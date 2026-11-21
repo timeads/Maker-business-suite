@@ -1,4 +1,13 @@
-import { CalendarDays, Home, Inbox, LineChart, Lock, Megaphone, Settings } from "lucide-react";
+import {
+  CalendarDays,
+  Home,
+  Inbox,
+  LineChart,
+  Lock,
+  Megaphone,
+  Plug,
+  Settings,
+} from "lucide-react";
 import type { Entitlements } from "@/lib/entitlements";
 import { MODULES, type ModuleKey } from "@/lib/modules";
 import type { Tenant } from "@/lib/tenants";
@@ -31,6 +40,9 @@ export function Sidebar({
       <nav aria-label="Workspace" className="flex flex-col gap-1">
         <NavLink href={base} exact>
           <Home aria-hidden /> Home
+        </NavLink>
+        <NavLink href={`${base}/connections`}>
+          <Plug aria-hidden /> Connections
         </NavLink>
 
         <p className="text-muted-foreground px-3 pt-4 pb-1 text-xs font-medium tracking-wide uppercase">

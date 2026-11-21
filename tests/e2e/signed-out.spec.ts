@@ -56,3 +56,13 @@ test("the Stripe webhook refuses unsigned requests", async ({ request }) => {
   const res = await request.post("/api/webhooks/stripe", { data: { id: "evt_fake" } });
   expect([400, 503]).toContain(res.status());
 });
+
+test("the Shopify webhook refuses unsigned requests", async ({ request }) => {
+  const res = await request.post("/api/webhooks/shopify", { data: { id: 1 } });
+  expect([401, 503]).toContain(res.status());
+});
+
+test("a connection callback without a matching session goes nowhere useful", async ({ page }) => {
+  await page.goto("/api/connections/shopify/callback?code=x&state=y&shop=evil.myshopify.com");
+  await expect(page).toHaveURL(/\/login/);
+});

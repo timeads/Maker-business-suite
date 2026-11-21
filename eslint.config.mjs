@@ -9,7 +9,10 @@ const eslintConfig = defineConfig([
   prettier,
   {
     rules: {
-      "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_" }],
+      "@typescript-eslint/no-unused-vars": [
+        "warn",
+        { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
+      ],
     },
   },
   globalIgnores([".next/**", "out/**", "build/**", "next-env.d.ts", "playwright-report/**"]),
