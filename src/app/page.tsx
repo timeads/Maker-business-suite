@@ -21,6 +21,9 @@ export default function HomePage() {
           <Button asChild size="lg" variant="outline">
             <Link href="/login">Sign in</Link>
           </Button>
+          <Button asChild size="lg" variant="ghost">
+            <Link href="/pricing">Pricing</Link>
+          </Button>
         </div>
       </div>
       <ul className="grid gap-3 sm:grid-cols-2">

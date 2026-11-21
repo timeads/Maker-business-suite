@@ -1,5 +1,5 @@
 import { CalendarDays, Home, Inbox, LineChart, Lock, Megaphone, Settings } from "lucide-react";
-import { can } from "@/lib/entitlements";
+import type { Entitlements } from "@/lib/entitlements";
 import { MODULES, type ModuleKey } from "@/lib/modules";
 import type { Tenant } from "@/lib/tenants";
 import { NavLink } from "./nav-link";
@@ -16,8 +16,10 @@ export function Sidebar({
   tenant,
   tenants,
   userEmail,
+  entitlements,
 }: {
   tenant: Tenant;
+  entitlements: Entitlements;
   tenants: Tenant[];
   userEmail: string | undefined;
 }) {
@@ -36,7 +38,8 @@ export function Sidebar({
         </p>
         {MODULES.map((m) => {
           const Icon = MODULE_ICONS[m.key];
-          if (can(tenant, `module.${m.key}`)) {
+          const entitled = entitlements.can(`module.${m.key}`);
+          if (entitled && m.available) {
             return (
               <NavLink key={m.key} href={`${base}/${m.key}`}>
                 <Icon aria-hidden /> {m.name}
@@ -47,11 +50,19 @@ export function Sidebar({
             <span
               key={m.key}
               aria-disabled="true"
-              title={`${m.name} isn't switched on yet`}
+              title={
+                entitled
+                  ? `${m.name} is on your plan and arrives soon`
+                  : `${m.name} isn't switched on yet`
+              }
               className="text-muted-foreground/60 flex cursor-not-allowed items-center gap-2 rounded-md px-3 py-2 text-sm [&_svg]:size-4"
             >
               <Icon aria-hidden /> {m.name}
-              <Lock className="ml-auto size-3!" aria-label="Not switched on yet" />
+              {entitled ? (
+                <span className="ml-auto text-xs">Soon</span>
+              ) : (
+                <Lock className="ml-auto size-3!" aria-label="Not switched on yet" />
+              )}
             </span>
           );
         })}
