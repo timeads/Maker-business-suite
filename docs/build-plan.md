@@ -8,7 +8,7 @@ The full plan lives in the "Maker Business Suite — Claude Code Build Plan" doc
 | 0     | Accounts and app reviews (done by the owner, outside the repo) | In progress                 |
 | 1     | Foundation and tenancy                                         | Built                       |
 | 2     | Billing and plans                                              | Built, awaiting Stripe keys |
-| 3     | Connections hub                                                | Not started                 |
+| 3     | Connections hub                                                | Built, awaiting app keys    |
 | 4     | Financial dashboard module                                     | Not started                 |
 | 5     | Help desk module                                               | Not started                 |
 | 6     | Bookings, then Social                                          | Not started                 |
@@ -70,3 +70,35 @@ Open decisions and deferrals:
   honoured by the gates, but the screen for choosing arrives with the first
   module.
 - `usage_events` exists; nothing writes to it until the AI assistant (Phase 7).
+
+## Phase 3: Connections hub
+
+Goal: a Connections page with a Connect button per provider, live status, and
+reconnect when a token expires.
+
+Done when:
+
+- [ ] A dev store and a QuickBooks sandbox connect, sync, disconnect and
+      reconnect from the UI (the adapters are tested against scripted
+      responses in `src/lib/connections/**/*.test.ts`; needs a run with real
+      app credentials)
+- [ ] Uninstalling the Shopify app marks the connection inactive (covered by
+      the webhook, runner and database tests; needs the same real run)
+
+To switch a provider on for an environment: set its client id and secret
+(see `.env.example`) plus `SUPABASE_SECRET_KEY` on the web service and the
+worker, and allow the redirect URL named there in the provider's app settings.
+
+Open decisions and deferrals:
+
+- Syncs prove the connection and refresh the account's name; storing orders,
+  customers and reports arrives with the money view (Phase 4). Shopify order
+  and customer webhooks are received and acknowledged but not stored yet.
+- Shopify's privacy webhooks are accepted and verified. `shop/redact`
+  disconnects the store; `customers/redact` and `customers/data_request` have
+  nothing to act on until Phase 4 stores customer data, and must be handled
+  there.
+- Installing from the Shopify App Store (starting in Shopify rather than in a
+  workspace) is Phase 8.
+- Owners are emailed when a connection needs reconnecting only once Postmark
+  is configured.

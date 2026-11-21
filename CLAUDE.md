@@ -6,7 +6,7 @@ are OAuth apps owned by us.
 
 ## Current phase
 
-Phase 2: Billing and plans (see docs/build-plan.md)
+Phase 3: Connections hub (see docs/build-plan.md)
 
 ## Stack
 
@@ -66,6 +66,11 @@ Phase 2: Billing and plans (see docs/build-plan.md)
   `lib/billing/plans.ts`; every gate asks `getEntitlements()`.
 - Service-role code (`lib/supabase/admin.ts`) is server-only and touches
   tenant data only through `withTenant`.
+- Connections: each provider is a `ProviderAdapter` in
+  `lib/connections/providers/`, registered in `registry.ts`. Tokens are read
+  only through `getProviderToken()` (it refreshes under a per-connection lock
+  because refresh tokens rotate). Webhooks verify the signature on the raw
+  body, queue a `sync_jobs` row and return; the worker runs the job.
 - Schema changes are new files in `supabase/migrations`; never edit an
   applied migration.
 - UI copy: warm and plain, written for makers, not developers.
