@@ -26,7 +26,9 @@ Done when:
       (automated: `tests/db/tenant-isolation.test.ts`)
 - [ ] Invite flow works end to end on staging (covered at the database level
       by the same test file; needs a click-through against real Supabase Auth)
-- [ ] Staging URL is live (needs the Supabase and Railway projects from Phase 0)
+- [x] Staging URL is live: https://web-staging-11af7da6.up.railway.app
+      (Railway project `maker-business-suite`, environment `staging`; Supabase
+      project in the "Maker business suite" organization)
 
 Deferred on purpose:
 
