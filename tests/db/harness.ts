@@ -49,3 +49,11 @@ export function asAnon<T>(db: PGlite, fn: (tx: Transaction) => Promise<T>): Prom
     return fn(tx);
   }) as Promise<T>;
 }
+
+/** Runs `fn` the way the worker or a webhook would: with the service role. */
+export function asService<T>(db: PGlite, fn: (tx: Transaction) => Promise<T>): Promise<T> {
+  return db.transaction(async (tx) => {
+    await tx.exec("set local role service_role");
+    return fn(tx);
+  }) as Promise<T>;
+}

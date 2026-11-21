@@ -5,6 +5,8 @@ create role authenticated nologin;
 create role service_role nologin bypassrls;
 
 create schema auth;
+-- On Supabase the service role can use every schema it is granted on.
+
 create table auth.users (
   id uuid primary key default gen_random_uuid(),
   email text unique
