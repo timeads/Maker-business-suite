@@ -6,7 +6,7 @@ are OAuth apps owned by us.
 
 ## Current phase
 
-Phase 1: Foundation and tenancy (see docs/build-plan.md)
+Phase 2: Billing and plans (see docs/build-plan.md)
 
 ## Stack
 
@@ -44,6 +44,8 @@ Phase 1: Foundation and tenancy (see docs/build-plan.md)
 - `pnpm test` — Vitest. `tests/db` runs the real migration files against an
   in-process Postgres (PGlite) and holds the cross-tenant tests.
 - `pnpm test:e2e` — Playwright (signed-out flows; builds the app first)
+- `pnpm worker` — background worker (Stripe events, retention)
+- `pnpm stripe:setup` — create/update Stripe products, prices and portal
 
 ## Things that are easy to get wrong here
 
@@ -57,6 +59,13 @@ Phase 1: Foundation and tenancy (see docs/build-plan.md)
   (`create_tenant`, `create_invite`, `accept_invite`, ...), each checking the
   caller's role itself. New tables: revoke the default grants, then grant
   only what is needed (see the first migration).
+- Billing: Stripe is the source of truth. The webhook only verifies and
+  queues (`private.stripe_events`); `pnpm worker` applies events by re-reading
+  the subscription from Stripe, so replays and out-of-order events are
+  harmless. Only the worker writes `subscriptions`. Plans live in
+  `lib/billing/plans.ts`; every gate asks `getEntitlements()`.
+- Service-role code (`lib/supabase/admin.ts`) is server-only and touches
+  tenant data only through `withTenant`.
 - Schema changes are new files in `supabase/migrations`; never edit an
   applied migration.
 - UI copy: warm and plain, written for makers, not developers.
