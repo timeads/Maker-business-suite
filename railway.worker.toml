@@ -1,0 +1,11 @@
+# Worker service. In Railway, create a second service from this repo and set
+# its config file path to railway.worker.toml. It needs NEXT_PUBLIC_SUPABASE_URL,
+# SUPABASE_SECRET_KEY and STRIPE_SECRET_KEY.
+[build]
+builder = "RAILPACK"
+buildCommand = "echo worker runs from source"
+
+[deploy]
+startCommand = "pnpm worker"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
