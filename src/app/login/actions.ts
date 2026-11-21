@@ -24,6 +24,12 @@ export async function signInWithEmail(_prev: LoginState, formData: FormData): Pr
     options: { emailRedirectTo: await callbackUrl(next) },
   });
   if (error) {
+    if (error.code === "over_email_send_rate_limit") {
+      return {
+        error:
+          "We've sent as many sign-in emails as we can for now. Check your inbox for the latest one, or try again in about an hour.",
+      };
+    }
     return {
       error: "We couldn't send your sign-in link just now. Give it another go in a minute.",
     };
