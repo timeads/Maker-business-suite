@@ -27,6 +27,7 @@ for (const path of [
   "/onboarding",
   "/w/some-workspace",
   "/w/some-workspace/settings/team",
+  "/w/some-workspace/bookings",
   "/invite/abc",
 ]) {
   test(`signed-out visitors to ${path} are sent to sign in, then back`, async ({ page }) => {
@@ -70,4 +71,25 @@ test("a connection callback without a matching session goes nowhere useful", asy
 test("the inbound email webhook refuses requests without its secret", async ({ request }) => {
   const res = await request.post("/api/webhooks/postmark", { data: { MessageID: "x" } });
   expect([401, 503]).toContain(res.status());
+});
+
+test("the booking payments webhook refuses unsigned requests", async ({ request }) => {
+  const res = await request.post("/api/webhooks/stripe-connect", { data: { id: "evt_fake" } });
+  expect([400, 503]).toContain(res.status());
+});
+
+test("booking pages are public, and unknown ones are simply not found", async ({ page }) => {
+  // No sign-in redirect: the visitor stays on the address and sees "not found".
+  await page.goto("/book/no-such-workspace");
+  await expect(page).toHaveURL(/\/book\/no-such-workspace$/);
+  await expect(page.getByRole("heading", { name: "We couldn't find that page" })).toBeVisible();
+  await page.goto("/booking/not-a-real-booking-link-000000");
+  await expect(page).toHaveURL(/\/booking\/not-a-real-booking-link-000000$/);
+  await expect(page.getByRole("heading", { name: "We couldn't find that page" })).toBeVisible();
+});
+
+test("the embed script is served to other sites", async ({ request }) => {
+  const res = await request.get("/embed.js");
+  expect(res.ok()).toBe(true);
+  expect(await res.text()).toContain("data-maker-booking");
 });

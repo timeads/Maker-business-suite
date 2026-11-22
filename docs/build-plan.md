@@ -11,7 +11,7 @@ The full plan lives in the "Maker Business Suite — Claude Code Build Plan" doc
 | 3     | Connections hub                                                | Built, awaiting app keys    |
 | 4     | Financial dashboard module                                     | Built, awaiting app keys    |
 | 5     | Help desk module                                               | Built, awaiting email keys  |
-| 6     | Bookings, then Social                                          | Not started                 |
+| 6     | Bookings, then Social                                          | Bookings built; Social next |
 | 7     | Claude customization layer                                     | Not started                 |
 | 8     | Hardening and launch                                           | Not started                 |
 
@@ -160,3 +160,46 @@ Open decisions and deferrals:
   credit top-ups come with the assistant (Phase 7).
 - Anyone on the team can reply; there is no assignment yet.
 - Starter's "one tool of your choice" now has its chooser on the Billing page.
+
+## Phase 6: Bookings, then Social
+
+### Bookings
+
+Goal: workshops and appointments people can book and pay for online, with
+the money going straight to the business.
+
+Done when:
+
+- [ ] A customer books and pays through the embed, and both sides get emails
+      (holding seats, payment confirmation and the emails are tested against
+      stand-ins; needs a run with a real connected Stripe account and Postmark)
+- [x] Capacity is enforced (automated: `tests/db/bookings.test.ts` covers
+      full sessions, holds that lapse, double-booked appointment times and
+      late payments)
+
+To switch bookings on for an environment: set `STRIPE_CONNECT_CLIENT_ID` and
+`STRIPE_CONNECT_WEBHOOK_SECRET` (see `.env.example`) on the web service, and
+make sure the worker has `STRIPE_SECRET_KEY` and `NEXT_PUBLIC_SITE_URL`. Free
+bookings work without Stripe.
+
+Open decisions and deferrals:
+
+- Businesses connect an existing Stripe account through Stripe's OAuth
+  screen (Connect, Standard). We take no cut of booking payments.
+- Refunds are not automatic. Cancelling (by the customer or the business)
+  frees the seats and sends emails; the business refunds from Stripe.
+- Seats are held for 40 minutes while someone pays. A payment that arrives
+  after the hold lapsed and the session filled is kept and flagged for the
+  business rather than dropped.
+- The embed is a script that adds a frame; it works in a Shopify "Custom
+  liquid" section. A proper Shopify theme app block needs the Shopify app
+  itself and waits for app review (Phase 8).
+- Google Calendar sync is not built yet (`sessions.calendar_event_id` is
+  ready for it). It needs Google's OAuth verification from Phase 0.
+- One set of hours per weekday for appointments; no buffers between
+  appointments, no blocked-out dates, and one shared calendar per workspace
+  rather than per staff member.
+- The booking form's extra questions are a `configs` entry (rule 4), edited
+  as one question per line.
+- The public form has a simple bot trap but no rate limiting; add it in
+  Phase 8.

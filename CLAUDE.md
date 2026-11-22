@@ -6,7 +6,7 @@ are OAuth apps owned by us.
 
 ## Current phase
 
-Phase 5: Help desk module (see docs/build-plan.md)
+Phase 6: Bookings, then Social (see docs/build-plan.md)
 
 ## Stack
 
@@ -44,7 +44,8 @@ Phase 5: Help desk module (see docs/build-plan.md)
 - `pnpm test` — Vitest. `tests/db` runs the real migration files against an
   in-process Postgres (PGlite) and holds the cross-tenant tests.
 - `pnpm test:e2e` — Playwright (signed-out flows; builds the app first)
-- `pnpm worker` — background worker (Stripe events, retention)
+- `pnpm worker` — background worker (Stripe events, syncs, inbound email,
+  booking payments and reminders, retention)
 - `pnpm stripe:setup` — create/update Stripe products, prices and portal
 
 ## Things that are easy to get wrong here
@@ -85,6 +86,17 @@ Phase 5: Help desk module (see docs/build-plan.md)
   email is shown as plain text only. Reply templates and auto-tag rules are
   `configs` (module `helpdesk`). Claude drafts go into the reply box and are
   never sent automatically; customer text in the prompt is marked as data.
+- Bookings: seats are never stored as a count. `hold_booking`,
+  `confirm_booking` and friends work them out from `bookings` under a row
+  lock on the session. A paid booking is never dropped: paid late into a full
+  session, it is confirmed and flagged `oversold`. The public pages (`/book`,
+  `/booking`) have no database access of their own; they call service-role
+  functions in `lib/bookings/server.ts` that name the workspace. Payments are
+  direct charges on the business's own Stripe account (provider `stripe`);
+  a Checkout session only counts if it sits on the account the workspace
+  connected and is the one we created for that booking (`payments.ts`).
+  Appointment times come from weekly hours in the workspace's timezone
+  (`slots.ts`); keep the daylight-saving tests passing.
 - Schema changes are new files in `supabase/migrations`; never edit an
   applied migration.
 - UI copy: warm and plain, written for makers, not developers.

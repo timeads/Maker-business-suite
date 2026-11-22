@@ -16,7 +16,7 @@ export const MODULES = [
     key: "bookings",
     name: "Bookings",
     blurb: "Workshops and appointments, paid up front",
-    available: false,
+    available: true,
   },
   { key: "social", name: "Social", blurb: "Plan and schedule your posts", available: false },
 ] as const;
