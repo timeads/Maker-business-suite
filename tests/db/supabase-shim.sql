@@ -64,3 +64,6 @@ create table storage.buckets (
   file_size_limit bigint,
   allowed_mime_types text[]
 );
+
+-- Supabase Realtime announces changes to tables in this publication.
+create publication supabase_realtime;
