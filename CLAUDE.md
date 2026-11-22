@@ -74,6 +74,10 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   only through `getProviderToken()` (it refreshes under a per-connection lock
   because refresh tokens rotate). Webhooks verify the signature on the raw
   body, queue a `sync_jobs` row and return; the worker runs the job.
+  Members can read a connection's `scopes` and `metadata` (nothing secret
+  lives there; tokens are in Vault) but not the whole row, so always name
+  the columns: a `select` that names a column members can't read fails as a
+  whole and the page quietly behaves as if nothing were connected.
 - Money view: dashboards are JSON in `configs` (module `dashboard`), parsed
   with the Zod schemas in `lib/dashboard/schema.ts` on every read. Sync writes
   go through service-role functions that name the workspace

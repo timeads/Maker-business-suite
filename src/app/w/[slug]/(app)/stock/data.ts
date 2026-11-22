@@ -92,7 +92,7 @@ export async function loadStock(
       .maybeSingle(),
     supabase
       .from("connections")
-      .select("status, metadata, last_synced_at")
+      .select("status, scopes, last_synced_at")
       .eq("tenant_id", tenant.id)
       .eq("provider", "shopify")
       .maybeSingle(),
@@ -108,9 +108,7 @@ export async function loadStock(
   }));
   const link: ShopLink = {
     connected: shop?.status === "active",
-    canPush:
-      shop?.status === "active" &&
-      canWriteShopifyStock((shop.metadata as { scopes?: unknown } | null)?.scopes),
+    canPush: shop?.status === "active" && canWriteShopifyStock(shop.scopes),
     lastSyncedAt: (shop?.last_synced_at as string | null) ?? null,
   };
   return {

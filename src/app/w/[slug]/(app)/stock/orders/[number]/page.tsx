@@ -92,7 +92,7 @@ export default async function StockOrderPage({
         .maybeSingle(),
       supabase
         .from("connections")
-        .select("status, metadata")
+        .select("status, scopes")
         .eq("tenant_id", tenant.id)
         .eq("provider", "shopify")
         .maybeSingle(),
@@ -110,9 +110,7 @@ export default async function StockOrderPage({
         .limit(50),
     ]);
   const settings = parseStockSettings(config?.body);
-  const canPush =
-    shop?.status === "active" &&
-    canWriteShopifyStock((shop.metadata as { scopes?: unknown } | null)?.scopes);
+  const canPush = shop?.status === "active" && canWriteShopifyStock(shop.scopes);
   const onOrder = new Set(lines.map((line) => line.stock_item_id));
   const addable = ((theirs ?? []) as (Item & { unit_cost: number | null })[])
     .filter((item) => !onOrder.has(item.id))

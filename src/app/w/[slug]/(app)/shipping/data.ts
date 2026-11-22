@@ -53,7 +53,7 @@ export async function loadShippingSetup(supabase: SupabaseClient, tenantId: stri
       .maybeSingle(),
     supabase
       .from("connections")
-      .select("status, metadata")
+      .select("status, scopes")
       .eq("tenant_id", tenantId)
       .eq("provider", "shopify")
       .maybeSingle(),
@@ -62,7 +62,7 @@ export async function loadShippingSetup(supabase: SupabaseClient, tenantId: stri
   return {
     settings: parseShippingSettings(config?.body),
     connected,
-    canSend: connected && canSendInShopify((shop.metadata as { scopes?: unknown } | null)?.scopes),
+    canSend: connected && canSendInShopify(shop.scopes),
   };
 }
 

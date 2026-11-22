@@ -79,7 +79,6 @@ describe("cross-tenant isolation for connections", () => {
       `select * from public.get_provider_token('${tenantA}', 'shopify')`,
       `select * from public.get_provider_token('${tenantB}', 'shopify')`,
       "select payload from public.sync_jobs",
-      "select metadata from public.connections",
       "select * from public.connections",
       `update public.connections set status = 'disconnected'`,
       `delete from public.connections`,
@@ -368,5 +367,27 @@ describe("disconnecting", () => {
     expect(await service("select email from public.tenant_owner_emails($1)", [tenantA])).toEqual([
       { email: "alice@a.test" },
     ]);
+  });
+});
+
+describe("what members can see of a connection", () => {
+  it("its details and permissions, in their own workspace only, and never anything from the vault", async () => {
+    const mine = await asUser(
+      db,
+      alice,
+      async (tx) =>
+        (await tx.query("select provider, scopes, metadata, status from public.connections")).rows,
+    );
+    expect(mine).toContainEqual(
+      expect.objectContaining({ provider: "shopify", scopes: ["read_orders"] }),
+    );
+    expect(JSON.stringify(mine)).not.toContain("token-for");
+    const theirs = await asUser(
+      db,
+      bob,
+      async (tx) => (await tx.query("select tenant_id from public.connections")).rows,
+    );
+    expect(theirs.length).toBeGreaterThan(0);
+    expect(theirs.every((row) => (row as { tenant_id: string }).tenant_id === tenantB)).toBe(true);
   });
 });
