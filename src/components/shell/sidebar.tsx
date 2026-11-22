@@ -7,6 +7,7 @@ import {
   Megaphone,
   Plug,
   Settings,
+  Sparkles,
 } from "lucide-react";
 import type { Entitlements } from "@/lib/entitlements";
 import { MODULES, type ModuleKey } from "@/lib/modules";
@@ -43,6 +44,9 @@ export function Sidebar({
         </NavLink>
         <NavLink href={`${base}/connections`}>
           <Plug aria-hidden /> Connections
+        </NavLink>
+        <NavLink href={`${base}/assistant`}>
+          <Sparkles aria-hidden /> Assistant
         </NavLink>
 
         <p className="text-muted-foreground px-3 pt-4 pb-1 text-xs font-medium tracking-wide uppercase">

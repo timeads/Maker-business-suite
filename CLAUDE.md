@@ -6,7 +6,7 @@ are OAuth apps owned by us.
 
 ## Current phase
 
-Phase 6: Bookings, then Social (see docs/build-plan.md)
+Phase 7: Claude customization layer (see docs/build-plan.md)
 
 ## Stack
 
@@ -107,6 +107,15 @@ Phase 6: Bookings, then Social (see docs/build-plan.md)
 - Code with no signed-in member (public pages, the worker) asks
   `moduleOpen()` in `lib/module-access.ts`, which uses the same resolver as
   `getEntitlements()`.
+- Assistant: its whole reach is the tool list in `lib/assistant/tools.ts`,
+  run with the member's own database session (never the service role). Its
+  only write is `propose_config_change`, which validates against the Zod
+  schema in `lib/assistant/registry.ts` and files a `config_proposals` row; a
+  person previews it and an owner or admin applies it. Every config write,
+  by hand or applied, goes through `private.write_config` and leaves a
+  `config_versions` row. A new customisable setting means a registry entry.
+  Earlier chat turns are sent as quoted text, so each request is a fresh,
+  append-only conversation. Files marked "use server" export only actions.
 - Schema changes are new files in `supabase/migrations`; never edit an
   applied migration.
 - UI copy: warm and plain, written for makers, not developers.

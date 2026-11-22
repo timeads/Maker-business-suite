@@ -29,6 +29,7 @@ for (const path of [
   "/w/some-workspace/settings/team",
   "/w/some-workspace/bookings",
   "/w/some-workspace/social/new",
+  "/w/some-workspace/assistant",
   "/invite/abc",
 ]) {
   test(`signed-out visitors to ${path} are sent to sign in, then back`, async ({ page }) => {

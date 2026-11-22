@@ -3,17 +3,17 @@
 The full plan lives in the "Maker Business Suite — Claude Code Build Plan" doc
 (kept outside this repo). This file tracks where the build is against it.
 
-| Phase | Scope                                                          | Status                      |
-| ----- | -------------------------------------------------------------- | --------------------------- |
-| 0     | Accounts and app reviews (done by the owner, outside the repo) | In progress                 |
-| 1     | Foundation and tenancy                                         | Built                       |
-| 2     | Billing and plans                                              | Built, awaiting Stripe keys |
-| 3     | Connections hub                                                | Built, awaiting app keys    |
-| 4     | Financial dashboard module                                     | Built, awaiting app keys    |
-| 5     | Help desk module                                               | Built, awaiting email keys  |
-| 6     | Bookings, then Social                                          | Built, awaiting app keys    |
-| 7     | Claude customization layer                                     | Not started                 |
-| 8     | Hardening and launch                                           | Not started                 |
+| Phase | Scope                                                          | Status                       |
+| ----- | -------------------------------------------------------------- | ---------------------------- |
+| 0     | Accounts and app reviews (done by the owner, outside the repo) | In progress                  |
+| 1     | Foundation and tenancy                                         | Built                        |
+| 2     | Billing and plans                                              | Built, awaiting Stripe keys  |
+| 3     | Connections hub                                                | Built, awaiting app keys     |
+| 4     | Financial dashboard module                                     | Built, awaiting app keys     |
+| 5     | Help desk module                                               | Built, awaiting email keys   |
+| 6     | Bookings, then Social                                          | Built, awaiting app keys     |
+| 7     | Claude customization layer                                     | Assistant built; MCP not yet |
+| 8     | Hardening and launch                                           | Not started                  |
 
 ## Phase 1: Foundation and tenancy
 
@@ -236,3 +236,33 @@ Open decisions and deferrals:
   desk drafts.
 - No approval step between writing and scheduling; any member can post.
 - Likes, comments and reach are not pulled back in.
+
+## Phase 7: Claude customization layer
+
+Goal: an assistant inside the app that answers questions about the business
+and reshapes the workspace on request, with a person approving every change.
+
+Done when:
+
+- [ ] "Add a wholesale vs retail chart to my dashboard" produces a preview
+      and applies cleanly (the tools, validation, proposal and apply steps are
+      tested with a stand-in model; needs a run with a real API key. Note the
+      dashboard has no wholesale/retail split widget yet, so today the
+      assistant can rearrange and retitle existing widgets, not invent one)
+- [x] Rollback works (every change is versioned and can be put back;
+      automated in `tests/db/assistant.test.ts`)
+- [x] Hitting the credit cap blocks further AI calls gracefully (the
+      assistant, reply drafts and caption drafts all stop with a plain message)
+
+Open decisions and deferrals:
+
+- The remote MCP server (Studio plan) is not built. It needs a decision on
+  how outside tools sign in (per-workspace access keys or OAuth).
+- Tools so far: list and read settings, propose a change, sales figures,
+  search help desk conversations. Bookings and social have no lookup tools.
+- The 80% warning shows in the assistant; reply and caption drafts only
+  show the stop at 100%. Buying extra credits is not built.
+- Conversations are not saved; the chat starts fresh on each visit.
+  Proposals and the change history are saved.
+- Any member can ask the assistant and file a suggestion; only owners and
+  admins can apply one or put a setting back.
