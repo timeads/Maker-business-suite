@@ -96,7 +96,14 @@ Phase 7: Claude customization layer (see docs/build-plan.md)
   a Checkout session only counts if it sits on the account the workspace
   connected and is the one we created for that booking (`payments.ts`).
   Appointment times come from weekly hours in the workspace's timezone
-  (`slots.ts`); keep the daylight-saving tests passing.
+  (`slots.ts`); keep the daylight-saving tests passing. What the business
+  does by hand (add, move or cancel a person, close or hide a date, repeat
+  weekly) is manager-only functions; check-in and notes are open to the
+  whole team. A closed or private date refuses online bookings in a trigger,
+  so no route can slip past it. Reminder and thank-you timing lives in
+  `configs` (bookings / emails) and is read by `claim_booking_emails` in the
+  database; the worker only adds the words. Tools with several views use
+  `<SectionTabs>` under the page header.
 - Social: members write posts through `save_social_post`; the worker claims
   due posts (`claim_due_social_posts`) and records each channel's answer with
   `finish_social_post`, which merges results so a channel that went out is
