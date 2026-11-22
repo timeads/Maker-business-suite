@@ -54,3 +54,13 @@ grant usage on schema public to anon, authenticated, service_role;
 -- that so the tests prove the migrations lock things down themselves.
 alter default privileges in schema public grant all on tables to anon, authenticated, service_role;
 alter default privileges in schema public grant execute on functions to anon, authenticated, service_role;
+
+-- Supabase Storage: just the bucket list, so migrations can create buckets.
+create schema storage;
+create table storage.buckets (
+  id text primary key,
+  name text not null,
+  public boolean not null default false,
+  file_size_limit bigint,
+  allowed_mime_types text[]
+);
