@@ -19,7 +19,9 @@ export type LayoutId =
   "statement" | "sale" | "product" | "split" | "grid" | "photo" | "note" | "closing" | "tag";
 
 export interface BrandKit {
+  /** A workspace's own kit borrows a built-in id for the email themes; `own` tells them apart. */
   id: BrandId;
+  own?: boolean;
   name: string;
   /** Web address as it is written on a slide. */
   site: string;
@@ -231,8 +233,15 @@ const HISTORY: BrandKit = {
 export const BRANDS: Record<BrandId, BrandKit> = { ttw: TTW, pyc: PYC, history: HISTORY };
 export const BRAND_IDS = Object.keys(BRANDS) as BrandId[];
 
-/** The kit for a brand id; anything unknown is Tuft the World. */
+/**
+ * The kit for a brand. A workspace's own kit is passed as the kit itself
+ * (built from its settings by `toDesignKit`); the three ids are the built-in
+ * ones. Anything unknown is Tuft the World.
+ */
 export function kitFor(brand: unknown): BrandKit {
+  if (brand && typeof brand === "object" && "palette" in brand && "pairings" in brand) {
+    return brand as BrandKit;
+  }
   return BRANDS[brand as BrandId] ?? TTW;
 }
 

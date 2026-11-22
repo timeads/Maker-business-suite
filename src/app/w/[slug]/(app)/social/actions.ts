@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { parseClock, zonedTimeToUtc } from "@/lib/bookings/slots";
 import { getEntitlements } from "@/lib/entitlements";
+import { BRAND_MODULE, KIT_KEY, brandBrief, parseBrandKit } from "@/lib/brand/kit";
 import { draftCaption } from "@/lib/social/caption";
 import {
   LINKS_KEY,
@@ -268,6 +269,7 @@ export async function draftPostCaption(
       ),
       recent: (recent ?? []).map((row) => String(row.caption).slice(0, 600)).filter(Boolean),
       styleNotes: parsePlan(planRow?.body).style_notes,
+      brand: await loadBrandBrief(ctx),
     });
     // Metered whether or not a draft came back: the tokens were spent.
     const { error: usageError } = await getAdminClient().rpc("record_usage", {
@@ -358,6 +360,18 @@ export async function saveProject(
   done(slug);
   if (!projectId) redirect(`/w/${slug}/social/projects/${data as string}`);
   return { message: "Saved." };
+}
+
+/** The workspace's brand kit, in words, for a draft to follow. */
+async function loadBrandBrief(ctx: Ctx): Promise<string> {
+  const { data } = await ctx.supabase
+    .from("configs")
+    .select("body")
+    .eq("tenant_id", ctx.tenant.id)
+    .eq("module", BRAND_MODULE)
+    .eq("key", KIT_KEY)
+    .maybeSingle();
+  return brandBrief(parseBrandKit(data?.body));
 }
 
 async function saveSocialConfig(ctx: Ctx, key: string, body: object): Promise<boolean> {
@@ -518,6 +532,7 @@ export async function draftTheMonth(
   const limit = ctx.entitlements.limit("ai_credits");
   const admin = getAdminClient();
   let made = 0;
+  const brand = await loadBrandBrief(ctx);
   for (const slot of open) {
     if (used >= limit) break;
     const topic = plan.topics.find((t) => t.id === slot.topic);
@@ -530,6 +545,7 @@ export async function draftTheMonth(
         channels: ["Facebook", "Instagram"],
         recent: (recent ?? []).map((row) => String(row.caption).slice(0, 600)).filter(Boolean),
         styleNotes: plan.style_notes,
+        brand,
       });
       used += draft.tokens;
       await admin.rpc("record_usage", {

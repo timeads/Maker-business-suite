@@ -30,5 +30,6 @@ export async function createWorkspace(
   if (error || !data) {
     return { error: "We couldn't set up your workspace. Check the details and try again." };
   }
-  redirect(`/w/${data.slug}`);
+  // Straight to the brand kit: everything Claude drafts later follows it.
+  redirect(`/w/${data.slug}/settings/brand?welcome=1`);
 }

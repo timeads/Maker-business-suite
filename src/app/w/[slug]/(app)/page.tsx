@@ -57,7 +57,7 @@ export default async function WorkspaceHomePage({ params }: { params: Promise<{ 
   const count = (table: string) =>
     supabase.from(table).select("id", { count: "exact", head: true }).eq("tenant_id", tenant.id);
 
-  const [chat, tickets, urgent, sessions, toSend, onOrder, nextPost, failedPosts, drafts] =
+  const [chat, tickets, urgent, sessions, toSend, onOrder, nextPost, failedPosts, drafts, brand] =
     await Promise.all([
       has("messages") ? supabase.rpc("chat_overview", { p_tenant_id: tenant.id }) : skip,
       has("helpdesk")
@@ -100,6 +100,14 @@ export default async function WorkspaceHomePage({ params }: { params: Promise<{ 
         : skip,
       has("social") ? count("social_posts").eq("status", "failed") : skip,
       has("social") ? count("social_posts").eq("status", "draft") : skip,
+      canManage(role)
+        ? supabase
+            .from("configs")
+            .select("key", { count: "exact", head: true })
+            .eq("tenant_id", tenant.id)
+            .eq("module", "brand")
+            .eq("key", "kit")
+        : skip,
     ]);
 
   const rows: Row[] = [];
@@ -255,6 +263,23 @@ export default async function WorkspaceHomePage({ params }: { params: Promise<{ 
               : `${plural(waiting, "thing wants", "things want")} your attention today.`
         }
       />
+
+      {canManage(role) && brand.count === 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Set up your brand kit</CardTitle>
+            <CardDescription>
+              Your colours and the way you sound. Claude follows it whenever it drafts a post or an
+              email for you. Build one in two minutes, or upload the guide you already have.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button asChild variant="outline">
+              <Link href={`${base}/settings/brand?welcome=1`}>Set up brand kit</Link>
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       {rows.length === 0 ? (
         <Card>

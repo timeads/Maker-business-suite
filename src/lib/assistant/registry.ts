@@ -30,6 +30,7 @@ import {
   linkPageSchema,
   socialPlanSchema,
 } from "../social/plan";
+import { BRAND_MODULE, KIT_KEY, brandKitSchema } from "../brand/kit";
 import {
   DEFAULT_SHIPPING_SETTINGS,
   SHIPPING_MODULE,
@@ -148,6 +149,23 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
       "The public page of links for a social profile: its heading, a short intro, the links (https only), whether recent posts show, and whether it is published.",
     schema: linkPageSchema,
     defaultBody: () => DEFAULT_LINKS,
+  },
+  {
+    module: BRAND_MODULE,
+    key: KIT_KEY,
+    feature: "social",
+    name: "Brand kit",
+    description:
+      "The brand's name, tagline, what it makes, its named colours (hex, main colour first, one dark and one light), its overall feel, and how it sounds: voice notes, words it likes and words it never uses. Drafts of posts and emails follow it.",
+    schema: brandKitSchema,
+    defaultBody: () => ({
+      version: 1,
+      name: "Your brand",
+      colors: [
+        { name: "ink", hex: "#1f2a2e" },
+        { name: "paper", hex: "#f7f3ea" },
+      ],
+    }),
   },
 ];
 

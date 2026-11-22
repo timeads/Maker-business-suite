@@ -176,6 +176,14 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   plain links, never as markup (`splitBody`). Other tools post heads-ups with
   `postAlert()`, which must never throw. Pages that need the whole window
   live beside the `(app)` route group, not inside it.
+- Brand kit: each workspace's colours and voice are one config (module
+  `brand`, key `kit`, schema in `lib/brand/kit.ts`), set up under Settings >
+  Brand kit, where a new workspace lands first. Claude can suggest one from
+  five answers or read one out of an uploaded guide (`lib/brand/draft.ts`);
+  the suggestion only fills the editor and is saved when a person presses
+  save. `brandBrief()` puts the kit into drafting prompts as data;
+  `toDesignKit()` turns it into the kit the email and slide designs draw
+  with, choosing text colours by contrast. We never fetch a brand's website.
 - Schema changes are new files in `supabase/migrations`; never edit an
   applied migration.
 - Look: the "Tuft Life" house style (see the tuft-ui repo's DESIGN.md). Teal

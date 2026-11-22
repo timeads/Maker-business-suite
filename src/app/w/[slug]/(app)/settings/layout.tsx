@@ -17,6 +17,7 @@ export default async function SettingsLayout({
           <NavLink href={base} exact>
             Workspace
           </NavLink>
+          <NavLink href={`${base}/brand`}>Brand kit</NavLink>
           <NavLink href={`${base}/team`}>Team</NavLink>
           <NavLink href={`${base}/billing`}>Billing</NavLink>
         </nav>
