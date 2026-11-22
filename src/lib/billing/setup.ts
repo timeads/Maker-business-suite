@@ -18,6 +18,9 @@ export async function ensureStripeCatalog(
     const details = {
       name: `Maker Business Suite ${plan.name}`,
       description: plan.tagline,
+      // Software as a service, business use. Stripe needs this to work out
+      // tax, and requires it when it handles tax as the seller of record.
+      tax_code: "txcd_10103001",
     };
 
     let product;
