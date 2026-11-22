@@ -32,6 +32,7 @@ export default async function SocialProjectsPage({
     supabase
       .from("social_assets")
       .select("project_id, storage_path")
+      .like("mime_type", "image/%")
       .eq("tenant_id", tenant.id)
       .not("project_id", "is", null)
       .eq("hidden", false)

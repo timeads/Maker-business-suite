@@ -361,4 +361,80 @@ describe("library, projects and posts with several photos", () => {
     await expect(full(alice, tenantA, many)).rejects.toThrow(/too_many_photos/);
     await expect(full(bob, tenantA, [])).rejects.toThrow(/Workspace not found/);
   });
+
+  it("folders hold photos and videos, and stay inside their workspace", async () => {
+    const folder = (
+      await as<{ id: string }>(
+        alice,
+        "select public.save_social_folder($1, null, ' Workshops ') as id",
+        [tenantA],
+      )
+    )[0].id;
+    const clip = (
+      await service<{ id: string }>(
+        "select public.register_social_asset($1, $2, 'video/mp4', 4000000, $3, $4, 'Tufting clip') as id",
+        [tenantA, `${tenantA}/clip-1.mp4`, alice.id, folder],
+      )
+    )[0].id;
+    const still = await photo(tenantA, "folder-still");
+    const moved = await as<{ n: number }>(
+      alice,
+      "select public.sort_social_assets($1, $2, true, $3, $4, null) as n",
+      [tenantA, [still], folder, ["Workshop"]],
+    );
+    expect(moved[0].n).toBe(1);
+    const inside = await as<{ id: string; tags: string[] }>(
+      alice,
+      "select id, tags from public.social_assets where folder_id = $1 order by created_at",
+      [folder],
+    );
+    expect(inside.map((row) => row.id).sort()).toEqual([clip, still].sort());
+    expect(inside.find((row) => row.id === still)?.tags).toContain("workshop");
+
+    // Bob can't see the folder, use it, rename it, or file Alice's things.
+    expect(await as(bob, "select id from public.social_folders")).toEqual([]);
+    await expect(
+      as(bob, "select public.save_social_folder($1, $2, 'Mine now')", [tenantB, folder]),
+    ).rejects.toThrow(/Folder not found/);
+    await expect(
+      as(bob, "select public.save_social_folder($1, null, 'Sneaky')", [tenantA]),
+    ).rejects.toThrow(/Workspace not found/);
+    await expect(
+      as(bob, "select public.remove_social_folder($1, $2)", [tenantB, folder]),
+    ).rejects.toThrow(/Folder not found/);
+    const bobs = await photo(tenantB, "bobs");
+    await expect(
+      as(bob, "select public.sort_social_assets($1, $2, true, $3, '{}', null)", [
+        tenantB,
+        [bobs],
+        folder,
+      ]),
+    ).rejects.toThrow(/Folder not found/);
+    await expect(
+      service("select public.register_social_asset($1, $2, 'image/png', 10, $3, $4, '')", [
+        tenantB,
+        `${tenantB}/x.png`,
+        bob.id,
+        folder,
+      ]),
+    ).rejects.toThrow(/Folder not found/);
+    await expect(
+      service("select public.register_social_asset($1, $2, 'application/pdf', 10, $3, null, '')", [
+        tenantA,
+        `${tenantA}/x.pdf`,
+        alice.id,
+      ]),
+    ).rejects.toThrow(/mime_type/);
+
+    // A video can't ride on a post until video posting exists.
+    await expect(full(alice, tenantA, [clip])).rejects.toThrow(/video_not_yet/);
+
+    // Removing a folder keeps what was in it.
+    await as(alice, "select public.remove_social_folder($1, $2)", [tenantA, folder]);
+    const { rows } = await db.query<{ folder_id: string | null }>(
+      "select folder_id from public.social_assets where id = any($1)",
+      [[clip, still]],
+    );
+    expect(rows.map((row) => row.folder_id)).toEqual([null, null]);
+  });
 });

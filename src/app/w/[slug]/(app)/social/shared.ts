@@ -62,6 +62,7 @@ export async function composerChoices(supabase: Supabase, tenantId: string, also
         .select("id, storage_path, title")
         .eq("tenant_id", tenantId)
         .eq("hidden", false)
+        .like("mime_type", "image/%")
         .order("created_at", { ascending: false })
         .limit(64),
       alsoPhotos.length

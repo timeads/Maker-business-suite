@@ -38,6 +38,7 @@ const SAVE_ERRORS: Record<string, string> = {
   locked: "This post has already gone out, so it can't be changed.",
   too_many_photos: "A post can have up to 10 photos.",
   caption_too_long: "Captions can be up to 2,200 characters.",
+  video_not_yet: "Videos can't go on a post just yet. Pick photos for now.",
 };
 
 type Ctx = Exclude<Awaited<ReturnType<typeof context>>, { error: string }>;
@@ -585,4 +586,173 @@ export async function draftTheMonth(
   return {
     message: `${made} draft${made === 1 ? "" : "s"} written. Read each one, add a photo, then schedule it.`,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Assets: photos and videos, in folders
+// ---------------------------------------------------------------------------
+
+const ASSET_TYPES: Record<string, { ext: string; max: number }> = {
+  "image/jpeg": { ext: "jpg", max: 8 * 1024 * 1024 },
+  "image/png": { ext: "png", max: 8 * 1024 * 1024 },
+  "video/mp4": { ext: "mp4", max: 50 * 1024 * 1024 },
+  "video/quicktime": { ext: "mov", max: 50 * 1024 * 1024 },
+};
+
+export type UploadTicket = { path: string; token: string };
+
+/**
+ * Hands the browser a one-time link for each file, so it can send them
+ * straight to storage. Nothing is in the library until `finishUpload` has
+ * looked at what actually arrived.
+ */
+export async function startUpload(
+  slug: string,
+  files: { type: string; size: number }[],
+): Promise<{ tickets: UploadTicket[] } | { error: string }> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: String(ctx.error) };
+  if (!process.env.SUPABASE_SECRET_KEY) {
+    return { error: "Uploads aren't switched on for this environment yet." };
+  }
+  if (files.length === 0) return { error: "Choose some files first." };
+  if (files.length > 30) return { error: "Add up to 30 files at a time." };
+  for (const file of files) {
+    const kind = ASSET_TYPES[file.type];
+    if (!kind) return { error: "Photos need to be JPEG or PNG, and videos MP4 or MOV." };
+    if (!(file.size > 0) || file.size > kind.max) {
+      return {
+        error: file.type.startsWith("video/")
+          ? "Videos can be up to 50 MB each."
+          : "Photos can be up to 8 MB each.",
+      };
+    }
+  }
+  const admin = getAdminClient();
+  const tickets: UploadTicket[] = [];
+  for (const file of files) {
+    const path = `${ctx.tenant.id}/${randomUUID()}.${ASSET_TYPES[file.type].ext}`;
+    const { data, error } = await admin.storage.from("social").createSignedUploadUrl(path);
+    if (error || !data) {
+      console.error(`Upload link failed: ${error?.message ?? "no data"}`);
+      return { error: "We couldn't start the upload. Please try again." };
+    }
+    tickets.push({ path, token: data.token });
+  }
+  return { tickets };
+}
+
+/** Files what the browser uploaded, after checking each file really is what it should be. */
+export async function finishUpload(
+  slug: string,
+  items: { path: string; title: string }[],
+  folderId: string | null,
+  tagsText: string,
+): Promise<{ added: number } | { error: string }> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: String(ctx.error) };
+  if (!process.env.SUPABASE_SECRET_KEY) {
+    return { error: "Uploads aren't switched on for this environment yet." };
+  }
+  const admin = getAdminClient();
+  const bucket = admin.storage.from("social");
+  const mine = new RegExp(`^${ctx.tenant.id}/[0-9a-f-]{36}\\.(jpg|png|mp4|mov)$`);
+  const ids: string[] = [];
+  for (const item of items.slice(0, 30)) {
+    if (!mine.test(item.path)) continue;
+    const { data: info } = await bucket.info(item.path);
+    const type = info?.contentType ?? "";
+    const size = info?.size ?? 0;
+    const kind = ASSET_TYPES[type];
+    if (!kind || !(size > 0) || size > kind.max || !item.path.endsWith(`.${kind.ext}`)) {
+      if (info) await bucket.remove([item.path]);
+      continue;
+    }
+    const { data, error } = await admin.rpc("register_social_asset", {
+      p_tenant_id: ctx.tenant.id,
+      p_storage_path: item.path,
+      p_mime_type: type,
+      p_bytes: size,
+      p_created_by: ctx.user.id,
+      p_folder_id: folderId && UUID.test(folderId) ? folderId : null,
+      p_title: String(item.title ?? "").slice(0, 120),
+    });
+    if (!error && data) ids.push(data as string);
+  }
+  if (ids.length === 0) return { error: "Those files didn't arrive. Please try again." };
+  const tags = tagsFrom(tagsText);
+  if (tags.length > 0) {
+    await ctx.supabase.rpc("sort_social_assets", {
+      p_tenant_id: ctx.tenant.id,
+      p_asset_ids: ids,
+      p_move: false,
+      p_folder_id: null,
+      p_add_tags: tags,
+      p_hidden: null,
+    });
+  }
+  done(slug);
+  return { added: ids.length };
+}
+
+export async function saveFolder(
+  slug: string,
+  folderId: string | null,
+  _prev: SocialState,
+  formData: FormData,
+): Promise<SocialState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const name = String(formData.get("name") ?? "").trim();
+  if (!name || name.length > 60) return { error: "Give the folder a name (up to 60 characters)." };
+  const { error } = await ctx.supabase.rpc("save_social_folder", {
+    p_tenant_id: ctx.tenant.id,
+    p_folder_id: folderId,
+    p_name: name,
+  });
+  if (error) {
+    return {
+      error: error.message.includes("too_many_folders")
+        ? "That's the most folders a workspace can have."
+        : OOPS,
+    };
+  }
+  done(slug);
+  return { message: folderId ? "Renamed." : "Folder added." };
+}
+
+/** Removes a folder; what was in it stays in the library. */
+export async function removeFolder(slug: string, folderId: string): Promise<void> {
+  const ctx = await context(slug);
+  if ("error" in ctx || !UUID.test(folderId)) return;
+  await ctx.supabase.rpc("remove_social_folder", {
+    p_tenant_id: ctx.tenant.id,
+    p_folder_id: folderId,
+  });
+  done(slug);
+  redirect(`/w/${slug}/social/library`);
+}
+
+/** Moves, tags or puts away several files at once. */
+export async function sortAssets(
+  slug: string,
+  ids: string[],
+  change: { moveTo?: string | null; tags?: string; hidden?: boolean },
+): Promise<{ error?: string; changed?: number }> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const assets = ids.filter((id) => UUID.test(id)).slice(0, 400);
+  if (assets.length === 0) return { error: "Pick some files first." };
+  const moving = change.moveTo !== undefined;
+  const { data, error } = await ctx.supabase.rpc("sort_social_assets", {
+    p_tenant_id: ctx.tenant.id,
+    p_asset_ids: assets,
+    p_move: moving,
+    p_folder_id: moving && change.moveTo && UUID.test(change.moveTo) ? change.moveTo : null,
+    p_add_tags: tagsFrom(change.tags ?? ""),
+    p_hidden: change.hidden ?? null,
+  });
+  if (error) return { error: OOPS };
+  done(slug);
+  return { changed: Number(data ?? 0) };
 }

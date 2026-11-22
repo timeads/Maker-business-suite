@@ -121,8 +121,13 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   due posts (`claim_due_social_posts`) and records each channel's answer with
   `finish_social_post`, which merges results so a channel that went out is
   never sent twice. A post that is partly or fully out can't be edited.
-  Photos sit in the public `social` storage bucket under the workspace's id
-  (Instagram fetches by URL); only the server uploads. Caption drafts land
+  Photos and videos (the Assets tab) sit in the public `social` storage
+  bucket under the workspace's id (Instagram fetches by URL). The browser
+  sends a file straight to storage with a one-time link from `startUpload`;
+  `finishUpload` then checks what really arrived (type, size, path) before
+  it is registered, so nothing is trusted from the browser. Folders are one
+  level (`social_folders`). A post can't carry a video yet
+  (`social_posts_photos_only` trigger) because video publishing isn't built. Caption drafts land
   in the caption box and are never scheduled or posted automatically.
   Posts are saved through `save_social_post_full` (up to ten photos in
   order, a caption per channel only where it differs, project, topic); it
