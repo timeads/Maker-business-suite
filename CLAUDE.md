@@ -118,6 +118,16 @@ Phase 7: Claude customization layer (see docs/build-plan.md)
   append-only conversation. Files marked "use server" export only actions.
 - Schema changes are new files in `supabase/migrations`; never edit an
   applied migration.
+- Look: the "Tuft Life" house style (see the tuft-ui repo's DESIGN.md). Teal
+  rail with the dot texture, white cards on a warm panel, stone hairlines.
+  Tokens live in `src/app/globals.css` as `--tuft-*` and as Tailwind colours
+  (`bg-teal`, `text-ochre-text`, `bg-brick-soft`, ...). One filled ochre
+  button per screen; other actions are `outline`, `dark` or `ghost`. Status
+  uses `<Badge tone>` (open teal, waiting ochre, good mint, bad brick, closed
+  sunken) and always carries words. Chivo for interface text, Roboto
+  (`font-read`) for anything a customer wrote or will read, Abril Fatface
+  (`font-display`) for the wordmark only. Pages start with `<PageHeader>`.
+  On phones the rail becomes a bottom tab bar.
 - UI copy: warm and plain, written for makers, not developers.
 
 ## Workflow
