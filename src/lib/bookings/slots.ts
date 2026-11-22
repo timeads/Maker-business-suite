@@ -181,3 +181,42 @@ export function parseClock(value: string): number | null {
 
 /** Whether an instant is still ahead of us. */
 export const isUpcoming = (instant: string) => Date.parse(instant) > Date.now();
+
+/**
+ * The weeks of a month ("YYYY-MM") as rows of seven YYYY-MM-DD days, Sunday
+ * first, padded with the neighbouring months' days.
+ */
+export function monthGrid(month: string): { days: string[][]; previous: string; next: string } {
+  const [y, m] = month.split("-").map(Number);
+  const iso = (date: Date) => date.toISOString().slice(0, 10);
+  const first = new Date(Date.UTC(y, m - 1, 1));
+  const cursor = new Date(first);
+  cursor.setUTCDate(1 - first.getUTCDay());
+  const days: string[][] = [];
+  do {
+    const week: string[] = [];
+    for (let i = 0; i < 7; i++) {
+      week.push(iso(cursor));
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
+    }
+    days.push(week);
+  } while (cursor.getUTCMonth() === m - 1);
+  return {
+    days,
+    previous: iso(new Date(Date.UTC(y, m - 2, 1))).slice(0, 7),
+    next: iso(new Date(Date.UTC(y, m, 1))).slice(0, 7),
+  };
+}
+
+/** "December 2026" for "2026-12". */
+export function formatMonth(month: string): string {
+  const [y, m] = month.split("-").map(Number);
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "UTC",
+    month: "long",
+    year: "numeric",
+  }).format(new Date(Date.UTC(y, m - 1, 1)));
+}
+
+/** An instant some days from now (negative for the past), as an ISO string. */
+export const daysFromNow = (days: number) => new Date(Date.now() + days * 86_400_000).toISOString();

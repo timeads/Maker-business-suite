@@ -62,3 +62,40 @@ export function readAnswers(
   }
   return { answers };
 }
+
+/**
+ * When the automatic emails go out and what the business adds to them.
+ * `reminder_hours`, `followup_on` and `followup_hours` are also read by the
+ * database when it decides which emails are due.
+ */
+export const EMAILS_KEY = "emails";
+
+const note = z.string().trim().max(1500);
+
+export const bookingEmailsSchema = z.object({
+  version: z.literal(1),
+  reminder_hours: z.number().int().min(1).max(336).default(24),
+  followup_on: z.boolean().default(false),
+  followup_hours: z.number().int().min(1).max(336).default(24),
+  /** Added to the "you're booked" email: what to bring, where to park. */
+  confirmation_note: note.default(""),
+  reminder_note: note.default(""),
+  followup_message: note.default(""),
+});
+export type BookingEmails = z.infer<typeof bookingEmailsSchema>;
+
+export const DEFAULT_EMAILS: BookingEmails = bookingEmailsSchema.parse({ version: 1 });
+
+export function parseBookingEmails(body: unknown): BookingEmails {
+  const parsed = bookingEmailsSchema.safeParse(body);
+  return parsed.success ? parsed.data : DEFAULT_EMAILS;
+}
+
+/** Tags are short lowercase labels, the same shape the database accepts. */
+export function tagsFromText(text: string): string[] {
+  const tags = text
+    .split(",")
+    .map((t) => t.trim().toLowerCase())
+    .filter((t) => /^[a-z0-9][a-z0-9 _-]{0,29}$/.test(t));
+  return [...new Set(tags)].slice(0, 12);
+}

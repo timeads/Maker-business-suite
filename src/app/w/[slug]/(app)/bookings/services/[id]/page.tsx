@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Badge } from "@/components/ui/badge";
+import { PageHeader } from "@/components/ui/page-header";
 import { notFound } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatWhen } from "@/lib/bookings/slots";
@@ -38,7 +40,7 @@ export default async function ServicePage({
   const [{ data: sessions }, { data: rules }] = await Promise.all([
     supabase
       .from("sessions")
-      .select("id, starts_at, ends_at, capacity")
+      .select("id, starts_at, ends_at, capacity, private, bookings_closed, bookings(seats, status)")
       .eq("service_id", service.id)
       .is("cancelled_at", null)
       .gte("starts_at", new Date().toISOString())
@@ -56,12 +58,17 @@ export default async function ServicePage({
 
   return (
     <>
-      <header className="flex flex-col gap-2">
-        <Link href={base} className="text-muted-foreground text-sm hover:underline">
-          ← Bookings
-        </Link>
-        <h1 className="text-2xl font-semibold tracking-tight">{service.name}</h1>
-      </header>
+      <PageHeader
+        back={{ href: base, label: "Bookings" }}
+        title={service.name}
+        description={
+          service.kind === "workshop"
+            ? "A workshop: set dates, several places on each."
+            : "An appointment: one person at a time, from your open hours."
+        }
+      >
+        {!service.active && <Badge>Hidden from your booking page</Badge>}
+      </PageHeader>
 
       {service.kind === "workshop" ? (
         <Card>
@@ -78,12 +85,19 @@ export default async function ServicePage({
                   <li key={s.id}>
                     <Link
                       href={`${base}/sessions/${s.id}`}
-                      className="hover:bg-muted -mx-2 flex items-center gap-4 rounded px-2 py-2 text-sm"
+                      className="hover:bg-hover -mx-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-sm px-2 py-2 text-sm"
                     >
                       <span className="flex-1">
                         {formatWhen(s.starts_at, s.ends_at, tenant.timezone)}
                       </span>
-                      <span className="text-muted-foreground">{s.capacity} places</span>
+                      {s.private && <Badge tone="waiting">Private</Badge>}
+                      {s.bookings_closed && <Badge>Not taking bookings</Badge>}
+                      <span className="text-muted-foreground tabular-nums">
+                        {(s.bookings as { seats: number; status: string }[])
+                          .filter((b) => b.status === "confirmed")
+                          .reduce((n, b) => n + b.seats, 0)}{" "}
+                        of {s.capacity} booked
+                      </span>
                     </Link>
                   </li>
                 ))}

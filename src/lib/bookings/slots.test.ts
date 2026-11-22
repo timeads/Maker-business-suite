@@ -8,6 +8,7 @@ import {
   parseClock,
   zonedTimeToUtc,
 } from "./slots";
+import { formatMonth, monthGrid } from "./slots";
 
 const NY = "America/New_York";
 
@@ -112,5 +113,29 @@ describe("formatting", () => {
     expect(parseClock("9am")).toBeNull();
     expect(formatMinutes(570)).toBe("9:30 AM");
     expect(formatMinutes(720)).toBe("12:00 PM");
+  });
+});
+
+describe("monthGrid", () => {
+  it("lays a month out in whole weeks starting on Sunday", () => {
+    const grid = monthGrid("2027-02");
+    // February 2027 starts on a Monday and ends on a Sunday.
+    expect(grid.days[0]).toEqual([
+      "2027-01-31",
+      "2027-02-01",
+      "2027-02-02",
+      "2027-02-03",
+      "2027-02-04",
+      "2027-02-05",
+      "2027-02-06",
+    ]);
+    expect(grid.days.at(-1)?.[0]).toBe("2027-02-28");
+    expect(grid.days.every((week) => week.length === 7)).toBe(true);
+  });
+
+  it("steps across the year end", () => {
+    expect(monthGrid("2026-12").next).toBe("2027-01");
+    expect(monthGrid("2027-01").previous).toBe("2026-12");
+    expect(formatMonth("2026-12")).toBe("December 2026");
   });
 });

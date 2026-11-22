@@ -31,7 +31,10 @@ const seats = (d: BookingDetails) => (d.seats === 1 ? "1 place" : `${d.seats} pl
 
 export const manageUrl = (site: string, token: string) => `${site}/booking/${token}`;
 
-export function confirmationEmail(d: BookingDetails, link: string): Email {
+/** The business's own words, set off from ours. */
+const noteLines = (note: string | undefined) => (note?.trim() ? [note.trim(), ""] : []);
+
+export function confirmationEmail(d: BookingDetails, link: string, note?: string): Email {
   return {
     to: d.customer_email,
     subject: `You're booked: ${d.service_name} with ${d.workspace_name}`,
@@ -44,6 +47,7 @@ export function confirmationEmail(d: BookingDetails, link: string): Email {
       ...(d.service_kind === "workshop" ? [`Places: ${seats(d)}`] : []),
       ...(d.amount_cents > 0 ? [`Paid: ${formatMoney(d.amount_cents / 100, d.currency)}`] : []),
       "",
+      ...noteLines(note),
       "Need to change or cancel? Use your booking link:",
       link,
       "",
@@ -52,7 +56,7 @@ export function confirmationEmail(d: BookingDetails, link: string): Email {
   };
 }
 
-export function reminderEmail(d: BookingDetails): Email {
+export function reminderEmail(d: BookingDetails, note?: string): Email {
   return {
     to: d.customer_email,
     subject: `Reminder: ${d.service_name} with ${d.workspace_name}`,
@@ -63,6 +67,7 @@ export function reminderEmail(d: BookingDetails): Email {
       "",
       `When: ${when(d)}`,
       "",
+      ...noteLines(note),
       "If you can't make it, the link in your confirmation email lets you change or cancel.",
     ].join("\n"),
   };
@@ -122,4 +127,82 @@ export function ownerNoticeEmail(d: BookingDetails, to: string, link: string): E
       `See who's coming: ${link}`,
     ].join("\n"),
   };
+}
+
+export function followupEmail(d: BookingDetails, message?: string): Email {
+  return {
+    to: d.customer_email,
+    subject: `Thanks for coming to ${d.service_name}`,
+    text: [
+      `Hi ${firstName(d.customer_name)},`,
+      "",
+      message?.trim() ||
+        `Thank you for joining ${d.service_name} with ${d.workspace_name}. We hope you enjoyed it and we'd love to see you again.`,
+      "",
+      d.workspace_name,
+    ].join("\n"),
+  };
+}
+
+/** The business moved someone to another date. `d` is the booking after the move. */
+export function movedEmail(d: BookingDetails, link: string | null): Email {
+  return {
+    to: d.customer_email,
+    subject: `Your booking has moved: ${d.service_name} with ${d.workspace_name}`,
+    text: [
+      `Hi ${firstName(d.customer_name)},`,
+      "",
+      `${d.workspace_name} has moved your booking for ${d.service_name}.`,
+      "",
+      `New time: ${when(d)}`,
+      ...(link ? ["", "Your booking link:", link] : []),
+      "",
+      `If that doesn't work for you, reply to ${d.workspace_name} and they'll sort it out.`,
+    ].join("\n"),
+  };
+}
+
+/** The business cancelled one person's booking (not the whole date). */
+export function bookingCancelledEmail(d: BookingDetails): Email {
+  return {
+    to: d.customer_email,
+    subject: `Your booking was cancelled: ${d.service_name} with ${d.workspace_name}`,
+    text: [
+      `Hi ${firstName(d.customer_name)},`,
+      "",
+      `${d.workspace_name} has cancelled your booking for ${d.service_name} on ${when(d)}.`,
+      "",
+      d.amount_cents > 0
+        ? `${d.workspace_name} will be in touch about your payment.`
+        : "There's nothing you need to do.",
+    ].join("\n"),
+  };
+}
+
+/** A note from the business to everyone on a date. */
+export function broadcastEmail(
+  to: { customer_name: string; customer_email: string },
+  d: Pick<BookingDetails, "service_name" | "workspace_name" | "starts_at" | "ends_at" | "timezone">,
+  subject: string,
+  body: string,
+): Email {
+  return {
+    to: to.customer_email,
+    subject,
+    text: [
+      `Hi ${firstName(to.customer_name)},`,
+      "",
+      body.trim(),
+      "",
+      `${d.workspace_name}`,
+      `About: ${d.service_name}, ${formatWhen(d.starts_at, d.ends_at, d.timezone)}`,
+    ].join("\n"),
+  };
+}
+
+/** Plain CSV: quotes doubled, and cells that a spreadsheet would run as a formula defused. */
+export function csvCell(value: string | number): string {
+  const text = String(value);
+  const safe = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+  return /[",\n\r]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 }

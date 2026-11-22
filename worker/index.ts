@@ -16,9 +16,9 @@ import { ensureStripeCatalog } from "../src/lib/billing/setup";
 import { liveSyncDeps } from "../src/lib/billing/store";
 import { billingConfigured, getStripe } from "../src/lib/billing/stripe";
 import { processStripeEvent, type StripeEventLike } from "../src/lib/billing/sync";
-import { reminderEmail } from "../src/lib/bookings/emails";
+import { followupEmail, reminderEmail } from "../src/lib/bookings/emails";
 import { isConnectEvent, processConnectEvent } from "../src/lib/bookings/payments";
-import { getBookingDetails, livePaymentDeps } from "../src/lib/bookings/server";
+import { getBookingDetails, getBookingEmails, livePaymentDeps } from "../src/lib/bookings/server";
 import { PROVIDER_ORDER, getAdapter } from "../src/lib/connections/registry";
 import { runSyncJob, type RunnerDeps, type SyncJob } from "../src/lib/connections/runner";
 import { rpcSyncStore } from "../src/lib/connections/store";
@@ -242,21 +242,43 @@ async function drainInboundEmails(): Promise<number> {
   return emails.length;
 }
 
-/** Emails a reminder for each booking that starts within a day. */
+/**
+ * Emails reminders ahead of each date and thank-yous after it. The database
+ * decides what's due from each workspace's own settings; the words the
+ * business added are read here.
+ */
 async function sendBookingReminders(): Promise<number> {
   const admin = getAdminClient();
-  const { data, error } = await admin.rpc("claim_booking_reminders", { p_limit: 50 });
-  if (error) throw new Error(`Could not claim booking reminders: ${error.message}`);
-  const due = (data ?? []) as { id: string; tenant_id: string }[];
-  for (const booking of due) {
-    const details = await getBookingDetails(
-      { tenantId: booking.tenant_id, bookingId: booking.id },
-      admin,
-    );
-    if (details) await sendEmail(reminderEmail(details));
+  let sent = 0;
+  for (const kind of ["reminder", "followup"] as const) {
+    const { data, error } = await admin.rpc("claim_booking_emails", { p_kind: kind, p_limit: 50 });
+    if (error) throw new Error(`Could not claim booking ${kind}s: ${error.message}`);
+    const due = (data ?? []) as { id: string; tenant_id: string }[];
+    const settings = new Map<string, Awaited<ReturnType<typeof getBookingEmails>>>();
+    for (const booking of due) {
+      try {
+        const details = await getBookingDetails(
+          { tenantId: booking.tenant_id, bookingId: booking.id },
+          admin,
+        );
+        if (!details) continue;
+        if (!settings.has(booking.tenant_id)) {
+          settings.set(booking.tenant_id, await getBookingEmails(booking.tenant_id));
+        }
+        const words = settings.get(booking.tenant_id)!;
+        await sendEmail(
+          kind === "reminder"
+            ? reminderEmail(details, words.reminder_note)
+            : followupEmail(details, words.followup_message),
+        );
+        sent += 1;
+      } catch (err) {
+        console.error(`booking ${kind} ${booking.id}:`, err instanceof Error ? err.message : err);
+      }
+    }
   }
-  if (due.length) console.log(`sent ${due.length} booking reminder(s)`);
-  return due.length;
+  if (sent) console.log(`sent ${sent} booking email(s)`);
+  return sent;
 }
 
 /** Sends scheduled social posts whose time has come. */

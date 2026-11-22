@@ -1,16 +1,19 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { PageHeader } from "@/components/ui/page-header";
 import {
   BOOKINGS_MODULE,
+  EMAILS_KEY,
   FORM_KEY,
+  parseBookingEmails,
   parseBookingForm,
   questionsToText,
 } from "@/lib/bookings/config";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
-import { BookingQuestionsForm } from "../forms";
+import { BookingEmailsForm, BookingQuestionsForm } from "../forms";
 import { bookingsAccess } from "../gate";
+import { BookingsTabs } from "../tabs";
 
 export const metadata: Metadata = { title: "Booking page settings" };
 
@@ -27,24 +30,40 @@ export default async function BookingSettingsPage({
   const supabase = await createClient();
   const { data } = await supabase
     .from("configs")
-    .select("body")
+    .select("key, body")
     .eq("tenant_id", tenant.id)
     .eq("module", BOOKINGS_MODULE)
-    .eq("key", FORM_KEY)
-    .maybeSingle();
-  const form = parseBookingForm(data?.body);
+    .in("key", [FORM_KEY, EMAILS_KEY]);
+  const body = (key: string) => (data ?? []).find((row) => row.key === key)?.body;
+  const form = parseBookingForm(body(FORM_KEY));
+  const emails = parseBookingEmails(body(EMAILS_KEY));
+  const canEdit = canManage(role) && entitlements.canWrite;
 
   return (
     <>
-      <header className="flex flex-col gap-2">
-        <Link
-          href={`/w/${tenant.slug}/bookings`}
-          className="text-muted-foreground text-sm hover:underline"
-        >
-          ← Bookings
-        </Link>
-        <h1 className="text-2xl font-semibold tracking-tight">Booking page settings</h1>
-      </header>
+      <PageHeader
+        title="Bookings"
+        description="What you ask people when they book, and the emails they get from you."
+      />
+      <BookingsTabs slug={tenant.slug} />
+      <Card>
+        <CardHeader>
+          <CardTitle>Emails to your customers</CardTitle>
+          <CardDescription>
+            Everyone gets a confirmation with a link to change or cancel, then a reminder. Add your
+            own words to each.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {canEdit ? (
+            <BookingEmailsForm slug={tenant.slug} settings={emails} />
+          ) : (
+            <p className="text-muted-foreground text-sm">
+              An owner or admin can change these emails.
+            </p>
+          )}
+        </CardContent>
+      </Card>
       <Card>
         <CardHeader>
           <CardTitle>Extra questions</CardTitle>
@@ -54,7 +73,7 @@ export default async function BookingSettingsPage({
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {canManage(role) && entitlements.canWrite ? (
+          {canEdit ? (
             <BookingQuestionsForm slug={tenant.slug} questions={questionsToText(form)} />
           ) : (
             <p className="text-muted-foreground text-sm">

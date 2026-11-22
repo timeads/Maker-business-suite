@@ -12,6 +12,7 @@ import {
   saveService,
   type BookingsState,
 } from "./actions";
+import { saveBookingEmails } from "./roster-actions";
 
 const textarea =
   "border-input bg-card placeholder:text-muted-foreground focus-visible:ring-ring w-full rounded-md border px-3 py-2 text-sm outline-none focus-visible:ring-2";
@@ -187,12 +188,30 @@ export function AddSessionForm({
           />
         </div>
       </div>
+      <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="session-weeks">Repeat</Label>
+          <Select id="session-weeks" name="weeks" defaultValue="1" className="w-52">
+            <option value="1">Just this date</option>
+            <option value="4">Weekly, 4 weeks</option>
+            <option value="6">Weekly, 6 weeks</option>
+            <option value="8">Weekly, 8 weeks</option>
+            <option value="12">Weekly, 12 weeks</option>
+            <option value="26">Weekly, 26 weeks</option>
+          </Select>
+        </div>
+        <label className="flex h-9 items-center gap-2 text-sm">
+          <input type="checkbox" name="private" />
+          Private (not on my booking page)
+        </label>
+      </div>
       <p className="text-muted-foreground text-xs">
-        Times are in your workspace&apos;s timezone ({timezone.replace(/_/g, " ")}).
+        Times are in your workspace&apos;s timezone ({timezone.replace(/_/g, " ")}). A weekly repeat
+        keeps the same time on the clock all the way through.
       </p>
       <Result state={state} />
       <SubmitButton pendingText="Adding…" variant="outline" className="sm:w-fit">
-        Add date
+        Add to the calendar
       </SubmitButton>
     </form>
   );
@@ -284,6 +303,118 @@ export function BookingQuestionsForm({ slug, questions }: { slug: string; questi
       <Result state={state} />
       <SubmitButton pendingText="Saving…" className="sm:w-fit">
         Save questions
+      </SubmitButton>
+    </form>
+  );
+}
+
+export type EmailSettings = {
+  reminder_hours: number;
+  followup_on: boolean;
+  followup_hours: number;
+  confirmation_note: string;
+  reminder_note: string;
+  followup_message: string;
+};
+
+const LEAD_TIMES: [number, string][] = [
+  [2, "2 hours"],
+  [12, "12 hours"],
+  [24, "1 day"],
+  [48, "2 days"],
+  [72, "3 days"],
+  [168, "1 week"],
+];
+
+function LeadTime({ id, name, value }: { id: string; name: string; value: number }) {
+  const options = LEAD_TIMES.some(([hours]) => hours === value)
+    ? LEAD_TIMES
+    : [...LEAD_TIMES, [value, `${value} hours`] as [number, string]];
+  return (
+    <Select id={id} name={name} defaultValue={String(value)} className="w-40">
+      {options.map(([hours, label]) => (
+        <option key={hours} value={hours}>
+          {label}
+        </option>
+      ))}
+    </Select>
+  );
+}
+
+export function BookingEmailsForm({ slug, settings }: { slug: string; settings: EmailSettings }) {
+  const [state, action] = useActionState(saveBookingEmails.bind(null, slug), {});
+  const [followup, setFollowup] = useState(settings.followup_on);
+  const read = `${textarea} font-read`;
+  return (
+    <form action={action} className="flex flex-col gap-5">
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="confirmation-note">Add to the “you&apos;re booked” email</Label>
+        <textarea
+          id="confirmation-note"
+          name="confirmation_note"
+          rows={3}
+          maxLength={1500}
+          defaultValue={settings.confirmation_note}
+          placeholder="We're at 12 Mill Lane, up the stairs. Wear clothes you don't mind getting fluffy."
+          className={read}
+        />
+      </div>
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="reminder-hours">Send a reminder</Label>
+        <div className="flex items-center gap-2 text-sm">
+          <LeadTime id="reminder-hours" name="reminder_hours" value={settings.reminder_hours} />
+          before
+        </div>
+        <Label htmlFor="reminder-note" className="mt-1">
+          Add to the reminder
+        </Label>
+        <textarea
+          id="reminder-note"
+          name="reminder_note"
+          rows={3}
+          maxLength={1500}
+          defaultValue={settings.reminder_note}
+          placeholder="Doors open 15 minutes early. Parking is free behind the building."
+          className={read}
+        />
+      </div>
+      <div className="flex flex-col gap-2">
+        <label className="flex items-center gap-2 text-sm font-semibold">
+          <input
+            type="checkbox"
+            name="followup_on"
+            checked={followup}
+            onChange={(e) => setFollowup(e.target.checked)}
+          />
+          Send a thank-you afterwards
+        </label>
+        {followup && (
+          <>
+            <div className="flex items-center gap-2 text-sm">
+              <LeadTime id="followup-hours" name="followup_hours" value={settings.followup_hours} />
+              after it ends
+            </div>
+            <Label htmlFor="followup-message" className="mt-1">
+              What it says
+            </Label>
+            <textarea
+              id="followup-message"
+              name="followup_message"
+              rows={4}
+              maxLength={1500}
+              defaultValue={settings.followup_message}
+              placeholder="Thank you for coming! Tag us in a photo of your rug, and here's 10% off your next workshop: COMEBACK10"
+              className={read}
+            />
+            <p className="text-muted-foreground text-xs">
+              Leave it empty for a simple thank-you. People marked as a no-show don&apos;t get it.
+            </p>
+          </>
+        )}
+      </div>
+      <Result state={state} />
+      <SubmitButton pendingText="Saving…" className="sm:w-fit">
+        Save emails
       </SubmitButton>
     </form>
   );

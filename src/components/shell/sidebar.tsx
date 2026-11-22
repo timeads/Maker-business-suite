@@ -49,7 +49,7 @@ export function Sidebar({
 
   return (
     <>
-      <aside className="rail-texture sticky top-0 hidden h-dvh w-[228px] shrink-0 flex-col p-3 md:flex">
+      <aside className="rail-texture sticky top-0 hidden h-dvh w-[228px] shrink-0 flex-col p-3 md:flex print:hidden">
         <WorkspaceSwitcher key={tenant.id} current={tenant} tenants={tenants} />
 
         <nav aria-label="Workspace" className="mt-3 flex flex-col gap-0.5 overflow-y-auto">
@@ -121,7 +121,7 @@ export function Sidebar({
 
       <nav
         aria-label="Workspace"
-        className="bg-teal fixed inset-x-0 bottom-0 z-30 flex items-stretch pb-[env(safe-area-inset-bottom)] md:hidden"
+        className="bg-teal fixed inset-x-0 bottom-0 z-30 flex items-stretch pb-[env(safe-area-inset-bottom)] md:hidden print:hidden"
       >
         <TabLink href={base} exact>
           <Home aria-hidden /> Home

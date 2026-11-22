@@ -100,17 +100,28 @@ export async function addSession(
   if (capacity !== null && !(capacity >= 1 && capacity <= 500)) {
     return { error: "How many places does this date have?" };
   }
+  const weeks = Number.parseInt(text(formData, "weeks") || "1", 10);
+  if (!(weeks >= 1 && weeks <= 52)) return { error: "Repeat for between 1 and 52 weeks." };
 
-  const { error } = await ctx.supabase.rpc("add_session", {
+  const { data, error } = await ctx.supabase.rpc("add_sessions", {
     p_service_id: serviceId,
     p_starts_at: startsAt.toISOString(),
     p_capacity: capacity,
+    p_repeat_weeks: weeks,
+    p_private: formData.get("private") === "on",
   });
-  if (error) {
-    return { error: error.code === "23505" ? "That date and time is already scheduled." : OOPS };
-  }
+  if (error) return { error: OOPS };
+  const added = (data as number) ?? 0;
   revalidatePath(`/w/${slug}/bookings`, "layout");
-  return { message: "Date added." };
+  if (added === 0) return { error: "That date and time is already scheduled." };
+  return {
+    message:
+      weeks === 1
+        ? "Date added."
+        : added === weeks
+          ? `${added} dates added.`
+          : `${added} dates added. The rest were already scheduled.`,
+  };
 }
 
 /** Calls a date off and emails everyone who was booked on it. */

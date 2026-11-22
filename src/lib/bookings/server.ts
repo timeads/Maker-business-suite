@@ -6,7 +6,15 @@ import { sendEmail } from "../email";
 import { postAlert } from "../messages/alerts";
 import { moduleOpen } from "../module-access";
 import { getAdminClient, withTenant } from "../supabase/admin";
-import { BOOKINGS_MODULE, FORM_KEY, parseBookingForm, type BookingForm } from "./config";
+import {
+  BOOKINGS_MODULE,
+  EMAILS_KEY,
+  FORM_KEY,
+  parseBookingEmails,
+  parseBookingForm,
+  type BookingEmails,
+  type BookingForm,
+} from "./config";
 import {
   confirmationEmail,
   manageUrl,
@@ -162,6 +170,17 @@ export async function getBookingForm(tenantId: string): Promise<BookingForm> {
   });
 }
 
+export async function getBookingEmails(tenantId: string): Promise<BookingEmails> {
+  return withTenant(tenantId, async (scope) => {
+    const { data } = await scope
+      .select("configs", "body")
+      .eq("module", BOOKINGS_MODULE)
+      .eq("key", EMAILS_KEY)
+      .maybeSingle();
+    return parseBookingEmails((data as { body?: unknown } | null)?.body);
+  });
+}
+
 /** The Stripe account a workspace takes booking payments into, once it can charge. */
 export async function getPayoutAccount(
   tenantId: string,
@@ -247,7 +266,10 @@ export async function announceBooking(
   admin: SupabaseClient = getAdminClient(),
 ): Promise<void> {
   const site = siteUrl();
-  if (manageToken) await sendEmail(confirmationEmail(details, manageUrl(site, manageToken)));
+  if (manageToken) {
+    const { confirmation_note } = await getBookingEmails(details.tenant_id);
+    await sendEmail(confirmationEmail(details, manageUrl(site, manageToken), confirmation_note));
+  }
   const { data: owners } = await admin.rpc("tenant_owner_emails", {
     p_tenant_id: details.tenant_id,
   });

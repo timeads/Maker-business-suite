@@ -396,3 +396,219 @@ describe("reminders", () => {
     expect(await service("select * from public.claim_booking_reminders(50)")).toHaveLength(0);
   });
 });
+
+describe("the business's own changes", () => {
+  const asOwner = <T>(sql: string, params: unknown[]) =>
+    asUser(db, alice, async (tx) => (await tx.query<T>(sql, params)).rows);
+
+  it("repeat weekly keeps the local time across a clock change and skips existing dates", async () => {
+    const owner = { id: await createUser(db, "nyc@c.test"), email: "nyc@c.test" };
+    const tenant = await asUser(db, owner, async (tx) => {
+      const { rows } = await tx.query<{ id: string }>(
+        "select id from public.create_tenant('NYC Studio', 'America/New_York', 'USD')",
+      );
+      return rows[0].id;
+    });
+    const svc = await makeService(owner, tenant, "workshop", 0, 4);
+    // Saturday 6 March 2027, 10:00 in New York; clocks go forward on the 14th.
+    const add = () =>
+      asUser(db, owner, async (tx) => {
+        const { rows } = await tx.query<{ n: number }>(
+          "select public.add_sessions($1, '2027-03-06T15:00:00Z', null, 3, false) as n",
+          [svc],
+        );
+        return rows[0].n;
+      });
+    expect(await add()).toBe(3);
+    expect(await add()).toBe(0);
+    const { rows } = await db.query<{ starts_at: Date }>(
+      "select starts_at from public.sessions where service_id = $1 order by starts_at",
+      [svc],
+    );
+    expect(rows.map((r) => new Date(r.starts_at).toISOString())).toEqual([
+      "2027-03-06T15:00:00.000Z",
+      "2027-03-13T15:00:00.000Z",
+      "2027-03-20T14:00:00.000Z",
+    ]);
+  });
+
+  it("closed and private dates take no online bookings but the owner can still add people", async () => {
+    const svc = await makeService(alice, tenantA, "workshop", 0, 2);
+    const closed = await makeSession(alice, svc, 48);
+    const hidden = await makeSession(alice, svc, 72);
+    await asOwner("select public.update_session($1, 2, true, false, '')", [closed]);
+    await asOwner("select public.update_session($1, 2, false, true, 'Birthday party')", [hidden]);
+    await expect(hold(tenantA, closed)).rejects.toThrow(/no longer available/);
+    await expect(hold(tenantA, hidden)).rejects.toThrow(/no longer available/);
+    const listed = await service("select * from public.session_availability($1, $2)", [
+      tenantA,
+      svc,
+    ]);
+    expect(listed).toHaveLength(0);
+
+    await asOwner(
+      "select public.add_manual_booking($1, 'Pat', 'Pat@Example.com', 2, 'paid cash', 'tok-manual-1', false)",
+      [hidden],
+    );
+    await expect(
+      asOwner(
+        "select public.add_manual_booking($1, 'Extra', 'x@example.com', 1, '', 'tok-manual-2', false)",
+        [hidden],
+      ),
+    ).rejects.toThrow(/full/);
+    await asOwner(
+      "select public.add_manual_booking($1, 'Extra', 'x@example.com', 1, '', 'tok-manual-3', true)",
+      [hidden],
+    );
+    const { rows } = await db.query<{ source: string; status: string; customer_email: string }>(
+      "select source, status, customer_email from public.bookings where session_id = $1 order by created_at",
+      [hidden],
+    );
+    expect(rows[0]).toEqual({
+      source: "manual",
+      status: "confirmed",
+      customer_email: "pat@example.com",
+    });
+    expect(rows).toHaveLength(2);
+  });
+
+  it("the owner can move and cancel a booking; the waitlist of the date it left is told", async () => {
+    const svc = await makeService(alice, tenantA, "workshop", 0, 1);
+    const from = await makeSession(alice, svc, 48);
+    const to = await makeSession(alice, svc, 72);
+    const { booking } = await hold(tenantA, from);
+    await service("select public.join_waitlist($1, $2, 'Wen', 'wen@example.com', 1)", [
+      tenantA,
+      from,
+    ]);
+    const told = await asOwner<{ customer_email: string }>(
+      "select * from public.admin_move_booking($1, $2)",
+      [booking.id, to],
+    );
+    expect(told.map((w) => w.customer_email)).toEqual(["wen@example.com"]);
+    await asOwner("select * from public.admin_cancel_booking($1)", [booking.id]);
+    const { rows } = await db.query<{ status: string; session_id: string }>(
+      "select status, session_id from public.bookings where id = $1",
+      [booking.id],
+    );
+    expect(rows[0]).toEqual({ status: "cancelled", session_id: to });
+  });
+
+  it("anyone on the team can check people in and keep notes; outsiders and members can't do owner jobs", async () => {
+    const svc = await makeService(alice, tenantA, "workshop", 0, 3);
+    const session = await makeSession(alice, svc, 48);
+    const { booking } = await hold(tenantA, session);
+    const staff = { id: await createUser(db, "staff@a.test"), email: "staff@a.test" };
+    await db.query(
+      "insert into public.memberships (tenant_id, user_id, role) values ($1, $2, 'member')",
+      [tenantA, staff.id],
+    );
+    await asUser(db, staff, (tx) =>
+      tx.query("select public.set_booking_attendance($1, 'attended')", [booking.id]),
+    );
+    await asUser(db, staff, (tx) =>
+      tx.query("select public.set_booking_notes($1, 'Left-handed', $2)", [
+        booking.id,
+        ["VIP", " gift ", "bad tag!!"],
+      ]),
+    );
+    const { rows } = await db.query<{ attendance: string; notes: string; tags: string[] }>(
+      "select attendance, notes, tags from public.bookings where id = $1",
+      [booking.id],
+    );
+    expect(rows[0].attendance).toBe("attended");
+    expect(rows[0].notes).toBe("Left-handed");
+    expect([...rows[0].tags].sort()).toEqual(["gift", "vip"]);
+
+    await expect(
+      asUser(db, staff, (tx) =>
+        tx.query("select * from public.admin_cancel_booking($1)", [booking.id]),
+      ),
+    ).rejects.toThrow(/Only owners and admins/);
+    for (const sql of [
+      "select public.set_booking_attendance($1, 'no_show')",
+      "select * from public.admin_cancel_booking($1)",
+      "select public.set_booking_notes($1, 'x', '{}')",
+    ]) {
+      await expect(asUser(db, bob, (tx) => tx.query(sql, [booking.id]))).rejects.toThrow(
+        /Booking not found/,
+      );
+    }
+  });
+
+  it("reminders use the chosen lead time, follow-ups come after, and both respect email-off", async () => {
+    const owner = { id: await createUser(db, "mail@d.test"), email: "mail@d.test" };
+    const tenant = await asUser(db, owner, async (tx) => {
+      const { rows } = await tx.query<{ id: string }>(
+        "select id from public.create_tenant('Mail Test', 'UTC', 'USD')",
+      );
+      return rows[0].id;
+    });
+    const svc = await makeService(owner, tenant, "workshop", 0, 5);
+    const in40h = await makeSession(owner, svc, 40);
+    const a = await hold(tenant, in40h);
+    const quiet = await hold(tenant, in40h);
+    await asUser(db, owner, (tx) =>
+      tx.query("select public.update_booking_contact($1, 'Quiet', 'quiet@example.com', false)", [
+        quiet.booking.id,
+      ]),
+    );
+    const setEmails = (body: object) =>
+      asUser(db, owner, (tx) =>
+        tx.query("select public.save_config($1, 'bookings', 'emails', $2::jsonb)", [
+          tenant,
+          JSON.stringify(body),
+        ]),
+      );
+    const claim = (kind: string) =>
+      service<Booking>("select * from public.claim_booking_emails($1, 50)", [kind]);
+    const mine = (rows: Booking[]) => rows.filter((r) => r.session_id === in40h).map((r) => r.id);
+    // A day ahead by default, so nothing is due 40 hours out.
+    expect(mine(await claim("reminder"))).toEqual([]);
+    await setEmails({ version: 1, reminder_hours: 48 });
+    expect(mine(await claim("reminder"))).toEqual([a.booking.id]);
+    expect(mine(await claim("reminder"))).toEqual([]);
+
+    await db.query(
+      "update public.sessions set starts_at = now() - interval '30 hours', ends_at = now() - interval '29 hours' where id = $1",
+      [in40h],
+    );
+    // Thank-yous are off until the workspace switches them on.
+    expect(mine(await claim("followup"))).toEqual([]);
+    await setEmails({ version: 1, reminder_hours: 48, followup_on: true, followup_hours: 24 });
+    expect(mine(await claim("followup"))).toEqual([a.booking.id]);
+    expect(mine(await claim("followup"))).toEqual([]);
+  });
+
+  it("messages sent to a date are logged by owners and hidden from other workspaces", async () => {
+    const svc = await makeService(alice, tenantA, "workshop", 0, 3);
+    const session = await makeSession(alice, svc, 48);
+    await asOwner("select public.log_booking_message($1, 'Parking', 'Use the back lot.', 4)", [
+      session,
+    ]);
+    await expect(
+      asUser(db, bob, (tx) =>
+        tx.query("select public.log_booking_message($1, 'Hi', 'x', 1)", [session]),
+      ),
+    ).rejects.toThrow(/Session not found/);
+    const seenByBob = await asUser(
+      db,
+      bob,
+      async (tx) => (await tx.query("select id from public.booking_messages")).rows,
+    );
+    expect(seenByBob).toHaveLength(0);
+    const seenByAlice = await asOwner<{ subject: string }>(
+      "select subject from public.booking_messages where session_id = $1",
+      [session],
+    );
+    expect(seenByAlice).toEqual([{ subject: "Parking" }]);
+    await expect(
+      asUser(db, alice, (tx) =>
+        tx.query(
+          "insert into public.booking_messages (tenant_id, session_id, subject, body, recipients) values ($1, $2, 'x', 'y', 1)",
+          [tenantA, session],
+        ),
+      ),
+    ).rejects.toThrow(/permission denied/);
+  });
+});

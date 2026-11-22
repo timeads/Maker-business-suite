@@ -1,5 +1,13 @@
 import { z } from "zod";
-import { BOOKINGS_MODULE, DEFAULT_FORM, FORM_KEY, bookingFormSchema } from "../bookings/config";
+import {
+  BOOKINGS_MODULE,
+  DEFAULT_EMAILS,
+  EMAILS_KEY,
+  DEFAULT_FORM,
+  FORM_KEY,
+  bookingEmailsSchema,
+  bookingFormSchema,
+} from "../bookings/config";
 import { DASHBOARD_KEY, DASHBOARD_MODULE, dashboardSchema } from "../dashboard/schema";
 import { DEFAULT_TEMPLATE, templateConfig } from "../dashboard/templates";
 import {
@@ -67,6 +75,16 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
       "Extra questions customers answer when they book (name and email are always asked).",
     schema: bookingFormSchema,
     defaultBody: () => DEFAULT_FORM,
+  },
+  {
+    module: BOOKINGS_MODULE,
+    key: EMAILS_KEY,
+    feature: "bookings",
+    name: "Booking emails",
+    description:
+      "How many hours ahead the reminder goes out, whether a thank-you is sent afterwards, and the business's own note added to the confirmation, reminder and thank-you emails.",
+    schema: bookingEmailsSchema,
+    defaultBody: () => DEFAULT_EMAILS,
   },
 ];
 
@@ -145,6 +163,21 @@ export function describeConfig(entry: ConfigEntry, body: unknown): string[] {
             `"${r.contains}" in the ${r.where === "anywhere" ? "subject or message" : r.where === "body" ? "message" : "subject"} → tag "${r.tag}"`,
         )
       : ["No rules"];
+  }
+  if (entry.key === EMAILS_KEY) {
+    const clip = (text: unknown) => {
+      const t = String(text ?? "").replace(/\s+/g, " ");
+      return t ? `"${t.slice(0, 90)}${t.length > 90 ? "…" : ""}"` : "nothing added";
+    };
+    return [
+      `Reminder goes out ${value.reminder_hours} hours before`,
+      value.followup_on
+        ? `Thank-you goes out ${value.followup_hours} hours after`
+        : "No thank-you email afterwards",
+      `Added to the confirmation: ${clip(value.confirmation_note)}`,
+      `Added to the reminder: ${clip(value.reminder_note)}`,
+      `Thank-you message: ${clip(value.followup_message)}`,
+    ];
   }
   const questions = list("questions") as { label: string; required: boolean }[];
   return questions.length
