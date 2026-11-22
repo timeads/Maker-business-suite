@@ -249,3 +249,14 @@ export const HEALTH_LABELS = {
   over: "Too much",
   nosales: "Not selling",
 } as const;
+
+export const ORDER_STATUS: Record<
+  string,
+  { label: string; tone: "open" | "waiting" | "good" | "bad" | "closed" }
+> = {
+  draft: { label: "Draft", tone: "closed" },
+  ordered: { label: "Sent, waiting", tone: "open" },
+  partial: { label: "Part arrived", tone: "waiting" },
+  closed: { label: "All in", tone: "good" },
+  cancelled: { label: "Cancelled", tone: "closed" },
+};

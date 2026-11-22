@@ -7,7 +7,7 @@ are OAuth apps owned by us.
 ## Current phase
 
 Phases 0 to 7 are built. Now: the overhaul toward eight full tools in the
-house look (Messages, Bookings and Help desk are rebuilt; Stock, Shipping and
+house look (Messages, Bookings, Help desk and Stock are built; Shipping and
 the larger Social are next). See docs/build-plan.md.
 
 ## Stack
@@ -120,6 +120,18 @@ the larger Social are next). See docs/build-plan.md.
   Photos sit in the public `social` storage bucket under the workspace's id
   (Instagram fetches by URL); only the server uploads. Caption drafts land
   in the caption box and are never scheduled or posted automatically.
+- Stock: `stock_items` mirror the shop's variants and are written only by
+  the sync (`upsert_stock_items`), which leaves the workspace's own planning
+  columns alone. Every reorder figure is worked out on read by the pure
+  engine in `lib/stock/engine` (ported from TuftStock with its tests; change
+  a formula only with its test) through `buildStockRows()`; nothing derived
+  is stored. Sales are matched to an item by SKU, else by product and option.
+  A sync only ever reads the shop's count. The one write to a shop is adding
+  a checked-in delivery (`stock_receipts` -> worker -> `shopify-stock.ts`):
+  add-only, tried once, and refused when the shop has more than one
+  location. Suppliers and orders are manager-only; anyone on the team can
+  check a delivery in. Supabase returns 1,000 rows at most, so `loadStock()`
+  pages.
 - Code with no signed-in member (public pages, the worker) asks
   `moduleOpen()` in `lib/module-access.ts`, which uses the same resolver as
   `getEntitlements()`.
