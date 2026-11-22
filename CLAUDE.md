@@ -6,7 +6,7 @@ are OAuth apps owned by us.
 
 ## Current phase
 
-Phase 4: Financial dashboard module (see docs/build-plan.md)
+Phase 5: Help desk module (see docs/build-plan.md)
 
 ## Stack
 
@@ -78,6 +78,13 @@ Phase 4: Financial dashboard module (see docs/build-plan.md)
   RLS. Chart text is formatted on the server (`prepareTimeChart`) so server
   and browser output match. Charts follow one validated series colour
   (`--chart-1`) and always offer a table view.
+- Help desk: inbound email is authenticated by a secret in the webhook URL,
+  queued (`private.inbound_emails`) and filed by the worker through
+  `ingest_inbound_email`, which threads by the ticket's reply key, then by
+  mail headers. `tickets.reply_key` is never readable by clients. Customer
+  email is shown as plain text only. Reply templates and auto-tag rules are
+  `configs` (module `helpdesk`). Claude drafts go into the reply box and are
+  never sent automatically; customer text in the prompt is marked as data.
 - Schema changes are new files in `supabase/migrations`; never edit an
   applied migration.
 - UI copy: warm and plain, written for makers, not developers.

@@ -10,7 +10,7 @@ export const MODULES = [
     key: "helpdesk",
     name: "Help desk",
     blurb: "One inbox with order details alongside",
-    available: false,
+    available: true,
   },
   {
     key: "bookings",

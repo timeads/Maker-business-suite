@@ -1,11 +1,15 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/auth";
 import { PLANS, TRIAL_DAYS, isPlanKey } from "@/lib/billing/plans";
 import { getSubscriptionRow } from "@/lib/billing/store";
 import { billingConfigured, getStripe } from "@/lib/billing/stripe";
+import { getEntitlements } from "@/lib/entitlements";
+import { MODULES } from "@/lib/modules";
 import { getSiteUrl } from "@/lib/site-url";
+import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
 
 export type BillingState = { error?: string };
@@ -100,4 +104,34 @@ export async function openBillingPortal(slug: string, _prev: BillingState): Prom
     return { error: FAILED };
   }
   redirect(url);
+}
+
+/** On plans with a choice of tools (Starter), picks which one is switched on. */
+export async function chooseModule(
+  slug: string,
+  _prev: BillingState,
+  formData: FormData,
+): Promise<BillingState> {
+  const ctx = await billingContext(slug);
+  if (!ctx) return { error: NOT_ALLOWED };
+  const entitlements = await getEntitlements(ctx.tenant.id);
+  const plan = entitlements.plan;
+  if (!plan || plan.moduleChoices < 1)
+    return { error: "Your plan doesn't include a choice of tools." };
+
+  const picked = formData.getAll("module").map(String);
+  const allowed = MODULES.filter((m) => !plan.includedModules.includes(m.key)).map((m) => m.key);
+  if (picked.length > plan.moduleChoices || picked.some((key) => !allowed.includes(key as never))) {
+    return {
+      error: `Pick ${plan.moduleChoices === 1 ? "one tool" : `up to ${plan.moduleChoices} tools`}.`,
+    };
+  }
+  const supabase = await createClient();
+  const { error } = await supabase.rpc("choose_modules", {
+    p_tenant_id: ctx.tenant.id,
+    p_modules: picked,
+  });
+  if (error) return { error: "We couldn't save that choice. Try again in a moment." };
+  revalidatePath(`/w/${slug}`, "layout");
+  return {};
 }

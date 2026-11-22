@@ -8,7 +8,8 @@ import { RETENTION_DAYS, TRIAL_DAYS } from "@/lib/billing/plans";
 import { billingConfigured } from "@/lib/billing/stripe";
 import { getEntitlements, type Entitlements } from "@/lib/entitlements";
 import { canManage, getTenantContext } from "@/lib/tenants";
-import { ChoosePlanButton, ManageBillingButton } from "./billing-forms";
+import { MODULES } from "@/lib/modules";
+import { ChoosePlanButton, ManageBillingButton, ModuleChoiceForm } from "./billing-forms";
 
 export const metadata: Metadata = { title: "Billing" };
 
@@ -111,6 +112,27 @@ export default async function BillingPage({
           )}
         </CardContent>
       </Card>
+
+      {entitlements.plan && entitlements.plan.moduleChoices > 0 && manager && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Your extra tool</CardTitle>
+            <CardDescription>
+              {entitlements.plan.name} includes the money view plus one more tool. You can change
+              your pick whenever you like.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ModuleChoiceForm
+              slug={tenant.slug}
+              chosen={entitlements.chosenModules}
+              options={MODULES.filter(
+                (m) => !entitlements.plan?.includedModules.includes(m.key),
+              ).map((m) => ({ ...m }))}
+            />
+          </CardContent>
+        </Card>
+      )}
 
       <section aria-label="Plans" className="flex flex-col gap-4">
         <h2 className="text-lg font-semibold">Plans</h2>

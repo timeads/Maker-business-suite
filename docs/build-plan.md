@@ -10,7 +10,7 @@ The full plan lives in the "Maker Business Suite — Claude Code Build Plan" doc
 | 2     | Billing and plans                                              | Built, awaiting Stripe keys |
 | 3     | Connections hub                                                | Built, awaiting app keys    |
 | 4     | Financial dashboard module                                     | Built, awaiting app keys    |
-| 5     | Help desk module                                               | Not started                 |
+| 5     | Help desk module                                               | Built, awaiting email keys  |
 | 6     | Bookings, then Social                                          | Not started                 |
 | 7     | Claude customization layer                                     | Not started                 |
 | 8     | Hardening and launch                                           | Not started                 |
@@ -130,3 +130,33 @@ Open decisions and deferrals:
 - Customers and products are stored when they appear on an order.
 - A customer data request emails the workspace owners rather than producing
   an export; review before Shopify's app review (Phase 8).
+
+## Phase 5: Help desk module
+
+Goal: one inbox for email with Shopify order context next to each ticket.
+
+Done when:
+
+- [ ] An email sent to the tenant's address becomes a ticket (parsing, the
+      queue and filing are tested; needs a real Postmark inbound stream)
+- [ ] Replies thread correctly (tested at the database level by reply key and
+      by mail headers; needs a real round trip through a mail app)
+- [ ] The order panel matches the sender's email (it queries orders by the
+      contact's email; needs real synced orders)
+
+To switch the help desk on for an environment: set `INBOUND_EMAIL_DOMAIN`,
+`POSTMARK_INBOUND_SECRET`, `POSTMARK_SERVER_TOKEN` and `ANTHROPIC_API_KEY`
+(see `.env.example`) on the web service, the first of them on the worker too,
+and point Postmark's inbound webhook at `/api/webhooks/postmark`.
+
+Open decisions and deferrals:
+
+- Reply templates are stored in `configs`, not in a `reply_templates` table
+  as the plan's data model listed, because rule 4 puts templates in configs.
+- Email only: no attachments, no HTML rendering of customer mail, and
+  Instagram and Facebook messages wait for the Meta review (Phase 6).
+- Drafts use Claude Opus 5.5 at low effort, metered against the plan's
+  monthly AI allowance with a hard stop at the limit. The 80% warning and
+  credit top-ups come with the assistant (Phase 7).
+- Anyone on the team can reply; there is no assignment yet.
+- Starter's "one tool of your choice" now has its chooser on the Billing page.

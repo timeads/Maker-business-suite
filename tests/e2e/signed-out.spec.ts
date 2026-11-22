@@ -66,3 +66,8 @@ test("a connection callback without a matching session goes nowhere useful", asy
   await page.goto("/api/connections/shopify/callback?code=x&state=y&shop=evil.myshopify.com");
   await expect(page).toHaveURL(/\/login/);
 });
+
+test("the inbound email webhook refuses requests without its secret", async ({ request }) => {
+  const res = await request.post("/api/webhooks/postmark", { data: { MessageID: "x" } });
+  expect([401, 503]).toContain(res.status());
+});

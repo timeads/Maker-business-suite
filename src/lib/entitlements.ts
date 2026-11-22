@@ -28,6 +28,8 @@ export type Entitlements = {
   renewsAt: string | null;
   cancelsAtPeriodEnd: boolean;
   purgeAfter: string | null;
+  /** The optional tools this workspace picked, on plans that include a choice. */
+  chosenModules: ModuleKey[];
   can(feature: Feature): boolean;
   limit(name: Limit): number;
 };
@@ -59,6 +61,7 @@ export function resolveEntitlements(subscription: SubscriptionSummary | null): E
     renewsAt: usable ? (subscription?.current_period_end ?? null) : null,
     cancelsAtPeriodEnd: Boolean(usable && subscription?.cancel_at_period_end),
     purgeAfter: access === "read_only" ? (subscription?.purge_after ?? null) : null,
+    chosenModules: [...chosen] as ModuleKey[],
     can(feature) {
       if (!plan) return false;
       if (feature === "mcp") return plan.mcp;
