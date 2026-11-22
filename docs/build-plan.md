@@ -266,3 +266,28 @@ Open decisions and deferrals:
   Proposals and the change history are saved.
 - Any member can ask the assistant and file a suggestion; only owners and
   admins can apply one or put a setting back.
+
+## The overhaul: eight tools in the house look
+
+After Phase 7 the suite was rebuilt to follow the single-tenant apps it grew
+out of, in the "Tuft Life" house style. Status of each tool:
+
+| Tool      | What it does now                                                                                                                                                  | Waiting on a decision                                                   |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Home      | The day's to-do list: one line per tool, what needs someone first                                                                                                 |                                                                         |
+| Messages  | Channels, direct messages, mentions, unread counts, heads-ups from other tools                                                                                    |                                                                         |
+| Money     | Dashboards from Shopify and QuickBooks                                                                                                                            |                                                                         |
+| Help desk | Three-pane inbox, assignment, priority, snooze, team notes, joining conversations, rules, reply variables, reports, shortcuts                                     | Chat widget; Instagram and Facebook messages; text messages             |
+| Bookings  | Check-in, notes and tags, add/move/cancel a person, private and closed dates, weekly repeats, email everyone, editable emails with thank-you, calendar, customers | Text reminders; shared capacity across workshops                        |
+| Social    | Photo library, projects, multi-photo posts, per-channel captions, content plan, draft the month, month review, link page                                          | More networks; slides; video and reels; email newsletters; post results |
+| Stock     | Reorder suggestions by supplier, item health, purchase orders, checking deliveries in, adding them to the shop's count                                            | Daily out-of-stock history; payables                                    |
+| Shipping  | To-send queue, part shipments, packing slips, tracking, holds, sent log, marking orders sent in the shop                                                          | Buying postage (needs a label provider)                                 |
+
+Shopify permissions the newer tools use, on top of the read-only ones:
+`write_inventory` and `read_locations` (Stock adds deliveries to the shop's
+count) and `write_merchant_managed_fulfillment_orders` (Shipping marks orders
+as sent). Each is optional: without it the tool works and the shop is updated
+by hand. Shipping also needs the app to be allowed to read customer addresses.
+
+Stock and Shipping are on the Growth and Studio plans and are not yet among
+the tools a Starter workspace can choose.
