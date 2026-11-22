@@ -301,3 +301,66 @@ describe("invites", () => {
     });
   });
 });
+
+describe("invites waiting for a signed-in person", () => {
+  it("shows a person the invites sent to their email, and nobody else's", async () => {
+    const frank = await user("frank@a.test");
+    const { invite_id } = await invite(alice, tenantA.id, "Frank@A.test", "admin");
+    await invite(bob, tenantB.id, "someone-else@b.test");
+
+    const pending = (who: User) =>
+      asUser(db, who, async (tx) => {
+        const { rows } = await tx.query<{ invite_id: string; tenant_name: string; role: string }>(
+          "select invite_id, tenant_name, role from public.my_pending_invites()",
+        );
+        return rows;
+      });
+
+    expect(await pending(frank)).toEqual([{ invite_id, tenant_name: "Alice Rugs", role: "admin" }]);
+    expect(await pending(bob)).toEqual([]);
+
+    // Bob knows the id but it isn't his invite.
+    await expect(
+      asUser(db, bob, (tx) => tx.query("select public.accept_invite_by_id($1)", [invite_id])),
+    ).rejects.toThrow(/not valid/i);
+
+    const slug = await asUser(db, frank, async (tx) => {
+      const { rows } = await tx.query<{ s: string }>("select public.accept_invite_by_id($1) as s", [
+        invite_id,
+      ]);
+      return rows[0].s;
+    });
+    expect(slug).toBe(tenantA.slug);
+    expect(await pending(frank)).toEqual([]);
+    await asUser(db, frank, async (tx) => {
+      const m = await tx.query<{ role: string }>(
+        "select role from public.memberships where user_id = $1",
+        [frank.id],
+      );
+      expect(m.rows).toEqual([{ role: "admin" }]);
+    });
+    await expect(
+      asUser(db, frank, (tx) => tx.query("select public.accept_invite_by_id($1)", [invite_id])),
+    ).rejects.toThrow(/already been used/i);
+  });
+
+  it("hides expired and withdrawn invites, and signed-out visitors can't ask", async () => {
+    const gina = await user("gina@a.test");
+    const expired = await invite(alice, tenantA.id, gina.email);
+    await db.query(
+      "update public.invites set expires_at = now() - interval '1 minute' where id = $1",
+      [expired.invite_id],
+    );
+    await asUser(db, gina, async (tx) => {
+      expect((await tx.query("select * from public.my_pending_invites()")).rows).toEqual([]);
+    });
+    await expect(
+      asUser(db, gina, (tx) =>
+        tx.query("select public.accept_invite_by_id($1)", [expired.invite_id]),
+      ),
+    ).rejects.toThrow(/expired/i);
+    await expect(
+      asAnon(db, (tx) => tx.query("select * from public.my_pending_invites()")),
+    ).rejects.toThrow(/permission denied/i);
+  });
+});
