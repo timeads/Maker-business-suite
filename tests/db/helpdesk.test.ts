@@ -407,3 +407,151 @@ describe("plan choices and privacy", () => {
     expect(theirs.rows).toHaveLength(1);
   });
 });
+
+describe("working the inbox as a team", () => {
+  const ticketRow = async (id: string) =>
+    (
+      await db.query<{
+        status: string;
+        assignee_id: string | null;
+        priority: string;
+        snoozed_until: string | null;
+        merged_into: string | null;
+        first_reply_at: string | null;
+        closed_at: string | null;
+      }>(
+        "select status, assignee_id, priority, snoozed_until, merged_into, first_reply_at, closed_at from public.tickets where id = $1",
+        [id],
+      )
+    ).rows[0];
+  const as = (user: User, sql: string, params: unknown[]) =>
+    asUser(db, user, (tx) => tx.query(sql, params));
+
+  it("assigns only to people in the workspace, and the first reply takes an unassigned one", async () => {
+    const t = await email("alice-rugs", "team1@example.com", "Who has this?");
+    await expect(
+      as(alice, "select public.assign_ticket($1, $2)", [t.ticket_id, bob.id]),
+    ).rejects.toThrow(/not in this workspace/);
+    await as(alice, "select public.record_reply($1, 'On it', 'help@a.test', 'out-team-1')", [
+      t.ticket_id,
+    ]);
+    const row = await ticketRow(t.ticket_id!);
+    expect(row.assignee_id).toBe(alice.id);
+    expect(row.first_reply_at).not.toBeNull();
+    await as(alice, "select public.assign_ticket($1, null)", [t.ticket_id]);
+    expect((await ticketRow(t.ticket_id!)).assignee_id).toBeNull();
+  });
+
+  it("a snoozed conversation wakes when the customer writes again", async () => {
+    const t = await email("alice-rugs", "team2@example.com", "Later please");
+    await expect(
+      as(alice, "select public.snooze_ticket($1, now() - interval '1 hour')", [t.ticket_id]),
+    ).rejects.toThrow(/coming year/);
+    await as(alice, "select public.snooze_ticket($1, now() + interval '2 days')", [t.ticket_id]);
+    expect((await ticketRow(t.ticket_id!)).snoozed_until).not.toBeNull();
+    await email("alice-rugs", "team2@example.com", "Re: Later please", {
+      replyKey: await replyKey(t.ticket_id!),
+    });
+    expect((await ticketRow(t.ticket_id!)).snoozed_until).toBeNull();
+  });
+
+  it("closing stamps the time and reopening clears it; priority takes only real values", async () => {
+    const t = await email("alice-rugs", "team3@example.com", "Urgent thing");
+    await as(alice, "select public.set_ticket_priority($1, 'urgent')", [t.ticket_id]);
+    await expect(
+      as(alice, "select public.set_ticket_priority($1, 'panic')", [t.ticket_id]),
+    ).rejects.toThrow();
+    await as(alice, "select public.set_ticket_status($1, 'closed')", [t.ticket_id]);
+    expect((await ticketRow(t.ticket_id!)).closed_at).not.toBeNull();
+    await as(alice, "select public.set_ticket_status($1, 'open')", [t.ticket_id]);
+    const row = await ticketRow(t.ticket_id!);
+    expect(row.closed_at).toBeNull();
+    expect(row.priority).toBe("urgent");
+  });
+
+  it("notes stay inside the workspace and only mention its own people", async () => {
+    const t = await email("alice-rugs", "team4@example.com", "Note me");
+    await as(alice, "select public.add_ticket_note($1, 'Ask Sam about this', $2)", [
+      t.ticket_id,
+      [alice.id, bob.id],
+    ]);
+    const { rows } = await db.query<{ mentions: string[] }>(
+      "select mentions from public.ticket_notes where ticket_id = $1",
+      [t.ticket_id],
+    );
+    expect(rows[0].mentions).toEqual([alice.id]);
+    const seenByBob = await asUser(
+      db,
+      bob,
+      async (tx) => (await tx.query("select id from public.ticket_notes")).rows,
+    );
+    expect(seenByBob).toHaveLength(0);
+    await expect(
+      as(bob, "select public.add_ticket_note($1, 'sneaky', '{}')", [t.ticket_id]),
+    ).rejects.toThrow(/Ticket not found/);
+    await expect(
+      as(
+        alice,
+        "insert into public.ticket_notes (tenant_id, ticket_id, body) values ($1, $2, 'x')",
+        [tenantA, t.ticket_id],
+      ),
+    ).rejects.toThrow(/permission denied/);
+  });
+
+  it("joining two conversations moves everything across, and later replies follow", async () => {
+    const first = await email("alice-rugs", "team5@example.com", "Where is my order?");
+    const second = await email("alice-rugs", "team5@example.com", "Hello?? order", {
+      tags: ["shipping"],
+    });
+    const other = await email("bob-pottery", "team5@example.com", "Other shop");
+    await expect(
+      as(alice, "select public.merge_tickets($1, $2)", [second.ticket_id, other.ticket_id]),
+    ).rejects.toThrow(/Ticket not found/);
+    await as(alice, "select public.merge_tickets($1, $2)", [second.ticket_id, first.ticket_id]);
+
+    const moved = await db.query("select id from public.messages where ticket_id = $1", [
+      first.ticket_id,
+    ]);
+    expect(moved.rows).toHaveLength(2);
+    const source = await ticketRow(second.ticket_id!);
+    expect(source.merged_into).toBe(first.ticket_id);
+    expect(source.status).toBe("closed");
+    const tags = await db.query<{ name: string }>(
+      "select g.name from public.ticket_tags tt join public.tags g on g.id = tt.tag_id where tt.ticket_id = $1",
+      [first.ticket_id],
+    );
+    expect(tags.rows.map((r) => r.name)).toContain("shipping");
+
+    // A reply addressed to the folded conversation lands in the one it joined.
+    const late = await email("alice-rugs", "team5@example.com", "Re: Hello?? order", {
+      replyKey: await replyKey(second.ticket_id!),
+    });
+    expect(late.ticket_id).toBe(first.ticket_id);
+    await expect(
+      as(alice, "select public.merge_tickets($1, $2)", [second.ticket_id, first.ticket_id]),
+    ).rejects.toThrow(/can't be joined/);
+  });
+
+  it("rules can set priority and hand a new conversation to a teammate, never an outsider", async () => {
+    const t = await email("alice-rugs", "team6@example.com", "Wholesale enquiry");
+    await service("select public.apply_ticket_rules($1, $2, 'high', $3)", [
+      tenantA,
+      t.ticket_id,
+      bob.id,
+    ]);
+    let row = await ticketRow(t.ticket_id!);
+    expect(row.priority).toBe("high");
+    expect(row.assignee_id).toBeNull();
+    await service("select public.apply_ticket_rules($1, $2, null, $3)", [
+      tenantA,
+      t.ticket_id,
+      alice.id,
+    ]);
+    row = await ticketRow(t.ticket_id!);
+    expect(row.assignee_id).toBe(alice.id);
+    expect(row.priority).toBe("high");
+    await expect(
+      as(alice, "select public.apply_ticket_rules($1, $2, 'low', null)", [tenantA, t.ticket_id]),
+    ).rejects.toThrow(/permission denied/);
+  });
+});
