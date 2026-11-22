@@ -4,6 +4,7 @@
  * Jobs:
  *  - on start, make sure Stripe has the plans from plans.ts
  *  - apply queued Stripe events to the subscriptions table
+ *  - file inbound emails into help desk tickets
  *  - run sync jobs for connected accounts (first sync, webhooks, scheduled pulls)
  *  - every few minutes, queue pulls for providers that don't push changes
  *  - once an hour, delete workspaces whose retention window has passed
@@ -18,7 +19,15 @@ import { runSyncJob, type RunnerDeps, type SyncJob } from "../src/lib/connection
 import { rpcSyncStore } from "../src/lib/connections/store";
 import { getProviderToken, vaultTokenStore, type TokenDeps } from "../src/lib/connections/tokens";
 import { sendEmail } from "../src/lib/email";
-import { getAdminClient } from "../src/lib/supabase/admin";
+import { inboundDomain } from "../src/lib/helpdesk/addresses";
+import { HELPDESK_MODULE, RULES_KEY, parseRules } from "../src/lib/helpdesk/config";
+import {
+  processInboundEmail,
+  type InboundDeps,
+  type IngestResult,
+  type PostmarkInbound,
+} from "../src/lib/helpdesk/inbound";
+import { getAdminClient, withTenant } from "../src/lib/supabase/admin";
 
 const POLL_MS = 5_000;
 const SCHEDULE_EVERY_MS = 5 * 60 * 1000;
@@ -157,6 +166,69 @@ async function drainSyncJobs(): Promise<number> {
   return jobs.length;
 }
 
+/** Files queued inbound emails into help desk tickets. */
+async function drainInboundEmails(): Promise<number> {
+  const domain = inboundDomain();
+  if (!domain) return 0;
+  const admin = getAdminClient();
+  const { data, error } = await admin.rpc("claim_inbound_emails", { p_limit: 10 });
+  if (error) throw new Error(`Could not claim inbound emails: ${error.message}`);
+  const emails = (data ?? []) as { id: string; payload: PostmarkInbound; attempts: number }[];
+
+  const deps: InboundDeps = {
+    async rulesFor(slug) {
+      const { data: tenants } = await admin.from("tenants").select("id").eq("slug", slug);
+      const tenantId = (tenants as { id: string }[] | null)?.[0]?.id;
+      if (!tenantId) return null;
+      return withTenant(
+        tenantId,
+        async (scope) => {
+          const { data: config } = await scope
+            .select("configs", "body")
+            .eq("module", HELPDESK_MODULE)
+            .eq("key", RULES_KEY)
+            .maybeSingle();
+          return parseRules((config as { body?: unknown } | null)?.body);
+        },
+        admin,
+      );
+    },
+    async ingest(email, tags) {
+      const { data: result, error: ingestError } = await admin.rpc("ingest_inbound_email", {
+        p_slug: email.slug,
+        p_provider_message_id: email.providerMessageId,
+        p_from_email: email.fromEmail,
+        p_from_name: email.fromName,
+        p_subject: email.subject,
+        p_body: email.body,
+        p_message_id: email.messageId,
+        p_reply_key: email.replyKey,
+        p_references: email.references,
+        p_tags: tags,
+      });
+      if (ingestError) throw new Error(ingestError.message);
+      return result as IngestResult;
+    },
+  };
+
+  for (const email of emails) {
+    let failure: string | null = null;
+    try {
+      const result = await processInboundEmail(email.payload, domain, deps);
+      console.log(`inbound email ${email.id}: ${result}`);
+    } catch (err) {
+      failure = err instanceof Error ? err.message : String(err);
+      console.error(`inbound email ${email.id} failed (attempt ${email.attempts}): ${failure}`);
+    }
+    const { error: completeError } = await admin.rpc("complete_inbound_email", {
+      p_id: email.id,
+      p_error: failure,
+    });
+    if (completeError) console.error(`could not mark ${email.id}: ${completeError.message}`);
+  }
+  return emails.length;
+}
+
 async function queueScheduledSyncs() {
   const admin = getAdminClient();
   for (const key of PROVIDER_ORDER) {
@@ -200,7 +272,10 @@ async function main() {
   let lastSchedule = 0;
   let lastPurge = 0;
   while (!stopping) {
-    const handled = (await attempt(drainStripeEvents, 0)) + (await attempt(drainSyncJobs, 0));
+    const handled =
+      (await attempt(drainStripeEvents, 0)) +
+      (await attempt(drainSyncJobs, 0)) +
+      (await attempt(drainInboundEmails, 0));
 
     if (Date.now() - lastSchedule > SCHEDULE_EVERY_MS) {
       lastSchedule = Date.now();
