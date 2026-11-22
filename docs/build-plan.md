@@ -9,7 +9,7 @@ The full plan lives in the "Maker Business Suite — Claude Code Build Plan" doc
 | 1     | Foundation and tenancy                                         | Built                       |
 | 2     | Billing and plans                                              | Built, awaiting Stripe keys |
 | 3     | Connections hub                                                | Built, awaiting app keys    |
-| 4     | Financial dashboard module                                     | Not started                 |
+| 4     | Financial dashboard module                                     | Built, awaiting app keys    |
 | 5     | Help desk module                                               | Not started                 |
 | 6     | Bookings, then Social                                          | Not started                 |
 | 7     | Claude customization layer                                     | Not started                 |
@@ -102,3 +102,31 @@ Open decisions and deferrals:
   workspace) is Phase 8.
 - Owners are emailed when a connection needs reconnecting only once Postmark
   is configured.
+
+## Phase 4: Financial dashboard module
+
+Goal: a useful money view in the first five minutes after connecting.
+
+Done when:
+
+- [ ] A new tenant connects Shopify + QuickBooks and sees populated widgets
+      without any setup (the default layout needs no setup and the syncs and
+      queries are tested; needs a run with real app credentials)
+- [x] Changing a widget config in the database changes the chart (the page
+      reads `configs` and validates it on every load)
+
+Open decisions and deferrals:
+
+- One date range applies to the whole dashboard (a row of presets above the
+  charts) rather than a range per widget, so every number on the page agrees.
+- Shopify only returns the last 60 days of orders unless the app is approved
+  for `read_all_orders`; once approved, add it to `SHOPIFY_EXTRA_SCOPES`.
+  Customer names and emails also need Shopify's protected customer data
+  approval for a public app.
+- QuickBooks report parsing is written from the documented report format and
+  tested against hand-built samples, not yet against a live company.
+- Money is shown in the workspace's currency; orders in other currencies are
+  not converted.
+- Customers and products are stored when they appear on an order.
+- A customer data request emails the workspace owners rather than producing
+  an export; review before Shopify's app review (Phase 8).

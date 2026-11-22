@@ -1,0 +1,325 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { periodKeys, periodLabel, type Grouping, type ResolvedRange } from "./range";
+import {
+  DASHBOARD_KEY,
+  DASHBOARD_MODULE,
+  dashboardSchema,
+  type DashboardConfig,
+  type WidgetConfig,
+} from "./schema";
+import { DEFAULT_TEMPLATE, templateConfig } from "./templates";
+
+export type Point = { key: string; label: string; longLabel: string; value: number | null };
+export type RankedRow = { name: string; value: number; detail?: string };
+
+export type WidgetData =
+  | {
+      type: "key_figures";
+      sales: number;
+      orders: number;
+      averageOrder: number | null;
+      margin: number | null;
+    }
+  | { type: "sales_over_time"; points: Point[]; total: number; grouping: Grouping }
+  | {
+      type: "gross_margin";
+      points: Point[];
+      overall: number | null;
+      source: "store" | "books";
+      coverage: number | null;
+    }
+  | { type: "top_products"; rows: RankedRow[] }
+  | { type: "sales_by_channel"; rows: RankedRow[]; total: number }
+  | { type: "cash_on_hand"; cash: number; asOf: string }
+  | { type: "ar_aging"; rows: RankedRow[]; total: number; asOf: string }
+  /** Nothing to show yet, and which connection would fill it. */
+  | { type: "empty"; needs: "shopify" | "quickbooks" };
+
+export type LoadedDashboard = {
+  config: DashboardConfig;
+  /** saved: from the workspace's config. default: no config yet. invalid: the saved one didn't parse. */
+  source: "saved" | "default" | "invalid";
+};
+
+export async function loadDashboardConfig(
+  supabase: SupabaseClient,
+  tenantId: string,
+): Promise<LoadedDashboard> {
+  const { data, error } = await supabase
+    .from("configs")
+    .select("body")
+    .eq("tenant_id", tenantId)
+    .eq("module", DASHBOARD_MODULE)
+    .eq("key", DASHBOARD_KEY)
+    .maybeSingle();
+  if (error) throw new Error(`Could not load the dashboard: ${error.message}`);
+  if (!data) return { config: templateConfig(DEFAULT_TEMPLATE), source: "default" };
+  const parsed = dashboardSchema.safeParse(data.body);
+  if (!parsed.success) return { config: templateConfig(DEFAULT_TEMPLATE), source: "invalid" };
+  return { config: parsed.data, source: "saved" };
+}
+
+type SalesRow = {
+  period: string;
+  order_count: number;
+  net_sales: number;
+  cost: number;
+  costed_sales: number;
+};
+type Snapshot = { kind: string; period_start: string; data: Record<string, unknown> };
+
+const num = (value: unknown): number => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+/**
+ * Loads what every widget on the dashboard needs for one date range. All
+ * queries run as the signed-in member, so row-level security applies.
+ */
+export async function loadDashboardData(
+  supabase: SupabaseClient,
+  tenant: { id: string; timezone: string },
+  config: DashboardConfig,
+  range: ResolvedRange,
+): Promise<Record<string, WidgetData>> {
+  const window = {
+    p_tenant_id: tenant.id,
+    p_from: range.from.toISOString(),
+    p_to: range.to.toISOString(),
+  };
+  const types = new Set(config.widgets.map((w) => w.type));
+  const needs = (...wanted: WidgetConfig["type"][]) => wanted.some((t) => types.has(t));
+
+  const salesFor = async (grouping: Grouping): Promise<SalesRow[]> => {
+    const { data, error } = await supabase.rpc("dashboard_sales_by_period", {
+      ...window,
+      p_grouping: grouping,
+      p_timezone: tenant.timezone,
+    });
+    if (error) throw new Error(`Could not load sales: ${error.message}`);
+    return ((data as Record<string, unknown>[] | null) ?? []).map((row) => ({
+      period: String(row.period),
+      order_count: num(row.order_count),
+      net_sales: num(row.net_sales),
+      cost: num(row.cost),
+      costed_sales: num(row.costed_sales),
+    }));
+  };
+
+  const groupings = new Set<Grouping>();
+  if (needs("key_figures", "gross_margin")) groupings.add("month");
+  for (const widget of config.widgets) {
+    if (widget.type === "sales_over_time") {
+      groupings.add(widget.grouping === "auto" ? range.grouping : widget.grouping);
+    }
+  }
+
+  const [salesEntries, products, channels, snapshots, anyOrder] = await Promise.all([
+    Promise.all([...groupings].map(async (g) => [g, await salesFor(g)] as const)),
+    needs("top_products")
+      ? supabase.rpc("dashboard_top_products", {
+          ...window,
+          p_limit: Math.max(
+            ...config.widgets.map((w) => (w.type === "top_products" ? w.limit : 0)),
+            3,
+          ),
+        })
+      : null,
+    needs("sales_by_channel") ? supabase.rpc("dashboard_sales_by_channel", window) : null,
+    needs("gross_margin", "cash_on_hand", "ar_aging", "key_figures")
+      ? supabase
+          .from("financial_snapshots")
+          .select("kind, period_start, data")
+          .eq("tenant_id", tenant.id)
+          .order("period_start", { ascending: true })
+      : null,
+    supabase.from("orders").select("id", { count: "exact", head: true }).eq("tenant_id", tenant.id),
+  ]);
+  for (const result of [products, channels, snapshots]) {
+    if (result?.error) throw new Error(`Could not load the dashboard: ${result.error.message}`);
+  }
+
+  const sales = new Map(salesEntries);
+  const hasOrders = (anyOrder.count ?? 0) > 0;
+  const snaps = ((snapshots?.data as Snapshot[] | null) ?? []).map((s) => ({
+    ...s,
+    data: s.data ?? {},
+  }));
+  const latest = (kind: string) => snaps.filter((s) => s.kind === kind).at(-1) ?? null;
+  const fromMonth = range.from.toISOString().slice(0, 7);
+  const profitMonths = snaps.filter(
+    (s) => s.kind === "profit_and_loss" && s.period_start.slice(0, 7) >= fromMonth,
+  );
+
+  const series = (
+    grouping: Grouping,
+    valueOf: (row: SalesRow | undefined) => number | null,
+  ): Point[] => {
+    const byPeriod = new Map((sales.get(grouping) ?? []).map((row) => [row.period, row]));
+    const keys = periodKeys({ ...range, grouping }, tenant.timezone);
+    return keys.map((key) => ({
+      key,
+      label: periodLabel(key, grouping),
+      longLabel: periodLabel(key, grouping, true),
+      value: valueOf(byPeriod.get(key)),
+    }));
+  };
+
+  const storeMargin = (rows: SalesRow[]) => {
+    const costed = rows.reduce((sum, r) => sum + r.costed_sales, 0);
+    const cost = rows.reduce((sum, r) => sum + r.cost, 0);
+    const all = rows.reduce((sum, r) => sum + r.net_sales, 0);
+    return {
+      overall: costed > 0 ? (costed - cost) / costed : null,
+      coverage: all > 0 ? Math.min(1, costed / all) : null,
+    };
+  };
+  const booksMargin = () => {
+    const income = profitMonths.reduce((sum, s) => sum + num(s.data.income), 0);
+    const gross = profitMonths.reduce((sum, s) => sum + num(s.data.gross_profit), 0);
+    return income > 0 ? gross / income : null;
+  };
+
+  const out: Record<string, WidgetData> = {};
+  for (const widget of config.widgets) {
+    switch (widget.type) {
+      case "key_figures": {
+        if (!hasOrders) {
+          out[widget.id] = { type: "empty", needs: "shopify" };
+          break;
+        }
+        const rows = sales.get("month") ?? [];
+        const total = rows.reduce((sum, r) => sum + r.net_sales, 0);
+        const orders = rows.reduce((sum, r) => sum + r.order_count, 0);
+        out[widget.id] = {
+          type: "key_figures",
+          sales: total,
+          orders,
+          averageOrder: orders > 0 ? total / orders : null,
+          margin: profitMonths.length > 0 ? booksMargin() : storeMargin(rows).overall,
+        };
+        break;
+      }
+      case "sales_over_time": {
+        if (!hasOrders) {
+          out[widget.id] = { type: "empty", needs: "shopify" };
+          break;
+        }
+        const grouping = widget.grouping === "auto" ? range.grouping : widget.grouping;
+        const points = series(grouping, (row) => row?.net_sales ?? 0);
+        out[widget.id] = {
+          type: "sales_over_time",
+          points,
+          grouping,
+          total: points.reduce((sum, p) => sum + (p.value ?? 0), 0),
+        };
+        break;
+      }
+      case "gross_margin": {
+        const useBooks =
+          widget.source === "books" || (widget.source === "auto" && profitMonths.length > 0);
+        if (useBooks) {
+          if (profitMonths.length === 0) {
+            out[widget.id] = { type: "empty", needs: "quickbooks" };
+            break;
+          }
+          out[widget.id] = {
+            type: "gross_margin",
+            source: "books",
+            coverage: null,
+            overall: booksMargin(),
+            points: profitMonths.map((s) => ({
+              key: s.period_start,
+              label: periodLabel(s.period_start, "month"),
+              longLabel: periodLabel(s.period_start, "month", true),
+              value: num(s.data.income) > 0 ? num(s.data.gross_profit) / num(s.data.income) : null,
+            })),
+          };
+          break;
+        }
+        if (!hasOrders) {
+          out[widget.id] = { type: "empty", needs: "shopify" };
+          break;
+        }
+        const rows = sales.get("month") ?? [];
+        out[widget.id] = {
+          type: "gross_margin",
+          source: "store",
+          ...storeMargin(rows),
+          points: series("month", (row) =>
+            row && row.costed_sales > 0 ? (row.costed_sales - row.cost) / row.costed_sales : null,
+          ),
+        };
+        break;
+      }
+      case "top_products": {
+        const rows = ((products?.data as Record<string, unknown>[] | null) ?? []).slice(
+          0,
+          widget.limit,
+        );
+        out[widget.id] =
+          rows.length === 0 && !hasOrders
+            ? { type: "empty", needs: "shopify" }
+            : {
+                type: "top_products",
+                rows: rows.map((row) => ({
+                  name: String(row.title),
+                  value: num(row.revenue),
+                  detail: `${num(row.units)} sold`,
+                })),
+              };
+        break;
+      }
+      case "sales_by_channel": {
+        const rows = (channels?.data as Record<string, unknown>[] | null) ?? [];
+        out[widget.id] =
+          rows.length === 0 && !hasOrders
+            ? { type: "empty", needs: "shopify" }
+            : {
+                type: "sales_by_channel",
+                total: rows.reduce((sum, row) => sum + num(row.net_sales), 0),
+                rows: rows.map((row) => ({
+                  name: String(row.channel),
+                  value: num(row.net_sales),
+                  detail: `${num(row.order_count)} ${num(row.order_count) === 1 ? "order" : "orders"}`,
+                })),
+              };
+        break;
+      }
+      case "cash_on_hand": {
+        const sheet = latest("balance_sheet");
+        out[widget.id] = sheet
+          ? { type: "cash_on_hand", cash: num(sheet.data.cash), asOf: sheet.period_start }
+          : { type: "empty", needs: "quickbooks" };
+        break;
+      }
+      case "ar_aging": {
+        const aging = latest("ar_aging");
+        const buckets =
+          (aging?.data.buckets as { label: string; amount: number }[] | undefined) ?? [];
+        out[widget.id] = aging
+          ? {
+              type: "ar_aging",
+              asOf: aging.period_start,
+              total: num(aging.data.total),
+              rows: buckets.map((b) => ({ name: agingLabel(b.label), value: num(b.amount) })),
+            }
+          : { type: "empty", needs: "quickbooks" };
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/** "1 - 30" → "1–30 days late". */
+export function agingLabel(label: string): string {
+  const trimmed = label.trim();
+  if (/^current$/i.test(trimmed)) return "Not due yet";
+  const range = trimmed.match(/^(\d+)\s*-\s*(\d+)$/);
+  if (range) return `${range[1]}–${range[2]} days late`;
+  const over = trimmed.match(/^(\d+)\s+and\s+over$/i);
+  if (over) return `${over[1]}+ days late`;
+  return trimmed;
+}

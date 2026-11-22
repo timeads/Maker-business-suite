@@ -24,12 +24,20 @@ export default async function WorkspaceHomePage({ params }: { params: Promise<{ 
 
       <section aria-label="Modules" className="grid gap-4 sm:grid-cols-2">
         {MODULES.map((m) => (
-          <Card key={m.key} className="border-dashed bg-transparent">
+          <Card key={m.key} className={m.available ? undefined : "border-dashed bg-transparent"}>
             <CardHeader>
               <CardTitle className="text-base">{m.name}</CardTitle>
               <CardDescription>{m.blurb}</CardDescription>
             </CardHeader>
-            <CardContent className="text-muted-foreground pt-4 text-xs">Coming soon</CardContent>
+            <CardContent className="text-muted-foreground pt-4 text-xs">
+              {m.available ? (
+                <Button asChild variant="outline" size="sm">
+                  <Link href={`/w/${tenant.slug}/${m.key}`}>Open {m.name}</Link>
+                </Button>
+              ) : (
+                "Coming soon"
+              )}
+            </CardContent>
           </Card>
         ))}
       </section>

@@ -6,7 +6,7 @@ are OAuth apps owned by us.
 
 ## Current phase
 
-Phase 3: Connections hub (see docs/build-plan.md)
+Phase 4: Financial dashboard module (see docs/build-plan.md)
 
 ## Stack
 
@@ -71,6 +71,13 @@ Phase 3: Connections hub (see docs/build-plan.md)
   only through `getProviderToken()` (it refreshes under a per-connection lock
   because refresh tokens rotate). Webhooks verify the signature on the raw
   body, queue a `sync_jobs` row and return; the worker runs the job.
+- Money view: dashboards are JSON in `configs` (module `dashboard`), parsed
+  with the Zod schemas in `lib/dashboard/schema.ts` on every read. Sync writes
+  go through service-role functions that name the workspace
+  (`upsert_commerce_batch`, ...); dashboard queries run as the member under
+  RLS. Chart text is formatted on the server (`prepareTimeChart`) so server
+  and browser output match. Charts follow one validated series colour
+  (`--chart-1`) and always offer a table view.
 - Schema changes are new files in `supabase/migrations`; never edit an
   applied migration.
 - UI copy: warm and plain, written for makers, not developers.

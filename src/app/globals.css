@@ -16,6 +16,9 @@
   --destructive: #a12a2a;
   --ring: #b4472b;
   --sidebar: #f4efe7;
+  /* Charts: one validated series colour per mode, and a recessive grid. */
+  --chart-1: #b4472b;
+  --chart-grid: #ece5da;
   --radius: 0.625rem;
 }
 
@@ -36,6 +39,8 @@
     --destructive: #e06a6a;
     --ring: #e0714f;
     --sidebar: #201b18;
+    --chart-1: #d4673f;
+    --chart-grid: #332c27;
   }
 }
 
@@ -55,6 +60,8 @@
   --color-destructive: var(--destructive);
   --color-ring: var(--ring);
   --color-sidebar: var(--sidebar);
+  --color-chart-1: var(--chart-1);
+  --color-chart-grid: var(--chart-grid);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);

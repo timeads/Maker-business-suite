@@ -4,7 +4,7 @@ export const MODULES = [
     key: "dashboard",
     name: "Money",
     blurb: "Sales, margins and cash in one view",
-    available: false,
+    available: true,
   },
   {
     key: "helpdesk",
