@@ -34,7 +34,81 @@ export type ConnectFinish = {
   input: Record<string, string>;
 };
 
+export type CustomerRow = {
+  external_id: string;
+  email: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  source_created_at: string | null;
+  source_updated_at: string | null;
+};
+
+export type ProductRow = {
+  external_id: string;
+  title: string;
+  vendor: string | null;
+  product_type: string | null;
+  status: string | null;
+  source_updated_at: string | null;
+};
+
+export type OrderLineRow = {
+  external_id: string;
+  product_external_id: string | null;
+  title: string;
+  variant_title: string | null;
+  sku: string | null;
+  quantity: number;
+  unit_price: number;
+  unit_cost: number | null;
+};
+
+export type OrderRow = {
+  external_id: string;
+  name: string | null;
+  customer_external_id: string | null;
+  email: string | null;
+  processed_at: string;
+  currency: string | null;
+  net_sales: number;
+  total_tax: number;
+  total_shipping: number;
+  total: number;
+  financial_status: string | null;
+  fulfillment_status: string | null;
+  channel: string;
+  cancelled_at: string | null;
+  is_test: boolean;
+  source_updated_at: string | null;
+  lines: OrderLineRow[];
+};
+
+export type SnapshotRow = {
+  kind: "profit_and_loss" | "balance_sheet" | "ar_aging";
+  period_start: string;
+  period_end: string;
+  data: Record<string, unknown>;
+};
+
+/** Where a sync puts what it fetched. Always scoped to the job's workspace and provider. */
+export type SyncStore = {
+  upsertCommerce(batch: {
+    customers?: CustomerRow[];
+    products?: ProductRow[];
+    orders?: OrderRow[];
+  }): Promise<void>;
+  saveSnapshots(rows: SnapshotRow[]): Promise<void>;
+  /** Erases one shopper's personal details, keeping the sales figures. */
+  redactCustomer(externalId: string, email: string | null): Promise<void>;
+  /** Deletes everything synced from this provider for the workspace. */
+  purgeProviderData(): Promise<void>;
+  /** Counts API calls made, for usage limits. */
+  recordUsage(calls: number): Promise<void>;
+  notifyOwners(subject: string, text: string): Promise<void>;
+};
+
 export type SyncContext = {
+  store: SyncStore;
   connectionId: string;
   externalAccountId: string;
   token: TokenSet;
@@ -50,6 +124,8 @@ export type SyncResult = {
   cursor?: Record<string, unknown>;
   /** Fresh details to show about the connected account. */
   account?: { displayName?: string; metadata?: Record<string, unknown> };
+  /** Set when there is more to fetch: the job is re-queued with this cursor. */
+  continueWith?: Record<string, unknown>;
   /** Set when the provider told us the connection is over (app uninstalled). */
   disconnected?: string;
 };
@@ -93,6 +169,8 @@ export interface ProviderAdapter {
   /** Best-effort revoke on the provider's side. */
   disconnect(token: TokenSet, externalAccountId: string): Promise<void>;
   sync(ctx: SyncContext): Promise<SyncResult>;
+  /** Webhook topics that are handled without a token (it may already be dead). */
+  tokenlessTopics?: readonly string[];
   /** How often to pull when the provider doesn't push changes. Null = webhook-driven. */
   pollEveryHours: number | null;
 }

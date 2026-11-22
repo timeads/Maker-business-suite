@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { ProviderHttpError, requestJson, requiredEnv } from "../http";
+import { syncShopify } from "./shopify-sync";
 import {
   ConnectError,
   ReconnectRequiredError,
@@ -9,7 +10,18 @@ import {
   type TokenSet,
 } from "../types";
 
-const SCOPES = ["read_orders", "read_customers", "read_products", "read_inventory"];
+const BASE_SCOPES = ["read_orders", "read_customers", "read_products", "read_inventory"];
+/**
+ * Extra scopes Shopify has approved for the app, comma separated. Without
+ * `read_all_orders`, Shopify only returns the last 60 days of orders.
+ */
+const scopes = () => [
+  ...BASE_SCOPES,
+  ...(process.env.SHOPIFY_EXTRA_SCOPES ?? "")
+    .split(",")
+    .map((scope) => scope.trim())
+    .filter(Boolean),
+];
 const WEBHOOK_TOPICS = [
   "ORDERS_CREATE",
   "ORDERS_UPDATED",
@@ -141,7 +153,7 @@ export function createShopifyAdapter(fetchImpl: Fetch = fetch): ProviderAdapter 
       input.shop = shop;
       const url = new URL(`https://${shop}/admin/oauth/authorize`);
       url.searchParams.set("client_id", clientId());
-      url.searchParams.set("scope", SCOPES.join(","));
+      url.searchParams.set("scope", scopes().join(","));
       url.searchParams.set("redirect_uri", redirectUri);
       url.searchParams.set("state", state);
       return url.toString();
@@ -254,21 +266,8 @@ export function createShopifyAdapter(fetchImpl: Fetch = fetch): ProviderAdapter 
       );
     },
 
-    async sync({ externalAccountId, token, job }) {
-      if (job.type === "webhook") {
-        if (job.topic === "app/uninstalled")
-          return { disconnected: "The app was removed from the store" };
-        if (job.topic === "shop/redact")
-          return { disconnected: "Shopify asked us to erase this store's data" };
-        // Order and customer changes are stored once the money view exists
-        // (Phase 4). Until then, receiving them is all there is to do.
-        return {};
-      }
-      const info = await shopInfo(externalAccountId, token);
-      return {
-        account: { displayName: info.shop.name, metadata: { currency: info.shop.currencyCode } },
-        cursor: { synced_at: new Date().toISOString() },
-      };
-    },
+    tokenlessTopics: ["app/uninstalled", ...SHOPIFY_COMPLIANCE_TOPICS],
+
+    sync: (ctx) => syncShopify(ctx, graphql),
   };
 }

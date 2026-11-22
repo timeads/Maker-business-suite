@@ -5,8 +5,15 @@ import {
   type ConnectedAccount,
   type Fetch,
   type ProviderAdapter,
+  type SnapshotRow,
   type TokenSet,
 } from "../types";
+import {
+  parseAgedReceivables,
+  parseBalanceSheet,
+  parseProfitAndLoss,
+  type QuickBooksReport,
+} from "./quickbooks-reports";
 
 const SCOPE = "com.intuit.quickbooks.accounting";
 const AUTHORIZE_URL = "https://appcenter.intuit.com/connect/oauth2";
@@ -62,6 +69,28 @@ export function createQuickBooksAdapter(fetchImpl: Fetch = fetch): ProviderAdapt
         fetchImpl,
         "QuickBooks",
         `${apiBase()}/v3/company/${encodeURIComponent(realmId)}/companyinfo/${encodeURIComponent(realmId)}?minorversion=75`,
+        { headers: { Authorization: `Bearer ${token.access_token}`, Accept: "application/json" } },
+      );
+    } catch (err) {
+      if (err instanceof ProviderHttpError && err.status === 401) {
+        throw new ReconnectRequiredError("QuickBooks no longer accepts this company's access");
+      }
+      throw err;
+    }
+  }
+
+  async function report(
+    realmId: string,
+    token: TokenSet,
+    name: string,
+    params: Record<string, string>,
+  ): Promise<QuickBooksReport> {
+    const query = new URLSearchParams({ ...params, minorversion: "75" });
+    try {
+      return await requestJson<QuickBooksReport>(
+        fetchImpl,
+        "QuickBooks",
+        `${apiBase()}/v3/company/${encodeURIComponent(realmId)}/reports/${name}?${query}`,
         { headers: { Authorization: `Bearer ${token.access_token}`, Accept: "application/json" } },
       );
     } catch (err) {
@@ -147,12 +176,34 @@ export function createQuickBooksAdapter(fetchImpl: Fetch = fetch): ProviderAdapt
       });
     },
 
-    async sync({ externalAccountId, token }) {
-      // Report pulls (P&L, balance sheet) arrive with the money view (Phase 4).
+    async sync({ externalAccountId, token, store }) {
       const info = await companyInfo(externalAccountId, token);
+      const today = new Date();
+      const iso = (date: Date) => date.toISOString().slice(0, 10);
+      const start = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - 12, 1));
+
+      // Three report pulls per sync, cached as snapshots. Dashboards read the
+      // cache, never QuickBooks, which keeps us well inside Intuit's limits.
+      const [profitAndLoss, balanceSheet, receivables] = await Promise.all([
+        report(externalAccountId, token, "ProfitAndLoss", {
+          start_date: iso(start),
+          end_date: iso(today),
+          summarize_column_by: "Month",
+        }),
+        report(externalAccountId, token, "BalanceSheet", { date_macro: "Today" }),
+        report(externalAccountId, token, "AgedReceivables", { report_date: iso(today) }),
+      ]);
+      const snapshots = [
+        ...parseProfitAndLoss(profitAndLoss),
+        parseBalanceSheet(balanceSheet, iso(today)),
+        parseAgedReceivables(receivables, iso(today)),
+      ].filter((row): row is SnapshotRow => row !== null);
+      await store.saveSnapshots(snapshots);
+      await store.recordUsage(4);
+
       return {
         account: { displayName: info.CompanyInfo.CompanyName },
-        cursor: { synced_at: new Date().toISOString() },
+        cursor: { synced_through: today.toISOString() },
       };
     },
   };

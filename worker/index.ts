@@ -15,6 +15,7 @@ import { billingConfigured, getStripe } from "../src/lib/billing/stripe";
 import { processStripeEvent, type StripeEventLike } from "../src/lib/billing/sync";
 import { PROVIDER_ORDER, getAdapter } from "../src/lib/connections/registry";
 import { runSyncJob, type RunnerDeps, type SyncJob } from "../src/lib/connections/runner";
+import { rpcSyncStore } from "../src/lib/connections/store";
 import { getProviderToken, vaultTokenStore, type TokenDeps } from "../src/lib/connections/tokens";
 import { sendEmail } from "../src/lib/email";
 import { getAdminClient } from "../src/lib/supabase/admin";
@@ -54,6 +55,15 @@ async function drainStripeEvents(): Promise<number> {
     if (completeError) console.error(`could not mark ${event.id}: ${completeError.message}`);
   }
   return events.length;
+}
+
+async function emailOwners(tenantId: string, subject: string, text: string) {
+  const { data: owners } = await getAdminClient().rpc("tenant_owner_emails", {
+    p_tenant_id: tenantId,
+  });
+  for (const { email } of (owners ?? []) as { email: string }[]) {
+    await sendEmail({ to: email, subject, text });
+  }
 }
 
 /** Tells a workspace's owners that a connection stopped working. */
@@ -98,6 +108,14 @@ function runnerDeps(): RunnerDeps {
   return {
     adapter: getAdapter,
     getToken: (tenantId, provider) => getProviderToken(tenantId, provider, tokenDeps),
+    store: (job) =>
+      rpcSyncStore(admin, { tenantId: job.tenant_id, provider: job.provider }, (subject, text) =>
+        emailOwners(job.tenant_id, subject, text),
+      ),
+    async requeue(jobId, cursor) {
+      const { error } = await admin.rpc("requeue_sync_job", { p_id: jobId, p_cursor: cursor });
+      check("Could not requeue sync job", error);
+    },
     async finish(jobId, outcome) {
       const { error } = await admin.rpc("finish_sync_job", {
         p_id: jobId,

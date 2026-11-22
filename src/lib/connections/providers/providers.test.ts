@@ -1,5 +1,6 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { beforeAll, describe, expect, it } from "vitest";
+import { memoryStore } from "../testing";
 import { ConnectError, ReconnectRequiredError, type Fetch } from "../types";
 import { createQuickBooksAdapter } from "./quickbooks";
 import {
@@ -262,6 +263,7 @@ describe("Shopify adapter", () => {
     const adapter = createShopifyAdapter(fakeFetch([]).impl);
     const run = (topic: string) =>
       adapter.sync({
+        store: memoryStore().store,
         connectionId: "c",
         externalAccountId: "",
         token: { access_token: "" },
@@ -276,6 +278,7 @@ describe("Shopify adapter", () => {
     const adapter = createShopifyAdapter(fakeFetch([["/graphql.json", 401, "Unauthorized"]]).impl);
     await expect(
       adapter.sync({
+        store: memoryStore().store,
         connectionId: "c",
         externalAccountId: "wild-thread.myshopify.com",
         token: { access_token: "t" },

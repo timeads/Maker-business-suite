@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { runSyncJob, type RunnerDeps, type SyncJob } from "./runner";
+import { memoryStore } from "./testing";
 import {
   ReconnectRequiredError,
   type ProviderAdapter,
@@ -26,7 +27,12 @@ function setup(sync: (ctx: SyncContext) => Promise<SyncResult>) {
   const log: string[] = [];
   let tokenReads = 0;
   const deps: RunnerDeps = {
-    adapter: () => ({ sync }) as unknown as ProviderAdapter,
+    adapter: () =>
+      ({ sync, tokenlessTopics: ["app/uninstalled", "shop/redact"] }) as unknown as ProviderAdapter,
+    store: () => memoryStore().store,
+    requeue: async (id, cursor) => {
+      log.push(`requeue ${id} ${JSON.stringify(cursor)}`);
+    },
     getToken: async () => {
       tokenReads += 1;
       return {
@@ -61,12 +67,20 @@ describe("runSyncJob", () => {
     expect(t.log).toEqual(["account Alice Rugs", 'finish 7 {"cursor":{"since":"x"}}']);
   });
 
-  it("handles webhooks without touching the token", async () => {
+  it("fetches a token for order webhooks but not for uninstall or erase notices", async () => {
     const t = setup(async () => ({}));
     expect(await runSyncJob(job({ type: "webhook", topic: "orders/create" }), t.deps)).toBe(
       "succeeded",
     );
-    expect(t.tokenReads()).toBe(0);
+    expect(t.tokenReads()).toBe(1);
+    await runSyncJob(job({ type: "webhook", topic: "shop/redact" }), t.deps);
+    expect(t.tokenReads()).toBe(1);
+  });
+
+  it("puts a long sync back on the queue instead of finishing it", async () => {
+    const t = setup(async () => ({ continueWith: { after: "page-21" } }));
+    expect(await runSyncJob(job(), t.deps)).toBe("continued");
+    expect(t.log).toEqual(['requeue 7 {"after":"page-21"}']);
   });
 
   it("disconnects when the provider says the app was removed", async () => {

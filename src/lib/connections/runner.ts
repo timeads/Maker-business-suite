@@ -5,6 +5,7 @@ import {
   type ProviderAdapter,
   type ProviderKey,
   type SyncResult,
+  type SyncStore,
 } from "./types";
 
 export type SyncJob = {
@@ -22,15 +23,19 @@ export type SyncJob = {
 export type RunnerDeps = {
   adapter(provider: ProviderKey): ProviderAdapter;
   getToken(tenantId: string, provider: ProviderKey): Promise<StoredToken>;
+  /** Storage for what the sync fetches, scoped to this job's workspace and provider. */
+  store(job: SyncJob): SyncStore;
   finish(
     jobId: number,
     outcome: { error?: string; cursor?: object; retry?: boolean },
   ): Promise<void>;
+  /** Puts the job back on the queue to carry on from `cursor`. */
+  requeue(jobId: number, cursor: object): Promise<void>;
   updateAccount(connectionId: string, account: NonNullable<SyncResult["account"]>): Promise<void>;
   disconnect(connectionId: string, reason: string): Promise<void>;
 };
 
-export type JobOutcome = "succeeded" | "retry" | "failed" | "disconnected";
+export type JobOutcome = "succeeded" | "continued" | "retry" | "failed" | "disconnected";
 
 /**
  * Runs one sync job. Decides what kind of failure it was:
@@ -46,12 +51,14 @@ export async function runSyncJob(job: SyncJob, deps: RunnerDeps): Promise<JobOut
 
   try {
     const adapter = deps.adapter(job.provider);
-    // Webhooks carry their own data, and uninstall notices arrive after the
-    // token is already dead, so only pulls need one.
-    const needsToken = job.type !== "webhook";
+    // Uninstall and privacy notices arrive after the token is already dead.
+    const needsToken = !(
+      job.type === "webhook" && (adapter.tokenlessTopics ?? []).includes(job.topic ?? "")
+    );
     const stored = needsToken ? await deps.getToken(job.tenant_id, job.provider) : null;
 
     const result = await adapter.sync({
+      store: deps.store(job),
       connectionId: job.connection_id,
       externalAccountId: stored?.externalAccountId ?? "",
       token: stored?.token ?? { access_token: "" },
@@ -65,6 +72,10 @@ export async function runSyncJob(job: SyncJob, deps: RunnerDeps): Promise<JobOut
       return "disconnected";
     }
     if (result.account) await deps.updateAccount(job.connection_id, result.account);
+    if (result.continueWith) {
+      await deps.requeue(job.id, result.continueWith);
+      return "continued";
+    }
     await deps.finish(job.id, { cursor: result.cursor });
     return "succeeded";
   } catch (err) {

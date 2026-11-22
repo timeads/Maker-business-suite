@@ -326,6 +326,37 @@ as $$
   where j.id = p_id and j.status = 'running';
 $$;
 
+-- A new sync starts from where the last finished one got to.
+create or replace function public.enqueue_sync(p_connection_id uuid, p_type text default 'incremental')
+returns boolean
+language plpgsql security definer set search_path = ''
+as $$
+declare
+  v_conn public.connections;
+  v_cursor jsonb;
+begin
+  select * into v_conn from public.connections c where c.id = p_connection_id and c.status = 'active';
+  if not found then
+    return false;
+  end if;
+  if exists (
+    select 1 from public.sync_jobs j
+    where j.connection_id = p_connection_id and j.type in ('full', 'incremental')
+      and j.status in ('queued', 'running')
+  ) then
+    return false;
+  end if;
+  select j.cursor into v_cursor from public.sync_jobs j
+  where j.connection_id = p_connection_id and j.type in ('full', 'incremental')
+    and j.status = 'succeeded'
+  order by j.finished_at desc
+  limit 1;
+  insert into public.sync_jobs (tenant_id, connection_id, provider, type, cursor)
+  values (v_conn.tenant_id, v_conn.id, v_conn.provider, p_type, v_cursor);
+  return true;
+end;
+$$;
+
 -- Privacy webhooks can arrive after a store has disconnected (Shopify sends
 -- shop/redact 48 hours after uninstall), so those reach every workspace that
 -- ever connected the account. Everything else still needs a live connection.
