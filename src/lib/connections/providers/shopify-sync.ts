@@ -2,6 +2,7 @@ import type {
   CustomerRow,
   OrderRow,
   ProductRow,
+  StockItemRow,
   SyncContext,
   SyncResult,
   TokenSet,
@@ -186,7 +187,82 @@ type Cursor = {
   after?: string | null;
   started_at?: string;
   synced_through?: string;
+  /** Set while the stock count is being read, after the orders are done. */
+  stock_after?: string | null;
 };
+
+type ShopifyVariant = {
+  legacyResourceId: string;
+  title: string;
+  sku: string | null;
+  inventoryQuantity: number | null;
+  product: { legacyResourceId: string; title: string; status: string | null } | null;
+  inventoryItem: { id: string; tracked: boolean; unitCost: { amount: string } | null } | null;
+};
+
+const VARIANTS_QUERY = `query Variants($first: Int!, $after: String) {
+  productVariants(first: $first, after: $after) {
+    pageInfo { hasNextPage endCursor }
+    nodes {
+      legacyResourceId title sku inventoryQuantity
+      product { legacyResourceId title status }
+      inventoryItem { id tracked unitCost { amount } }
+    }
+  }
+}`;
+const VARIANT_PAGE_SIZE = 100;
+
+/** A product with no options has one variant that Shopify calls "Default Title". */
+export function mapShopifyVariants(variants: ShopifyVariant[]): StockItemRow[] {
+  return variants.map((variant) => {
+    const cost = variant.inventoryItem?.unitCost?.amount;
+    return {
+      external_id: variant.legacyResourceId,
+      product_external_id: variant.product?.legacyResourceId ?? null,
+      inventory_item_id: variant.inventoryItem?.id ?? null,
+      title: variant.product?.title ?? variant.title,
+      variant_title: variant.title === "Default Title" ? null : variant.title,
+      sku: variant.sku?.trim() || null,
+      on_hand: variant.inventoryQuantity ?? 0,
+      unit_cost: cost == null ? null : Number(cost),
+      tracked: variant.inventoryItem?.tracked ?? false,
+      product_status: variant.product?.status ?? null,
+    };
+  });
+}
+
+/**
+ * Reads what the shop has on the shelf. Only ever reads: the count in the
+ * shop changes when someone checks a delivery in, never during a sync.
+ */
+async function pullStock(
+  ctx: SyncContext,
+  graphql: ShopifyGraphql,
+  startedAt: string,
+  from: string | null,
+): Promise<SyncResult> {
+  let after = from;
+  let calls = 0;
+  for (let page = 0; page < PAGES_PER_RUN; page++) {
+    const data = await graphql<{
+      productVariants: {
+        pageInfo: { hasNextPage: boolean; endCursor: string | null };
+        nodes: ShopifyVariant[];
+      };
+    }>(ctx.externalAccountId, ctx.token, VARIANTS_QUERY, { first: VARIANT_PAGE_SIZE, after });
+    calls += 1;
+    if (data.productVariants.nodes.length > 0) {
+      await ctx.store.upsertStock(mapShopifyVariants(data.productVariants.nodes));
+    }
+    if (!data.productVariants.pageInfo.hasNextPage) {
+      await ctx.store.recordUsage(calls);
+      return { cursor: { synced_through: startedAt } };
+    }
+    after = data.productVariants.pageInfo.endCursor;
+  }
+  await ctx.store.recordUsage(calls);
+  return { continueWith: { stock_after: after, started_at: startedAt } };
+}
 
 const monthsAgo = (months: number, from: Date) => {
   const date = new Date(from);
@@ -201,6 +277,9 @@ async function pullOrders(
   now: Date,
 ): Promise<SyncResult> {
   const previous = (ctx.job.cursor ?? {}) as Cursor;
+  if (previous.stock_after !== undefined && previous.started_at) {
+    return pullStock(ctx, graphql, previous.started_at, previous.stock_after);
+  }
   // A continuation keeps its window; otherwise start from where the last
   // finished sync got to, or from the beginning of the history we keep.
   const since =
@@ -230,7 +309,8 @@ async function pullOrders(
       await ctx.store.upsertCommerce(mapShopifyOrders(data.orders.nodes));
     if (!data.orders.pageInfo.hasNextPage) {
       await ctx.store.recordUsage(calls);
-      return { cursor: { synced_through: startedAt } };
+      // Orders are in; the stock count follows in the same run.
+      return pullStock(ctx, graphql, startedAt, null);
     }
     after = data.orders.pageInfo.endCursor;
   }

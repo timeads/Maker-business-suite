@@ -25,6 +25,12 @@ export const MODULES = [
     available: true,
   },
   { key: "social", name: "Social", blurb: "Plan and schedule your posts", available: true },
+  {
+    key: "stock",
+    name: "Stock",
+    blurb: "What to reorder, when, and what's on its way",
+    available: true,
+  },
 ] as const;
 
 export type ModuleKey = (typeof MODULES)[number]["key"];

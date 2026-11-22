@@ -36,7 +36,7 @@ export const SHOPIFY_COMPLIANCE_TOPICS = [
   "shop/redact",
 ];
 
-const apiVersion = () => process.env.SHOPIFY_API_VERSION || "2026-10";
+export const shopifyApiVersion = () => process.env.SHOPIFY_API_VERSION || "2026-10";
 
 /** Accepts "my-store", "my-store.myshopify.com" or a pasted admin URL; returns the canonical domain. */
 export function normalizeShopDomain(input: string): string | null {
@@ -102,7 +102,7 @@ export function createShopifyAdapter(fetchImpl: Fetch = fetch): ProviderAdapter 
       const result = await requestJson<{ data?: T; errors?: unknown }>(
         fetchImpl,
         "Shopify",
-        `https://${shop}/admin/api/${apiVersion()}/graphql.json`,
+        `https://${shop}/admin/api/${shopifyApiVersion()}/graphql.json`,
         {
           method: "POST",
           headers: {

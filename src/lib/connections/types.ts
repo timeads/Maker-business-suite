@@ -90,6 +90,20 @@ export type SnapshotRow = {
   data: Record<string, unknown>;
 };
 
+/** One thing the shop keeps a count of (a product, or one option of it). */
+export type StockItemRow = {
+  external_id: string;
+  product_external_id: string | null;
+  inventory_item_id: string | null;
+  title: string;
+  variant_title: string | null;
+  sku: string | null;
+  on_hand: number;
+  unit_cost: number | null;
+  tracked: boolean;
+  product_status: string | null;
+};
+
 /** Where a sync puts what it fetched. Always scoped to the job's workspace and provider. */
 export type SyncStore = {
   upsertCommerce(batch: {
@@ -97,6 +111,7 @@ export type SyncStore = {
     products?: ProductRow[];
     orders?: OrderRow[];
   }): Promise<void>;
+  upsertStock(items: StockItemRow[]): Promise<void>;
   saveSnapshots(rows: SnapshotRow[]): Promise<void>;
   /** Erases one shopper's personal details, keeping the sales figures. */
   redactCustomer(externalId: string, email: string | null): Promise<void>;

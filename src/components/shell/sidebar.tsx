@@ -5,6 +5,7 @@ import {
   Inbox,
   LineChart,
   Lock,
+  Boxes,
   Megaphone,
   MessagesSquare,
   Plug,
@@ -23,6 +24,7 @@ const MODULE_ICONS: Record<ModuleKey, typeof Home> = {
   helpdesk: Inbox,
   bookings: CalendarDays,
   social: Megaphone,
+  stock: Boxes,
 };
 
 const GROUP =

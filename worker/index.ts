@@ -22,6 +22,7 @@ import { getBookingDetails, getBookingEmails, livePaymentDeps } from "../src/lib
 import { PROVIDER_ORDER, getAdapter } from "../src/lib/connections/registry";
 import { runSyncJob, type RunnerDeps, type SyncJob } from "../src/lib/connections/runner";
 import { rpcSyncStore } from "../src/lib/connections/store";
+import { createShopifyStockWriter } from "../src/lib/connections/providers/shopify-stock";
 import { getProviderToken, vaultTokenStore, type TokenDeps } from "../src/lib/connections/tokens";
 import { sendEmail } from "../src/lib/email";
 import { inboundDomain } from "../src/lib/helpdesk/addresses";
@@ -301,6 +302,69 @@ async function sendBookingReminders(): Promise<number> {
   return sent;
 }
 
+/**
+ * Adds deliveries that were checked in to the shop's own count, for
+ * workspaces that asked for that. Each receipt is tried once; a failure is
+ * recorded on it and told to the team rather than retried blindly, because a
+ * repeat could add the same boxes twice.
+ */
+async function drainStockReceipts(): Promise<number> {
+  const admin = getAdminClient();
+  const { data, error } = await admin.rpc("claim_stock_receipts", { p_limit: 20 });
+  if (error) throw new Error(`Could not claim stock receipts: ${error.message}`);
+  const receipts = (data ?? []) as {
+    id: string;
+    tenant_id: string;
+    quantity: number;
+    provider: string;
+    inventory_item_id: string | null;
+    po_number: number;
+  }[];
+  if (receipts.length === 0) return 0;
+  const writer = createShopifyStockWriter();
+  const tokenDeps: TokenDeps = {
+    store: vaultTokenStore(admin),
+    adapter: getAdapter,
+    now: Date.now,
+    wait: sleep,
+    onNeedsReconnect: notifyNeedsReconnect,
+  };
+  for (const receipt of receipts) {
+    let failure: string | null = null;
+    try {
+      if (receipt.provider !== "shopify" || !receipt.inventory_item_id) {
+        throw new Error("This item isn't one the shop keeps a count of");
+      }
+      if (!(await moduleOpen(receipt.tenant_id, "stock", admin))) {
+        throw new Error("Stock isn't part of this workspace's plan right now");
+      }
+      const stored = await getProviderToken(receipt.tenant_id, "shopify", tokenDeps);
+      await writer.add(stored.externalAccountId, stored.token, {
+        inventoryItemId: receipt.inventory_item_id,
+        delta: receipt.quantity,
+        reference: `app://stock/receipt/${receipt.id}`,
+      });
+    } catch (err) {
+      failure = err instanceof Error ? err.message : String(err);
+      console.error(`stock receipt ${receipt.id}: ${failure}`);
+    }
+    const { error: finishError } = await admin.rpc("finish_stock_receipt", {
+      p_id: receipt.id,
+      p_error: failure,
+    });
+    if (finishError) console.error(`could not mark receipt ${receipt.id}: ${finishError.message}`);
+    if (failure) {
+      await postAlert(
+        admin,
+        receipt.tenant_id,
+        "stock",
+        `A delivery on order ${receipt.po_number} (${receipt.quantity} units) couldn't be added to your shop's count: ${failure}. Add it in your shop by hand.`,
+      );
+    }
+  }
+  return receipts.length;
+}
+
 /** Sends scheduled social posts whose time has come. */
 async function drainSocialPosts(): Promise<number> {
   const admin = getAdminClient();
@@ -390,7 +454,8 @@ async function main() {
       (await attempt(drainStripeEvents, 0)) +
       (await attempt(drainSyncJobs, 0)) +
       (await attempt(drainInboundEmails, 0)) +
-      (await attempt(drainSocialPosts, 0));
+      (await attempt(drainSocialPosts, 0)) +
+      (await attempt(drainStockReceipts, 0));
 
     if (Date.now() - lastSchedule > SCHEDULE_EVERY_MS) {
       lastSchedule = Date.now();

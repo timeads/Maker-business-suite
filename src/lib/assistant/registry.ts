@@ -20,6 +20,12 @@ import {
   replyTemplatesSchema,
 } from "../helpdesk/config";
 import type { ModuleKey } from "../modules";
+import {
+  DEFAULT_STOCK_SETTINGS,
+  STOCK_MODULE,
+  STOCK_SETTINGS_KEY,
+  stockSettingsSchema,
+} from "../stock/config";
 
 /**
  * Every setting the assistant may read or propose a change to. Anything not
@@ -86,6 +92,16 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
       "How many hours ahead the reminder goes out, whether a thank-you is sent afterwards, and the business's own note added to the confirmation, reminder and thank-you emails.",
     schema: bookingEmailsSchema,
     defaultBody: () => DEFAULT_EMAILS,
+  },
+  {
+    module: STOCK_MODULE,
+    key: STOCK_SETTINGS_KEY,
+    feature: "stock",
+    name: "Stock planning",
+    description:
+      "The lead time and days of cover used when a supplier doesn't say, how often orders are reviewed, whether busy seasons are planned for, and whether checked-in deliveries are added to the shop's count.",
+    schema: stockSettingsSchema,
+    defaultBody: () => DEFAULT_STOCK_SETTINGS,
   },
 ];
 
@@ -182,6 +198,17 @@ export function describeConfig(entry: ConfigEntry, body: unknown): string[] {
               .join(", ")}`,
         )
       : ["No rules"];
+  }
+  if (entry.module === STOCK_MODULE) {
+    return [
+      `Lead time when a supplier doesn't say: ${value.default_lead_time_days} days`,
+      `Each order should cover: ${value.default_coverage_days} days of sales`,
+      `Orders are reviewed every ${value.review_buffer_days} days`,
+      value.seasonality ? "Plans ahead for busy seasons" : "Doesn't adjust for seasons",
+      value.push_to_shop
+        ? "Checked-in deliveries are added to the shop's count"
+        : "The shop's count is kept by hand",
+    ];
   }
   if (entry.key === EMAILS_KEY) {
     const clip = (text: unknown) => {

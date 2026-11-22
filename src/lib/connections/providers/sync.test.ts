@@ -144,9 +144,24 @@ describe("Shopify order mapping", () => {
 
 describe("Shopify sync", () => {
   type Page = { nodes: unknown[]; hasNextPage: boolean; endCursor: string | null };
-  function pagedGraphql(pages: Page[]) {
+  function pagedGraphql(pages: Page[], stockPages: Page[] = []) {
     const calls: { query: string; variables: Record<string, unknown> }[] = [];
+    const stockCalls: Record<string, unknown>[] = [];
     const graphql = (async (_shop: string, _token: TokenSet, query: string, variables?: object) => {
+      if (query.includes("productVariants")) {
+        stockCalls.push((variables ?? {}) as Record<string, unknown>);
+        const page = stockPages[Math.min(stockCalls.length - 1, stockPages.length - 1)] ?? {
+          nodes: [],
+          hasNextPage: false,
+          endCursor: null,
+        };
+        return {
+          productVariants: {
+            nodes: page.nodes,
+            pageInfo: { hasNextPage: page.hasNextPage, endCursor: page.endCursor },
+          },
+        };
+      }
       calls.push({ query, variables: (variables ?? {}) as Record<string, unknown> });
       const page = pages[Math.min(calls.length - 1, pages.length - 1)];
       return {
@@ -156,8 +171,74 @@ describe("Shopify sync", () => {
         },
       };
     }) as ShopifyGraphql;
-    return { graphql, calls };
+    return { graphql, calls, stockCalls };
   }
+
+  const variant = (id: string, overrides: Record<string, unknown> = {}) => ({
+    legacyResourceId: id,
+    title: "Large",
+    sku: " RUG-L ",
+    inventoryQuantity: 4,
+    product: { legacyResourceId: "p1", title: "Wool rug", status: "ACTIVE" },
+    inventoryItem: {
+      id: `gid://shopify/InventoryItem/${id}`,
+      tracked: true,
+      unitCost: { amount: "60.00" },
+    },
+    ...overrides,
+  });
+
+  it("reads the stock count once the orders are in, and carries on where it left off", async () => {
+    const net = pagedGraphql(
+      [{ nodes: [], hasNextPage: false, endCursor: null }],
+      [
+        {
+          nodes: [variant("v1"), variant("v2", { title: "Default Title", sku: null })],
+          hasNextPage: false,
+          endCursor: null,
+        },
+      ],
+    );
+    const { ctx, state } = context({
+      type: "incremental",
+      cursor: { synced_through: "2026-11-20T00:00:00.000Z" },
+    });
+    const result = await syncShopify(ctx, net.graphql, NOW);
+    expect(state.stock).toEqual([
+      {
+        external_id: "v1",
+        product_external_id: "p1",
+        inventory_item_id: "gid://shopify/InventoryItem/v1",
+        title: "Wool rug",
+        variant_title: "Large",
+        sku: "RUG-L",
+        on_hand: 4,
+        unit_cost: 60,
+        tracked: true,
+        product_status: "ACTIVE",
+      },
+      expect.objectContaining({ external_id: "v2", variant_title: null, sku: null }),
+    ]);
+    expect(result).toEqual({ cursor: { synced_through: NOW.toISOString() } });
+
+    // A shop with a great many items pauses part-way and picks up from its marker.
+    const big = pagedGraphql(
+      [{ nodes: [], hasNextPage: false, endCursor: null }],
+      [{ nodes: [variant("v1")], hasNextPage: true, endCursor: "s-more" }],
+    );
+    const first = context({ type: "full" });
+    const paused = await syncShopify(first.ctx, big.graphql, NOW);
+    expect(paused.continueWith).toEqual({ stock_after: "s-more", started_at: NOW.toISOString() });
+    const rest = pagedGraphql(
+      [],
+      [{ nodes: [variant("v9")], hasNextPage: false, endCursor: null }],
+    );
+    const second = context({ type: "full", cursor: paused.continueWith });
+    const finished = await syncShopify(second.ctx, rest.graphql, new Date("2026-11-21T13:00:00Z"));
+    expect(rest.calls).toHaveLength(0);
+    expect(rest.stockCalls[0]).toMatchObject({ after: "s-more" });
+    expect(finished).toEqual({ cursor: { synced_through: NOW.toISOString() } });
+  });
 
   it("a first sync reaches back two years, pages through, and records where it got to", async () => {
     const net = pagedGraphql([
@@ -174,7 +255,7 @@ describe("Shopify sync", () => {
     });
     expect(net.calls[1].variables).toMatchObject({ after: "c1" });
     expect(result).toEqual({ cursor: { synced_through: NOW.toISOString() } });
-    expect(state.usage).toBe(2);
+    expect(state.usage).toBe(3);
   });
 
   it("a later sync only asks for what changed since the last one finished", async () => {

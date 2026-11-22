@@ -1,4 +1,11 @@
-import type { CustomerRow, OrderRow, ProductRow, SnapshotRow, SyncStore } from "./types";
+import type {
+  CustomerRow,
+  OrderRow,
+  ProductRow,
+  SnapshotRow,
+  StockItemRow,
+  SyncStore,
+} from "./types";
 
 /** An in-memory SyncStore for tests: records everything a sync wrote. */
 export function memoryStore() {
@@ -6,6 +13,7 @@ export function memoryStore() {
     customers: [] as CustomerRow[],
     products: [] as ProductRow[],
     orders: [] as OrderRow[],
+    stock: [] as StockItemRow[],
     snapshots: [] as SnapshotRow[],
     redacted: [] as { externalId: string; email: string | null }[],
     purged: 0,
@@ -17,6 +25,9 @@ export function memoryStore() {
       state.customers.push(...(batch.customers ?? []));
       state.products.push(...(batch.products ?? []));
       state.orders.push(...(batch.orders ?? []));
+    },
+    async upsertStock(items) {
+      state.stock.push(...items);
     },
     async saveSnapshots(rows) {
       state.snapshots.push(...rows);
