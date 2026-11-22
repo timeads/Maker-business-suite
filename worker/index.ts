@@ -2,13 +2,16 @@
  * Background worker. Runs as its own Railway service (`pnpm worker`).
  *
  * Jobs:
+ *  - on start, make sure Stripe has the plans from plans.ts
  *  - apply queued Stripe events to the subscriptions table
  *  - run sync jobs for connected accounts (first sync, webhooks, scheduled pulls)
  *  - every few minutes, queue pulls for providers that don't push changes
  *  - once an hour, delete workspaces whose retention window has passed
  *    (only when ENABLE_TENANT_PURGE=true)
  */
+import { ensureStripeCatalog } from "../src/lib/billing/setup";
 import { liveSyncDeps } from "../src/lib/billing/store";
+import { billingConfigured, getStripe } from "../src/lib/billing/stripe";
 import { processStripeEvent, type StripeEventLike } from "../src/lib/billing/sync";
 import { PROVIDER_ORDER, getAdapter } from "../src/lib/connections/registry";
 import { runSyncJob, type RunnerDeps, type SyncJob } from "../src/lib/connections/runner";
@@ -169,6 +172,13 @@ async function attempt<T>(task: () => Promise<T>, fallback: T): Promise<T> {
 
 async function main() {
   console.log("worker started");
+  // Keep Stripe's products and prices in step with plans.ts.
+  if (billingConfigured()) {
+    await attempt(
+      () => ensureStripeCatalog(getStripe(), (m) => console.log(`stripe setup: ${m}`)),
+      undefined,
+    );
+  }
   let lastSchedule = 0;
   let lastPurge = 0;
   while (!stopping) {
