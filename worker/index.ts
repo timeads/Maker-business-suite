@@ -5,6 +5,7 @@
  *  - on start, make sure Stripe has the plans from plans.ts
  *  - apply queued Stripe events to the subscriptions table
  *  - file inbound emails into help desk tickets
+ *  - confirm booking payments and send booking reminders
  *  - run sync jobs for connected accounts (first sync, webhooks, scheduled pulls)
  *  - every few minutes, queue pulls for providers that don't push changes
  *  - once an hour, delete workspaces whose retention window has passed
@@ -14,6 +15,9 @@ import { ensureStripeCatalog } from "../src/lib/billing/setup";
 import { liveSyncDeps } from "../src/lib/billing/store";
 import { billingConfigured, getStripe } from "../src/lib/billing/stripe";
 import { processStripeEvent, type StripeEventLike } from "../src/lib/billing/sync";
+import { reminderEmail } from "../src/lib/bookings/emails";
+import { isConnectEvent, processConnectEvent } from "../src/lib/bookings/payments";
+import { getBookingDetails, livePaymentDeps } from "../src/lib/bookings/server";
 import { PROVIDER_ORDER, getAdapter } from "../src/lib/connections/registry";
 import { runSyncJob, type RunnerDeps, type SyncJob } from "../src/lib/connections/runner";
 import { rpcSyncStore } from "../src/lib/connections/store";
@@ -47,11 +51,15 @@ async function drainStripeEvents(): Promise<number> {
   if (error) throw new Error(`Could not claim Stripe events: ${error.message}`);
   const events = (data ?? []) as (StripeEventLike & { attempts: number })[];
   const deps = liveSyncDeps(admin);
+  const paymentDeps = livePaymentDeps(admin);
 
   for (const event of events) {
     let failure: string | null = null;
     try {
-      const result = await processStripeEvent(event, deps);
+      // Events from a business's own Stripe account are booking payments.
+      const result = isConnectEvent(event)
+        ? await processConnectEvent(event, paymentDeps)
+        : await processStripeEvent(event, deps);
       console.log(`stripe event ${event.id} (${event.type}): ${result}`);
     } catch (err) {
       failure = err instanceof Error ? err.message : String(err);
@@ -229,6 +237,23 @@ async function drainInboundEmails(): Promise<number> {
   return emails.length;
 }
 
+/** Emails a reminder for each booking that starts within a day. */
+async function sendBookingReminders(): Promise<number> {
+  const admin = getAdminClient();
+  const { data, error } = await admin.rpc("claim_booking_reminders", { p_limit: 50 });
+  if (error) throw new Error(`Could not claim booking reminders: ${error.message}`);
+  const due = (data ?? []) as { id: string; tenant_id: string }[];
+  for (const booking of due) {
+    const details = await getBookingDetails(
+      { tenantId: booking.tenant_id, bookingId: booking.id },
+      admin,
+    );
+    if (details) await sendEmail(reminderEmail(details));
+  }
+  if (due.length) console.log(`sent ${due.length} booking reminder(s)`);
+  return due.length;
+}
+
 async function queueScheduledSyncs() {
   const admin = getAdminClient();
   for (const key of PROVIDER_ORDER) {
@@ -280,6 +305,7 @@ async function main() {
     if (Date.now() - lastSchedule > SCHEDULE_EVERY_MS) {
       lastSchedule = Date.now();
       await attempt(queueScheduledSyncs, undefined);
+      await attempt(sendBookingReminders, 0);
     }
     if (Date.now() - lastPurge > PURGE_EVERY_MS) {
       lastPurge = Date.now();

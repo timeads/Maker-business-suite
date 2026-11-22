@@ -1,4 +1,4 @@
-export type ProviderKey = "shopify" | "quickbooks";
+export type ProviderKey = "shopify" | "quickbooks" | "stripe";
 
 export type ConnectionStatus = "active" | "needs_reconnect" | "disconnected";
 
