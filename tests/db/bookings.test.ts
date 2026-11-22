@@ -273,13 +273,13 @@ describe("appointments", () => {
     ).rejects.toThrow(/taken/);
 
     const busy = await service<{ starts_at: string }>(
-      "select starts_at from public.busy_appointment_times($1, now(), now() + interval '30 days')",
+      "select starts_at from public.busy_appointment_times($1, now() + interval '99 hours', now() + interval '102 hours')",
       [tenantA],
     );
     expect(busy).toHaveLength(1);
     expect(
       await service(
-        "select 1 from public.busy_appointment_times($1, now(), now() + interval '30 days')",
+        "select 1 from public.busy_appointment_times($1, now() + interval '99 hours', now() + interval '102 hours')",
         [tenantB],
       ),
     ).toHaveLength(0);
@@ -354,11 +354,33 @@ describe("manage link", () => {
     await expect(
       service("select public.move_booking_by_token($1, $2)", [token, elsewhere]),
     ).rejects.toThrow(/not available/);
-    await service("select public.move_booking_by_token($1, $2)", [token, to]);
+    await service("select public.join_waitlist($1, $2, 'Wen', 'wen@example.com', 1)", [
+      tenantA,
+      from,
+    ]);
+    const told = await service<{ customer_email: string }>(
+      "select * from public.move_booking_by_token($1, $2)",
+      [token, to],
+    );
+    // The date they left has a free place, so its waitlist hears about it.
+    expect(told.map((w) => w.customer_email)).toEqual(["wen@example.com"]);
     const rows = await service<Booking>("select session_id from public.bookings where id = $1", [
       booking.id,
     ]);
     expect(rows[0].session_id).toBe(to);
+    await expect(
+      service("select * from public.move_booking_by_token($1, $2)", [token, to]),
+    ).rejects.toThrow(/not available/);
+  });
+
+  it("a workshop blocks appointment times even before anyone books it", async () => {
+    const svc = await makeService(bob, tenantB, "workshop", 0, 4);
+    await makeSession(bob, svc, 400);
+    const busy = await service<{ starts_at: string }>(
+      "select starts_at from public.busy_appointment_times($1, now() + interval '399 hours', now() + interval '402 hours')",
+      [tenantB],
+    );
+    expect(busy).toHaveLength(1);
   });
 });
 

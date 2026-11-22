@@ -56,8 +56,9 @@ export default async function ManageBookingPage({
   const note = NOTES[query.note ?? ""];
   const when = formatWhen(booking.starts_at, booking.ends_at, booking.timezone);
 
-  const heading =
-    booking.status === "cancelled" || booking.session_cancelled
+  const heading = booking.session_cancelled
+    ? `${booking.workspace_name} cancelled this date`
+    : booking.status === "cancelled"
       ? "This booking is cancelled"
       : booking.status === "pending_payment"
         ? "This booking is waiting for payment"
@@ -69,6 +70,14 @@ export default async function ManageBookingPage({
     <BookingShell workspaceName={booking.workspace_name} href={`/book/${booking.workspace_slug}`}>
       <h1 className="text-3xl font-semibold tracking-tight">{heading}</h1>
       {note && <FormMessage kind={note.kind}>{note.text}</FormMessage>}
+      {booking.session_cancelled && (
+        <p className="text-muted-foreground">
+          We&apos;re sorry for the change of plans.
+          {booking.amount_cents > 0
+            ? ` ${booking.workspace_name} will be in touch about your payment.`
+            : " There's nothing you need to do."}
+        </p>
+      )}
       {query.new === "1" && confirmed && (
         <p className="text-muted-foreground">
           We&apos;ve emailed the details to {booking.customer_email}. Keep this page&apos;s link if

@@ -8,7 +8,7 @@ import {
   bookingsConfigured,
   getAppointmentSlots,
   getBookingForm,
-  getPayoutAccount,
+  getLivePayoutAccount,
   getPublicService,
   getPublicWorkspace,
   getSessionAvailability,
@@ -51,7 +51,7 @@ export default async function ServicePage({
 
   const [form, payout] = await Promise.all([
     getBookingForm(tenant.id),
-    service.price_cents > 0 ? getPayoutAccount(tenant.id) : null,
+    service.price_cents > 0 ? getLivePayoutAccount(tenant.id) : null,
   ]);
   const canPay = service.price_cents === 0 || Boolean(payout?.ready);
   const message = NOTICES[query.error ?? ""] ?? NOTICES[query.notice ?? ""];
@@ -181,7 +181,7 @@ export default async function ServicePage({
             <div className="flex flex-col gap-3">
               <h2 className="text-lg font-semibold">Pick a time</h2>
               <nav aria-label="Days" className="flex flex-wrap gap-2">
-                {days.slice(0, 14).map((d) => (
+                {days.map((d) => (
                   <Link
                     key={d}
                     href={withEmbed({ day: d })}

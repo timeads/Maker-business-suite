@@ -28,7 +28,8 @@ export async function POST(request: Request) {
 
   const admin = getAdminClient();
   const { error } =
-    event.type === "account.application.deauthorized"
+    // Changes to the account itself go to the connection's own queue.
+    event.type === "account.application.deauthorized" || event.type === "account.updated"
       ? await admin.rpc("enqueue_provider_webhook", {
           p_provider: "stripe",
           p_external_account_id: event.account,

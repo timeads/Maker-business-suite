@@ -135,7 +135,9 @@ export default async function SessionPage({
         <Card>
           <CardHeader>
             <CardTitle>Waitlist</CardTitle>
-            <CardDescription>They&apos;re emailed when someone cancels.</CardDescription>
+            <CardDescription>
+              They&apos;re emailed when someone cancels or moves to another date.
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <ul className="flex flex-col gap-1 text-sm">

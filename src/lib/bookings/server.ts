@@ -179,6 +179,47 @@ export async function getPayoutAccount(
   );
 }
 
+/**
+ * Like getPayoutAccount, but when our stored note says the account can't
+ * take payments yet it asks Stripe for the current answer. Stripe often
+ * finishes checking a new account minutes after it connects, and a business
+ * shouldn't stay closed for a day waiting for the next scheduled check.
+ */
+export async function getLivePayoutAccount(
+  tenantId: string,
+  admin: SupabaseClient = getAdminClient(),
+): Promise<{ account: string; ready: boolean } | null> {
+  const stored = await getPayoutAccount(tenantId, admin);
+  if (!stored || stored.ready || !process.env.STRIPE_SECRET_KEY) return stored;
+  try {
+    const account = await getStripe().accounts.retrieve(stored.account);
+    if (!account.charges_enabled) return stored;
+    await withTenant(
+      tenantId,
+      async (scope) => {
+        const { data } = await scope
+          .select("connections", "id")
+          .eq("provider", "stripe")
+          .eq("status", "active")
+          .maybeSingle();
+        const id = (data as { id?: string } | null)?.id;
+        if (id) {
+          await admin.rpc("update_connection_details", {
+            p_connection_id: id,
+            p_display_name: null,
+            p_metadata: { charges_enabled: true },
+          });
+        }
+      },
+      admin,
+    );
+    return { account: stored.account, ready: true };
+  } catch (err) {
+    console.error("Could not check the Stripe account", err instanceof Error ? err.message : err);
+    return stored;
+  }
+}
+
 export async function getBookingDetails(
   by: { tenantId: string; bookingId: string } | { token: string },
   admin: SupabaseClient = getAdminClient(),
@@ -233,7 +274,7 @@ export async function reserve(input: ReserveInput): Promise<ReserveResult> {
   const admin = getAdminClient();
   const { tenant, service } = input;
   const paid = service.price_cents > 0;
-  const payout = paid ? await getPayoutAccount(tenant.id, admin) : null;
+  const payout = paid ? await getLivePayoutAccount(tenant.id, admin) : null;
   if (paid && (!payout?.ready || !process.env.STRIPE_SECRET_KEY)) {
     return { ok: false, reason: "payments_off" };
   }
@@ -399,12 +440,21 @@ export async function moveByToken(
   token: string,
   sessionId: string,
 ): Promise<"moved" | "full" | "unavailable"> {
-  const { error } = await getAdminClient().rpc("move_booking_by_token", {
+  const admin = getAdminClient();
+  // Read before moving: afterwards the booking points at its new date.
+  const before = await getBookingDetails({ token }, admin);
+  const { data, error } = await admin.rpc("move_booking_by_token", {
     p_manage_token: token,
     p_new_session_id: sessionId,
   });
-  if (!error) return "moved";
-  return error.message.includes("full") ? "full" : "unavailable";
+  if (error) return error.message.includes("full") ? "full" : "unavailable";
+  if (before) {
+    const link = `${siteUrl()}/book/${before.workspace_slug}`;
+    for (const entry of (data ?? []) as { customer_name: string; customer_email: string }[]) {
+      await sendEmail(waitlistEmail(entry, before, link));
+    }
+  }
+  return "moved";
 }
 
 export async function joinWaitlist(input: {

@@ -46,7 +46,7 @@ export default async function BookingsPage({ params }: { params: Promise<{ slug:
       .limit(30),
     supabase
       .from("connections")
-      .select("status, display_name")
+      .select("status, display_name, metadata")
       .eq("tenant_id", tenant.id)
       .eq("provider", "stripe")
       .maybeSingle(),
@@ -58,6 +58,8 @@ export default async function BookingsPage({ params }: { params: Promise<{ slug:
   const bookingUrl = `${site}/book/${tenant.slug}`;
   const hasPaid = (services ?? []).some((s) => s.price_cents > 0);
   const payoutsOn = payout?.status === "active";
+  const stripeNotReady =
+    (payout?.metadata as { charges_enabled?: boolean } | null)?.charges_enabled === false;
 
   return (
     <>
@@ -67,6 +69,24 @@ export default async function BookingsPage({ params }: { params: Promise<{ slug:
           Booking page settings
         </Link>
       </header>
+
+      {hasPaid && payoutsOn && stripeNotReady && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Stripe isn&apos;t ready to take payments yet</CardTitle>
+            <CardDescription>
+              Your Stripe account is connected, but Stripe hasn&apos;t switched on payments for it.
+              This usually means it is still checking your details, or needs something more from
+              you. Until then, customers can&apos;t book anything with a price.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button asChild variant="outline">
+              <a href="https://dashboard.stripe.com/account/status">Check your Stripe account</a>
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       {hasPaid && !payoutsOn && (
         <Card>
