@@ -225,3 +225,140 @@ describe("publishing", () => {
     expect((await post(id)).status).toBe("scheduled");
   });
 });
+
+describe("library, projects and posts with several photos", () => {
+  const as = <T>(user: User, sql: string, params: unknown[] = []) =>
+    asUser(db, user, async (tx) => (await tx.query<T>(sql, params)).rows);
+  const photo = async (tenant: string, name: string) =>
+    (
+      await service<{ id: string }>(
+        "select public.register_social_asset($1, $2, 'image/jpeg', 1000, null) as id",
+        [tenant, `${tenant}/${name}.jpg`],
+      )
+    )[0].id;
+  const full = (
+    user: User,
+    tenant: string,
+    assets: string[],
+    opts: { captions?: object; project?: string | null; channels?: string[]; id?: string } = {},
+  ) =>
+    as<{ id: string }>(
+      user,
+      "select public.save_social_post_full($1, $2, 'Studio day', $3, $4, null, $5::jsonb, $6, 'process', 'First try by Claude') as id",
+      [
+        tenant,
+        opts.id ?? null,
+        assets,
+        opts.channels ?? ["facebook", "instagram"],
+        JSON.stringify(opts.captions ?? {}),
+        opts.project ?? null,
+      ],
+    ).then((rows) => rows[0].id);
+
+  it("projects stay inside their workspace", async () => {
+    const mine = (
+      await as<{ id: string }>(
+        alice,
+        "select public.save_social_project($1, null, 'Blue rug', 'Commission for a hallway', 'process') as id",
+        [tenantA],
+      )
+    )[0].id;
+    expect(await as(bob, "select id from public.social_projects")).toEqual([]);
+    await expect(
+      as(bob, "select public.save_social_project($1, $2, 'Mine now', '', null)", [tenantB, mine]),
+    ).rejects.toThrow(/Project not found/);
+    await expect(
+      as(bob, "select public.save_social_project($1, null, 'Sneaky', '', null)", [tenantA]),
+    ).rejects.toThrow(/Workspace not found/);
+    await expect(
+      as(alice, "insert into public.social_projects (tenant_id, name) values ($1, 'x')", [tenantA]),
+    ).rejects.toThrow(/permission denied/);
+  });
+
+  it("photos can be named, tagged and filed, but only by their own workspace", async () => {
+    const one = await photo(tenantA, "lib-1");
+    const two = await photo(tenantA, "lib-2");
+    const project = (
+      await as<{ id: string }>(
+        alice,
+        "select public.save_social_project($1, null, 'Green rug', '', null) as id",
+        [tenantA],
+      )
+    )[0].id;
+    await as(alice, "select public.update_social_asset($1, 'Trimming', $2, $3, false)", [
+      one,
+      ["Process", " studio ", "bad tag!!"],
+      project,
+    ]);
+    await as(alice, "select public.file_social_assets($1, $2, $3, $4)", [
+      tenantA,
+      [one, two],
+      project,
+      ["Green"],
+    ]);
+    const { rows } = await db.query<{ title: string; tags: string[]; project_id: string }>(
+      "select title, tags, project_id from public.social_assets where id = $1",
+      [one],
+    );
+    expect(rows[0].title).toBe("Trimming");
+    expect([...rows[0].tags].sort()).toEqual(["green", "process", "studio"]);
+    expect(rows[0].project_id).toBe(project);
+    await expect(
+      as(bob, "select public.update_social_asset($1, 'x', '{}', null, true)", [one]),
+    ).rejects.toThrow(/Photo not found/);
+    expect(
+      (
+        await as<{ n: number }>(bob, "select public.file_social_assets($1, $2, null, '{}') as n", [
+          tenantB,
+          [one],
+        ])
+      )[0].n,
+    ).toBe(0);
+  });
+
+  it("a post keeps its photos in order, with a caption per channel only where it differs", async () => {
+    const a = await photo(tenantA, "multi-a");
+    const b = await photo(tenantA, "multi-b");
+    const id = await full(alice, tenantA, [b, a], {
+      captions: { instagram: "Studio day #tufting", facebook: "Studio day", tiktok: "nope" },
+    });
+    const { rows } = await db.query(
+      "select asset_id, asset_ids, captions, topic, ai_draft from public.social_posts where id = $1",
+      [id],
+    );
+    expect(rows[0]).toEqual({
+      asset_id: b,
+      asset_ids: [b, a],
+      captions: { instagram: "Studio day #tufting" },
+      topic: "process",
+      ai_draft: "First try by Claude",
+    });
+    // Saving again with no photos clears them.
+    await full(alice, tenantA, [], { id });
+    const after = await db.query(
+      "select asset_id, asset_ids from public.social_posts where id = $1",
+      [id],
+    );
+    expect(after.rows[0]).toEqual({ asset_id: null, asset_ids: [] });
+  });
+
+  it("refuses another workspace's photos or project, and more than ten photos", async () => {
+    const theirs = await photo(tenantB, "theirs");
+    await expect(full(alice, tenantA, [theirs])).rejects.toThrow(/Photo not found/);
+    const bobProject = (
+      await as<{ id: string }>(
+        bob,
+        "select public.save_social_project($1, null, 'Pots', '', null) as id",
+        [tenantB],
+      )
+    )[0].id;
+    await expect(full(alice, tenantA, [], { project: bobProject })).rejects.toThrow(
+      /Project not found/,
+    );
+    const many = await Promise.all(
+      Array.from({ length: 11 }, (_, i) => photo(tenantA, `many-${i}`)),
+    );
+    await expect(full(alice, tenantA, many)).rejects.toThrow(/too_many_photos/);
+    await expect(full(bob, tenantA, [])).rejects.toThrow(/Workspace not found/);
+  });
+});

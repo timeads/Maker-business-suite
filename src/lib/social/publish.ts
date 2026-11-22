@@ -7,8 +7,10 @@ export type ChannelResult = { id: string } | { error: string };
 
 export type PublishInput = {
   caption: string;
-  /** A public address the photo can be fetched from, if the post has one. */
-  imageUrl: string | null;
+  /** Different words for one channel, where the post has them. */
+  captions?: Partial<Record<Channel, string>>;
+  /** Public addresses the photos can be fetched from, in order. Empty for words alone. */
+  imageUrls: string[];
   channels: Channel[];
   /** Channels that already went out on an earlier try; never sent again. */
   alreadySent: Channel[];
@@ -44,40 +46,84 @@ export async function publishPost(
       body: new URLSearchParams(body).toString(),
     });
 
+  const words = (channel: Channel) => input.captions?.[channel]?.trim() || input.caption;
+  const photos = input.imageUrls.slice(0, 10);
+
+  /** Waits for Instagram to finish fetching whatever a container points at. */
+  const ready = async (containerId: string) => {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const status = await requestJson<{ status_code?: string }>(
+        fetchImpl,
+        "Meta",
+        `${graphUrl(`/${containerId}`)}?fields=status_code`,
+        { headers: { Authorization: `Bearer ${input.pageToken}` } },
+      );
+      if (status.status_code === "ERROR") {
+        throw new PermanentError("Instagram couldn't use that photo");
+      }
+      if (status.status_code !== "IN_PROGRESS") return;
+      await wait(2_000);
+    }
+  };
+
   const senders: Record<Channel, () => Promise<string>> = {
     async facebook() {
-      if (input.imageUrl) {
+      if (photos.length === 1) {
         const photo = await post<{ id: string; post_id?: string }>(`/${input.pageId}/photos`, {
-          url: input.imageUrl,
-          caption: input.caption,
+          url: photos[0],
+          caption: words("facebook"),
         });
         return photo.post_id ?? photo.id;
       }
-      return (await post<{ id: string }>(`/${input.pageId}/feed`, { message: input.caption })).id;
+      if (photos.length > 1) {
+        // Each photo is uploaded unseen, then one post gathers them.
+        const attached: Record<string, string> = {};
+        for (const [index, url] of photos.entries()) {
+          const photo = await post<{ id: string }>(`/${input.pageId}/photos`, {
+            url,
+            published: "false",
+          });
+          attached[`attached_media[${index}]`] = JSON.stringify({ media_fbid: photo.id });
+        }
+        return (
+          await post<{ id: string }>(`/${input.pageId}/feed`, {
+            message: words("facebook"),
+            ...attached,
+          })
+        ).id;
+      }
+      return (await post<{ id: string }>(`/${input.pageId}/feed`, { message: words("facebook") }))
+        .id;
     },
     async instagram() {
       if (!input.instagramId) {
         throw new PermanentError("No Instagram account is linked to this Facebook Page");
       }
-      if (!input.imageUrl) throw new PermanentError("Instagram posts need a photo");
-      const container = await post<{ id: string }>(`/${input.instagramId}/media`, {
-        image_url: input.imageUrl,
-        caption: input.caption,
-      });
-      // Instagram fetches the photo itself; give it a moment if it asks for one.
-      for (let attempt = 0; attempt < 5; attempt++) {
-        const status = await requestJson<{ status_code?: string }>(
-          fetchImpl,
-          "Meta",
-          `${graphUrl(`/${container.id}`)}?fields=status_code`,
-          { headers: { Authorization: `Bearer ${input.pageToken}` } },
-        );
-        if (status.status_code === "ERROR") {
-          throw new PermanentError("Instagram couldn't use that photo");
+      if (photos.length === 0) throw new PermanentError("Instagram posts need a photo");
+      let container: { id: string };
+      if (photos.length === 1) {
+        container = await post<{ id: string }>(`/${input.instagramId}/media`, {
+          image_url: photos[0],
+          caption: words("instagram"),
+        });
+      } else {
+        // A swipe-through post: one container per photo, then one that holds them.
+        const children: string[] = [];
+        for (const url of photos) {
+          const child = await post<{ id: string }>(`/${input.instagramId}/media`, {
+            image_url: url,
+            is_carousel_item: "true",
+          });
+          await ready(child.id);
+          children.push(child.id);
         }
-        if (status.status_code !== "IN_PROGRESS") break;
-        await wait(2_000);
+        container = await post<{ id: string }>(`/${input.instagramId}/media`, {
+          media_type: "CAROUSEL",
+          children: children.join(","),
+          caption: words("instagram"),
+        });
       }
+      await ready(container.id);
       const published = await post<{ id: string }>(`/${input.instagramId}/media_publish`, {
         creation_id: container.id,
       });

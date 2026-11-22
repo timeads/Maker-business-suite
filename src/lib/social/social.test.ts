@@ -107,7 +107,7 @@ describe("Meta adapter", () => {
 describe("publishPost", () => {
   const base: PublishInput = {
     caption: "New rugs just landed",
-    imageUrl: "https://files.test/rug.jpg",
+    imageUrls: ["https://files.test/rug.jpg"],
     channels: ["facebook", "instagram"],
     alreadySent: [],
     pageId: "p2",
@@ -130,10 +130,46 @@ describe("publishPost", () => {
     expect(calls[0].body).toContain("caption=New+rugs+just+landed");
   });
 
+  it("sends several photos as one post on each channel, with each channel's own words", async () => {
+    const { impl, calls } = fakeFetch([
+      ["/p2/photos", 200, { id: "ph" }],
+      ["/p2/feed", 200, { id: "p2_90" }],
+      ["/ig9/media_publish", 200, { id: "ig_post_9" }],
+      ["/ig9/media", 200, { id: "c" }],
+      ["/c", 200, { status_code: "FINISHED" }],
+    ]);
+    const outcome = await publishPost(
+      {
+        ...base,
+        imageUrls: ["https://files.test/a.jpg", "https://files.test/b.jpg"],
+        captions: { instagram: "Studio day #tufting" },
+      },
+      impl,
+      noWait,
+    );
+    expect(outcome.results).toEqual({ facebook: { id: "p2_90" }, instagram: { id: "ig_post_9" } });
+    const bodies = (match: string) =>
+      calls.filter((c) => c.method === "POST" && c.url.includes(match)).map((c) => c.body);
+    // Facebook: two photos uploaded unseen, then one post that gathers them.
+    expect(bodies("/p2/photos")).toHaveLength(2);
+    expect(bodies("/p2/photos").every((body) => body.includes("published=false"))).toBe(true);
+    const feed = new URLSearchParams(bodies("/p2/feed")[0]);
+    expect(feed.get("message")).toBe("New rugs just landed");
+    expect(feed.get("attached_media[1]")).toBe('{"media_fbid":"ph"}');
+    // Instagram: a container per photo, then the one that holds them, with its own caption.
+    const media = bodies("/ig9/media").filter((body) => !body.includes("creation_id"));
+    expect(media).toHaveLength(3);
+    expect(media[0]).toContain("is_carousel_item=true");
+    const carousel = new URLSearchParams(media[2]);
+    expect(carousel.get("media_type")).toBe("CAROUSEL");
+    expect(carousel.get("children")).toBe("c,c");
+    expect(carousel.get("caption")).toBe("Studio day #tufting");
+  });
+
   it("posts words alone to the Page feed", async () => {
     const { impl, calls } = fakeFetch([["/p2/feed", 200, { id: "p2_78" }]]);
     const outcome = await publishPost(
-      { ...base, imageUrl: null, channels: ["facebook"] },
+      { ...base, imageUrls: [], channels: ["facebook"] },
       impl,
       noWait,
     );
@@ -168,7 +204,7 @@ describe("publishPost", () => {
       ["/p2/feed", 400, { error: { message: "Expired", type: "OAuthException", code: 190 } }],
     ]);
     const first = await publishPost(
-      { ...base, imageUrl: null, channels: ["facebook"] },
+      { ...base, imageUrls: [], channels: ["facebook"] },
       dead.impl,
       noWait,
     );

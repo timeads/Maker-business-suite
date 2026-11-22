@@ -9,6 +9,8 @@ type DuePost = {
   tenant_id: string;
   caption: string;
   asset_id: string | null;
+  asset_ids?: string[] | null;
+  captions?: Partial<Record<Channel, string>> | null;
   channels: Channel[];
   results: Partial<Record<Channel, ChannelResult>>;
 };
@@ -45,27 +47,37 @@ async function send(post: DuePost, deps: SocialWorkerDeps): Promise<PublishOutco
     }
     throw err;
   }
-  const { instagramId, storagePath } = await withTenant(
+  // Posts saved before several photos were possible only have the one.
+  const assetIds = post.asset_ids?.length ? post.asset_ids : post.asset_id ? [post.asset_id] : [];
+  const { instagramId, storagePaths } = await withTenant(
     post.tenant_id,
     async (scope) => {
-      const [{ data: connection }, { data: asset }] = await Promise.all([
+      const [{ data: connection }, { data: assets }] = await Promise.all([
         scope.select("connections", "metadata").eq("provider", "meta").maybeSingle(),
-        post.asset_id
-          ? scope.select("social_assets", "storage_path").eq("id", post.asset_id).maybeSingle()
-          : Promise.resolve({ data: null }),
+        assetIds.length
+          ? scope.select("social_assets", "id, storage_path").in("id", assetIds)
+          : Promise.resolve({ data: [] }),
       ]);
+      const paths = new Map(
+        ((assets ?? []) as unknown as { id: string; storage_path: string }[]).map((asset) => [
+          asset.id,
+          asset.storage_path,
+        ]),
+      );
       return {
         instagramId:
           (connection as { metadata?: { instagram_id?: string | null } } | null)?.metadata
             ?.instagram_id ?? null,
-        storagePath: (asset as { storage_path?: string } | null)?.storage_path ?? null,
+        // In the order the person arranged them.
+        storagePaths: assetIds.flatMap((id) => (paths.has(id) ? [paths.get(id)!] : [])),
       };
     },
     deps.admin,
   );
   return deps.publish({
     caption: post.caption,
-    imageUrl: storagePath ? publicAssetUrl(storagePath) : null,
+    captions: post.captions ?? {},
+    imageUrls: storagePaths.map(publicAssetUrl),
     channels: post.channels,
     alreadySent: post.channels.filter((c) => "id" in (post.results[c] ?? {})),
     pageId: stored.externalAccountId,
