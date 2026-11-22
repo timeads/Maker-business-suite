@@ -18,7 +18,7 @@ export const MODULES = [
     blurb: "Workshops and appointments, paid up front",
     available: true,
   },
-  { key: "social", name: "Social", blurb: "Plan and schedule your posts", available: false },
+  { key: "social", name: "Social", blurb: "Plan and schedule your posts", available: true },
 ] as const;
 
 export type ModuleKey = (typeof MODULES)[number]["key"];

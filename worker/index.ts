@@ -6,6 +6,7 @@
  *  - apply queued Stripe events to the subscriptions table
  *  - file inbound emails into help desk tickets
  *  - confirm booking payments and send booking reminders
+ *  - publish scheduled social posts
  *  - run sync jobs for connected accounts (first sync, webhooks, scheduled pulls)
  *  - every few minutes, queue pulls for providers that don't push changes
  *  - once an hour, delete workspaces whose retention window has passed
@@ -31,6 +32,9 @@ import {
   type IngestResult,
   type PostmarkInbound,
 } from "../src/lib/helpdesk/inbound";
+import { moduleOpen } from "../src/lib/module-access";
+import { publishPost } from "../src/lib/social/publish";
+import { publishDuePosts } from "../src/lib/social/worker";
 import { getAdminClient, withTenant } from "../src/lib/supabase/admin";
 
 const POLL_MS = 5_000;
@@ -254,6 +258,42 @@ async function sendBookingReminders(): Promise<number> {
   return due.length;
 }
 
+/** Sends scheduled social posts whose time has come. */
+async function drainSocialPosts(): Promise<number> {
+  const admin = getAdminClient();
+  const site = (process.env.NEXT_PUBLIC_SITE_URL ?? "").replace(/\/+$/, "");
+  return publishDuePosts({
+    admin,
+    moduleOpen: (tenantId) => moduleOpen(tenantId, "social", admin),
+    getToken: (tenantId) =>
+      getProviderToken(tenantId, "meta", {
+        store: vaultTokenStore(admin),
+        adapter: getAdapter,
+        now: Date.now,
+        wait: sleep,
+        onNeedsReconnect: notifyNeedsReconnect,
+      }),
+    publish: publishPost,
+    async notifyFailed(tenantId, caption, reason) {
+      const { data: tenants } = await admin.from("tenants").select("slug").eq("id", tenantId);
+      const slug = (tenants as { slug: string }[] | null)?.[0]?.slug;
+      await emailOwners(
+        tenantId,
+        "A scheduled post didn't go out",
+        [
+          "One of your scheduled posts couldn't be published:",
+          "",
+          `"${caption.slice(0, 140)}"`,
+          "",
+          `What we were told: ${reason}`,
+          "",
+          `You can fix it and schedule it again here: ${site}/w/${slug}/social`,
+        ].join("\n"),
+      );
+    },
+  });
+}
+
 async function queueScheduledSyncs() {
   const admin = getAdminClient();
   for (const key of PROVIDER_ORDER) {
@@ -300,7 +340,8 @@ async function main() {
     const handled =
       (await attempt(drainStripeEvents, 0)) +
       (await attempt(drainSyncJobs, 0)) +
-      (await attempt(drainInboundEmails, 0));
+      (await attempt(drainInboundEmails, 0)) +
+      (await attempt(drainSocialPosts, 0));
 
     if (Date.now() - lastSchedule > SCHEDULE_EVERY_MS) {
       lastSchedule = Date.now();

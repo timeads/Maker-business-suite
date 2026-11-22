@@ -97,6 +97,16 @@ Phase 6: Bookings, then Social (see docs/build-plan.md)
   connected and is the one we created for that booking (`payments.ts`).
   Appointment times come from weekly hours in the workspace's timezone
   (`slots.ts`); keep the daylight-saving tests passing.
+- Social: members write posts through `save_social_post`; the worker claims
+  due posts (`claim_due_social_posts`) and records each channel's answer with
+  `finish_social_post`, which merges results so a channel that went out is
+  never sent twice. A post that is partly or fully out can't be edited.
+  Photos sit in the public `social` storage bucket under the workspace's id
+  (Instagram fetches by URL); only the server uploads. Caption drafts land
+  in the caption box and are never scheduled or posted automatically.
+- Code with no signed-in member (public pages, the worker) asks
+  `moduleOpen()` in `lib/module-access.ts`, which uses the same resolver as
+  `getEntitlements()`.
 - Schema changes are new files in `supabase/migrations`; never edit an
   applied migration.
 - UI copy: warm and plain, written for makers, not developers.

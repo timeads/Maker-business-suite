@@ -11,7 +11,7 @@ The full plan lives in the "Maker Business Suite — Claude Code Build Plan" doc
 | 3     | Connections hub                                                | Built, awaiting app keys    |
 | 4     | Financial dashboard module                                     | Built, awaiting app keys    |
 | 5     | Help desk module                                               | Built, awaiting email keys  |
-| 6     | Bookings, then Social                                          | Bookings built; Social next |
+| 6     | Bookings, then Social                                          | Built, awaiting app keys    |
 | 7     | Claude customization layer                                     | Not started                 |
 | 8     | Hardening and launch                                           | Not started                 |
 
@@ -203,3 +203,36 @@ Open decisions and deferrals:
   as one question per line.
 - The public form has a simple bot trap but no rate limiting; add it in
   Phase 8.
+
+### Social
+
+Goal: plan posts on a calendar and have them go out on time.
+
+Done when:
+
+- [ ] A scheduled post publishes to a test Page and Instagram account at the
+      set time (the queue, the Meta calls and partial-failure handling are
+      tested against stand-ins; needs a real Meta app and test accounts)
+- [x] A failed post is surfaced and can be retried (it is retried twice on
+      its own, then shown under "Didn't post", the owners are emailed, and it
+      can be fixed and rescheduled; automated in `tests/db/social.test.ts`)
+
+To switch social on for an environment: set `META_APP_ID` and
+`META_APP_SECRET` (see `.env.example`) on the web service and the worker.
+Drafts and the calendar work without them.
+
+Open decisions and deferrals:
+
+- Facebook Pages and Instagram business accounts only, one photo or text
+  per post. Carousels, video, Reels, Stories and TikTok come later.
+- When someone manages several Pages, the one with Instagram linked is
+  connected; there is no Page chooser yet.
+- The plan's `assets` table is `social_assets`, and scheduling lives on the
+  post itself (`scheduled_for`) rather than in a separate `post_schedules`
+  table. Recurring "usual posting times" are not built.
+- Uploaded photos are public by address (unguessable, but not private),
+  because Instagram has to fetch them.
+- Caption drafts are metered against the same monthly AI allowance as help
+  desk drafts.
+- No approval step between writing and scheduling; any member can post.
+- Likes, comments and reach are not pulled back in.

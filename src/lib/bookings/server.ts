@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type Stripe from "stripe";
 import { getStripe } from "../billing/stripe";
 import { sendEmail } from "../email";
+import { moduleOpen } from "../module-access";
 import { getAdminClient, withTenant } from "../supabase/admin";
 import { BOOKINGS_MODULE, FORM_KEY, parseBookingForm, type BookingForm } from "./config";
 import {
@@ -78,29 +79,7 @@ export async function getPublicWorkspace(
     .maybeSingle();
   const tenant = data as PublicWorkspace | null;
   if (!tenant) return null;
-  return (await bookingsOpen(tenant.id, admin)) ? tenant : null;
-}
-
-/**
- * The same answer `getEntitlements().can("module.bookings")` gives a member,
- * for a visitor who has no session to ask with.
- */
-async function bookingsOpen(tenantId: string, admin: SupabaseClient): Promise<boolean> {
-  const { resolveEntitlements } = await import("../entitlements");
-  return withTenant(
-    tenantId,
-    async (scope) => {
-      const { data } = await scope
-        .select(
-          "subscriptions",
-          "tenant_id, plan, status, trial_end, current_period_end, cancel_at_period_end, ended_at, purge_after, selected_modules",
-        )
-        .maybeSingle();
-      const entitlements = resolveEntitlements(data as never);
-      return entitlements.canWrite && entitlements.can("module.bookings");
-    },
-    admin,
-  );
+  return (await moduleOpen(tenant.id, "bookings", admin)) ? tenant : null;
 }
 
 export async function listPublicServices(tenantId: string): Promise<ServiceRow[]> {
