@@ -22,6 +22,7 @@ import { getBookingDetails, getBookingEmails, livePaymentDeps } from "../src/lib
 import { PROVIDER_ORDER, getAdapter } from "../src/lib/connections/registry";
 import { runSyncJob, type RunnerDeps, type SyncJob } from "../src/lib/connections/runner";
 import { rpcSyncStore } from "../src/lib/connections/store";
+import { createShopifySender } from "../src/lib/connections/providers/shopify-fulfil";
 import { createShopifyStockWriter } from "../src/lib/connections/providers/shopify-stock";
 import { getProviderToken, vaultTokenStore, type TokenDeps } from "../src/lib/connections/tokens";
 import { sendEmail } from "../src/lib/email";
@@ -365,6 +366,76 @@ async function drainStockReceipts(): Promise<number> {
   return receipts.length;
 }
 
+/**
+ * Marks recorded parcels as sent in the shop, for workspaces that asked for
+ * that. Tried once each, like stock receipts: a repeat could tell a customer
+ * twice that their order has shipped.
+ */
+async function drainShipments(): Promise<number> {
+  const admin = getAdminClient();
+  const { data, error } = await admin.rpc("claim_shipments_to_send", { p_limit: 20 });
+  if (error) throw new Error(`Could not claim shipments: ${error.message}`);
+  const shipments = (data ?? []) as {
+    id: string;
+    tenant_id: string;
+    number: number;
+    provider: string | null;
+    order_external_id: string | null;
+    carrier: string;
+    tracking_number: string;
+    tracking_url: string | null;
+    items: { line_id: string; qty: number }[];
+    notify_customer: boolean;
+  }[];
+  if (shipments.length === 0) return 0;
+  const sender = createShopifySender();
+  const tokenDeps: TokenDeps = {
+    store: vaultTokenStore(admin),
+    adapter: getAdapter,
+    now: Date.now,
+    wait: sleep,
+    onNeedsReconnect: notifyNeedsReconnect,
+  };
+  for (const shipment of shipments) {
+    let failure: string | null = null;
+    try {
+      if (shipment.provider !== "shopify" || !shipment.order_external_id) {
+        throw new Error("This parcel isn't for an order in the shop");
+      }
+      if (!(await moduleOpen(shipment.tenant_id, "shipping", admin))) {
+        throw new Error("Shipping isn't part of this workspace's plan right now");
+      }
+      const stored = await getProviderToken(shipment.tenant_id, "shopify", tokenDeps);
+      await sender.send(stored.externalAccountId, stored.token, {
+        orderExternalId: shipment.order_external_id,
+        carrier: shipment.carrier,
+        trackingNumber: shipment.tracking_number,
+        trackingUrl: shipment.tracking_url,
+        items: shipment.items,
+        notifyCustomer: shipment.notify_customer,
+      });
+    } catch (err) {
+      failure = err instanceof Error ? err.message : String(err);
+      console.error(`shipment ${shipment.id}: ${failure}`);
+    }
+    const { error: finishError } = await admin.rpc("finish_shipment_send", {
+      p_id: shipment.id,
+      p_error: failure,
+    });
+    if (finishError)
+      console.error(`could not mark shipment ${shipment.id}: ${finishError.message}`);
+    if (failure) {
+      await postAlert(
+        admin,
+        shipment.tenant_id,
+        "shipping",
+        `Parcel ${shipment.number} couldn't be marked as sent in your shop: ${failure}. Mark it there by hand so your customer gets their tracking.`,
+      );
+    }
+  }
+  return shipments.length;
+}
+
 /** Sends scheduled social posts whose time has come. */
 async function drainSocialPosts(): Promise<number> {
   const admin = getAdminClient();
@@ -455,7 +526,8 @@ async function main() {
       (await attempt(drainSyncJobs, 0)) +
       (await attempt(drainInboundEmails, 0)) +
       (await attempt(drainSocialPosts, 0)) +
-      (await attempt(drainStockReceipts, 0));
+      (await attempt(drainStockReceipts, 0)) +
+      (await attempt(drainShipments, 0));
 
     if (Date.now() - lastSchedule > SCHEDULE_EVERY_MS) {
       lastSchedule = Date.now();

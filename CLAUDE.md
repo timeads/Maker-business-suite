@@ -7,8 +7,8 @@ are OAuth apps owned by us.
 ## Current phase
 
 Phases 0 to 7 are built. Now: the overhaul toward eight full tools in the
-house look (Messages, Bookings, Help desk and Stock are built; Shipping and
-the larger Social are next). See docs/build-plan.md.
+house look (Messages, Bookings, Help desk, Stock and Shipping are built; the
+larger Social is next). See docs/build-plan.md.
 
 ## Stack
 
@@ -132,6 +132,17 @@ the larger Social are next). See docs/build-plan.md.
   location. Suppliers and orders are manager-only; anyone on the team can
   check a delivery in. Supabase returns 1,000 rows at most, so `loadStock()`
   pages.
+- Shipping: `shipping_orders` holds what packing needs (address, what's left
+  to send), kept apart from `orders` so the sales figures never carry an
+  address. It is read from the shop in a separate query that is allowed to
+  fail, so a shop that hasn't shared addresses still syncs its sales. When a
+  shopper is forgotten or a shop disconnected, triggers blank the address
+  there and on `shipments`; keep both tests in `tests/db/shipping.test.ts`
+  passing. A parcel is recorded with `record_shipment` (whole team; part
+  shipments leave the rest in the queue); undoing one is manager-only. We do
+  not buy postage: no label provider has been chosen. Telling the shop a
+  parcel went (`shopify-fulfil.ts`) follows the same once-only queue as
+  stock receipts.
 - Code with no signed-in member (public pages, the worker) asks
   `moduleOpen()` in `lib/module-access.ts`, which uses the same resolver as
   `getEntitlements()`.

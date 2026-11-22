@@ -21,6 +21,12 @@ import {
 } from "../helpdesk/config";
 import type { ModuleKey } from "../modules";
 import {
+  DEFAULT_SHIPPING_SETTINGS,
+  SHIPPING_MODULE,
+  SHIPPING_SETTINGS_KEY,
+  shippingSettingsSchema,
+} from "../shipping/config";
+import {
   DEFAULT_STOCK_SETTINGS,
   STOCK_MODULE,
   STOCK_SETTINGS_KEY,
@@ -102,6 +108,16 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
       "The lead time and days of cover used when a supplier doesn't say, how often orders are reviewed, whether busy seasons are planned for, and whether checked-in deliveries are added to the shop's count.",
     schema: stockSettingsSchema,
     defaultBody: () => DEFAULT_STOCK_SETTINGS,
+  },
+  {
+    module: SHIPPING_MODULE,
+    key: SHIPPING_SETTINGS_KEY,
+    feature: "shipping",
+    name: "Shipping and packing slips",
+    description:
+      "The return address and note printed on packing slips, the usual carrier, and whether recording a parcel also marks the order as sent in the shop and emails the customer.",
+    schema: shippingSettingsSchema,
+    defaultBody: () => DEFAULT_SHIPPING_SETTINGS,
   },
 ];
 
@@ -198,6 +214,22 @@ export function describeConfig(entry: ConfigEntry, body: unknown): string[] {
               .join(", ")}`,
         )
       : ["No rules"];
+  }
+  if (entry.module === SHIPPING_MODULE) {
+    const from = (value.ship_from ?? {}) as Record<string, string>;
+    const clip = (text: unknown) => {
+      const t = String(text ?? "").replace(/\s+/g, " ");
+      return t ? `"${t.slice(0, 90)}${t.length > 90 ? "…" : ""}"` : "nothing";
+    };
+    return [
+      `Slips are from: ${[from.name, from.address1, from.city_line].filter(Boolean).join(", ") || "no address yet"}`,
+      `Note at the bottom of each slip: ${clip(value.slip_note)}`,
+      value.slip_show_sku ? "Slips show item codes" : "Slips leave item codes off",
+      `Usual carrier: ${value.default_carrier}`,
+      value.mark_sent_in_shop
+        ? `Parcels are marked as sent in the shop${value.notify_customer ? ", and the shop emails the customer" : ""}`
+        : "Orders are marked as sent in the shop by hand",
+    ];
   }
   if (entry.module === STOCK_MODULE) {
     return [

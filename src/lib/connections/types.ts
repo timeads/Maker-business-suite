@@ -104,6 +104,31 @@ export type StockItemRow = {
   product_status: string | null;
 };
 
+/** What packing an order needs: who it's for and what is left to send. */
+export type ShippingOrderRow = {
+  external_id: string;
+  recipient: string | null;
+  company: string | null;
+  address1: string | null;
+  address2: string | null;
+  city: string | null;
+  region: string | null;
+  postal_code: string | null;
+  country_code: string | null;
+  phone: string | null;
+  shipping_method: string | null;
+  note: string | null;
+  paid: boolean;
+  items: {
+    line_id: string;
+    title: string;
+    variant: string | null;
+    sku: string | null;
+    qty: number;
+    left: number;
+  }[];
+};
+
 /** Where a sync puts what it fetched. Always scoped to the job's workspace and provider. */
 export type SyncStore = {
   upsertCommerce(batch: {
@@ -112,6 +137,8 @@ export type SyncStore = {
     orders?: OrderRow[];
   }): Promise<void>;
   upsertStock(items: StockItemRow[]): Promise<void>;
+  /** For orders already stored with upsertCommerce. */
+  upsertShipping(orders: ShippingOrderRow[]): Promise<void>;
   saveSnapshots(rows: SnapshotRow[]): Promise<void>;
   /** Erases one shopper's personal details, keeping the sales figures. */
   redactCustomer(externalId: string, email: string | null): Promise<void>;

@@ -2,6 +2,7 @@ import type {
   CustomerRow,
   OrderRow,
   ProductRow,
+  ShippingOrderRow,
   StockItemRow,
   SyncContext,
   SyncResult,
@@ -182,6 +183,114 @@ export function mapShopifyOrders(orders: ShopifyOrder[]): {
   return { customers: [...customers.values()], products: [...products.values()], orders: rows };
 }
 
+type ShopifyShipping = {
+  legacyResourceId: string;
+  displayFinancialStatus: string | null;
+  note: string | null;
+  shippingAddress: {
+    name: string | null;
+    company: string | null;
+    address1: string | null;
+    address2: string | null;
+    city: string | null;
+    provinceCode: string | null;
+    zip: string | null;
+    countryCodeV2: string | null;
+    phone: string | null;
+  } | null;
+  shippingLines: { nodes: { title: string }[] };
+  lineItems: {
+    nodes: {
+      id: string;
+      title: string;
+      variantTitle: string | null;
+      sku: string | null;
+      currentQuantity: number;
+      unfulfilledQuantity: number;
+      requiresShipping: boolean;
+    }[];
+  };
+} | null;
+
+/**
+ * Asked separately from the sales figures: a shop that hasn't let the app
+ * see addresses still gets its dashboards, just no packing list.
+ */
+const SHIPPING_QUERY = `query Shipping($ids: [ID!]!) {
+  nodes(ids: $ids) {
+    ... on Order {
+      legacyResourceId displayFinancialStatus note
+      shippingAddress { name company address1 address2 city provinceCode zip countryCodeV2 phone }
+      shippingLines(first: 1) { nodes { title } }
+      lineItems(first: 100) {
+        nodes { id title variantTitle sku currentQuantity unfulfilledQuantity requiresShipping }
+      }
+    }
+  }
+}`;
+
+const UNPAID = new Set(["PENDING", "AUTHORIZED", "PARTIALLY_PAID", "EXPIRED", "VOIDED"]);
+
+export function mapShopifyShipping(orders: ShopifyShipping[]): ShippingOrderRow[] {
+  return orders.flatMap((order) => {
+    if (!order) return [];
+    const address = order.shippingAddress;
+    return [
+      {
+        external_id: order.legacyResourceId,
+        recipient: address?.name ?? null,
+        company: address?.company ?? null,
+        address1: address?.address1 ?? null,
+        address2: address?.address2 ?? null,
+        city: address?.city ?? null,
+        region: address?.provinceCode ?? null,
+        postal_code: address?.zip ?? null,
+        country_code: address?.countryCodeV2 ?? null,
+        phone: address?.phone ?? null,
+        shipping_method: order.shippingLines.nodes[0]?.title ?? null,
+        note: order.note,
+        paid: !UNPAID.has(order.displayFinancialStatus ?? ""),
+        // Only things that go in a box; a gift card or a class has nothing to send.
+        items: order.lineItems.nodes
+          .filter((line) => line.requiresShipping && line.currentQuantity > 0)
+          .map((line) => ({
+            line_id: line.id,
+            title: line.title,
+            variant: line.variantTitle,
+            sku: line.sku?.trim() || null,
+            qty: line.currentQuantity,
+            left: Math.max(0, Math.min(line.currentQuantity, line.unfulfilledQuantity)),
+          })),
+      },
+    ];
+  });
+}
+
+/** Reads the packing details for orders just stored. Never fails the sync. */
+async function pullShipping(
+  ctx: SyncContext,
+  graphql: ShopifyGraphql,
+  orderIds: string[],
+): Promise<boolean> {
+  if (orderIds.length === 0) return true;
+  try {
+    const data = await graphql<{ nodes: ShopifyShipping[] }>(
+      ctx.externalAccountId,
+      ctx.token,
+      SHIPPING_QUERY,
+      { ids: orderIds.map((id) => `gid://shopify/Order/${id}`) },
+    );
+    await ctx.store.upsertShipping(mapShopifyShipping(data.nodes ?? []));
+    return true;
+  } catch (err) {
+    console.warn(
+      `shipping details unavailable for ${ctx.externalAccountId}:`,
+      err instanceof Error ? err.message : err,
+    );
+    return false;
+  }
+}
+
 type Cursor = {
   since?: string;
   after?: string | null;
@@ -292,6 +401,7 @@ async function pullOrders(
     previous.after !== undefined && previous.started_at ? previous.started_at : now.toISOString();
   let after = previous.after ?? null;
   let calls = 0;
+  let addresses = true;
 
   for (let page = 0; page < PAGES_PER_RUN; page++) {
     const data = await graphql<{
@@ -305,8 +415,18 @@ async function pullOrders(
       query: `updated_at:>='${since}'`,
     });
     calls += 1;
-    if (data.orders.nodes.length > 0)
+    if (data.orders.nodes.length > 0) {
       await ctx.store.upsertCommerce(mapShopifyOrders(data.orders.nodes));
+      // One refusal means the shop hasn't shared addresses; don't ask again this run.
+      if (addresses) {
+        addresses = await pullShipping(
+          ctx,
+          graphql,
+          data.orders.nodes.map((order) => order.legacyResourceId),
+        );
+        calls += 1;
+      }
+    }
     if (!data.orders.pageInfo.hasNextPage) {
       await ctx.store.recordUsage(calls);
       // Orders are in; the stock count follows in the same run.
@@ -370,8 +490,11 @@ async function handleWebhook(ctx: SyncContext, graphql: ShopifyGraphql): Promise
       ORDER_QUERY,
       { id },
     );
-    if (data.order) await ctx.store.upsertCommerce(mapShopifyOrders([data.order]));
-    await ctx.store.recordUsage(1);
+    if (data.order) {
+      await ctx.store.upsertCommerce(mapShopifyOrders([data.order]));
+      await pullShipping(ctx, graphql, [data.order.legacyResourceId]);
+    }
+    await ctx.store.recordUsage(2);
     return {};
   }
 

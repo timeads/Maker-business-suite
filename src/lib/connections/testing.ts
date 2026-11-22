@@ -3,6 +3,7 @@ import type {
   OrderRow,
   ProductRow,
   SnapshotRow,
+  ShippingOrderRow,
   StockItemRow,
   SyncStore,
 } from "./types";
@@ -14,6 +15,7 @@ export function memoryStore() {
     products: [] as ProductRow[],
     orders: [] as OrderRow[],
     stock: [] as StockItemRow[],
+    shipping: [] as ShippingOrderRow[],
     snapshots: [] as SnapshotRow[],
     redacted: [] as { externalId: string; email: string | null }[],
     purged: 0,
@@ -25,6 +27,9 @@ export function memoryStore() {
       state.customers.push(...(batch.customers ?? []));
       state.products.push(...(batch.products ?? []));
       state.orders.push(...(batch.orders ?? []));
+    },
+    async upsertShipping(orders) {
+      state.shipping.push(...orders);
     },
     async upsertStock(items) {
       state.stock.push(...items);

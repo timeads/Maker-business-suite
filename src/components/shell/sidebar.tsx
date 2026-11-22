@@ -11,6 +11,7 @@ import {
   Plug,
   Settings,
   Sparkles,
+  Truck,
 } from "lucide-react";
 import type { Entitlements } from "@/lib/entitlements";
 import { MODULES, type ModuleKey } from "@/lib/modules";
@@ -25,6 +26,7 @@ const MODULE_ICONS: Record<ModuleKey, typeof Home> = {
   bookings: CalendarDays,
   social: Megaphone,
   stock: Boxes,
+  shipping: Truck,
 };
 
 const GROUP =

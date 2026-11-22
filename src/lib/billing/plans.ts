@@ -21,7 +21,15 @@ export type Plan = {
   prioritySupport: boolean;
 };
 
-const ALL_MODULES = ["messages", "dashboard", "helpdesk", "bookings", "social", "stock"] as const;
+const ALL_MODULES = [
+  "messages",
+  "dashboard",
+  "helpdesk",
+  "bookings",
+  "social",
+  "stock",
+  "shipping",
+] as const;
 
 export const PLANS: Record<PlanKey, Plan> = {
   starter: {

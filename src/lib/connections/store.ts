@@ -25,6 +25,7 @@ export function rpcSyncStore(
         p_products: batch.products ?? [],
         p_orders: batch.orders ?? [],
       }),
+    upsertShipping: (orders) => call("upsert_shipping_orders", { p_orders: orders }),
     upsertStock: (items) => call("upsert_stock_items", { p_items: items }),
     saveSnapshots: (rows) => call("save_financial_snapshots", { p_snapshots: rows }),
     redactCustomer: (externalId, email) =>

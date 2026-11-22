@@ -147,7 +147,54 @@ describe("Shopify sync", () => {
   function pagedGraphql(pages: Page[], stockPages: Page[] = []) {
     const calls: { query: string; variables: Record<string, unknown> }[] = [];
     const stockCalls: Record<string, unknown>[] = [];
+    const shippingCalls: Record<string, unknown>[] = [];
+    let shippingFails = false;
     const graphql = (async (_shop: string, _token: TokenSet, query: string, variables?: object) => {
+      if (query.includes("shippingAddress")) {
+        shippingCalls.push((variables ?? {}) as Record<string, unknown>);
+        if (shippingFails) throw new Error("Access denied for shippingAddress field");
+        return {
+          nodes: ((variables as { ids: string[] }).ids ?? []).map((id) => ({
+            legacyResourceId: id.split("/").pop(),
+            displayFinancialStatus: "PAID",
+            note: null,
+            shippingAddress: {
+              name: "Sam Shopper",
+              company: null,
+              address1: "12 Mill Lane",
+              address2: null,
+              city: "Hudson",
+              provinceCode: "NY",
+              zip: "12534",
+              countryCodeV2: "US",
+              phone: null,
+            },
+            shippingLines: { nodes: [{ title: "Standard" }] },
+            lineItems: {
+              nodes: [
+                {
+                  id: "gid://shopify/LineItem/501",
+                  title: "Wool rug",
+                  variantTitle: "Large",
+                  sku: "RUG-L",
+                  currentQuantity: 2,
+                  unfulfilledQuantity: 1,
+                  requiresShipping: true,
+                },
+                {
+                  id: "gid://shopify/LineItem/502",
+                  title: "Gift card",
+                  variantTitle: null,
+                  sku: null,
+                  currentQuantity: 1,
+                  unfulfilledQuantity: 1,
+                  requiresShipping: false,
+                },
+              ],
+            },
+          })),
+        };
+      }
       if (query.includes("productVariants")) {
         stockCalls.push((variables ?? {}) as Record<string, unknown>);
         const page = stockPages[Math.min(stockCalls.length - 1, stockPages.length - 1)] ?? {
@@ -171,7 +218,15 @@ describe("Shopify sync", () => {
         },
       };
     }) as ShopifyGraphql;
-    return { graphql, calls, stockCalls };
+    return {
+      graphql,
+      calls,
+      stockCalls,
+      shippingCalls,
+      denyShipping: () => {
+        shippingFails = true;
+      },
+    };
   }
 
   const variant = (id: string, overrides: Record<string, unknown> = {}) => ({
@@ -186,6 +241,47 @@ describe("Shopify sync", () => {
       unitCost: { amount: "60.00" },
     },
     ...overrides,
+  });
+
+  it("reads what packing needs for each page of orders, leaving out things that don't ship", async () => {
+    const net = pagedGraphql([{ nodes: [shopifyOrder("7")], hasNextPage: false, endCursor: null }]);
+    const { ctx, state } = context({ type: "full" });
+    await syncShopify(ctx, net.graphql, NOW);
+    expect(net.shippingCalls[0]).toEqual({ ids: ["gid://shopify/Order/7"] });
+    expect(state.shipping).toEqual([
+      expect.objectContaining({
+        external_id: "7",
+        recipient: "Sam Shopper",
+        region: "NY",
+        country_code: "US",
+        shipping_method: "Standard",
+        paid: true,
+        items: [
+          {
+            line_id: "gid://shopify/LineItem/501",
+            title: "Wool rug",
+            variant: "Large",
+            sku: "RUG-L",
+            qty: 2,
+            left: 1,
+          },
+        ],
+      }),
+    ]);
+  });
+
+  it("a shop that won't share addresses still gets its sales, and is asked only once", async () => {
+    const net = pagedGraphql([
+      { nodes: [shopifyOrder("1")], hasNextPage: true, endCursor: "c1" },
+      { nodes: [shopifyOrder("2")], hasNextPage: false, endCursor: null },
+    ]);
+    net.denyShipping();
+    const { ctx, state } = context({ type: "full" });
+    const result = await syncShopify(ctx, net.graphql, NOW);
+    expect(state.orders.map((o) => o.external_id)).toEqual(["1", "2"]);
+    expect(state.shipping).toEqual([]);
+    expect(net.shippingCalls).toHaveLength(1);
+    expect(result.cursor).toBeDefined();
   });
 
   it("reads the stock count once the orders are in, and carries on where it left off", async () => {
@@ -255,7 +351,7 @@ describe("Shopify sync", () => {
     });
     expect(net.calls[1].variables).toMatchObject({ after: "c1" });
     expect(result).toEqual({ cursor: { synced_through: NOW.toISOString() } });
-    expect(state.usage).toBe(3);
+    expect(state.usage).toBe(5);
   });
 
   it("a later sync only asks for what changed since the last one finished", async () => {
@@ -307,7 +403,11 @@ describe("Shopify sync", () => {
       },
     });
     await syncShopify(ctx, graphql, NOW);
-    expect(calls).toEqual([{ id: "gid://shopify/Order/1001" }]);
+    // The order itself, then what packing needs for it.
+    expect(calls).toEqual([
+      { id: "gid://shopify/Order/1001" },
+      { ids: ["gid://shopify/Order/1001"] },
+    ]);
     expect(state.orders).toEqual([expect.objectContaining({ external_id: "1001", net_sales: 80 })]);
   });
 

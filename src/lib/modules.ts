@@ -31,6 +31,12 @@ export const MODULES = [
     blurb: "What to reorder, when, and what's on its way",
     available: true,
   },
+  {
+    key: "shipping",
+    name: "Shipping",
+    blurb: "Pack, post and track what's going out",
+    available: true,
+  },
 ] as const;
 
 export type ModuleKey = (typeof MODULES)[number]["key"];
