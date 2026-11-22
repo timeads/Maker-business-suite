@@ -6,6 +6,7 @@ import {
   LineChart,
   Lock,
   Megaphone,
+  MessagesSquare,
   Plug,
   Settings,
   Sparkles,
@@ -17,6 +18,7 @@ import { NavLink, TabLink } from "./nav-link";
 import { WorkspaceSwitcher } from "./workspace-switcher";
 
 const MODULE_ICONS: Record<ModuleKey, typeof Home> = {
+  messages: MessagesSquare,
   dashboard: LineChart,
   helpdesk: Inbox,
   bookings: CalendarDays,

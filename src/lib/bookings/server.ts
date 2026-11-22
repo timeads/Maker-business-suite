@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type Stripe from "stripe";
 import { getStripe } from "../billing/stripe";
 import { sendEmail } from "../email";
+import { postAlert } from "../messages/alerts";
 import { moduleOpen } from "../module-access";
 import { getAdminClient, withTenant } from "../supabase/admin";
 import { BOOKINGS_MODULE, FORM_KEY, parseBookingForm, type BookingForm } from "./config";
@@ -14,7 +15,13 @@ import {
   type BookingDetails,
 } from "./emails";
 import type { CheckoutInfo, PaymentDeps } from "./payments";
-import { generateSlots, isOfferedSlot, type AvailabilityRule, type Busy } from "./slots";
+import {
+  formatWhen,
+  generateSlots,
+  isOfferedSlot,
+  type AvailabilityRule,
+  type Busy,
+} from "./slots";
 
 /**
  * Server-only. The public booking pages have no database access of their
@@ -245,6 +252,12 @@ export async function announceBooking(
     p_tenant_id: details.tenant_id,
   });
   const roster = `${site}/w/${details.workspace_slug}/bookings/sessions/${details.session_id}`;
+  await postAlert(
+    admin,
+    details.tenant_id,
+    "bookings",
+    `${details.customer_name} booked ${details.service_name} for ${formatWhen(details.starts_at, details.ends_at, details.timezone)}${details.seats > 1 ? ` (${details.seats} places)` : ""}.${details.oversold ? " This one arrived after the date had filled, so it's over its limit." : ""}`,
+  );
   for (const { email } of (owners ?? []) as { email: string }[]) {
     await sendEmail(ownerNoticeEmail(details, email, roster));
   }

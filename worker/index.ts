@@ -32,6 +32,7 @@ import {
   type IngestResult,
   type PostmarkInbound,
 } from "../src/lib/helpdesk/inbound";
+import { postAlert } from "../src/lib/messages/alerts";
 import { moduleOpen } from "../src/lib/module-access";
 import { publishPost } from "../src/lib/social/publish";
 import { publishDuePosts } from "../src/lib/social/worker";
@@ -277,6 +278,12 @@ async function drainSocialPosts(): Promise<number> {
     async notifyFailed(tenantId, caption, reason) {
       const { data: tenants } = await admin.from("tenants").select("slug").eq("id", tenantId);
       const slug = (tenants as { slug: string }[] | null)?.[0]?.slug;
+      await postAlert(
+        admin,
+        tenantId,
+        "social",
+        `A scheduled post didn't go out: "${caption.slice(0, 100)}". ${reason}`,
+      );
       await emailOwners(
         tenantId,
         "A scheduled post didn't go out",

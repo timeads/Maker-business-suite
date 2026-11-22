@@ -21,7 +21,7 @@ export type Plan = {
   prioritySupport: boolean;
 };
 
-const ALL_MODULES = ["dashboard", "helpdesk", "bookings", "social"] as const;
+const ALL_MODULES = ["messages", "dashboard", "helpdesk", "bookings", "social"] as const;
 
 export const PLANS: Record<PlanKey, Plan> = {
   starter: {
@@ -31,7 +31,7 @@ export const PLANS: Record<PlanKey, Plan> = {
     lookupKey: "starter_monthly",
     tagline: "The money view plus one tool of your choice",
     seats: 2,
-    includedModules: ["dashboard"],
+    includedModules: ["messages", "dashboard"],
     moduleChoices: 1,
     aiCredits: 250_000,
     mcp: false,

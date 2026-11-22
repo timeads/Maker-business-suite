@@ -116,6 +116,15 @@ Phase 7: Claude customization layer (see docs/build-plan.md)
   `config_versions` row. A new customisable setting means a registry entry.
   Earlier chat turns are sent as quoted text, so each request is a fresh,
   append-only conversation. Files marked "use server" export only actions.
+- Messages: channels are open to the whole workspace, direct messages only
+  to their two people (`private.can_see_chat`). All writes are functions
+  (`post_chat_message`, ...); only the author can edit or delete, and delete
+  keeps the row. The browser uses Supabase Realtime only as a nudge to
+  re-read through server actions, with a 20s poll as a fallback, so nothing
+  depends on the live payload. Message text is rendered as text nodes and
+  plain links, never as markup (`splitBody`). Other tools post heads-ups with
+  `postAlert()`, which must never throw. Pages that need the whole window
+  live beside the `(app)` route group, not inside it.
 - Schema changes are new files in `supabase/migrations`; never edit an
   applied migration.
 - Look: the "Tuft Life" house style (see the tuft-ui repo's DESIGN.md). Teal

@@ -1,6 +1,12 @@
 /** `available` flips to true when a module's screens ship. */
 export const MODULES = [
   {
+    key: "messages",
+    name: "Messages",
+    blurb: "Team chat, with heads-ups from your other tools",
+    available: true,
+  },
+  {
     key: "dashboard",
     name: "Money",
     blurb: "Sales, margins and cash in one view",
