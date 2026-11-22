@@ -29,10 +29,15 @@ pnpm dev
 
 ## Deploy to Railway
 
-`railway.toml` configures the web service (build, start, health check at
-`/api/health`). Create a staging and a production environment and set the
-variables from `.env.example` in each, with `NEXT_PUBLIC_SITE_URL` set to that
-environment's public URL.
+Two services run from this repository, with their commands set on each
+service in Railway (not in a config file):
+
+- `web`: build `pnpm build`, start `pnpm start`, health check `/api/health`
+- `worker`: start `pnpm worker`, no build step
+
+Create a staging and a production environment and set the variables from
+`.env.example` in each, with `NEXT_PUBLIC_SITE_URL` set to that environment's
+public URL. The worker shares the web service's Supabase and Stripe variables.
 
 ## Checks
 

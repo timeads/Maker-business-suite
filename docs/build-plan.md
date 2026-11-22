@@ -51,13 +51,13 @@ Done when:
 
 To switch billing on for an environment:
 
-1. `STRIPE_SECRET_KEY=sk_test_... pnpm stripe:setup` (products, prices, portal)
-2. In Stripe, add a webhook endpoint at `<site>/api/webhooks/stripe` for
-   `checkout.session.completed` and `customer.subscription.*`
-3. Set `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` and `SUPABASE_SECRET_KEY`
-   on the web service
-4. Create the worker service from `railway.worker.toml` with
-   `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SECRET_KEY` and `STRIPE_SECRET_KEY`
+1. Set `STRIPE_SECRET_KEY` and `SUPABASE_SECRET_KEY` on the web service
+2. Run the worker service (start command `pnpm worker`) with
+   `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SECRET_KEY` and `STRIPE_SECRET_KEY`.
+   On start it creates the products, prices and portal settings in Stripe.
+3. In Stripe, add a webhook endpoint at `<site>/api/webhooks/stripe` for
+   `checkout.session.completed` and `customer.subscription.*`, and set its
+   signing secret as `STRIPE_WEBHOOK_SECRET` on the web service
 
 Open decisions and deferrals:
 
