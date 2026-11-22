@@ -24,8 +24,8 @@ Done when:
 
 - [x] Two test accounts in two workspaces can't see each other's data
       (automated: `tests/db/tenant-isolation.test.ts`)
-- [ ] Invite flow works end to end on staging (covered at the database level
-      by the same test file; needs a click-through against real Supabase Auth)
+- [x] Invite flow works end to end on staging (clicked through on 2026-11-21:
+      invited by one account, joined from another)
 - [x] Staging URL is live: https://web-staging-11af7da6.up.railway.app
       (Railway project `maker-business-suite`, environment `staging`; Supabase
       project in the "Maker business suite" organization)
