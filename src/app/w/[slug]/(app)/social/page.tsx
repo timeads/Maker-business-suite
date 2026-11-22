@@ -3,11 +3,13 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { FormMessage } from "@/components/ui/form-message";
+import { PageHeader } from "@/components/ui/page-header";
 import { formatDay, formatTime, localDay, zonedTimeToUtc } from "@/lib/bookings/slots";
 import { createClient } from "@/lib/supabase/server";
 import { cn } from "@/lib/utils";
 import { socialAccess } from "./gate";
 import { STATUS_LABELS, socialChannels } from "./shared";
+import { SocialTabs } from "./tabs";
 
 export const metadata: Metadata = { title: "Social" };
 
@@ -17,6 +19,7 @@ type PostRow = {
   channels: string[];
   status: keyof typeof STATUS_LABELS;
   scheduled_for: string | null;
+  planned_for: string | null;
   updated_at: string;
 };
 
@@ -34,6 +37,7 @@ const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 // Status is always written out as well; the tint only helps scanning.
 const CHIP: Record<string, string> = {
+  draft: "border-dashed border-ochre/60 bg-ochre-soft/40",
   scheduled: "border-border bg-card",
   publishing: "border-border bg-card",
   published: "border-transparent bg-muted text-muted-foreground",
@@ -77,7 +81,7 @@ export default async function SocialPage({
     `${base}?month=${iso(new Date(Date.UTC(year, monthIndex - 1 + offset, 1))).slice(0, 7)}`;
 
   const supabase = await createClient();
-  const columns = "id, caption, channels, status, scheduled_for, updated_at";
+  const columns = "id, caption, channels, status, scheduled_for, planned_for, updated_at";
   const [{ data: inMonth }, { data: drafts }, { data: failed }, channels] = await Promise.all([
     supabase
       .from("social_posts")
@@ -93,7 +97,7 @@ export default async function SocialPage({
       .eq("tenant_id", tenant.id)
       .eq("status", "draft")
       .order("updated_at", { ascending: false })
-      .limit(20),
+      .limit(60),
     supabase
       .from("social_posts")
       .select(columns)
@@ -104,8 +108,23 @@ export default async function SocialPage({
     socialChannels(supabase, tenant.id),
   ]);
   const byDay = new Map<string, PostRow[]>();
-  for (const post of (inMonth ?? []) as PostRow[]) {
-    const day = localDay(new Date(post.scheduled_for as string), tenant.timezone);
+  // Drafts pencilled in for a day sit on the calendar too, marked as drafts.
+  const pencilled = ((drafts ?? []) as PostRow[]).filter(
+    (post) =>
+      post.planned_for &&
+      post.planned_for >= from.toISOString() &&
+      post.planned_for < to.toISOString(),
+  );
+  const placed = [...((inMonth ?? []) as PostRow[]), ...pencilled].sort((a, b) =>
+    ((a.scheduled_for ?? a.planned_for) as string).localeCompare(
+      (b.scheduled_for ?? b.planned_for) as string,
+    ),
+  );
+  for (const post of placed) {
+    const day = localDay(
+      new Date((post.scheduled_for ?? post.planned_for) as string),
+      tenant.timezone,
+    );
     byDay.set(day, [...(byDay.get(day) ?? []), post]);
   }
   const monthName = new Intl.DateTimeFormat("en-US", {
@@ -124,7 +143,7 @@ export default async function SocialPage({
       )}
     >
       <span className="font-medium tabular-nums">
-        {formatTime(post.scheduled_for as string, tenant.timezone)}
+        {formatTime((post.scheduled_for ?? post.planned_for) as string, tenant.timezone)}
       </span>{" "}
       {post.status !== "scheduled" && <span>· {STATUS_LABELS[post.status]} </span>}
       <span className="line-clamp-2">{snippet(post.caption)}</span>
@@ -133,14 +152,17 @@ export default async function SocialPage({
 
   return (
     <>
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold tracking-tight">Social</h1>
+      <PageHeader
+        title="Social"
+        description="What's going out, what's pencilled in, and what's waiting on you."
+      >
         {entitlements.canWrite && (
           <Button asChild>
             <Link href={`${base}/new`}>New post</Link>
           </Button>
         )}
-      </header>
+      </PageHeader>
+      <SocialTabs slug={tenant.slug} />
 
       <FormMessage kind="success">{SAVED[query.saved ?? ""]}</FormMessage>
 

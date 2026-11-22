@@ -7,9 +7,19 @@ import { requireUser } from "@/lib/auth";
 import { parseClock, zonedTimeToUtc } from "@/lib/bookings/slots";
 import { getEntitlements } from "@/lib/entitlements";
 import { draftCaption } from "@/lib/social/caption";
+import {
+  LINKS_KEY,
+  PLAN_KEY,
+  SOCIAL_MODULE,
+  linkPageSchema,
+  linksFromText,
+  openSlots,
+  parsePlan,
+  socialPlanSchema,
+} from "@/lib/social/plan";
 import { getAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
-import { getTenantContext } from "@/lib/tenants";
+import { canManage, getTenantContext } from "@/lib/tenants";
 
 export type SocialState = { error?: string; message?: string; draft?: string };
 
@@ -25,7 +35,60 @@ const SAVE_ERRORS: Record<string, string> = {
   instagram_needs_photo: "Instagram posts need a photo.",
   past: "Pick a time in the future.",
   locked: "This post has already gone out, so it can't be changed.",
+  too_many_photos: "A post can have up to 10 photos.",
+  caption_too_long: "Captions can be up to 2,200 characters.",
 };
+
+type Ctx = Exclude<Awaited<ReturnType<typeof context>>, { error: string }>;
+
+/** Stores uploaded photos in the workspace's folder and returns their ids, in order. */
+async function storePhotos(
+  ctx: Ctx,
+  files: File[],
+): Promise<{ ids: string[] } | { error: string }> {
+  const photos = files.filter((file) => file.size > 0);
+  if (photos.length === 0) return { ids: [] };
+  if (photos.length > 20) return { error: "Add up to 20 photos at a time." };
+  for (const photo of photos) {
+    if (photo.type !== "image/jpeg" && photo.type !== "image/png") {
+      return { error: "Photos need to be JPEG or PNG files." };
+    }
+    if (photo.size > MAX_PHOTO_BYTES) return { error: "Photos can be up to 5 MB each." };
+  }
+  if (!process.env.SUPABASE_SECRET_KEY) {
+    return { error: "Photo uploads aren't switched on for this environment yet." };
+  }
+  const admin = getAdminClient();
+  const ids: string[] = [];
+  for (const photo of photos) {
+    const path = `${ctx.tenant.id}/${randomUUID()}.${photo.type === "image/png" ? "png" : "jpg"}`;
+    const { error: uploadError } = await admin.storage
+      .from("social")
+      .upload(path, photo, { contentType: photo.type });
+    if (uploadError) {
+      console.error(`Photo upload failed: ${uploadError.message}`);
+      return { error: "A photo didn't upload. Please try again." };
+    }
+    const { data, error } = await admin.rpc("register_social_asset", {
+      p_tenant_id: ctx.tenant.id,
+      p_storage_path: path,
+      p_mime_type: photo.type,
+      p_bytes: photo.size,
+      p_created_by: ctx.user.id,
+    });
+    if (error) return { error: "A photo didn't upload. Please try again." };
+    ids.push(data as string);
+  }
+  return { ids };
+}
+
+const UUID = /^[0-9a-f-]{36}$/i;
+const tagsFrom = (value: string) =>
+  value
+    .split(",")
+    .map((tag) => tag.trim().toLowerCase())
+    .filter(Boolean)
+    .slice(0, 12);
 
 async function context(slug: string) {
   const user = await requireUser(`/w/${slug}/social`);
@@ -34,7 +97,13 @@ async function context(slug: string) {
   const entitlements = await getEntitlements(ctx.tenant.id);
   if (!entitlements.can("module.social")) return { error: NO_ACCESS } as const;
   if (!entitlements.canWrite) return { error: READ_ONLY } as const;
-  return { user, tenant: ctx.tenant, entitlements, supabase: await createClient() } as const;
+  return {
+    user,
+    tenant: ctx.tenant,
+    role: ctx.role,
+    entitlements,
+    supabase: await createClient(),
+  } as const;
 }
 
 /** Saves a post as a draft, schedules it, or sends it now, depending on the button pressed. */
@@ -66,50 +135,58 @@ export async function savePost(
     scheduledFor = at.toISOString();
   }
 
-  // The photo: a new upload, the one already on the post, or none.
-  let assetId: string | null = String(formData.get("asset_id") ?? "") || null;
-  let mime = String(formData.get("asset_mime") ?? "");
-  if (formData.get("remove_photo") === "on") assetId = null;
-  const photo = formData.get("photo");
-  if (photo instanceof File && photo.size > 0) {
-    if (photo.type !== "image/jpeg" && photo.type !== "image/png") {
-      return { error: "Photos need to be JPEG or PNG files." };
+  // The photos: the ones picked from the library, in order, then any new uploads.
+  const picked = formData
+    .getAll("asset")
+    .map(String)
+    .filter((id) => UUID.test(id));
+  const uploaded = await storePhotos(
+    ctx,
+    formData.getAll("photos").filter((file): file is File => file instanceof File),
+  );
+  if ("error" in uploaded) return { error: uploaded.error };
+  const assetIds = [...new Set([...picked, ...uploaded.ids])];
+  if (assetIds.length > 10) return { error: SAVE_ERRORS.too_many_photos };
+  if (scheduledFor && assetIds.length > 0 && channels.includes("instagram")) {
+    const { data: kinds } = await ctx.supabase
+      .from("social_assets")
+      .select("mime_type")
+      .eq("tenant_id", ctx.tenant.id)
+      .in("id", assetIds);
+    if ((kinds ?? []).some((asset) => asset.mime_type === "image/png")) {
+      return { error: "Instagram only takes JPEG photos. Swap the PNG or untick Instagram." };
     }
-    if (photo.size > MAX_PHOTO_BYTES) return { error: "Photos can be up to 5 MB." };
-    if (!process.env.SUPABASE_SECRET_KEY) {
-      return { error: "Photo uploads aren't switched on for this environment yet." };
-    }
-    const admin = getAdminClient();
-    const path = `${ctx.tenant.id}/${randomUUID()}.${photo.type === "image/png" ? "png" : "jpg"}`;
-    const { error: uploadError } = await admin.storage
-      .from("social")
-      .upload(path, photo, { contentType: photo.type });
-    if (uploadError) {
-      console.error(`Photo upload failed: ${uploadError.message}`);
-      return { error: "The photo didn't upload. Please try again." };
-    }
-    const { data: registered, error: registerError } = await admin.rpc("register_social_asset", {
-      p_tenant_id: ctx.tenant.id,
-      p_storage_path: path,
-      p_mime_type: photo.type,
-      p_bytes: photo.size,
-      p_created_by: ctx.user.id,
-    });
-    if (registerError) return { error: "The photo didn't upload. Please try again." };
-    assetId = registered as string;
-    mime = photo.type;
-  }
-  if (scheduledFor && assetId && channels.includes("instagram") && mime === "image/png") {
-    return { error: "Instagram only takes JPEG photos. Swap the photo or untick Instagram." };
   }
 
-  const { error } = await ctx.supabase.rpc("save_social_post", {
+  // A draft keeps the date it's meant for, so it shows in the plan.
+  let plannedFor: string | null = null;
+  if (intent === "draft") {
+    const day = String(formData.get("day") ?? "");
+    const minutes = parseClock(String(formData.get("time") ?? ""));
+    if (/^\d{4}-\d{2}-\d{2}$/.test(day) && minutes !== null && formData.get("keep_date") === "on") {
+      plannedFor = zonedTimeToUtc(day, minutes, ctx.tenant.timezone)?.toISOString() ?? null;
+    }
+  }
+  const project = String(formData.get("project") ?? "");
+  const { error } = await ctx.supabase.rpc("save_social_post_full", {
     p_tenant_id: ctx.tenant.id,
     p_post_id: postId,
     p_caption: caption,
-    p_asset_id: assetId,
+    p_asset_ids: assetIds,
     p_channels: channels,
     p_scheduled_for: scheduledFor,
+    p_captions: Object.fromEntries(
+      CHANNELS.map((channel) => [
+        channel,
+        formData.get(`own_${channel}`) === "on"
+          ? String(formData.get(`caption_${channel}`) ?? "").trim()
+          : "",
+      ]),
+    ),
+    p_project_id: UUID.test(project) ? project : null,
+    p_topic: String(formData.get("topic") ?? "").slice(0, 40) || null,
+    p_ai_draft: String(formData.get("ai_draft") ?? "").slice(0, 2200) || null,
+    p_planned_for: plannedFor,
   });
   if (error) {
     const known = Object.keys(SAVE_ERRORS).find((key) => error.message.includes(key));
@@ -152,7 +229,7 @@ export async function draftPostCaption(
   const monthStart = new Date();
   monthStart.setUTCDate(1);
   monthStart.setUTCHours(0, 0, 0, 0);
-  const [{ data: usage }, { data: recent }] = await Promise.all([
+  const [{ data: usage }, { data: recent }, { data: planRow }] = await Promise.all([
     ctx.supabase
       .from("usage_events")
       .select("quantity")
@@ -166,6 +243,13 @@ export async function draftPostCaption(
       .eq("status", "published")
       .order("published_at", { ascending: false })
       .limit(5),
+    ctx.supabase
+      .from("configs")
+      .select("body")
+      .eq("tenant_id", ctx.tenant.id)
+      .eq("module", SOCIAL_MODULE)
+      .eq("key", PLAN_KEY)
+      .maybeSingle(),
   ]);
   const used = (usage ?? []).reduce((sum, row) => sum + Number(row.quantity), 0);
   if (used >= ctx.entitlements.limit("ai_credits")) {
@@ -183,6 +267,7 @@ export async function draftPostCaption(
         c === "facebook" ? "Facebook" : "Instagram",
       ),
       recent: (recent ?? []).map((row) => String(row.caption).slice(0, 600)).filter(Boolean),
+      styleNotes: parsePlan(planRow?.body).style_notes,
     });
     // Metered whether or not a draft came back: the tokens were spent.
     const { error: usageError } = await getAdminClient().rpc("record_usage", {
@@ -197,4 +282,291 @@ export async function draftPostCaption(
     console.error("Caption draft failed", err instanceof Error ? err.message : err);
     return { error: "Drafting didn't work just now. Please try again." };
   }
+}
+
+const done = (slug: string) => revalidatePath(`/w/${slug}/social`, "layout");
+const OOPS = "That didn't save. Please try again.";
+
+/** Adds photos to the library, optionally straight into a project with tags. */
+export async function uploadPhotos(
+  slug: string,
+  _prev: SocialState,
+  formData: FormData,
+): Promise<SocialState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const stored = await storePhotos(
+    ctx,
+    formData.getAll("photos").filter((file): file is File => file instanceof File),
+  );
+  if ("error" in stored) return { error: stored.error };
+  if (stored.ids.length === 0) return { error: "Choose some photos first." };
+  const project = String(formData.get("project") ?? "");
+  const tags = tagsFrom(String(formData.get("tags") ?? ""));
+  if (UUID.test(project) || tags.length > 0) {
+    await ctx.supabase.rpc("file_social_assets", {
+      p_tenant_id: ctx.tenant.id,
+      p_asset_ids: stored.ids,
+      p_project_id: UUID.test(project) ? project : null,
+      p_add_tags: tags,
+    });
+  }
+  done(slug);
+  return { message: `${stored.ids.length} photo${stored.ids.length === 1 ? "" : "s"} added.` };
+}
+
+export async function updatePhoto(
+  slug: string,
+  assetId: string,
+  _prev: SocialState,
+  formData: FormData,
+): Promise<SocialState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const project = String(formData.get("project") ?? "");
+  const { error } = await ctx.supabase.rpc("update_social_asset", {
+    p_asset_id: assetId,
+    p_title: String(formData.get("title") ?? "").slice(0, 120),
+    p_tags: tagsFrom(String(formData.get("tags") ?? "")),
+    p_project_id: UUID.test(project) ? project : null,
+    p_hidden: formData.get("hidden") === "on",
+  });
+  if (error) return { error: OOPS };
+  done(slug);
+  return { message: "Saved." };
+}
+
+export async function saveProject(
+  slug: string,
+  projectId: string | null,
+  _prev: SocialState,
+  formData: FormData,
+): Promise<SocialState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const name = String(formData.get("name") ?? "").trim();
+  if (!name || name.length > 80) return { error: "Give the project a name (up to 80 characters)." };
+  const { data, error } = await ctx.supabase.rpc("save_social_project", {
+    p_tenant_id: ctx.tenant.id,
+    p_project_id: projectId,
+    p_name: name,
+    p_note: String(formData.get("note") ?? "").slice(0, 2000),
+    p_topic: String(formData.get("topic") ?? "").slice(0, 40),
+    p_archived: formData.get("archived") === "on",
+  });
+  if (error) return { error: OOPS };
+  done(slug);
+  if (!projectId) redirect(`/w/${slug}/social/projects/${data as string}`);
+  return { message: "Saved." };
+}
+
+async function saveSocialConfig(ctx: Ctx, key: string, body: object): Promise<boolean> {
+  const { error } = await ctx.supabase.rpc("save_config", {
+    p_tenant_id: ctx.tenant.id,
+    p_module: SOCIAL_MODULE,
+    p_key: key,
+    p_body: body,
+  });
+  return !error;
+}
+
+const slugify = (value: string, index: number) =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 36) || `topic-${index + 1}`;
+
+/**
+ * Saves the content plan. Topics are typed one per line as "Name: what it's
+ * about"; posting times are rows of day, time and topic.
+ */
+export async function savePlan(
+  slug: string,
+  _prev: SocialState,
+  formData: FormData,
+): Promise<SocialState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const topics = String(formData.get("topics") ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line, index) => {
+      const cut = line.indexOf(":");
+      const name = (cut === -1 ? line : line.slice(0, cut)).trim().slice(0, 40);
+      return {
+        id: slugify(name, index),
+        name,
+        about: cut === -1 ? "" : line.slice(cut + 1).trim(),
+      };
+    });
+  const slots: { weekday: number; time: string; topic: string | null }[] = [];
+  for (let row = 0; row < 21; row++) {
+    const time = String(formData.get(`slot_time_${row}`) ?? "");
+    if (!time) continue;
+    const topic = String(formData.get(`slot_topic_${row}`) ?? "");
+    slots.push({
+      weekday: Number.parseInt(String(formData.get(`slot_day_${row}`) ?? "1"), 10),
+      time,
+      topic: topics.some((t) => t.id === topic) ? topic : null,
+    });
+  }
+  const parsed = socialPlanSchema.safeParse({
+    version: 1,
+    topics,
+    slots,
+    style_notes: String(formData.get("style_notes") ?? ""),
+  });
+  if (!parsed.success) {
+    return {
+      error:
+        "Check the plan: up to 12 topics (names under 40 characters) and voice notes under 3,000 characters.",
+    };
+  }
+  if (new Set(parsed.data.topics.map((t) => t.id)).size !== parsed.data.topics.length) {
+    return { error: "Two topics have the same name. Give each its own." };
+  }
+  if (!(await saveSocialConfig(ctx, PLAN_KEY, parsed.data))) return { error: OOPS };
+  done(slug);
+  return { message: "Plan saved." };
+}
+
+export async function saveLinkPage(
+  slug: string,
+  _prev: SocialState,
+  formData: FormData,
+): Promise<SocialState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  if (!canManage(ctx.role)) return { error: "Only owners and admins can change the link page." };
+  const links = linksFromText(String(formData.get("links") ?? ""));
+  if ("error" in links) return { error: links.error };
+  const parsed = linkPageSchema.safeParse({
+    version: 1,
+    published: formData.get("published") === "on",
+    heading: String(formData.get("heading") ?? ""),
+    intro: String(formData.get("intro") ?? ""),
+    links: links.links,
+    show_posts: formData.get("show_posts") === "on",
+  });
+  if (!parsed.success) {
+    return { error: "Keep the heading under 80 characters and the intro under 300." };
+  }
+  if (!(await saveSocialConfig(ctx, LINKS_KEY, parsed.data))) return { error: OOPS };
+  done(slug);
+  return { message: parsed.data.published ? "Saved and live." : "Saved. It isn't published yet." };
+}
+
+/**
+ * Drafts a post for each open time in the coming four weeks (ten at most).
+ * Every one is saved as a draft for a person to read, change and schedule;
+ * nothing here is ever posted (CLAUDE.md rule 6).
+ */
+export async function draftTheMonth(
+  slug: string,
+  _prev: SocialState,
+  _formData: FormData,
+): Promise<SocialState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  if (!process.env.ANTHROPIC_API_KEY || !process.env.SUPABASE_SECRET_KEY) {
+    return { error: "Drafting isn't switched on for this environment yet." };
+  }
+  const monthStart = new Date();
+  monthStart.setUTCDate(1);
+  monthStart.setUTCHours(0, 0, 0, 0);
+  const [{ data: planRow }, { data: posts }, { data: recent }, { data: usage }] = await Promise.all(
+    [
+      ctx.supabase
+        .from("configs")
+        .select("body")
+        .eq("tenant_id", ctx.tenant.id)
+        .eq("module", SOCIAL_MODULE)
+        .eq("key", PLAN_KEY)
+        .maybeSingle(),
+      ctx.supabase
+        .from("social_posts")
+        .select("status, scheduled_for, planned_for, topic")
+        .eq("tenant_id", ctx.tenant.id)
+        .or(
+          `scheduled_for.gte.${new Date().toISOString()},planned_for.gte.${new Date().toISOString()}`,
+        )
+        .limit(500),
+      ctx.supabase
+        .from("social_posts")
+        .select("caption")
+        .eq("tenant_id", ctx.tenant.id)
+        .eq("status", "published")
+        .order("published_at", { ascending: false })
+        .limit(5),
+      ctx.supabase
+        .from("usage_events")
+        .select("quantity")
+        .eq("tenant_id", ctx.tenant.id)
+        .eq("type", "ai_tokens")
+        .gte("occurred_at", monthStart.toISOString()),
+    ],
+  );
+  const plan = parsePlan(planRow?.body);
+  if (plan.slots.length === 0) return { error: "Add your posting times to the plan first." };
+  const open = openSlots(plan, posts ?? [], new Date(), 28, ctx.tenant.timezone).slice(0, 10);
+  if (open.length === 0)
+    return { message: "Every posting time in the next four weeks is covered." };
+
+  let used = (usage ?? []).reduce((sum, row) => sum + Number(row.quantity), 0);
+  const limit = ctx.entitlements.limit("ai_credits");
+  const admin = getAdminClient();
+  let made = 0;
+  for (const slot of open) {
+    if (used >= limit) break;
+    const topic = plan.topics.find((t) => t.id === slot.topic);
+    try {
+      const draft = await draftCaption({
+        workspaceName: ctx.tenant.name,
+        brief: topic
+          ? `A "${topic.name}" post.${topic.about ? ` ${topic.about}` : ""} Leave a clear gap, marked [like this], for any detail only the owner knows.`
+          : "A general update from the studio. Leave a clear gap, marked [like this], for any detail only the owner knows.",
+        channels: ["Facebook", "Instagram"],
+        recent: (recent ?? []).map((row) => String(row.caption).slice(0, 600)).filter(Boolean),
+        styleNotes: plan.style_notes,
+      });
+      used += draft.tokens;
+      await admin.rpc("record_usage", {
+        p_tenant_id: ctx.tenant.id,
+        p_type: "ai_tokens",
+        p_quantity: draft.tokens,
+      });
+      if (!draft.ok) continue;
+      const { error } = await ctx.supabase.rpc("save_social_post_full", {
+        p_tenant_id: ctx.tenant.id,
+        p_post_id: null,
+        p_caption: draft.text,
+        p_asset_ids: [],
+        p_channels: [],
+        p_scheduled_for: null,
+        p_captions: {},
+        p_project_id: null,
+        p_topic: slot.topic,
+        p_ai_draft: draft.text,
+        p_planned_for: slot.at,
+      });
+      if (!error) made += 1;
+    } catch (err) {
+      console.error("Month draft failed", err instanceof Error ? err.message : err);
+      break;
+    }
+  }
+  done(slug);
+  if (made === 0) {
+    return {
+      error:
+        used >= limit
+          ? "You've used this month's AI allowance, so no drafts were written."
+          : "Drafting didn't work just now. Please try again.",
+    };
+  }
+  return {
+    message: `${made} draft${made === 1 ? "" : "s"} written. Read each one, add a photo, then schedule it.`,
+  };
 }

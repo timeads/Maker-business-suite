@@ -96,3 +96,10 @@ test("the embed script is served to other sites", async ({ request }) => {
   expect(res.ok()).toBe(true);
   expect(await res.text()).toContain("data-maker-booking");
 });
+
+test("a link page that doesn't exist, or isn't published, is simply not found", async ({
+  page,
+}) => {
+  await page.goto("/links/nobody-here");
+  await expect(page.getByRole("heading", { name: "We couldn't find that page" })).toBeVisible();
+});

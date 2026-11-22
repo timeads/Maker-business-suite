@@ -1,4 +1,6 @@
 import { localDay } from "@/lib/bookings/slots";
+import { PLAN_KEY, SOCIAL_MODULE, parsePlan } from "@/lib/social/plan";
+import { publicAssetUrl } from "@/lib/social/worker";
 import type { createClient } from "@/lib/supabase/server";
 
 type Supabase = Awaited<ReturnType<typeof createClient>>;
@@ -50,3 +52,53 @@ export const STATUS_LABELS: Record<string, string> = {
   published: "Posted",
   failed: "Didn't post",
 };
+
+/** What the composer offers to pick from: recent photos, open projects and the plan's topics. */
+export async function composerChoices(supabase: Supabase, tenantId: string, alsoPhotos: string[]) {
+  const [{ data: recent }, { data: mine }, { data: projects }, { data: planRow }] =
+    await Promise.all([
+      supabase
+        .from("social_assets")
+        .select("id, storage_path, title")
+        .eq("tenant_id", tenantId)
+        .eq("hidden", false)
+        .order("created_at", { ascending: false })
+        .limit(64),
+      alsoPhotos.length
+        ? supabase
+            .from("social_assets")
+            .select("id, storage_path, title")
+            .eq("tenant_id", tenantId)
+            .in("id", alsoPhotos)
+        : Promise.resolve({ data: [] }),
+      supabase
+        .from("social_projects")
+        .select("id, name")
+        .eq("tenant_id", tenantId)
+        .is("archived_at", null)
+        .order("created_at", { ascending: false })
+        .limit(100),
+      supabase
+        .from("configs")
+        .select("body")
+        .eq("tenant_id", tenantId)
+        .eq("module", SOCIAL_MODULE)
+        .eq("key", PLAN_KEY)
+        .maybeSingle(),
+    ]);
+  const seen = new Set<string>();
+  const library = [...(mine ?? []), ...(recent ?? [])]
+    .filter((photo) => !seen.has(photo.id as string) && seen.add(photo.id as string))
+    .map((photo) => ({
+      id: photo.id as string,
+      url: publicAssetUrl(photo.storage_path as string),
+      title: (photo.title as string) ?? "",
+    }));
+  const plan = parsePlan(planRow?.body);
+  return {
+    library,
+    projects: (projects ?? []) as { id: string; name: string }[],
+    topics: plan.topics.map((topic) => ({ id: topic.id, name: topic.name })),
+    plan,
+  };
+}

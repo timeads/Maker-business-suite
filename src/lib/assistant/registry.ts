@@ -21,6 +21,16 @@ import {
 } from "../helpdesk/config";
 import type { ModuleKey } from "../modules";
 import {
+  DEFAULT_LINKS,
+  DEFAULT_PLAN,
+  LINKS_KEY,
+  PLAN_KEY,
+  SOCIAL_MODULE,
+  WEEKDAY_NAMES,
+  linkPageSchema,
+  socialPlanSchema,
+} from "../social/plan";
+import {
   DEFAULT_SHIPPING_SETTINGS,
   SHIPPING_MODULE,
   SHIPPING_SETTINGS_KEY,
@@ -119,6 +129,26 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
     schema: shippingSettingsSchema,
     defaultBody: () => DEFAULT_SHIPPING_SETTINGS,
   },
+  {
+    module: SOCIAL_MODULE,
+    key: PLAN_KEY,
+    feature: "social",
+    name: "Social content plan",
+    description:
+      "The topics the business posts about, the times of the week it likes to post (each with its usual topic), and notes on its voice that drafts follow.",
+    schema: socialPlanSchema,
+    defaultBody: () => DEFAULT_PLAN,
+  },
+  {
+    module: SOCIAL_MODULE,
+    key: LINKS_KEY,
+    feature: "social",
+    name: "Link page",
+    description:
+      "The public page of links for a social profile: its heading, a short intro, the links (https only), whether recent posts show, and whether it is published.",
+    schema: linkPageSchema,
+    defaultBody: () => DEFAULT_LINKS,
+  },
 ];
 
 export function findConfig(module: unknown, key: unknown): ConfigEntry | null {
@@ -214,6 +244,28 @@ export function describeConfig(entry: ConfigEntry, body: unknown): string[] {
               .join(", ")}`,
         )
       : ["No rules"];
+  }
+  if (entry.module === SOCIAL_MODULE && entry.key === PLAN_KEY) {
+    const topics = list("topics") as { id: string; name: string }[];
+    const slots = list("slots") as { weekday: number; time: string; topic: string | null }[];
+    const notes = String(value.style_notes ?? "").replace(/\s+/g, " ");
+    return [
+      `Topics: ${topics.map((t) => t.name).join(", ") || "none yet"}`,
+      ...slots.map(
+        (slot) =>
+          `${WEEKDAY_NAMES[slot.weekday]} ${slot.time}: ${topics.find((t) => t.id === slot.topic)?.name ?? "anything"}`,
+      ),
+      `Voice notes: ${notes ? `"${notes.slice(0, 120)}${notes.length > 120 ? "…" : ""}"` : "none"}`,
+    ];
+  }
+  if (entry.module === SOCIAL_MODULE && entry.key === LINKS_KEY) {
+    const links = list("links") as { label: string; url: string }[];
+    return [
+      value.published ? "Published" : "Not published",
+      `Heading: ${value.heading || "(the business name)"}`,
+      ...links.map((link) => `${link.label} → ${link.url}`),
+      value.show_posts ? "Shows recent posts" : "Links only",
+    ];
   }
   if (entry.module === SHIPPING_MODULE) {
     const from = (value.ship_from ?? {}) as Record<string, string>;

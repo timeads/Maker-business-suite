@@ -7,8 +7,8 @@ are OAuth apps owned by us.
 ## Current phase
 
 Phases 0 to 7 are built. Now: the overhaul toward eight full tools in the
-house look (Messages, Bookings, Help desk, Stock and Shipping are built; the
-larger Social is next). See docs/build-plan.md.
+house look. All eight are built; what is left waits on decisions (a label
+provider, more social networks, video, SMS). See docs/build-plan.md.
 
 ## Stack
 
@@ -120,6 +120,14 @@ larger Social is next). See docs/build-plan.md.
   Photos sit in the public `social` storage bucket under the workspace's id
   (Instagram fetches by URL); only the server uploads. Caption drafts land
   in the caption box and are never scheduled or posted automatically.
+  Posts are saved through `save_social_post_full` (up to ten photos in
+  order, a caption per channel only where it differs, project, topic); it
+  calls `save_social_post`, which still owns the rules about what can be
+  scheduled or changed. "Draft the month" writes drafts pencilled in with
+  `planned_for`, which is only a note: nothing goes out until a person
+  schedules it. The content plan and link page are `configs` (module
+  `social`); link-page links are https only. The public `/links/[slug]` page
+  reads through `lib/social/links-server.ts`, like the booking pages.
 - Stock: `stock_items` mirror the shop's variants and are written only by
   the sync (`upsert_stock_items`), which leaves the workspace's own planning
   columns alone. Every reorder figure is worked out on read by the pure

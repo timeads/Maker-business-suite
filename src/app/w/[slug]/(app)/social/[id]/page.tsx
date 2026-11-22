@@ -1,14 +1,19 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { FormMessage } from "@/components/ui/form-message";
+import { PageHeader } from "@/components/ui/page-header";
 import { formatWhen } from "@/lib/bookings/slots";
-import { publicAssetUrl } from "@/lib/social/worker";
 import { createClient } from "@/lib/supabase/server";
 import { Composer, DeletePostForm } from "../composer";
 import { socialAccess } from "../gate";
-import { STATUS_LABELS, defaultSlot, localFields, socialChannels } from "../shared";
+import {
+  STATUS_LABELS,
+  composerChoices,
+  defaultSlot,
+  localFields,
+  socialChannels,
+} from "../shared";
 
 export const metadata: Metadata = { title: "Post" };
 
@@ -30,7 +35,7 @@ export default async function PostPage({
     supabase
       .from("social_posts")
       .select(
-        "id, caption, channels, status, scheduled_for, published_at, results, error, social_assets(id, storage_path, mime_type)",
+        "id, caption, captions, channels, status, scheduled_for, planned_for, published_at, results, error, asset_id, asset_ids, project_id, topic, ai_draft",
       )
       .eq("id", id)
       .eq("tenant_id", tenant.id)
@@ -39,38 +44,40 @@ export default async function PostPage({
   ]);
   if (!post) notFound();
 
-  const asset = post.social_assets as unknown as {
-    id: string;
-    storage_path: string;
-    mime_type: string;
-  } | null;
+  const photoIds = (
+    (post.asset_ids as string[] | null)?.length
+      ? (post.asset_ids as string[])
+      : post.asset_id
+        ? [post.asset_id as string]
+        : []
+  ) as string[];
+  const choices = await composerChoices(supabase, tenant.id, photoIds);
+  const photoUrls = photoIds.flatMap((photoId) => {
+    const found = choices.library.find((photo) => photo.id === photoId);
+    return found ? [found.url] : [];
+  });
   const results = (post.results ?? {}) as Record<string, { id?: string; error?: string }>;
   const partlyOut = Object.values(results).some((r) => r.id);
   const editable =
     entitlements.canWrite &&
     ["draft", "scheduled", "failed"].includes(post.status as string) &&
     !partlyOut;
-  const when = post.scheduled_for
-    ? localFields(new Date(post.scheduled_for as string), tenant.timezone)
+  const meantFor = (post.scheduled_for ?? post.planned_for) as string | null;
+  const when = meantFor
+    ? localFields(new Date(meantFor), tenant.timezone)
     : defaultSlot(new Date(), tenant.timezone);
-  const assetUrl = asset ? publicAssetUrl(asset.storage_path) : null;
+  const captions = (post.captions ?? {}) as Partial<Record<"facebook" | "instagram", string>>;
 
   return (
     <>
-      <header className="flex flex-col gap-2">
-        <Link
-          href={`/w/${tenant.slug}/social`}
-          className="text-muted-foreground text-sm hover:underline"
-        >
-          ← Social
-        </Link>
-        <h1 className="text-2xl font-semibold tracking-tight">
-          {STATUS_LABELS[post.status as string]}
-          {post.scheduled_for && post.status !== "draft"
+      <PageHeader
+        back={{ href: `/w/${tenant.slug}/social`, label: "Social" }}
+        title={`${STATUS_LABELS[post.status as string]}${
+          post.scheduled_for && post.status !== "draft"
             ? ` · ${formatWhen(post.scheduled_for as string, post.scheduled_for as string, tenant.timezone).split(" – ")[0]}`
-            : ""}
-        </h1>
-      </header>
+            : ""
+        }`}
+      />
 
       {post.error && (
         <FormMessage>
@@ -94,10 +101,13 @@ export default async function PostPage({
                 post={{
                   id: post.id as string,
                   caption: post.caption as string,
+                  captions,
                   channels: post.channels as string[],
-                  assetId: asset?.id ?? null,
-                  assetMime: asset?.mime_type ?? null,
-                  assetUrl,
+                  photoIds,
+                  projectId: (post.project_id as string | null) ?? null,
+                  topic: (post.topic as string | null) ?? null,
+                  aiDraft: (post.ai_draft as string | null) ?? null,
+                  planned: Boolean(post.planned_for),
                   day: when.day,
                   time: when.time,
                 }}
@@ -105,6 +115,9 @@ export default async function PostPage({
                 timezone={tenant.timezone}
                 facebook={channels.facebook}
                 instagram={channels.instagram}
+                library={choices.library}
+                projects={choices.projects}
+                topics={choices.topics}
               />
             </CardContent>
           </Card>
@@ -119,15 +132,28 @@ export default async function PostPage({
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
-            {assetUrl && (
-              // eslint-disable-next-line @next/next/no-img-element -- a user upload on another host
-              <img
-                src={assetUrl}
-                alt="The photo on this post"
-                className="border-border max-h-80 w-fit rounded-md border object-contain"
-              />
+            {photoUrls.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {photoUrls.map((url, index) => (
+                  // eslint-disable-next-line @next/next/no-img-element -- a user upload on another host
+                  <img
+                    key={url}
+                    src={url}
+                    alt={`Photo ${index + 1} on this post`}
+                    className="border-border max-h-64 w-fit rounded-md border object-contain"
+                  />
+                ))}
+              </div>
             )}
-            <p className="text-sm whitespace-pre-line">{post.caption as string}</p>
+            <p className="font-read text-sm whitespace-pre-line">{post.caption as string}</p>
+            {Object.entries(captions).map(([channel, words]) => (
+              <div key={channel}>
+                <p className="text-muted-foreground text-xs font-semibold">
+                  On {CHANNEL_NAMES[channel] ?? channel}
+                </p>
+                <p className="font-read text-sm whitespace-pre-line">{words}</p>
+              </div>
+            ))}
             <ul className="text-muted-foreground text-sm">
               {(post.channels as string[]).map((c) => (
                 <li key={c}>
