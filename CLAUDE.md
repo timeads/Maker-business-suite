@@ -6,7 +6,9 @@ are OAuth apps owned by us.
 
 ## Current phase
 
-Phase 7: Claude customization layer (see docs/build-plan.md)
+Phases 0 to 7 are built. Now: the overhaul toward eight full tools in the
+house look (Messages, Bookings and Help desk are rebuilt; Stock, Shipping and
+the larger Social are next). See docs/build-plan.md.
 
 ## Stack
 
@@ -86,6 +88,13 @@ Phase 7: Claude customization layer (see docs/build-plan.md)
   email is shown as plain text only. Reply templates and auto-tag rules are
   `configs` (module `helpdesk`). Claude drafts go into the reply box and are
   never sent automatically; customer text in the prompt is marked as data.
+  The inbox is one full-window page (`w/[slug]/helpdesk/page.tsx`) whose
+  whole state is in the URL (`view`, `tag`, `q`, `t`); folders are worked out
+  by `inView()` in `lib/helpdesk/views.ts`, so a snooze needs no timer. Notes
+  for the team live in `ticket_notes` and are never emailed. A conversation
+  joined into another keeps a `merged_into` pointer, and later mail follows
+  it. Rules (`auto_tag_rules`) can tag, set priority or hand off; the worker
+  applies the last two through `apply_ticket_rules` after filing.
 - Bookings: seats are never stored as a count. `hold_booking`,
   `confirm_booking` and friends work them out from `bookings` under a row
   lock on the session. A paid booking is never dropped: paid late into a full

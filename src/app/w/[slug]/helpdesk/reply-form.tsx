@@ -4,7 +4,7 @@ import { useActionState, useRef, useState } from "react";
 import { FormMessage } from "@/components/ui/form-message";
 import { Label, Select } from "@/components/ui/input";
 import { SubmitButton } from "@/components/ui/submit-button";
-import { draftTicketReply, sendTicketReply, type HelpdeskState } from "../actions";
+import { draftTicketReply, sendTicketReply, type HelpdeskState } from "./actions";
 
 type Template = { id: string; name: string; body: string };
 
@@ -97,9 +97,9 @@ export function ReplyForm({
           ref={textarea}
           value={body}
           onChange={(event) => setBody(event.target.value)}
-          rows={8}
+          rows={6}
           placeholder="Write your reply…"
-          className="border-input bg-card placeholder:text-muted-foreground focus-visible:ring-ring w-full rounded-md border px-3 py-2 text-sm outline-none focus-visible:ring-2"
+          className="border-input bg-card placeholder:text-muted-foreground focus-visible:border-ochre focus-visible:ring-ochre/25 font-read w-full rounded-sm border px-[11px] py-2 text-sm outline-none focus-visible:ring-2"
         />
         {fromDraft && (
           <p className="text-muted-foreground text-xs">

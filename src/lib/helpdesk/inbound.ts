@@ -1,5 +1,5 @@
 import { parseSupportAddress } from "./addresses";
-import { tagsFor, type AutoTagRules } from "./config";
+import { actionsFor, type AutoTagRules, type RuleOutcome } from "./config";
 
 /** The parts of a Postmark inbound webhook we use. */
 export type PostmarkInbound = {
@@ -112,6 +112,8 @@ export type InboundDeps = {
   /** The workspace's auto-tag rules, by slug; null when there is no such workspace. */
   rulesFor(slug: string): Promise<AutoTagRules | null>;
   ingest(email: InboundEmail, tags: string[]): Promise<IngestResult>;
+  /** Called once for a brand-new conversation, with what the rules decided. */
+  onCreated?(email: InboundEmail, result: IngestResult, outcome: RuleOutcome): Promise<void>;
 };
 
 /** Files one queued inbound email. Returns what happened, for the worker's log. */
@@ -124,7 +126,10 @@ export async function processInboundEmail(
   if (!email) return "ignored";
   const rules = await deps.rulesFor(email.slug);
   if (!rules) return "unknown_workspace";
-  const tags = tagsFor(rules, email);
+  const outcome = actionsFor(rules, { ...email, from: email.fromEmail });
+  const tags = [...outcome.tags];
   if (email.automated) tags.push("automated");
-  return (await deps.ingest(email, tags)).result;
+  const result = await deps.ingest(email, tags);
+  if (result.result === "created") await deps.onCreated?.(email, result, outcome);
+  return result.result;
 }

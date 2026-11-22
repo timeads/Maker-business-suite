@@ -222,6 +222,26 @@ async function drainInboundEmails(): Promise<number> {
       if (ingestError) throw new Error(ingestError.message);
       return result as IngestResult;
     },
+    async onCreated(email, result, outcome) {
+      if (!result.tenant_id || !result.ticket_id) return;
+      if (outcome.priority || outcome.assignTo) {
+        const { error: rulesError } = await admin.rpc("apply_ticket_rules", {
+          p_tenant_id: result.tenant_id,
+          p_ticket_id: result.ticket_id,
+          p_priority: outcome.priority,
+          p_assignee_id: outcome.assignTo,
+        });
+        if (rulesError) console.error(`could not apply rules: ${rulesError.message}`);
+      }
+      // Machines writing to the help desk don't need a heads-up.
+      if (email.automated) return;
+      await postAlert(
+        admin,
+        result.tenant_id,
+        "helpdesk",
+        `New conversation #${result.number} from ${email.fromName ?? email.fromEmail}: ${email.subject || "(no subject)"}${outcome.priority === "urgent" ? " (urgent)" : ""}`,
+      );
+    },
   };
 
   for (const email of emails) {

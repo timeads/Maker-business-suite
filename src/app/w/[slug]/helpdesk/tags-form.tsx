@@ -4,7 +4,7 @@ import { useActionState } from "react";
 import { FormMessage } from "@/components/ui/form-message";
 import { Input, Label } from "@/components/ui/input";
 import { SubmitButton } from "@/components/ui/submit-button";
-import { setTicketTags, type HelpdeskState } from "../actions";
+import { setTicketTags, type HelpdeskState } from "./actions";
 
 export function TagsForm({
   slug,

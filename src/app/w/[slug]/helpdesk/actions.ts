@@ -7,6 +7,7 @@ import { getEntitlements } from "@/lib/entitlements";
 import { inboundDomain } from "@/lib/helpdesk/addresses";
 import {
   HELPDESK_MODULE,
+  PRIORITIES,
   RULES_KEY,
   TAG_PATTERN,
   TEMPLATES_KEY,
@@ -17,6 +18,8 @@ import {
 } from "@/lib/helpdesk/config";
 import { draftReply } from "@/lib/helpdesk/draft";
 import { sendReply } from "@/lib/helpdesk/reply";
+import { postAlert } from "@/lib/messages/alerts";
+import { handlesFor, nameOf, type Person } from "@/lib/messages/format";
 import { getAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
@@ -324,6 +327,13 @@ export async function saveAutoTagRule(slug: string, _prev: HelpdeskState, formDa
   return saveHelpdeskConfig(slug, RULES_KEY, (current) => {
     const existing = parseRules(current).rules;
     const contains = String(formData.get("contains") ?? "").trim();
+    const optional = (name: string) => String(formData.get(name) ?? "").trim() || undefined;
+    if (!optional("tag") && !optional("priority") && !optional("assign_to")) {
+      return {
+        error:
+          "Choose what the rule should do: add a tag, set how urgent it is, or hand it to someone.",
+      };
+    }
     const parsed = autoTagRulesSchema.safeParse({
       version: 1,
       rules: [
@@ -332,7 +342,9 @@ export async function saveAutoTagRule(slug: string, _prev: HelpdeskState, formDa
           id: `${slugify(contains)}-${Date.now().toString(36)}`,
           contains,
           where: formData.get("where") ?? "anywhere",
-          tag: String(formData.get("tag") ?? ""),
+          tag: optional("tag"),
+          priority: optional("priority"),
+          assign_to: optional("assign_to"),
         },
       ],
     });
@@ -340,7 +352,7 @@ export async function saveAutoTagRule(slug: string, _prev: HelpdeskState, formDa
       ? { body: parsed.data }
       : {
           error:
-            "A rule needs words to look for (at least two characters) and a tag made of letters, numbers, spaces or dashes.",
+            "A rule needs words to look for (at least two characters). Tags are letters, numbers, spaces or dashes.",
         };
   });
 }
@@ -350,4 +362,123 @@ export async function deleteAutoTagRule(slug: string, _prev: HelpdeskState, form
     const id = formData.get("id");
     return { body: { version: 1, rules: parseRules(current).rules.filter((r) => r.id !== id) } };
   });
+}
+
+const done = (slug: string) => revalidatePath(`/w/${slug}/helpdesk`, "layout");
+const TRY_AGAIN = "That didn't save. Try again in a moment.";
+
+/** Hands a conversation to a teammate ("" for nobody). */
+export async function assignTicket(slug: string, ticketId: string, userId: string): Promise<void> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return;
+  await ctx.supabase.rpc("assign_ticket", { p_ticket_id: ticketId, p_user_id: userId || null });
+  done(slug);
+}
+
+export async function setTicketPriority(
+  slug: string,
+  ticketId: string,
+  priority: string,
+): Promise<void> {
+  const ctx = await context(slug);
+  if ("error" in ctx || !(PRIORITIES as readonly string[]).includes(priority)) return;
+  await ctx.supabase.rpc("set_ticket_priority", { p_ticket_id: ticketId, p_priority: priority });
+  done(slug);
+}
+
+/** Puts a conversation aside until a time; null brings it back now. */
+export async function snoozeTicket(
+  slug: string,
+  ticketId: string,
+  until: string | null,
+): Promise<void> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return;
+  await ctx.supabase.rpc("snooze_ticket", { p_ticket_id: ticketId, p_until: until });
+  done(slug);
+}
+
+/** Leaves a note only the team sees. @names tell that person in Messages. */
+export async function addTicketNote(
+  slug: string,
+  ticketId: string,
+  _prev: HelpdeskState,
+  formData: FormData,
+): Promise<HelpdeskState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const body = String(formData.get("body") ?? "").trim();
+  if (!body) return { error: "Write a note first." };
+  if (body.length > 4000) return { error: "Keep a note under 4,000 characters." };
+
+  const [{ data: people }, { data: ticket }] = await Promise.all([
+    ctx.supabase.rpc("chat_people", { p_tenant_id: ctx.tenant.id }),
+    ctx.supabase
+      .from("tickets")
+      .select("number, subject")
+      .eq("id", ticketId)
+      .eq("tenant_id", ctx.tenant.id)
+      .maybeSingle(),
+  ]);
+  if (!ticket) return { error: "That conversation couldn't be found." };
+  const team = (people ?? []) as Person[];
+  const words = new Set(
+    (body.toLowerCase().match(/@[a-z0-9][a-z0-9._-]*/g) ?? []).map((w) =>
+      w.slice(1).replace(/[._-]+$/, ""),
+    ),
+  );
+  const mentioned = team.filter(
+    (person) => person.user_id !== ctx.user.id && handlesFor(person).some((h) => words.has(h)),
+  );
+  const { error } = await ctx.supabase.rpc("add_ticket_note", {
+    p_ticket_id: ticketId,
+    p_body: body,
+    p_mentions: mentioned.map((person) => person.user_id),
+  });
+  if (error) return { error: TRY_AGAIN };
+  if (mentioned.length > 0 && process.env.SUPABASE_SECRET_KEY) {
+    const me = nameOf(team.find((person) => person.user_id === ctx.user.id));
+    await postAlert(
+      getAdminClient(),
+      ctx.tenant.id,
+      "helpdesk",
+      `${me} left a note for ${mentioned.map((p) => `@${handlesFor(p)[0]}`).join(" ")} on conversation #${ticket.number} (${ticket.subject}).`,
+    );
+  }
+  done(slug);
+  return { message: "Note added." };
+}
+
+/** Folds this conversation into another one, by its number. */
+export async function mergeTicket(
+  slug: string,
+  ticketId: string,
+  _prev: HelpdeskState,
+  formData: FormData,
+): Promise<HelpdeskState & { into?: number }> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const number = Number.parseInt(String(formData.get("into") ?? "").replace(/^#/, ""), 10);
+  if (!(number > 0)) return { error: "Type the number of the conversation to join this into." };
+  const { data: target } = await ctx.supabase
+    .from("tickets")
+    .select("id, merged_into")
+    .eq("tenant_id", ctx.tenant.id)
+    .eq("number", number)
+    .maybeSingle();
+  if (!target) return { error: `There's no conversation #${number}.` };
+  if (target.id === ticketId) return { error: "That's this conversation. Pick a different one." };
+  const { error } = await ctx.supabase.rpc("merge_tickets", {
+    p_from_ticket_id: ticketId,
+    p_into_ticket_id: target.id,
+  });
+  if (error) {
+    return {
+      error: error.message.includes("joined")
+        ? "One of those has already been joined into another conversation."
+        : TRY_AGAIN,
+    };
+  }
+  done(slug);
+  return { message: `Joined into #${number}.`, into: number };
 }

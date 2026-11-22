@@ -10,7 +10,7 @@ import {
   saveAutoTagRule,
   saveReplyTemplate,
   type HelpdeskState,
-} from "../actions";
+} from "@/app/w/[slug]/helpdesk/actions";
 
 type Action = (slug: string, prev: HelpdeskState, formData: FormData) => Promise<HelpdeskState>;
 
@@ -49,10 +49,12 @@ export function AddTemplateForm({ slug }: { slug: string }) {
           maxLength={4000}
           required
           placeholder={"Hi {{first_name}},\n\nCustom pieces take about three weeks…"}
-          className="border-input bg-card placeholder:text-muted-foreground focus-visible:ring-ring w-full rounded-md border px-3 py-2 text-sm outline-none focus-visible:ring-2"
+          className="border-input bg-card placeholder:text-muted-foreground focus-visible:border-ochre focus-visible:ring-ochre/25 font-read w-full rounded-sm border px-[11px] py-2 text-sm outline-none focus-visible:ring-2"
         />
         <p className="text-muted-foreground text-xs">
-          Write {"{{first_name}}"} where the customer&apos;s first name should go.
+          These fill themselves in when you use the reply: {"{{first_name}}"}, {"{{my_name}}"},{" "}
+          {"{{order_number}}"}, {"{{order_date}}"}, {"{{order_total}}"}, {"{{order_status}}"} (from
+          their latest order).
         </p>
       </div>
       <FormMessage>{state.error}</FormMessage>
@@ -63,40 +65,68 @@ export function AddTemplateForm({ slug }: { slug: string }) {
   );
 }
 
-export function AddRuleForm({ slug }: { slug: string }) {
+export function AddRuleForm({
+  slug,
+  people,
+}: {
+  slug: string;
+  people: { id: string; name: string }[];
+}) {
   const [state, action, saves] = useSettingsAction(saveAutoTagRule, slug);
   return (
-    <form
-      action={action}
-      key={saves}
-      className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end"
-    >
-      <div className="flex flex-1 flex-col gap-2">
-        <Label htmlFor="rule-contains">When an email mentions</Label>
-        <Input
-          id="rule-contains"
-          name="contains"
-          maxLength={80}
-          placeholder="tracking number"
-          required
-        />
+    <form action={action} key={saves} className="flex flex-col gap-3">
+      <div className="grid gap-3 sm:grid-cols-[1fr_12rem]">
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="rule-contains">When a new email mentions</Label>
+          <Input
+            id="rule-contains"
+            name="contains"
+            maxLength={80}
+            placeholder="tracking number"
+            required
+          />
+        </div>
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="rule-where">In</Label>
+          <Select id="rule-where" name="where" defaultValue="anywhere">
+            <option value="anywhere">Subject or message</option>
+            <option value="subject">Subject</option>
+            <option value="body">Message</option>
+            <option value="from">Sender&apos;s address</option>
+          </Select>
+        </div>
       </div>
-      <div className="flex flex-col gap-2 sm:w-40">
-        <Label htmlFor="rule-where">In</Label>
-        <Select id="rule-where" name="where" defaultValue="anywhere">
-          <option value="anywhere">Subject or message</option>
-          <option value="subject">Subject</option>
-          <option value="body">Message</option>
-        </Select>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="rule-tag">Tag it</Label>
+          <Input id="rule-tag" name="tag" maxLength={30} placeholder="shipping" />
+        </div>
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="rule-priority">Mark it</Label>
+          <Select id="rule-priority" name="priority" defaultValue="">
+            <option value="">Leave as it is</option>
+            <option value="urgent">Urgent</option>
+            <option value="high">High</option>
+            <option value="low">Low</option>
+          </Select>
+        </div>
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="rule-assign">Hand it to</Label>
+          <Select id="rule-assign" name="assign_to" defaultValue="">
+            <option value="">Nobody in particular</option>
+            {people.map((person) => (
+              <option key={person.id} value={person.id}>
+                {person.name}
+              </option>
+            ))}
+          </Select>
+        </div>
       </div>
-      <div className="flex flex-col gap-2 sm:w-40">
-        <Label htmlFor="rule-tag">Tag it</Label>
-        <Input id="rule-tag" name="tag" maxLength={30} placeholder="shipping" required />
-      </div>
-      <SubmitButton pendingText="Adding…">Add rule</SubmitButton>
-      <div className="basis-full">
-        <FormMessage>{state.error}</FormMessage>
-      </div>
+      <p className="text-muted-foreground text-xs">Fill in at least one of the three.</p>
+      <FormMessage>{state.error}</FormMessage>
+      <SubmitButton variant="outline" pendingText="Adding…" className="sm:w-fit">
+        Add rule
+      </SubmitButton>
     </form>
   );
 }

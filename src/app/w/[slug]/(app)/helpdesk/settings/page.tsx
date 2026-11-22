@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
-import Link from "next/link";
+import { Badge } from "@/components/ui/badge";
+import { PageHeader } from "@/components/ui/page-header";
+import { nameOf, type Person } from "@/lib/messages/format";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { inboundDomain, supportAddress } from "@/lib/helpdesk/addresses";
 import {
@@ -11,7 +13,7 @@ import {
 } from "@/lib/helpdesk/config";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
-import { helpdeskAccess } from "../gate";
+import { helpdeskAccess } from "@/app/w/[slug]/helpdesk/gate";
 import { AddRuleForm, AddTemplateForm, DeleteButton } from "./forms";
 
 export const metadata: Metadata = { title: "Help desk settings" };
@@ -20,6 +22,7 @@ const WHERE_LABELS = {
   anywhere: "subject or message",
   subject: "subject",
   body: "message",
+  from: "sender's address",
 } as const;
 
 export default async function HelpdeskSettingsPage({
@@ -34,11 +37,15 @@ export default async function HelpdeskSettingsPage({
   const canEdit = canManage(role) && entitlements.canWrite;
 
   const supabase = await createClient();
-  const { data } = await supabase
-    .from("configs")
-    .select("key, body")
-    .eq("tenant_id", tenant.id)
-    .eq("module", HELPDESK_MODULE);
+  const [{ data }, { data: team }] = await Promise.all([
+    supabase
+      .from("configs")
+      .select("key, body")
+      .eq("tenant_id", tenant.id)
+      .eq("module", HELPDESK_MODULE),
+    supabase.rpc("chat_people", { p_tenant_id: tenant.id }),
+  ]);
+  const people = ((team ?? []) as Person[]).map((p) => ({ id: p.user_id, name: nameOf(p) }));
   const stored = new Map((data ?? []).map((row) => [row.key as string, row.body as unknown]));
   const templates = parseTemplates(stored.get(TEMPLATES_KEY)).templates;
   const rules = parseRules(stored.get(RULES_KEY)).rules;
@@ -46,15 +53,11 @@ export default async function HelpdeskSettingsPage({
 
   return (
     <>
-      <header className="flex flex-col gap-2">
-        <Link
-          href={`/w/${tenant.slug}/helpdesk`}
-          className="text-muted-foreground text-sm hover:underline"
-        >
-          ← Help desk
-        </Link>
-        <h1 className="text-2xl font-semibold tracking-tight">Help desk settings</h1>
-      </header>
+      <PageHeader
+        back={{ href: `/w/${tenant.slug}/helpdesk`, label: "Help desk" }}
+        title="Help desk settings"
+        description="Your address, the replies you reuse, and what happens to new email on its own."
+      />
 
       <Card>
         <CardHeader>
@@ -122,9 +125,10 @@ export default async function HelpdeskSettingsPage({
 
       <Card>
         <CardHeader>
-          <CardTitle>Automatic tags</CardTitle>
+          <CardTitle>Rules for new email</CardTitle>
           <CardDescription>
-            Tag new emails by the words they contain, so they&apos;re easy to sort.
+            Sort new conversations by the words they contain: tag them, mark them urgent, or hand
+            them straight to the right person.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-6">
@@ -135,8 +139,22 @@ export default async function HelpdeskSettingsPage({
               {rules.map((rule) => (
                 <li key={rule.id} className="flex items-center justify-between gap-3 py-2 text-sm">
                   <span>
-                    “{rule.contains}” in the {WHERE_LABELS[rule.where]} →{" "}
-                    <span className="bg-muted rounded-full px-2 py-0.5 text-xs">{rule.tag}</span>
+                    <span className="font-read">“{rule.contains}”</span> in the{" "}
+                    {WHERE_LABELS[rule.where]} →{" "}
+                    <span className="inline-flex flex-wrap gap-1 align-middle">
+                      {rule.tag && <Badge tone="open">{rule.tag}</Badge>}
+                      {rule.priority && (
+                        <Badge tone={rule.priority === "urgent" ? "bad" : "waiting"}>
+                          {rule.priority}
+                        </Badge>
+                      )}
+                      {rule.assign_to && (
+                        <Badge>
+                          to{" "}
+                          {people.find((p) => p.id === rule.assign_to)?.name ?? "someone who left"}
+                        </Badge>
+                      )}
+                    </span>
                   </span>
                   {canEdit && (
                     <DeleteButton
@@ -150,7 +168,7 @@ export default async function HelpdeskSettingsPage({
               ))}
             </ul>
           )}
-          {canEdit && <AddRuleForm slug={tenant.slug} />}
+          {canEdit && <AddRuleForm slug={tenant.slug} people={people} />}
           {!canEdit && (
             <p className="text-muted-foreground text-sm">
               Only owners and admins can change these settings.

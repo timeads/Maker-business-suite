@@ -27,17 +27,33 @@ export const replyTemplatesSchema = z.object({
 });
 export type ReplyTemplates = z.infer<typeof replyTemplatesSchema>;
 
+export const PRIORITIES = ["low", "normal", "high", "urgent"] as const;
+export type Priority = (typeof PRIORITIES)[number];
+
+/**
+ * Rules for new email: words to look for, and what to do when they're found.
+ * Each rule adds a tag, sets how urgent the conversation is, hands it to a
+ * teammate, or any mix of the three. (The key keeps its first name; early
+ * rules only added tags.)
+ */
 export const autoTagRulesSchema = z.object({
   version: z.literal(1),
   rules: z
     .array(
-      z.object({
-        id,
-        /** Words to look for, in any letter case. */
-        contains: z.string().trim().min(2).max(80),
-        where: z.enum(["subject", "body", "anywhere"]).default("anywhere"),
-        tag: z.string().trim().toLowerCase().regex(TAG_PATTERN),
-      }),
+      z
+        .object({
+          id,
+          /** Words to look for, in any letter case. */
+          contains: z.string().trim().min(2).max(80),
+          where: z.enum(["subject", "body", "anywhere", "from"]).default("anywhere"),
+          tag: z.string().trim().toLowerCase().regex(TAG_PATTERN).optional(),
+          priority: z.enum(PRIORITIES).optional(),
+          /** The teammate (their user id) who gets the conversation. */
+          assign_to: z.string().uuid().optional(),
+        })
+        .refine((rule) => rule.tag || rule.priority || rule.assign_to, {
+          message: "A rule needs something to do",
+        }),
     )
     .max(50),
 });
@@ -79,11 +95,22 @@ export function parseRules(body: unknown): AutoTagRules {
   return parsed.success ? parsed.data : DEFAULT_RULES;
 }
 
-/** The tags an email earns under the workspace's rules. */
-export function tagsFor(rules: AutoTagRules, email: { subject: string; body: string }): string[] {
+export type RuleOutcome = { tags: string[]; priority: Priority | null; assignTo: string | null };
+
+/**
+ * What the workspace's rules say about an email. Every matching tag is kept;
+ * the most urgent priority wins; the first rule that names a teammate does.
+ */
+export function actionsFor(
+  rules: AutoTagRules,
+  email: { subject: string; body: string; from?: string },
+): RuleOutcome {
   const subject = email.subject.toLowerCase();
   const body = email.body.toLowerCase();
+  const from = (email.from ?? "").toLowerCase();
   const tags = new Set<string>();
+  let priority: Priority | null = null;
+  let assignTo: string | null = null;
   for (const rule of rules.rules) {
     const needle = rule.contains.toLowerCase();
     const hit =
@@ -91,10 +118,25 @@ export function tagsFor(rules: AutoTagRules, email: { subject: string; body: str
         ? subject.includes(needle)
         : rule.where === "body"
           ? body.includes(needle)
-          : subject.includes(needle) || body.includes(needle);
-    if (hit) tags.add(rule.tag);
+          : rule.where === "from"
+            ? from.includes(needle)
+            : subject.includes(needle) || body.includes(needle);
+    if (!hit) continue;
+    if (rule.tag) tags.add(rule.tag);
+    if (
+      rule.priority &&
+      (priority === null || PRIORITIES.indexOf(rule.priority) > PRIORITIES.indexOf(priority))
+    ) {
+      priority = rule.priority;
+    }
+    if (rule.assign_to && !assignTo) assignTo = rule.assign_to;
   }
-  return [...tags];
+  return { tags: [...tags], priority, assignTo };
+}
+
+/** The tags an email earns under the workspace's rules. */
+export function tagsFor(rules: AutoTagRules, email: { subject: string; body: string }): string[] {
+  return actionsFor(rules, email).tags;
 }
 
 /** Fills `{{first_name}}` and friends; unknown placeholders are left for the person to see. */

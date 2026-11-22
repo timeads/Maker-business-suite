@@ -61,8 +61,9 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
     module: HELPDESK_MODULE,
     key: RULES_KEY,
     feature: "helpdesk",
-    name: "Help desk auto-tag rules",
-    description: "Words to look for in incoming email and the tag each one adds.",
+    name: "Help desk rules for new email",
+    description:
+      "Words to look for in incoming email, and what each match does: add a tag, set the priority (low, high, urgent), or both.",
     schema: autoTagRulesSchema,
     defaultBody: () => DEFAULT_RULES,
   },
@@ -156,11 +157,29 @@ export function describeConfig(entry: ConfigEntry, body: unknown): string[] {
       : ["No saved replies"];
   }
   if (entry.key === RULES_KEY) {
-    const rules = list("rules") as { contains: string; where: string; tag: string }[];
+    const rules = list("rules") as {
+      contains: string;
+      where: string;
+      tag?: string;
+      priority?: string;
+      assign_to?: string;
+    }[];
+    const place: Record<string, string> = {
+      anywhere: "subject or message",
+      body: "message",
+      subject: "subject",
+      from: "sender's address",
+    };
     return rules.length
       ? rules.map(
           (r) =>
-            `"${r.contains}" in the ${r.where === "anywhere" ? "subject or message" : r.where === "body" ? "message" : "subject"} → tag "${r.tag}"`,
+            `"${r.contains}" in the ${place[r.where] ?? r.where} → ${[
+              r.tag ? `tag "${r.tag}"` : "",
+              r.priority ? `mark ${r.priority}` : "",
+              r.assign_to ? "hand to a teammate" : "",
+            ]
+              .filter(Boolean)
+              .join(", ")}`,
         )
       : ["No rules"];
   }
