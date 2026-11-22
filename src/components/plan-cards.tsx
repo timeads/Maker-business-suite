@@ -43,7 +43,7 @@ export function PlanCards({
               <div className="flex items-center justify-between gap-2">
                 <h3 className="font-semibold">{plan.name}</h3>
                 {isCurrent && (
-                  <span className="bg-primary/10 text-primary rounded-full px-2 py-0.5 text-xs font-medium">
+                  <span className="bg-primary/10 text-ochre-text rounded-full px-2 py-0.5 text-xs font-medium">
                     Your plan
                   </span>
                 )}
@@ -57,7 +57,7 @@ export function PlanCards({
             <ul className="flex flex-1 flex-col gap-2 text-sm">
               {planFeatures(plan).map((feature) => (
                 <li key={feature} className="flex gap-2">
-                  <Check className="text-primary mt-0.5 size-4 shrink-0" aria-hidden />
+                  <Check className="text-ochre-text mt-0.5 size-4 shrink-0" aria-hidden />
                   <span>{feature}</span>
                 </li>
               ))}

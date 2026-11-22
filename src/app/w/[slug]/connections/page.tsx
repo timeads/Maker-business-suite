@@ -44,7 +44,7 @@ function StatusBadge({ status }: { status: ConnectionStatus | "none" }) {
     <span
       className={cn(
         "rounded-full px-2 py-0.5 text-xs font-medium",
-        status === "active" && "bg-primary/10 text-primary",
+        status === "active" && "bg-primary/10 text-ochre-text",
         status === "needs_reconnect" && "bg-destructive/10 text-destructive",
         (status === "none" || status === "disconnected") && "bg-muted text-muted-foreground",
       )}

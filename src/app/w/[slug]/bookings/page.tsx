@@ -173,7 +173,7 @@ export default async function BookingsPage({ params }: { params: Promise<{ slug:
           )}
           {canEdit ? (
             <details className="group" open={(services ?? []).length === 0}>
-              <summary className="text-primary cursor-pointer text-sm font-medium">
+              <summary className="text-ochre-text cursor-pointer text-sm font-medium">
                 Add a workshop or appointment
               </summary>
               <div className="pt-4">
@@ -199,7 +199,7 @@ export default async function BookingsPage({ params }: { params: Promise<{ slug:
         </CardHeader>
         <CardContent className="flex flex-col gap-3 text-sm">
           <p>
-            <a href={bookingUrl} className="text-primary font-medium hover:underline">
+            <a href={bookingUrl} className="text-ochre-text font-medium hover:underline">
               {bookingUrl}
             </a>
           </p>

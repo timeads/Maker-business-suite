@@ -13,7 +13,7 @@ export default function PricingPage() {
   return (
     <main className="mx-auto flex max-w-5xl flex-col gap-10 px-4 py-16">
       <div className="flex flex-col gap-3">
-        <Link href="/" className="text-primary text-sm font-medium">
+        <Link href="/" className="text-ochre-text text-sm font-medium">
           Maker Business Suite
         </Link>
         <h1 className="text-4xl font-semibold tracking-tight text-balance">

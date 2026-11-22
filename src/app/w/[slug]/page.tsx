@@ -17,9 +17,7 @@ export default async function WorkspaceHomePage({ params }: { params: Promise<{ 
     <>
       <header className="flex flex-col gap-1">
         <h1 className="text-2xl font-semibold tracking-tight">{tenant.name}</h1>
-        <p className="text-muted-foreground">
-          Your workspace is ready. The tools below switch on as we finish building them.
-        </p>
+        <p className="text-muted-foreground">Everything for running the business, in one place.</p>
       </header>
 
       <section aria-label="Modules" className="grid gap-4 sm:grid-cols-2">

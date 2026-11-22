@@ -12,10 +12,10 @@ export function FormMessage({
     <p
       role={kind === "error" ? "alert" : "status"}
       className={cn(
-        "rounded-md border px-3 py-2 text-sm",
+        "rounded-lg border px-3 py-2 text-sm",
         kind === "error"
-          ? "border-destructive/30 bg-destructive/5 text-destructive"
-          : "border-border bg-muted text-foreground",
+          ? "border-brick/25 bg-brick-soft text-brick"
+          : "border-mint-ink/15 bg-mint-soft text-mint-ink",
       )}
     >
       {children}

@@ -28,7 +28,7 @@ export default async function WorkspaceLayout({
   const inviteCount = Array.isArray(pendingInvites) ? pendingInvites.length : 0;
 
   return (
-    <div className="flex min-h-dvh flex-col md:flex-row">
+    <div className="flex min-h-dvh">
       <Sidebar
         tenant={ctx.tenant}
         tenants={tenants}
@@ -42,8 +42,8 @@ export default async function WorkspaceLayout({
           timeZone={ctx.tenant.timezone}
           canManage={canManage(ctx.role)}
         />
-        <main className="min-w-0 flex-1 px-4 py-8 md:px-10">
-          <div className="mx-auto flex max-w-4xl flex-col gap-8">
+        <main className="min-w-0 flex-1 px-4 pt-6 pb-24 md:px-8 md:pt-8 md:pb-12">
+          <div className="mx-auto flex max-w-5xl flex-col gap-6">
             {inviteCount > 0 && (
               <p
                 role="status"

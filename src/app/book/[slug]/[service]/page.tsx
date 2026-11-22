@@ -169,7 +169,7 @@ export default async function ServicePage({
                     <span>Full</span>
                     <Link
                       href={withEmbed({ waitlist: s.session_id })}
-                      className="text-primary font-medium hover:underline"
+                      className="text-ochre-text font-medium hover:underline"
                     >
                       Join the waitlist
                     </Link>

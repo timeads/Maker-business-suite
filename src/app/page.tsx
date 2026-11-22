@@ -6,7 +6,7 @@ export default function HomePage() {
   return (
     <main className="mx-auto flex min-h-dvh max-w-3xl flex-col justify-center gap-10 px-4 py-16">
       <div className="flex flex-col gap-4">
-        <p className="text-primary text-sm font-medium">Maker Business Suite</p>
+        <p className="text-ochre-text text-sm font-medium">Maker Business Suite</p>
         <h1 className="text-4xl leading-tight font-semibold tracking-tight text-balance sm:text-5xl">
           The back office for people who make things.
         </h1>

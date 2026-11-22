@@ -240,7 +240,7 @@ export default async function SocialPage({
                         <Link
                           href={`${base}/new?day=${day}`}
                           aria-label={`New post on ${formatDay(day)}`}
-                          className="text-muted-foreground hover:text-primary px-1 text-sm leading-none"
+                          className="text-muted-foreground hover:text-ochre-text px-1 text-sm leading-none"
                         >
                           +
                         </Link>
