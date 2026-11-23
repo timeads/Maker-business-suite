@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { Fetch } from "../types";
-import { canSendInShopify, createShopifySender, planFulfilment } from "./shopify-fulfil";
+import {
+  canSendInShopify,
+  createShopifySender,
+  planFulfilment,
+  trackingFor,
+} from "./shopify-fulfil";
 
 const token = { access_token: "test-access", refresh_token: null, expires_at: null } as never;
 const open = [
@@ -75,6 +80,47 @@ describe("telling the shop a parcel has gone", () => {
         },
         notifyCustomer: true,
       },
+    });
+  });
+
+  it("puts every box's tracking number on the one fulfilment", async () => {
+    const { sender, sent } = shop({ fulfillmentOrders: { nodes: open } });
+    await sender.send("wild-thread.myshopify.com", token, {
+      ...shipment,
+      trackingNumbers: ["9400 1000", "9400 2000"],
+      trackingUrls: ["https://tools.usps.com/x", "https://tools.usps.com/y"],
+    });
+    // Still one fulfilment: the order is looked up once and sent once.
+    expect(sent).toHaveLength(2);
+    expect(sent[1].variables).toMatchObject({
+      f: {
+        trackingInfo: {
+          numbers: ["9400 1000", "9400 2000"],
+          urls: ["https://tools.usps.com/x", "https://tools.usps.com/y"],
+          company: "USPS",
+        },
+      },
+    });
+  });
+
+  it("only sends links when there is one for every number", () => {
+    const one = { trackingNumber: "A1", trackingUrl: "https://t.example/A1" };
+    expect(trackingFor(one)).toEqual({ numbers: ["A1"], urls: ["https://t.example/A1"] });
+    expect(trackingFor({ ...one, trackingUrl: null })).toEqual({ numbers: ["A1"], urls: [] });
+    expect(trackingFor({ ...one, trackingNumbers: [], trackingUrls: [] })).toEqual({
+      numbers: ["A1"],
+      urls: ["https://t.example/A1"],
+    });
+    expect(
+      trackingFor({
+        ...one,
+        trackingNumbers: ["A1", "", "A3"],
+        trackingUrls: ["https://t.example/A1", null, null],
+      }),
+    ).toEqual({ numbers: ["A1", "A3"], urls: [] });
+    expect(trackingFor({ trackingNumber: "", trackingUrl: null })).toEqual({
+      numbers: [],
+      urls: [],
     });
   });
 

@@ -9,15 +9,18 @@ import {
   boxSize,
   boxTenthOz,
   deliveryDays,
+  labelBoxes,
   missingShipFrom,
   missingShipTo,
   parcelFrom,
+  parcelsFrom,
   parseInches,
   parseOunces,
   rateChoice,
   shipFromAddress,
   shipToAddress,
   shipToEdit,
+  shownBoxes,
   signatureByRule,
   withShipToEdit,
 } from "./labels";
@@ -170,11 +173,98 @@ describe("the box and its weight", () => {
     expect(parcelFrom({ ...typed, box, weightLb: "150" })).toHaveProperty("parcel");
   });
 
+  it("takes one to six boxes, says which one is wrong, and caps what they weigh together", () => {
+    const one = { ...typed, box, weightLb: "2" };
+    expect(parcelsFrom([one])).toEqual({
+      parcels: [{ length: 12, width: 9, height: 4.5, weightTenthOz: 320 }],
+    });
+    const two = parcelsFrom([
+      one,
+      { ...typed, length: "20", width: "20", height: "12", weightLb: "10", weightOz: "8" },
+    ]);
+    expect(two).toEqual({
+      parcels: [
+        { length: 12, width: 9, height: 4.5, weightTenthOz: 320 },
+        { length: 20, width: 20, height: 12, weightTenthOz: 1680 },
+      ],
+    });
+    expect(parcelsFrom([])).toHaveProperty("error");
+    expect(parcelsFrom(Array.from({ length: 7 }, () => one))).toEqual({
+      error: "One label purchase covers up to 6 boxes.",
+    });
+    expect(parcelsFrom(Array.from({ length: 6 }, () => one))).toHaveProperty("parcels");
+    // With one box the sentence is the one it always was; with several it names the box.
+    expect(parcelsFrom([{ ...typed, box }])).toEqual({ error: "Say what the packed box weighs." });
+    expect(parcelsFrom([one, { ...typed, box }])).toEqual({
+      error: "Box 2: Say what the packed box weighs.",
+    });
+    // Each is under 150 lb; together they are over.
+    expect(
+      parcelsFrom([
+        { ...typed, box, weightLb: "100" },
+        { ...typed, box, weightLb: "50", weightOz: "0.1" },
+      ]),
+    ).toEqual({
+      error: "Together these boxes are over 150 lb, which is more than one purchase takes.",
+    });
+    expect(
+      parcelsFrom([
+        { ...typed, box, weightLb: "100" },
+        { ...typed, box, weightLb: "50" },
+      ]),
+    ).toHaveProperty("parcels");
+  });
+
+  it("reads the boxes kept with a label, and falls back to the single number and link", () => {
+    const kept = [
+      {
+        shipment_id: "shp_1",
+        tracking_number: "T1",
+        tracking_url: "https://track.example/T1",
+        label_url: "https://labels.example/1.png",
+      },
+      {
+        shipment_id: "shp_2",
+        tracking_number: "T2",
+        tracking_url: null,
+        label_url: "javascript:x",
+      },
+      "nonsense",
+      null,
+    ];
+    expect(labelBoxes(kept)).toEqual([
+      {
+        shipmentId: "shp_1",
+        trackingNumber: "T1",
+        trackingUrl: "https://track.example/T1",
+        labelUrl: "https://labels.example/1.png",
+      },
+      { shipmentId: "shp_2", trackingNumber: "T2", trackingUrl: null, labelUrl: null },
+    ]);
+    expect(labelBoxes(null)).toEqual([]);
+    expect(labelBoxes({})).toEqual([]);
+    expect(
+      shownBoxes({ tracking_number: "T9", label_url: "https://l.example/9", boxes: kept }),
+    ).toHaveLength(2);
+    // A parcel typed in by hand, or from before boxes were kept one by one.
+    expect(
+      shownBoxes({
+        tracking_number: "T9",
+        tracking_url: null,
+        label_url: "https://l.example/9",
+        boxes: null,
+      }),
+    ).toEqual([
+      { shipmentId: "", trackingNumber: "T9", trackingUrl: null, labelUrl: "https://l.example/9" },
+    ]);
+  });
+
   it("shows the browser only what it needs of a rate", () => {
     expect(
       rateChoice({
         id: "rate_1",
         carrier: "USPS",
+        carrierCode: "USPS",
         service: "GroundAdvantage",
         name: "USPS Ground Advantage",
         price: "6.40",

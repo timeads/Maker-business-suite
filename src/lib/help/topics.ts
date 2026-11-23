@@ -221,6 +221,7 @@ export const HELP_TOPICS: HelpTopic[] = [
       "In Shipping → Settings you can ask for a signature on every order over an amount.",
       "Use the arrows at the top (or J and K) to go to the next order without going back to the list.",
       "A label covers everything left on the order. For a part shipment, record the parcel by hand instead.",
+      "An order can go in several boxes. Press “Add another box”, weigh each one, and you buy them together: one label and tracking number per box, all on the same parcel.",
       "International labels need a customs form, which isn't built yet. Buy those elsewhere and record the parcel by hand.",
       "Owners and admins can void a label. That asks EasyPost for a refund and puts the items back in the queue.",
       "The suite won't buy the same label twice, even on a double press.",

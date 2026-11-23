@@ -104,9 +104,7 @@ export function parcelFrom(input: ParcelInput): { parcel: LabelParcel } | { erro
  * Every box of one purchase, or what's wrong with the first that isn't
  * right. One to six boxes, and no more than 150 lb between them.
  */
-export function parcelsFrom(
-  inputs: ParcelInput[],
-): { parcels: LabelParcel[] } | { error: string } {
+export function parcelsFrom(inputs: ParcelInput[]): { parcels: LabelParcel[] } | { error: string } {
   if (inputs.length < 1) return { error: "Add a box first." };
   if (inputs.length > MAX_BOXES) {
     return { error: `One label purchase covers up to ${MAX_BOXES} boxes.` };
@@ -120,7 +118,9 @@ export function parcelsFrom(
     parcels.push(parsed.parcel);
   }
   if (parcels.reduce((sum, parcel) => sum + parcel.weightTenthOz, 0) > MAX_TENTH_OZ) {
-    return { error: "Together these boxes are over 150 lb, which is more than one purchase takes." };
+    return {
+      error: "Together these boxes are over 150 lb, which is more than one purchase takes.",
+    };
   }
   return { parcels };
 }
@@ -274,3 +274,55 @@ export const rateChoice = (rate: LabelRate): RateChoice => ({
 /** "2 days", "1 day", or nothing when the carrier doesn't say. */
 export const deliveryDays = (days: number | null) =>
   days === null ? "" : days === 1 ? "1 day" : `${days} days`;
+
+/** One box of a bought label, as the page shows it. */
+export type LabelBox = {
+  /** EasyPost's id for this box: what a refund is asked for by. */
+  shipmentId: string;
+  trackingNumber: string;
+  trackingUrl: string | null;
+  labelUrl: string | null;
+};
+
+const httpsLink = (value: unknown) =>
+  typeof value === "string" && value.startsWith("https://") ? value : null;
+
+/**
+ * The boxes kept with a bought label (`label_parcels` on a parcel, `parcels`
+ * on a label still to finish), read defensively. Empty for a parcel recorded
+ * by hand or from before boxes were kept one by one.
+ */
+export function labelBoxes(stored: unknown): LabelBox[] {
+  if (!Array.isArray(stored)) return [];
+  return stored
+    .filter((box): box is Record<string, unknown> => Boolean(box) && typeof box === "object")
+    .map((box) => ({
+      shipmentId: typeof box.shipment_id === "string" ? box.shipment_id : "",
+      trackingNumber: typeof box.tracking_number === "string" ? box.tracking_number : "",
+      trackingUrl: httpsLink(box.tracking_url),
+      labelUrl: httpsLink(box.label_url),
+    }));
+}
+
+/**
+ * What to show for a parcel or a label: every box when they were kept, else
+ * the single tracking number and label link the row has always carried.
+ */
+export function shownBoxes(row: {
+  tracking_number?: string | null;
+  tracking_url?: string | null;
+  label_url?: string | null;
+  boxes?: unknown;
+}): LabelBox[] {
+  const boxes = labelBoxes(row.boxes);
+  if (boxes.length > 0) return boxes;
+  return [
+    {
+      shipmentId: "",
+      trackingNumber: row.tracking_number ?? "",
+      // A link typed in by hand is shown as it always was.
+      trackingUrl: row.tracking_url || null,
+      labelUrl: httpsLink(row.label_url),
+    },
+  ];
+}

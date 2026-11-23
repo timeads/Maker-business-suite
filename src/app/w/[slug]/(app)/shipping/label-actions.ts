@@ -507,9 +507,7 @@ export async function buyLabel(
       return { error: `${await explain(err, held.connectionId)} Nothing was bought.` };
     }
     // No clear answer. Ask EasyPost whether the label exists before saying anything.
-    const settled = await getPurchase(held.key, kind, claim.provider_shipment_id).catch(
-      () => null,
-    );
+    const settled = await getPurchase(held.key, kind, claim.provider_shipment_id).catch(() => null);
     if (settled === null) {
       done(slug);
       return {

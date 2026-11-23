@@ -14,6 +14,7 @@ import {
   boxTenthOz,
   missingShipFrom,
   shipToEdit,
+  shownBoxes,
   signatureByRule,
 } from "@/lib/shipping/labels";
 import {
@@ -90,7 +91,7 @@ export default async function ShippingOrderPage({
       supabase
         .from("shipments")
         .select(
-          "id, number, carrier, service, tracking_number, tracking_url, shipped_at, items, voided_at, label_provider, label_url, label_mode",
+          "id, number, carrier, service, tracking_number, tracking_url, shipped_at, items, voided_at, label_provider, label_url, label_mode, label_parcels",
         )
         .eq("tenant_id", tenant.id)
         .eq("shipping_order_id", id)
@@ -182,6 +183,17 @@ export default async function ShippingOrderPage({
   const sent = (parcels ?? []).filter((parcel) => !parcel.voided_at);
   const manager = canManage(role) && entitlements.canWrite;
   const fresh = sent.find((parcel) => parcel.number === justBought && parcel.label_url);
+  // Every box of a parcel: one for most, several when the order went in more than one.
+  const boxesOf = (parcel: (typeof sent)[number]) =>
+    shownBoxes({
+      tracking_number: parcel.tracking_number as string | null,
+      tracking_url: parcel.tracking_url as string | null,
+      label_url: parcel.label_url as string | null,
+      boxes: parcel.label_parcels,
+    });
+  const freshBoxes = fresh ? boxesOf(fresh) : [];
+  const freshLabels = freshBoxes.filter((box) => box.labelUrl);
+  const linkClass = "text-ochre-text font-medium hover:underline";
 
   // Buying a label here: EasyPost is connected and this is a parcel to post.
   const posting = todo && entitlements.canWrite && !order.pickup;
@@ -322,16 +334,42 @@ export default async function ShippingOrderPage({
                 </div>
                 <CardDescription>
                   Parcel {fresh.number} · {fresh.carrier}
-                  {fresh.service ? ` ${fresh.service}` : ""} · tracking number{" "}
-                  {fresh.tracking_number || "not given"}
+                  {fresh.service ? ` ${fresh.service}` : ""} ·{" "}
+                  {freshBoxes.length > 1
+                    ? `${freshBoxes.length} boxes · tracking numbers `
+                    : "tracking number "}
+                  {freshBoxes
+                    .map((box) => box.trackingNumber)
+                    .filter(Boolean)
+                    .join(", ") || "not given"}
                 </CardDescription>
               </CardHeader>
-              <CardContent>
+              <CardContent className="flex flex-wrap items-center gap-x-4 gap-y-2">
                 <Button asChild>
-                  <a href={fresh.label_url as string} target="_blank" rel="noopener noreferrer">
-                    Print label
+                  <a
+                    href={(freshLabels[0]?.labelUrl ?? fresh.label_url) as string}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    {freshLabels.length > 1 ? "Print label 1" : "Print label"}
                   </a>
                 </Button>
+                {freshLabels.slice(1).map((box, index) => (
+                  <a
+                    key={box.labelUrl}
+                    href={box.labelUrl as string}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={`${linkClass} text-sm`}
+                  >
+                    Print label {index + 2}
+                  </a>
+                ))}
+                {freshLabels.length > 1 && (
+                  <p className="text-muted-foreground w-full text-xs">
+                    One label for each box. Print them all before you move on.
+                  </p>
+                )}
               </CardContent>
             </Card>
           )}
@@ -346,44 +384,57 @@ export default async function ShippingOrderPage({
               </CardHeader>
               <CardContent>
                 <ul className="flex flex-col gap-4 text-sm">
-                  {unfinished.map((label) => (
-                    <li key={label.id} className="flex flex-col gap-2">
-                      {label.status === "bought" ? (
-                        <p>
-                          <span className="font-semibold">Bought, not recorded yet</span> ·{" "}
-                          {[label.carrier, label.service].filter(Boolean).join(" ")} · tracking
-                          number {label.tracking_number || "not given"}
-                          {label.label_mode === "test" ? " · test label" : ""}
-                          {label.label_url && (
-                            <>
-                              {" · "}
-                              <a
-                                href={label.label_url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-ochre-text font-medium hover:underline"
-                              >
-                                Print label
-                              </a>
-                            </>
-                          )}
-                        </p>
-                      ) : (
-                        <p>
-                          <span className="font-semibold">We never heard back from EasyPost</span>
-                          {label.buying_at ? ` (${when.format(new Date(label.buying_at))})` : ""}.
-                          It may or may not have been bought; checking will settle it.
-                        </p>
-                      )}
-                      {entitlements.canWrite && (
-                        <FinishLabelButton
-                          slug={tenant.slug}
-                          quoteId={label.id}
-                          unsure={label.status === "buying"}
-                        />
-                      )}
-                    </li>
-                  ))}
+                  {unfinished.map((label) => {
+                    const boxes = shownBoxes({ ...label, boxes: label.parcels });
+                    const printable = boxes.filter((box) => box.labelUrl);
+                    return (
+                      <li key={label.id} className="flex flex-col gap-2">
+                        {label.status === "bought" ? (
+                          <p>
+                            <span className="font-semibold">Bought, not recorded yet</span> ·{" "}
+                            {[label.carrier, label.service].filter(Boolean).join(" ")} ·{" "}
+                            {boxes.length > 1
+                              ? `${boxes.length} boxes · tracking numbers `
+                              : "tracking number "}
+                            {boxes
+                              .map((box) => box.trackingNumber)
+                              .filter(Boolean)
+                              .join(", ") || "not given"}
+                            {label.label_mode === "test" ? " · test label" : ""}
+                            {printable.map((box, index) => (
+                              <span key={box.labelUrl}>
+                                {" · "}
+                                <a
+                                  href={box.labelUrl as string}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className={linkClass}
+                                >
+                                  {printable.length > 1
+                                    ? `Print label ${index + 1}`
+                                    : "Print label"}
+                                </a>
+                              </span>
+                            ))}
+                          </p>
+                        ) : (
+                          <p>
+                            <span className="font-semibold">We never heard back from EasyPost</span>
+                            {label.buying_at ? ` (${when.format(new Date(label.buying_at))})` : ""}
+                            {label.box_count > 1 ? `, for ${label.box_count} boxes` : ""}. It may or
+                            may not have been bought; checking will settle it.
+                          </p>
+                        )}
+                        {entitlements.canWrite && (
+                          <FinishLabelButton
+                            slug={tenant.slug}
+                            quoteId={label.id}
+                            unsure={label.status === "buying"}
+                          />
+                        )}
+                      </li>
+                    );
+                  })}
                 </ul>
               </CardContent>
             </Card>
@@ -561,51 +612,71 @@ export default async function ShippingOrderPage({
               </CardHeader>
               <CardContent>
                 <ul className="flex flex-col gap-3 text-sm">
-                  {sent.map((parcel) => (
-                    <li key={parcel.id}>
-                      <span className="font-semibold">Parcel {parcel.number}</span> ·{" "}
-                      {parcel.carrier}
-                      {parcel.service ? ` ${parcel.service}` : ""} ·{" "}
-                      {parcel.tracking_url ? (
-                        <a
-                          href={parcel.tracking_url as string}
-                          className="text-ochre-text font-medium hover:underline"
-                          rel="noreferrer"
-                          target="_blank"
-                        >
-                          {parcel.tracking_number}
-                        </a>
-                      ) : (
-                        parcel.tracking_number || "no tracking"
-                      )}
-                      <span className="text-muted-foreground block text-xs">
-                        {when.format(new Date(parcel.shipped_at as string))} ·{" "}
-                        <span className="font-read">
-                          {(parcel.items as { title: string; qty: number }[])
-                            .map((item) => `${item.qty} × ${item.title}`)
-                            .join(", ")}
+                  {sent.map((parcel) => {
+                    const boxes = boxesOf(parcel);
+                    const tracked = boxes.filter((box) => box.trackingNumber);
+                    const printable = boxes.filter((box) => box.labelUrl);
+                    return (
+                      <li key={parcel.id}>
+                        <span className="font-semibold">Parcel {parcel.number}</span> ·{" "}
+                        {parcel.carrier}
+                        {parcel.service ? ` ${parcel.service}` : ""} ·{" "}
+                        {boxes.length > 1 ? `${boxes.length} boxes · ` : ""}
+                        {tracked.length === 0
+                          ? "no tracking"
+                          : tracked.map((box, index) => (
+                              <span key={`${box.trackingNumber}-${index}`}>
+                                {index > 0 ? ", " : ""}
+                                {box.trackingUrl ? (
+                                  <a
+                                    href={box.trackingUrl}
+                                    className={linkClass}
+                                    rel="noreferrer"
+                                    target="_blank"
+                                  >
+                                    {box.trackingNumber}
+                                  </a>
+                                ) : (
+                                  box.trackingNumber
+                                )}
+                              </span>
+                            ))}
+                        <span className="text-muted-foreground block text-xs">
+                          {when.format(new Date(parcel.shipped_at as string))} ·{" "}
+                          <span className="font-read">
+                            {(parcel.items as { title: string; qty: number }[])
+                              .map((item) => `${item.qty} × ${item.title}`)
+                              .join(", ")}
+                          </span>
                         </span>
-                      </span>
-                      {parcel.label_provider && (
-                        <span className="mt-1 flex flex-wrap items-center gap-2">
-                          {parcel.label_mode === "test" && <Badge tone="waiting">Test label</Badge>}
-                          {parcel.label_url && (
-                            <a
-                              href={parcel.label_url as string}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-ochre-text font-medium hover:underline"
-                            >
-                              Print label
-                            </a>
-                          )}
-                          {manager && (
-                            <VoidButton slug={tenant.slug} shipmentId={parcel.id as string} label />
-                          )}
-                        </span>
-                      )}
-                    </li>
-                  ))}
+                        {parcel.label_provider && (
+                          <span className="mt-1 flex flex-wrap items-center gap-2">
+                            {parcel.label_mode === "test" && (
+                              <Badge tone="waiting">Test label</Badge>
+                            )}
+                            {printable.map((box, index) => (
+                              <a
+                                key={box.labelUrl}
+                                href={box.labelUrl as string}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className={linkClass}
+                              >
+                                {printable.length > 1 ? `Print label ${index + 1}` : "Print label"}
+                              </a>
+                            ))}
+                            {manager && (
+                              <VoidButton
+                                slug={tenant.slug}
+                                shipmentId={parcel.id as string}
+                                label
+                              />
+                            )}
+                          </span>
+                        )}
+                      </li>
+                    );
+                  })}
                 </ul>
               </CardContent>
             </Card>

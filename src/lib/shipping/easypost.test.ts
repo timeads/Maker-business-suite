@@ -3,12 +3,17 @@ import { ReconnectRequiredError, type Fetch } from "../connections/types";
 import {
   EasyPostError,
   buyLabel,
+  buyOrder,
   centsToPrice,
   checkKey,
   easypostServiceName,
   formatPrice,
   formatTenthOz,
+  getOrder,
+  getPurchase,
   getRates,
+  normalizeOrderRates,
+  orderRateId,
   readAddressCheck,
   verifyAddress,
   getShipment,
@@ -19,6 +24,7 @@ import {
   parseTenths,
   priceToCents,
   refundLabel,
+  refundLabels,
   serviceWithoutCarrier,
   tenthOzToLbOz,
 } from "./easypost";
@@ -220,8 +226,10 @@ describe("rates", () => {
     const { impl, calls } = fakeFetch([
       ["POST", "/v2/shipments", 201, { id: "shp_123", mode: "test", rates: RATES }],
     ]);
-    const quote = await getRates(KEY, { from, to, parcel, reference: "#1042" }, impl);
+    const quote = await getRates(KEY, { from, to, parcels: [parcel], reference: "#1042" }, impl);
     expect(quote.shipmentId).toBe("shp_123");
+    expect(quote.kind).toBe("shipment");
+    expect(quote.boxes).toBe(1);
     expect(quote.mode).toBe("test");
     expect(quote.rates[0].id).toBe("rate_ground");
 
@@ -273,8 +281,16 @@ describe("buying and refunding", () => {
     const label = await buyLabel(KEY, "shp_123", "rate_ground", impl);
     expect(label).toEqual({
       shipmentId: "shp_123",
+      kind: "shipment",
       trackingCode: "9400100000000000000000",
       labelUrl: "https://easypost-files.example/label.png",
+      boxes: [
+        {
+          shipmentId: "shp_123",
+          trackingCode: "9400100000000000000000",
+          labelUrl: "https://easypost-files.example/label.png",
+        },
+      ],
       carrier: "USPS",
       service: "GroundAdvantage",
       name: "USPS Ground Advantage",
@@ -363,10 +379,212 @@ describe("buying and refunding", () => {
   });
 });
 
+describe("an order in several boxes", () => {
+  const second = { length: 20, width: 20, height: 12, weightTenthOz: 1600 };
+  // What an order's own rates look like: the price of every box together, per service.
+  const ORDER_RATES = [
+    { id: "rate_o1", carrier: "UPSDAP", service: "Ground", rate: "31.10", currency: "USD" },
+    {
+      id: "rate_o2",
+      carrier: "USPS",
+      service: "GroundAdvantage",
+      rate: "24.5",
+      currency: "USD",
+      delivery_days: 4,
+    },
+    // A retail-only USPS extra is left out, as it is for one box.
+    { id: "rate_o3", carrier: "USPS", service: "First", rate: "1.00", currency: "USD" },
+  ];
+  const box = (n: number, rate: string) => ({
+    id: `shp_box${n}`,
+    mode: "test",
+    tracking_code: `940010000000000000000${n}`,
+    postage_label: { label_url: `https://easypost-files.example/label${n}.png` },
+    selected_rate: { carrier: "USPS", service: "GroundAdvantage", rate, currency: "USD" },
+  });
+  const boughtOrder = {
+    id: "order_abc",
+    mode: "test",
+    shipments: [box(1, "8.2"), box(2, "16.30")],
+  };
+
+  it("one box still goes the way it always did; several are sent as one order", async () => {
+    const { impl, calls } = fakeFetch([
+      [
+        "POST",
+        "/v2/orders",
+        201,
+        {
+          id: "order_abc",
+          mode: "test",
+          rates: ORDER_RATES,
+          shipments: [{ id: "shp_box1" }, { id: "shp_box2" }],
+        },
+      ],
+    ]);
+    const quote = await getRates(
+      KEY,
+      { from, to, parcels: [parcel, second], reference: "#1042", signature: "signature" },
+      impl,
+    );
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe("https://api.easypost.com/v2/orders");
+    const sent = JSON.parse(calls[0].body).order;
+    expect(sent.to_address).toMatchObject({ name: "Sam Shopper", city: "Portland" });
+    expect(sent.from_address).toMatchObject({ name: "Wild Thread", zip: "12534" });
+    expect(sent.reference).toBe("#1042");
+    const options = {
+      label_format: "PNG",
+      label_size: "4x6",
+      print_custom_1: "#1042",
+      delivery_confirmation: "SIGNATURE",
+    };
+    expect(sent.options).toEqual(options);
+    expect(sent.shipments).toEqual([
+      { parcel: { length: 12, width: 9, height: 4, weight: 20.5 }, options },
+      { parcel: { length: 20, width: 20, height: 12, weight: 160 }, options },
+    ]);
+    expect("parcel" in sent).toBe(false);
+
+    expect(quote).toMatchObject({ shipmentId: "order_abc", kind: "order", boxes: 2, mode: "test" });
+    // Cheapest first, priced for all the boxes together, and named by ids of our own.
+    expect(quote.rates.map((rate) => [rate.name, rate.price, rate.carrierCode])).toEqual([
+      ["USPS Ground Advantage", "24.50", "USPS"],
+      ["UPS Ground", "31.10", "UPSDAP"],
+    ]);
+    expect(quote.rates[0].id).toBe(orderRateId("order_abc", "USPS", "GroundAdvantage"));
+    for (const rate of quote.rates) expect(rate.id).toMatch(/^[A-Za-z0-9_]{4,120}$/);
+  });
+
+  it("an order's rate ids are steady, and belong to that one order", () => {
+    const once = normalizeOrderRates("order_abc", ORDER_RATES).map((rate) => rate.id);
+    expect(normalizeOrderRates("order_abc", ORDER_RATES).map((rate) => rate.id)).toEqual(once);
+    expect(new Set(once).size).toBe(2);
+    expect(once).not.toContain("rate_o1");
+    const other = normalizeOrderRates("order_xyz", ORDER_RATES).map((rate) => rate.id);
+    expect(other.some((id) => once.includes(id))).toBe(false);
+  });
+
+  it("won't ask for no boxes, or more than six", async () => {
+    const { impl, calls } = fakeFetch([]);
+    await expect(getRates(KEY, { from, to, parcels: [] }, impl)).rejects.toThrow(EasyPostError);
+    await expect(
+      getRates(KEY, { from, to, parcels: Array.from({ length: 7 }, () => parcel) }, impl),
+    ).rejects.toThrow(/one to 6 boxes/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("buys every box in one call, by carrier and service, and adds up the price", async () => {
+    const { impl, calls } = fakeFetch([["POST", "/orders/order_abc/buy", 200, boughtOrder]]);
+    const label = await buyOrder(
+      KEY,
+      "order_abc",
+      { carrierCode: "USPS", service: "GroundAdvantage" },
+      impl,
+    );
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe("https://api.easypost.com/v2/orders/order_abc/buy");
+    expect(JSON.parse(calls[0].body)).toEqual({ carrier: "USPS", service: "GroundAdvantage" });
+    expect(label).toEqual({
+      shipmentId: "order_abc",
+      kind: "order",
+      trackingCode: "9400100000000000000001",
+      labelUrl: "https://easypost-files.example/label1.png",
+      boxes: [
+        {
+          shipmentId: "shp_box1",
+          trackingCode: "9400100000000000000001",
+          labelUrl: "https://easypost-files.example/label1.png",
+        },
+        {
+          shipmentId: "shp_box2",
+          trackingCode: "9400100000000000000002",
+          labelUrl: "https://easypost-files.example/label2.png",
+        },
+      ],
+      carrier: "USPS",
+      service: "GroundAdvantage",
+      name: "USPS Ground Advantage",
+      price: "24.50",
+      currency: "USD",
+      mode: "test",
+    });
+  });
+
+  it("an order bought with no labels back is 'we can't tell'; a made-up id never reaches the URL", async () => {
+    const empty = fakeFetch([
+      ["POST", "/orders/order_abc/buy", 200, { id: "order_abc", shipments: [{ id: "shp_box1" }] }],
+    ]);
+    await expect(
+      buyOrder(KEY, "order_abc", { carrierCode: "USPS", service: "Priority" }, empty.impl),
+    ).rejects.toMatchObject({ uncertain: true });
+    const none = fakeFetch([]);
+    await expect(
+      buyOrder(KEY, "../shipments", { carrierCode: "USPS", service: "Priority" }, none.impl),
+    ).rejects.toThrow(EasyPostError);
+    await expect(
+      buyOrder(KEY, "order_abc", { carrierCode: "", service: "Priority" }, none.impl),
+    ).rejects.toMatchObject({ uncertain: false });
+    expect(none.calls).toHaveLength(0);
+  });
+
+  it("looks an order up to settle whether it was bought", async () => {
+    const yes = fakeFetch([["GET", "/orders/order_abc", 200, boughtOrder]]);
+    const found = await getPurchase(KEY, "order", "order_abc", yes.impl);
+    expect(found.label?.boxes.map((item) => item.trackingCode)).toEqual([
+      "9400100000000000000001",
+      "9400100000000000000002",
+    ]);
+    expect(found.label?.price).toBe("24.50");
+    const no = fakeFetch([
+      [
+        "GET",
+        "/orders/order_abc",
+        200,
+        {
+          id: "order_abc",
+          rates: ORDER_RATES,
+          shipments: [{ id: "shp_box1" }, { id: "shp_box2" }],
+        },
+      ],
+    ]);
+    expect(await getOrder(KEY, "order_abc", no.impl)).toEqual({ label: null });
+    // One box is still looked up as a shipment.
+    const single = fakeFetch([["GET", "/shipments/shp_123", 200, { id: "shp_123" }]]);
+    expect((await getPurchase(KEY, "shipment", "shp_123", single.impl)).label).toBeNull();
+    expect(single.calls[0].url).toBe("https://api.easypost.com/v2/shipments/shp_123");
+  });
+
+  it("refunds every box, and tries them all even when one is refused", async () => {
+    const all = fakeFetch([
+      ["POST", "/shipments/shp_box1/refund", 200, { refund_status: "submitted" }],
+      ["POST", "/shipments/shp_box2/refund", 200, { refund_status: "submitted" }],
+    ]);
+    expect(await refundLabels(KEY, ["shp_box1", "shp_box2"], all.impl)).toEqual({
+      asked: 2,
+      failed: 0,
+      error: null,
+    });
+    expect(all.calls.map((item) => item.url)).toEqual([
+      "https://api.easypost.com/v2/shipments/shp_box1/refund",
+      "https://api.easypost.com/v2/shipments/shp_box2/refund",
+    ]);
+
+    const part = fakeFetch([
+      ["POST", "/shipments/shp_box1/refund", 422, { error: { message: "Too old to refund" } }],
+      ["GET", "/shipments/shp_box1", 200, box(1, "8.2")],
+      ["POST", "/shipments/shp_box2/refund", 200, { refund_status: "submitted" }],
+    ]);
+    const result = await refundLabels(KEY, ["shp_box1", "shp_box2"], part.impl);
+    expect(result).toMatchObject({ asked: 1, failed: 1 });
+    expect(result.error).toBeInstanceOf(EasyPostError);
+  });
+});
+
 describe("when EasyPost says no", () => {
   const failing = (status: number, body: unknown = {}) =>
     fakeFetch([["POST", "/v2/shipments", status, body]]).impl;
-  const ask = (impl: Fetch) => getRates(KEY, { from, to, parcel }, impl);
+  const ask = (impl: Fetch) => getRates(KEY, { from, to, parcels: [parcel] }, impl);
 
   it("a rejected key means reconnect", async () => {
     await expect(ask(failing(401))).rejects.toThrow(ReconnectRequiredError);
@@ -527,14 +745,14 @@ describe("asking for a signature", () => {
     ]);
     await getRates(
       KEY,
-      { from, to: { ...to, residential: true }, parcel, signature: "adult" },
+      { from, to: { ...to, residential: true }, parcels: [parcel], signature: "adult" },
       impl,
     );
     const shipment = JSON.parse(calls[0].body).shipment;
     expect(shipment.options.delivery_confirmation).toBe("ADULT_SIGNATURE");
     expect(shipment.to_address.residential).toBe(true);
 
-    await getRates(KEY, { from, to, parcel, signature: "none" }, impl);
+    await getRates(KEY, { from, to, parcels: [parcel], signature: "none" }, impl);
     const plain = JSON.parse(calls[1].body).shipment;
     expect("delivery_confirmation" in plain.options).toBe(false);
     expect("residential" in plain.to_address).toBe(false);

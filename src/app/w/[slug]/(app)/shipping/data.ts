@@ -126,6 +126,10 @@ export type UnfinishedLabel = {
   label_url: string | null;
   label_mode: string | null;
   buying_at: string | null;
+  /** How many boxes the purchase covers. */
+  box_count: number;
+  /** Every box's tracking number and label, once bought (see `labelBoxes`). */
+  parcels: unknown;
 };
 
 export async function loadUnfinishedLabels(
@@ -135,7 +139,9 @@ export async function loadUnfinishedLabels(
 ): Promise<UnfinishedLabel[]> {
   const { data } = await supabase
     .from("shipping_label_quotes")
-    .select("id, status, carrier, service, tracking_number, label_url, label_mode, buying_at")
+    .select(
+      "id, status, carrier, service, tracking_number, label_url, label_mode, buying_at, box_count, parcels",
+    )
     .eq("tenant_id", tenantId)
     .eq("shipping_order_id", orderId)
     .in("status", ["buying", "bought"])

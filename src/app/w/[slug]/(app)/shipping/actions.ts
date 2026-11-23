@@ -16,7 +16,8 @@ import {
   slipLayoutSchema,
   type SlipSection,
 } from "@/lib/shipping/config";
-import { EasyPostError, refundLabel } from "@/lib/shipping/easypost";
+import { EasyPostError, refundLabels } from "@/lib/shipping/easypost";
+import { labelBoxes } from "@/lib/shipping/labels";
 import { flagLabelKey, getLabelKey } from "@/lib/shipping/label-key";
 import { formatHoldDate, isHoldDate, todayIn } from "@/lib/shipping/queue";
 import { createClient } from "@/lib/supabase/server";
@@ -245,7 +246,7 @@ export async function voidParcel(
   if (!UUID.test(shipmentId)) return { error: OOPS };
   const { data: parcel } = await ctx.supabase
     .from("shipments")
-    .select("label_provider, label_shipment_id, voided_at")
+    .select("label_provider, label_shipment_id, label_parcels, voided_at")
     .eq("tenant_id", ctx.tenant.id)
     .eq("id", shipmentId)
     .maybeSingle();
@@ -266,15 +267,25 @@ export async function voidParcel(
         error: `We couldn't void this label because EasyPost needs connecting again (under Connections). ${nothingChanged}`,
       };
     }
-    try {
-      await refundLabel(held.key, label);
-    } catch (err) {
+    // Each box has its own label to refund. A parcel from before boxes were
+    // kept one by one has just the one, named by the label's own id.
+    const boxIds = labelBoxes(parcel?.label_parcels)
+      .map((box) => box.shipmentId)
+      .filter(Boolean);
+    const refunds = await refundLabels(held.key, boxIds.length > 0 ? boxIds : [label]);
+    if (refunds.failed > 0) {
+      const err = refunds.error;
       if (err instanceof ReconnectRequiredError) await flagLabelKey(held.connectionId);
       const why =
         err instanceof ReconnectRequiredError || err instanceof EasyPostError
           ? err.message
           : "EasyPost couldn't be reached.";
-      return { error: `We couldn't void this label. ${why} ${nothingChanged}` };
+      return {
+        error:
+          refunds.asked > 0
+            ? `EasyPost took the refund request for ${refunds.asked} of this parcel's ${refunds.asked + refunds.failed} labels, but not the rest. ${why} The parcel is unchanged here; press it again to ask for the rest.`
+            : `We couldn't void this label. ${why} ${nothingChanged}`,
+      };
     }
   }
 

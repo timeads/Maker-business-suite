@@ -956,6 +956,288 @@ describe("buying labels: boxes, quotes and the purchase", () => {
     await db.query("update public.shipping_orders set cancelled = true where id = $1", [gone]);
     await expect(claim(carol, gone, "rate_ground")).rejects.toThrow(/cancelled/);
   });
+
+  // -------------------------------------------------------------------------
+  // One purchase for an order packed in several boxes
+  // -------------------------------------------------------------------------
+
+  const ORDER_RATES = [
+    {
+      id: "ordrate_00000000000000a1",
+      carrier: "USPS",
+      carrierCode: "USPS",
+      service: "GroundAdvantage",
+      name: "USPS Ground Advantage",
+      price: "24.50",
+      currency: "USD",
+      days: 4,
+    },
+  ];
+  const quoteBoxes = (
+    tenant: string,
+    order: string,
+    by: User,
+    providerId: string,
+    kind: string,
+    boxCount: number,
+  ) =>
+    service<{ id: string }>(
+      "select public.save_label_quote($1, $2, $3, $4, $5::jsonb, $6, $7) as id",
+      [tenant, order, by.id, providerId, JSON.stringify(ORDER_RATES), kind, boxCount],
+    ).then((rows) => rows[0].id);
+  const TWO_BOXES = [
+    {
+      shipment_id: "shp_box1",
+      tracking_number: "9400100000000000000011",
+      tracking_url: "https://tools.usps.com/go/TrackConfirmAction?tLabels=9400100000000000000011",
+      label_url: "https://labels.example/box1.png",
+    },
+    {
+      shipment_id: "shp_box2",
+      tracking_number: "9400100000000000000012",
+      tracking_url: "https://tools.usps.com/go/TrackConfirmAction?tLabels=9400100000000000000012",
+      // Not https: the link is dropped, the box and its tracking number are kept.
+      label_url: "http://plain.example/box2.png",
+    },
+  ];
+  const boughtBoxes = (tenant: string, quoteId: string, parcels: object[] = TWO_BOXES) =>
+    service<{ ok: boolean }>(
+      "select public.mark_label_bought($1, $2, 'USPS', 'Ground Advantage', '9400100000000000000011', 'https://tools.usps.com/go/TrackConfirmAction?tLabels=9400100000000000000011', 'https://labels.example/box1.png', 'test', 24.50, $3::jsonb) as ok",
+      [tenant, quoteId, JSON.stringify(parcels)],
+    ).then((rows) => rows[0].ok);
+  let multi: string;
+  let multiParcel: string;
+
+  it("a quote says whether it is one box or several, and the two can't disagree", async () => {
+    multi = await shopOrder(tenantA, "5005", "pat@example.com", "c54");
+    for (const [kind, count] of [
+      ["order", 1],
+      ["shipment", 2],
+      ["order", 7],
+      ["order", 0],
+      ["crate", 2],
+    ] as [string, number][]) {
+      await expect(
+        quoteBoxes(tenantA, multi, carol, "order_bad", kind, count),
+        `${kind} ${count}`,
+      ).rejects.toThrow(/Boxes are not right/);
+    }
+    // Left unsaid, a quote is for one box, as it always was.
+    const single = await quote(tenantA, multi, carol, "shp_single");
+    const { rows } = await db.query<{ label_kind: string; box_count: number }>(
+      "select label_kind, box_count from public.shipping_label_quotes where id = $1",
+      [single],
+    );
+    expect(rows[0]).toEqual({ label_kind: "shipment", box_count: 1 });
+    // Asking again with two boxes replaces it, kind and all.
+    const again = await quoteBoxes(tenantA, multi, carol, "order_m1", "order", 2);
+    expect(again).toBe(single);
+    const after = await db.query<{ label_kind: string; box_count: number }>(
+      "select label_kind, box_count from public.shipping_label_quotes where id = $1",
+      [single],
+    );
+    expect(after.rows[0]).toEqual({ label_kind: "order", box_count: 2 });
+  });
+
+  it("two boxes bought together become one parcel carrying both tracking numbers and labels", async () => {
+    // Another workspace can't claim it, even with the real rate id.
+    await expect(claim(bob, multi, "ordrate_00000000000000a1")).rejects.toThrow(/Order not found/);
+    const mine = (await claim(carol, multi, "ordrate_00000000000000a1")) as unknown as {
+      quote_id: string;
+      provider_shipment_id: string;
+      kind: string;
+      boxes: number;
+      rate: { carrierCode: string; service: string };
+    };
+    expect(mine).toMatchObject({
+      provider_shipment_id: "order_m1",
+      kind: "order",
+      boxes: 2,
+      rate: { carrierCode: "USPS", service: "GroundAdvantage" },
+    });
+    // Bought once: a second press is refused while it is being finished.
+    await expect(claim(carol, multi, "ordrate_00000000000000a1")).rejects.toThrow(
+      /still being finished|not quoted/,
+    );
+
+    // Another workspace's server call can't write it down, and a member can't at all.
+    expect(await boughtBoxes(tenantB, mine.quote_id)).toBe(false);
+    await expect(
+      as(
+        alice,
+        "select public.mark_label_bought($1, $2, 'USPS', '', 't', null, null, 'live', 1, '[]'::jsonb)",
+        [tenantA, mine.quote_id],
+      ),
+    ).rejects.toThrow(/permission denied/);
+    expect(await boughtBoxes(tenantA, mine.quote_id)).toBe(true);
+    // Paid for and written down before any parcel exists.
+    const kept = await db.query<{
+      status: string;
+      shipment_id: string | null;
+      tracking_number: string;
+      label_url: string;
+      price: string;
+      parcels: Record<string, unknown>[];
+    }>(
+      "select status, shipment_id, tracking_number, label_url, price, parcels from public.shipping_label_quotes where id = $1",
+      [mine.quote_id],
+    );
+    expect(kept.rows[0]).toMatchObject({
+      status: "bought",
+      shipment_id: null,
+      tracking_number: "9400100000000000000011",
+      label_url: "https://labels.example/box1.png",
+      price: "24.50",
+    });
+    expect(kept.rows[0].parcels).toEqual([TWO_BOXES[0], { ...TWO_BOXES[1], label_url: null }]);
+    // It can't be marked bought a second time.
+    expect(await boughtBoxes(tenantA, mine.quote_id)).toBe(false);
+
+    await expect(
+      as(bob, "select public.record_label_shipment($1, false, false)", [mine.quote_id]),
+    ).rejects.toThrow(/Label not found/);
+    const n = (
+      await as<{ n: number }>(carol, "select public.record_label_shipment($1, true, true) as n", [
+        mine.quote_id,
+      ])
+    )[0].n;
+    const { rows } = await db.query<Record<string, unknown>>(
+      "select id, tracking_number, tracking_url, cost, label_provider, label_shipment_id, label_url, label_mode, label_parcels, shop_status from public.shipments where tenant_id = $1 and shipping_order_id = $2",
+      [tenantA, multi],
+    );
+    // One parcel, not one per box.
+    expect(rows).toHaveLength(1);
+    multiParcel = rows[0].id as string;
+    expect(rows[0]).toMatchObject({
+      tracking_number: "9400100000000000000011",
+      cost: "24.50",
+      label_provider: "easypost",
+      label_shipment_id: "order_m1",
+      label_url: "https://labels.example/box1.png",
+      label_mode: "test",
+      shop_status: "pending",
+    });
+    expect(
+      (rows[0].label_parcels as { shipment_id: string; tracking_number: string }[]).map((b) => [
+        b.shipment_id,
+        b.tracking_number,
+      ]),
+    ).toEqual([
+      ["shp_box1", "9400100000000000000011"],
+      ["shp_box2", "9400100000000000000012"],
+    ]);
+    expect((await orderRow(multi)).units_left).toBe(0);
+    expect((await quoteRow(mine.quote_id)).status).toBe("recorded");
+    await expect(
+      as(carol, "select public.record_label_shipment($1, false, false)", [mine.quote_id]),
+    ).rejects.toThrow(/Label not found/);
+    // The other workspace sees none of it.
+    expect(
+      await as(bob, "select id from public.shipments where label_shipment_id = 'order_m1'"),
+    ).toEqual([]);
+    expect(
+      await as(
+        bob,
+        "select id from public.shipping_label_quotes where provider_shipment_id = 'order_m1'",
+      ),
+    ).toEqual([]);
+    expect(n).toBeGreaterThan(0);
+  });
+
+  it("the shop is told every box's tracking number, on the one parcel", async () => {
+    const claimed = await service<{
+      id: string;
+      tracking_number: string;
+      tracking_numbers: string[];
+      tracking_urls: (string | null)[];
+    }>("select * from public.claim_shipments_to_send(50)");
+    const mine = claimed.filter((row) => row.id === multiParcel);
+    expect(mine).toHaveLength(1);
+    expect(mine[0].tracking_number).toBe("9400100000000000000011");
+    expect(mine[0].tracking_numbers).toEqual(["9400100000000000000011", "9400100000000000000012"]);
+    expect(mine[0].tracking_urls).toEqual(TWO_BOXES.map((item) => item.tracking_url));
+    for (const row of claimed) {
+      await service("select public.finish_shipment_send($1, null)", [row.id]);
+    }
+    // A parcel typed in by hand still sends its one number.
+    await shopOrder(tenantA, "5006", "ash@example.com", "c55").then((order) =>
+      as(
+        carol,
+        "select public.record_shipment($1, $2, 'UPS', 'Ground', '1Z999', null, null, '[]'::jsonb, '', true, false)",
+        [tenantA, order],
+      ),
+    );
+    const byHand = await service<{ tracking_numbers: string[]; tracking_urls: (string | null)[] }>(
+      "select * from public.claim_shipments_to_send(50)",
+    );
+    expect(byHand).toHaveLength(1);
+    expect(byHand[0].tracking_numbers).toEqual(["1Z999"]);
+    expect(byHand[0].tracking_urls).toEqual([null]);
+    await expect(as(alice, "select * from public.claim_shipments_to_send(5)")).rejects.toThrow(
+      /permission denied/,
+    );
+  });
+
+  it("voiding a two-box label undoes the one parcel and marks the refund for both boxes", async () => {
+    await expect(as(carol, "select public.void_label_shipment($1)", [multiParcel])).rejects.toThrow(
+      /Only owners and admins/,
+    );
+    await expect(as(bob, "select public.void_label_shipment($1)", [multiParcel])).rejects.toThrow(
+      /Shipment not found/,
+    );
+    await as(alice, "select public.void_label_shipment($1)", [multiParcel]);
+    const { rows } = await db.query<{
+      voided_at: string | null;
+      label_refund_status: string;
+      label_parcels: { shipment_id: string }[];
+    }>("select voided_at, label_refund_status, label_parcels from public.shipments where id = $1", [
+      multiParcel,
+    ]);
+    expect(rows[0].voided_at).not.toBeNull();
+    expect(rows[0].label_refund_status).toBe("requested");
+    // Both boxes stay on the voided parcel, so each refund can still be followed up.
+    expect(rows[0].label_parcels.map((item) => item.shipment_id)).toEqual(["shp_box1", "shp_box2"]);
+    // Everything in both boxes is back on the to-send list.
+    expect((await orderRow(multi)).units_left).toBe(5);
+  });
+
+  it("a label bought the old way keeps its one box, and a box's link must be https", async () => {
+    const { rows } = await db.query<{ parcels: Record<string, unknown>[] }>(
+      "select parcels from public.shipping_label_quotes where provider_shipment_id = 'shp_a3'",
+    );
+    expect(rows[0].parcels).toEqual([
+      {
+        shipment_id: "shp_a3",
+        tracking_number: "9400100000000000000001",
+        tracking_url: "https://tools.usps.com/go/TrackConfirmAction?tLabels=9400100000000000000001",
+        label_url: "https://labels.example/label.png",
+      },
+    ]);
+    const same = await db.query<{ label_parcels: Record<string, unknown>[] }>(
+      "select label_parcels from public.shipments where label_shipment_id = 'shp_a3'",
+    );
+    expect(same.rows[0].label_parcels).toEqual(rows[0].parcels);
+    for (const bad of [
+      '[{"label_url": "http://plain.example/l.png"}]',
+      '[{"tracking_url": "javascript:alert(1)"}]',
+      '[{"label_url": 7}]',
+      '{"label_url": "https://ok.example/l.png"}',
+      "[{}, {}, {}, {}, {}, {}, {}]",
+    ]) {
+      await expect(
+        db.query(
+          "update public.shipments set label_parcels = $1::jsonb where label_shipment_id = 'order_m1'",
+          [bad],
+        ),
+        bad,
+      ).rejects.toThrow(/check/);
+    }
+    await expect(
+      db.query(
+        "update public.shipping_label_quotes set box_count = 3 where provider_shipment_id = 'shp_a3'",
+      ),
+    ).rejects.toThrow(/shipping_label_quotes_kind_matches_boxes/);
+  });
 });
 
 describe("privacy", () => {

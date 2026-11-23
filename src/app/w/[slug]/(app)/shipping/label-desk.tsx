@@ -1,14 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
-import { Check, Printer, RefreshCw, TriangleAlert } from "lucide-react";
+import { Check, Plus, Printer, RefreshCw, TriangleAlert } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { FormMessage } from "@/components/ui/form-message";
 import { Input, Label, Select } from "@/components/ui/input";
 import {
+  MAX_BOXES,
   formatPrice,
+  formatTenthOz,
+  lbOzToTenthOz,
   tenthOzToLbOz,
   type AddressCheck,
   type Signature,
@@ -30,6 +33,28 @@ export type DeskBox = {
 };
 
 const CUSTOM = "";
+
+/** One box on the bench: which saved box (or none), its size and what it weighs packed. */
+type Packed = {
+  /** Stays with the box while others come and go, for React and the field ids. */
+  key: number;
+  boxId: string;
+  size: { length: string; width: string; height: string };
+  weight: { lb: string; oz: string };
+  /** The weight was typed by hand, so picking another box leaves it alone. */
+  weightTyped: boolean;
+};
+
+/** What all the boxes weigh together, in tenths of an ounce; null while any isn't a number. */
+function totalTenthOz(packed: Packed[]): number | null {
+  let total = 0;
+  for (const box of packed) {
+    const tenths = lbOzToTenthOz(box.weight.lb, box.weight.oz);
+    if (tenths === null) return null;
+    total += tenths;
+  }
+  return total;
+}
 
 type Checked =
   | { state: "idle" }
@@ -110,15 +135,22 @@ export function LabelDesk({
   const [checked, setChecked] = useState<Checked>({ state: "idle" });
   const [residential, setResidential] = useState(true);
   const [signature, setSignature] = useState<Signature>(rule ? "signature" : "none");
-  const [boxId, setBoxId] = useState(boxes[0]?.id ?? CUSTOM);
   const sizeOf = (box: DeskBox | undefined) => ({
     length: box?.length ?? "",
     width: box?.width ?? "",
     height: box?.height ?? "",
   });
-  const [size, setSize] = useState(() => sizeOf(boxes[0]));
-  const [weight, setWeight] = useState(() => startWeight(boxes[0]));
-  const [weightTyped, setWeightTyped] = useState(false);
+  // The order starts in one box: the usual one, at the weight the shop gave.
+  const [packed, setPacked] = useState<Packed[]>(() => [
+    {
+      key: 0,
+      boxId: boxes[0]?.id ?? CUSTOM,
+      size: sizeOf(boxes[0]),
+      weight: startWeight(boxes[0]),
+      weightTyped: false,
+    },
+  ]);
+  const nextKey = useRef(1);
   const [rates, setRates] = useState<RateChoice[] | null>(null);
   const [chosen, setChosen] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -131,7 +163,7 @@ export function LabelDesk({
   const sent = useRef(false);
   const opened = useRef(false);
 
-  // A price belongs to one address, one box and one weight: change any and it's gone.
+  // A price belongs to one address and one set of boxes and weights: change any and it's gone.
   const stale = () => {
     setRates(null);
     setChosen("");
@@ -140,14 +172,16 @@ export function LabelDesk({
 
   type Ask = { to: ShipToEdit; residential: boolean; signature: Signature };
   const quote = useCallback(
-    (ask: Ask, parcel: { boxId: string; size: typeof size; weight: typeof weight }) =>
+    (ask: Ask, parcels: Pick<Packed, "boxId" | "size" | "weight">[]) =>
       startQuote(async () => {
         setError(null);
         const result = await getLabelRates(slug, orderId, {
-          boxId: parcel.boxId,
-          ...parcel.size,
-          weightLb: parcel.weight.lb,
-          weightOz: parcel.weight.oz,
+          boxes: parcels.map((parcel) => ({
+            boxId: parcel.boxId,
+            ...parcel.size,
+            weightLb: parcel.weight.lb,
+            weightOz: parcel.weight.oz,
+          })),
           shipTo: ask.to,
           residential: ask.residential,
           signature: ask.signature,
@@ -162,7 +196,7 @@ export function LabelDesk({
       }),
     [slug, orderId],
   );
-  const quoteNow = () => quote({ to, residential, signature }, { boxId, size, weight });
+  const quoteNow = () => quote({ to, residential, signature }, packed);
 
   const check = useCallback(
     async (address: ShipToEdit): Promise<AddressCheck | null> => {
@@ -180,7 +214,8 @@ export function LabelDesk({
   );
 
   // On opening: check the address, then ask for prices if the box and weight are known,
-  // so the next order is ready to buy by the time it's on screen.
+  // so the next order is ready to buy by the time it's on screen. Only ever for the one
+  // box an order starts in; more boxes are asked for by hand.
   useEffect(() => {
     if (opened.current) return;
     opened.current = true;
@@ -195,7 +230,7 @@ export function LabelDesk({
           residential: found?.residential ?? true,
           signature: rule ? "signature" : "none",
         },
-        { boxId: first.id, size: sizeOf(first), weight: starting },
+        [{ boxId: first.id, size: sizeOf(first), weight: starting }],
       );
     })();
     // Runs once for the order on screen; the page remounts this for the next one.
@@ -224,15 +259,49 @@ export function LabelDesk({
     );
     stale();
   };
-  const pickBox = (id: string) => {
-    setBoxId(id);
-    if (id !== CUSTOM) setSize(sizeOf(boxes.find((box) => box.id === id)));
-    if (!weightTyped) setWeight(startWeight(boxes.find((box) => box.id === id)));
+  const change = (key: number, edit: (box: Packed) => Packed) => {
+    setPacked((before) => before.map((box) => (box.key === key ? edit(box) : box)));
     stale();
   };
-  const typeWeight = (part: "lb" | "oz", value: string) => {
-    setWeight((before) => ({ ...before, [part]: value }));
-    setWeightTyped(true);
+  const pickBox = (key: number, id: string) => {
+    const saved = boxes.find((box) => box.id === id);
+    change(key, (box) => ({
+      ...box,
+      boxId: id,
+      size: id === CUSTOM ? box.size : sizeOf(saved),
+      weight: box.weightTyped ? box.weight : startWeight(saved),
+    }));
+  };
+  const typeSize = (key: number, side: keyof Packed["size"], value: string) =>
+    // A size typed by hand is its own box, not the saved one.
+    change(key, (box) => ({ ...box, boxId: CUSTOM, size: { ...box.size, [side]: value } }));
+  const typeWeight = (key: number, part: "lb" | "oz", value: string) =>
+    change(key, (box) => ({
+      ...box,
+      weight: { ...box.weight, [part]: value },
+      weightTyped: true,
+    }));
+  // Another box starts as a copy of the last one's size, waiting for its weight.
+  const addBox = () => {
+    const key = nextKey.current++;
+    setPacked((before) => {
+      if (before.length >= MAX_BOXES) return before;
+      const last = before[before.length - 1];
+      return [
+        ...before,
+        {
+          key,
+          boxId: last.boxId,
+          size: { ...last.size },
+          weight: { lb: "", oz: "" },
+          weightTyped: true,
+        },
+      ];
+    });
+    stale();
+  };
+  const removeBox = (key: number) => {
+    setPacked((before) => (before.length > 1 ? before.filter((box) => box.key !== key) : before));
     stale();
   };
 
@@ -271,7 +340,10 @@ export function LabelDesk({
     return () => window.removeEventListener("keydown", onKey);
   }, [buy, canBuy]);
 
-  const picked = boxes.find((box) => box.id === boxId);
+  const several = packed.length > 1;
+  const first = packed[0];
+  const picked = boxes.find((box) => box.id === first.boxId);
+  const total = totalTenthOz(packed);
   const margin = rate ? leftOver(paid.cents, rate.price, rate.currency) : null;
   const stat = "flex flex-col gap-0.5";
   const statLabel = "text-muted-foreground text-xs font-semibold";
@@ -293,7 +365,7 @@ export function LabelDesk({
                   )}
                 </div>
                 <div className={stat}>
-                  <span className={statLabel}>Label</span>
+                  <span className={statLabel}>{several ? `${packed.length} labels` : "Label"}</span>
                   <span className="font-semibold tabular-nums">
                     {formatPrice(rate.price, rate.currency)}
                   </span>
@@ -323,7 +395,9 @@ export function LabelDesk({
                   ? "This label is being sorted out. See the message below."
                   : quoting
                     ? "Asking the carriers what this would cost…"
-                    : "Check the address, box and weight, then get rates."}
+                    : several
+                      ? "Check the address and each box's size and weight, then get rates."
+                      : "Check the address, box and weight, then get rates."}
               </p>
             )}
             <div className="ml-auto flex flex-wrap items-center gap-2">
@@ -332,7 +406,13 @@ export function LabelDesk({
                 (rates ? (
                   <Button type="button" size="lg" onClick={buy} disabled={!canBuy}>
                     <Printer aria-hidden />
-                    {buying ? "Buying your label…" : "Buy & print label"}
+                    {buying
+                      ? several
+                        ? "Buying your labels…"
+                        : "Buying your label…"
+                      : several
+                        ? `Buy & print ${packed.length} labels`
+                        : "Buy & print label"}
                     <kbd className="rounded-sm border border-current/30 px-1 font-sans text-[10px] opacity-80">
                       Ctrl+P
                     </kbd>
@@ -461,66 +541,109 @@ export function LabelDesk({
 
       <Card>
         <CardHeader>
-          <CardTitle>Items &amp; box</CardTitle>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <CardTitle>Items &amp; boxes</CardTitle>
+            {total !== null && total > 0 && (
+              <span className="text-muted-foreground text-xs">
+                {several ? `${packed.length} boxes · ` : ""}Total{" "}
+                <span className="text-foreground font-semibold tabular-nums">
+                  {formatTenthOz(total)}
+                </span>
+              </span>
+            )}
+          </div>
         </CardHeader>
         <CardContent className="flex flex-col gap-5">
-          <fieldset disabled={busy || locked} className="flex flex-wrap items-end gap-3">
-            <div className="flex min-w-[14rem] flex-1 flex-col gap-1.5">
-              <Label htmlFor="label-box">Box</Label>
-              <Select
-                id="label-box"
-                value={boxId}
-                onChange={(event) => pickBox(event.target.value)}
+          <fieldset disabled={busy || locked} className="grid gap-3 sm:grid-cols-2">
+            {packed.map((box, index) => {
+              const id = (field: string) => `box-${box.key}-${field}`;
+              return (
+                <div
+                  key={box.key}
+                  role="group"
+                  aria-label={`Box ${index + 1}`}
+                  className="border-border grid grid-cols-6 gap-x-2 gap-y-3 rounded-md border p-3"
+                >
+                  <div className="col-span-6 flex min-h-8 items-center justify-between gap-2">
+                    <span className="text-sm font-semibold">Box {index + 1}</span>
+                    {index > 0 && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => removeBox(box.key)}
+                        aria-label={`Remove box ${index + 1}`}
+                      >
+                        Remove
+                      </Button>
+                    )}
+                  </div>
+                  <div className="col-span-6 flex min-w-0 flex-col gap-1.5">
+                    <Label htmlFor={id("box")}>Box</Label>
+                    <Select
+                      id={id("box")}
+                      value={box.boxId}
+                      onChange={(event) => pickBox(box.key, event.target.value)}
+                    >
+                      {boxes.map((saved) => (
+                        <option key={saved.id} value={saved.id}>
+                          {saved.name} ({saved.size})
+                        </option>
+                      ))}
+                      <option value={CUSTOM}>Another size…</option>
+                    </Select>
+                  </div>
+                  {(["length", "width", "height"] as const).map((side) => (
+                    <div key={side} className="col-span-2 flex min-w-0 flex-col gap-1.5">
+                      <Label htmlFor={id(side)}>{side[0].toUpperCase()} in</Label>
+                      <Input
+                        id={id(side)}
+                        inputMode="decimal"
+                        value={box.size[side]}
+                        onChange={(event) => typeSize(box.key, side, event.target.value)}
+                      />
+                    </div>
+                  ))}
+                  <div className="col-span-3 flex min-w-0 flex-col gap-1.5">
+                    <Label htmlFor={id("lb")}>Weight lb</Label>
+                    <Input
+                      id={id("lb")}
+                      inputMode="decimal"
+                      value={box.weight.lb}
+                      onChange={(event) => typeWeight(box.key, "lb", event.target.value)}
+                    />
+                  </div>
+                  <div className="col-span-3 flex min-w-0 flex-col gap-1.5">
+                    <Label htmlFor={id("oz")}>oz</Label>
+                    <Input
+                      id={id("oz")}
+                      inputMode="decimal"
+                      value={box.weight.oz}
+                      onChange={(event) => typeWeight(box.key, "oz", event.target.value)}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+            {packed.length < MAX_BOXES && (
+              <button
+                type="button"
+                onClick={addBox}
+                className="border-border text-muted-foreground hover:bg-hover hover:text-foreground focus-visible:ring-ring flex min-h-24 items-center justify-center gap-2 rounded-md border border-dashed p-3 text-sm font-semibold outline-none focus-visible:ring-2 disabled:pointer-events-none disabled:opacity-50"
               >
-                {boxes.map((box) => (
-                  <option key={box.id} value={box.id}>
-                    {box.name} ({box.size})
-                  </option>
-                ))}
-                <option value={CUSTOM}>Another size…</option>
-              </Select>
-            </div>
-            {(["length", "width", "height"] as const).map((side) => (
-              <div key={side} className="flex w-20 flex-col gap-1.5">
-                <Label htmlFor={`box-${side}`}>{side[0].toUpperCase()} in</Label>
-                <Input
-                  id={`box-${side}`}
-                  inputMode="decimal"
-                  value={size[side]}
-                  onChange={(event) => {
-                    // A size typed by hand is its own box, not the saved one.
-                    setBoxId(CUSTOM);
-                    setSize((before) => ({ ...before, [side]: event.target.value }));
-                    stale();
-                  }}
-                />
-              </div>
-            ))}
-            <div className="flex w-20 flex-col gap-1.5">
-              <Label htmlFor="box-lb">Weight lb</Label>
-              <Input
-                id="box-lb"
-                inputMode="decimal"
-                value={weight.lb}
-                onChange={(event) => typeWeight("lb", event.target.value)}
-              />
-            </div>
-            <div className="flex w-20 flex-col gap-1.5">
-              <Label htmlFor="box-oz">oz</Label>
-              <Input
-                id="box-oz"
-                inputMode="decimal"
-                value={weight.oz}
-                onChange={(event) => typeWeight("oz", event.target.value)}
-              />
-            </div>
+                <Plus className="size-4" aria-hidden />
+                Add another box
+              </button>
+            )}
           </fieldset>
           <p className="text-muted-foreground -mt-2 text-xs">
-            {contentsTenthOz === null
-              ? "Your shop didn't give a weight for this order, so pop it on the scale."
-              : picked && picked.emptyTenthOz > 0 && !weightTyped
-                ? "The weight is what your shop says the items weigh, plus this box."
-                : "The weight starts from what your shop says the items weigh."}
+            {several
+              ? "Weigh each packed box. They're bought together as one purchase, with a label for each box."
+              : contentsTenthOz === null
+                ? "Your shop didn't give a weight for this order, so pop it on the scale."
+                : picked && picked.emptyTenthOz > 0 && !first.weightTyped
+                  ? "The weight is what your shop says the items weigh, plus this box."
+                  : "The weight starts from what your shop says the items weigh."}
           </p>
           {children}
         </CardContent>
@@ -588,7 +711,9 @@ export function LabelDesk({
                 ? "No more rates on this screen: a label is already being sorted out."
                 : quoting
                   ? "Asking the carriers…"
-                  : "Rates appear here once the address, box and weight are set."}
+                  : several
+                    ? "Rates appear here once the address and every box's size and weight are set. Each price covers all the boxes."
+                    : "Rates appear here once the address, box and weight are set."}
             </p>
           )}
         </CardContent>
