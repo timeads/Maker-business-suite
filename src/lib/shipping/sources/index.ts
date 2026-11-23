@@ -187,7 +187,10 @@ export function upsSource(fetchImpl: Fetch = fetch): LabelSource<UpsAccess> {
         currency: made.currency,
         mode: access.test ? "test" : "live",
         files: made.boxes.flatMap((box, index): LabelFile[] => {
-          if (!box.label) return [];
+          if (!box.label) {
+            console.warn("ups sent no label file for box", index + 1);
+            return [];
+          }
           // UPS sends a picture, or ZPL when that was asked for: kept as what it really is.
           const sniffed = labelKind(box.label);
           const asked = purchase.request?.labelFormat === "zpl" ? "text/plain" : "image/gif";

@@ -11,6 +11,7 @@ import {
   fetchUpsToken,
   getUpsRates,
   parseRates,
+  labelData,
   parseShipResponse,
   readUpsAddressCheck,
   sameAddress,
@@ -504,5 +505,36 @@ describe("a label for a Zebra", () => {
     expect(buildRateRequest("A1B2C3", { ...request, labelFormat: "zpl" })).toEqual(
       buildRateRequest("A1B2C3", request),
     );
+  });
+});
+
+describe("the label file UPS sends", () => {
+  it("keeps plain base64 as it is", () => {
+    expect(labelData("R0lGODlhAQABAAAAACw=")).toBe("R0lGODlhAQABAAAAACw=");
+  });
+
+  it("takes out line breaks and spaces UPS wraps the file with", () => {
+    expect(labelData("R0lGODlh\r\nAQABAAAA\n ACw=\n")).toBe("R0lGODlhAQABAAAAACw=");
+  });
+
+  it("is nothing when there is no file, or it isn't base64", () => {
+    expect(labelData(undefined)).toBeNull();
+    expect(labelData("")).toBeNull();
+    expect(labelData("<html>not a label</html>")).toBeNull();
+  });
+
+  it("reads a wrapped file out of a ship answer", () => {
+    const shipment = parseShipResponse({
+      ShipmentResponse: {
+        ShipmentResults: {
+          ShipmentIdentificationNumber: "1ZTEST",
+          PackageResults: {
+            TrackingNumber: "1ZTEST",
+            ShippingLabel: { GraphicImage: "R0lGODlh\nAQABAAAAACw=" },
+          },
+        },
+      },
+    });
+    expect(shipment?.boxes[0].label).toBe("R0lGODlhAQABAAAAACw=");
   });
 });

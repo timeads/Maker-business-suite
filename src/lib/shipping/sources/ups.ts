@@ -388,6 +388,22 @@ type ShipmentResults = {
   ShipmentCharges?: { TotalCharges?: Money };
 };
 
+/**
+ * The label's file as plain base64, or null when there isn't one we can keep.
+ * UPS may wrap the base64 over several lines; the breaks are not part of it.
+ */
+export function labelData(image: unknown): string | null {
+  if (typeof image !== "string") return null;
+  const data = image.replace(/\s+/g, "");
+  if (data && /^[A-Za-z0-9+/]+=*$/.test(data)) return data;
+  // Never the label itself: only enough to say what arrived, for whoever reads the log.
+  console.warn("ups label file not usable", {
+    length: image.length,
+    startsLike: image.slice(0, 6).replace(/[A-Za-z0-9+/=]/g, "x"),
+  });
+  return null;
+}
+
 /** Null when the answer doesn't describe a shipment. */
 export function parseShipResponse(json: unknown): UpsShipment | null {
   const results = (json as { ShipmentResponse?: { ShipmentResults?: ShipmentResults } })
@@ -403,11 +419,7 @@ export function parseShipResponse(json: unknown): UpsShipment | null {
     shipmentId,
     boxes: asArray(results.PackageResults).map((box) => ({
       trackingNumber: typeof box?.TrackingNumber === "string" ? box.TrackingNumber : "",
-      label:
-        typeof box?.ShippingLabel?.GraphicImage === "string" &&
-        /^[A-Za-z0-9+/=]+$/.test(box.ShippingLabel.GraphicImage)
-          ? box.ShippingLabel.GraphicImage
-          : null,
+      label: labelData(box?.ShippingLabel?.GraphicImage),
     })),
     price: cents === null ? "0.00" : centsToPrice(cents),
     currency: typeof total?.CurrencyCode === "string" ? total.CurrencyCode : "USD",
