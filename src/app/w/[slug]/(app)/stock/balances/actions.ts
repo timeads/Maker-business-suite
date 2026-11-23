@@ -77,7 +77,8 @@ export async function addLedgerEntry(
   if (!realDay(date)) return { error: "Pick the date." };
   const reference = text(formData, "reference");
   const note = text(formData, "note");
-  if (reference.length > 80) return { error: "That reference is too long (80 characters at most)." };
+  if (reference.length > 80)
+    return { error: "That reference is too long (80 characters at most)." };
   if (note.length > 500) return { error: "That note is too long (500 characters at most)." };
 
   const amount = parseAmount(text(formData, "amount"));
