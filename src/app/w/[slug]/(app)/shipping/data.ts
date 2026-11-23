@@ -37,6 +37,8 @@ export type ShippingOrder = {
     sku: string | null;
     barcode?: string | null;
     price?: number | null;
+    /** One unit's weight in grams, on orders synced since the shop started sharing it. */
+    grams?: number | null;
     qty: number;
     left: number;
   }[];

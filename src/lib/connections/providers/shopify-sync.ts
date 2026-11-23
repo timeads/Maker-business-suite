@@ -222,7 +222,12 @@ type ShopifyShipping = {
       unfulfilledQuantity: number;
       requiresShipping: boolean;
       discountedUnitPriceAfterAllDiscountsSet?: Money | null;
-      variant?: { barcode: string | null } | null;
+      variant?: {
+        barcode: string | null;
+        inventoryItem?: {
+          measurement?: { weight?: { unit: string; value: number } | null } | null;
+        } | null;
+      } | null;
     }[];
   };
 } | null;
@@ -246,7 +251,7 @@ const shippingQuery = (deliveryMethods: boolean) => `query Shipping($ids: [ID!]!
         nodes {
           id title variantTitle sku currentQuantity unfulfilledQuantity requiresShipping
           discountedUnitPriceAfterAllDiscountsSet { shopMoney { amount } }
-          variant { barcode }
+          variant { barcode inventoryItem { measurement { weight { unit value } } } }
         }
       }
     }
@@ -256,6 +261,22 @@ const shippingQuery = (deliveryMethods: boolean) => `query Shipping($ids: [ID!]!
 const UNPAID = new Set(["PENDING", "AUTHORIZED", "PARTIALLY_PAID", "EXPIRED", "VOIDED"]);
 /** Without the shop's own word on it, the name of the checkout option is the best clue. */
 const PICKUP_NAME = /\b(pick ?-?up|in[- ]store|collect(ion)?)\b/i;
+
+const GRAMS_PER: Record<string, number> = {
+  GRAMS: 1,
+  KILOGRAMS: 1000,
+  OUNCES: 28.349523125,
+  POUNDS: 453.59237,
+};
+
+/** A product weight from the shop in whole grams, or null when there isn't a usable one. */
+export function unitGrams(
+  weight: { unit: string; value: number } | null | undefined,
+): number | null {
+  const per = weight ? GRAMS_PER[weight.unit] : undefined;
+  const grams = per ? Math.round(Number(weight!.value) * per) : Number.NaN;
+  return Number.isFinite(grams) && grams > 0 ? grams : null;
+}
 
 export function mapShopifyShipping(orders: ShopifyShipping[]): ShippingOrderRow[] {
   return orders.flatMap((order) => {
@@ -293,6 +314,8 @@ export function mapShopifyShipping(orders: ShopifyShipping[]): ShippingOrderRow[
             variant: line.variantTitle,
             sku: line.sku?.trim() || null,
             barcode: line.variant?.barcode?.trim() || null,
+            // One unit's weight, so a box's weight can follow what's put in it.
+            grams: unitGrams(line.variant?.inventoryItem?.measurement?.weight),
             price: line.discountedUnitPriceAfterAllDiscountsSet
               ? money(line.discountedUnitPriceAfterAllDiscountsSet)
               : null,

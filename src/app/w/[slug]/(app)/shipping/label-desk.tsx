@@ -17,7 +17,31 @@ import {
   type Signature,
 } from "@/lib/shipping/easypost";
 import { deliveryDays, type RateChoice, type ShipToEdit } from "@/lib/shipping/labels";
+import {
+  contentsTenthOz as boxContentsTenthOz,
+  emptyAlloc,
+  fullAlloc,
+  notInBox,
+  setQty,
+  splitEvenly,
+  unitsIn,
+  weightsKnown,
+  withoutBox,
+  type Alloc,
+} from "@/lib/shipping/packing";
 import { buyLabel, checkLabelAddress, getLabelRates } from "./label-actions";
+
+/** An item in the order, as the bench needs it for dividing between boxes. */
+export type DeskLine = {
+  id: string;
+  title: string;
+  /** "Large · RUG-L" */
+  detail: string;
+  qty: number;
+  /** One unit's weight in tenths of an ounce, when the shop gave one. */
+  tenthOz: number | null;
+  photo: string | null;
+};
 
 export type DeskBox = {
   id: string;
@@ -43,6 +67,8 @@ type Packed = {
   weight: { lb: string; oz: string };
   /** The weight was typed by hand, so picking another box leaves it alone. */
   weightTyped: boolean;
+  /** How many of each item are in this box. */
+  alloc: Alloc;
 };
 
 /** What all the boxes weigh together, in tenths of an ounce; null while any isn't a number. */
@@ -106,6 +132,7 @@ export function LabelDesk({
   shop,
   testMode,
   setup,
+  lines,
   children,
 }: {
   slug: string;
@@ -124,6 +151,8 @@ export function LabelDesk({
   testMode: boolean;
   /** What's still missing before a carrier will quote, with where to fix it. */
   setup: { missing: string; href: string | null } | null;
+  /** The items going in this purchase, for dividing between several boxes. */
+  lines: DeskLine[];
   /** The items in the order, shown under the box. */
   children: React.ReactNode;
 }) {
@@ -148,8 +177,25 @@ export function LabelDesk({
       size: sizeOf(boxes[0]),
       weight: startWeight(boxes[0]),
       weightTyped: false,
+      alloc: fullAlloc(lines),
     },
   ]);
+  // With a weight for every item, each box's weight follows what's put in it.
+  const known = weightsKnown(lines);
+  const reweigh = (list: Packed[]): Packed[] =>
+    list.length > 1 && known
+      ? list.map((box) =>
+          box.weightTyped
+            ? box
+            : {
+                ...box,
+                weight: tenthOzToLbOz(
+                  (boxes.find((saved) => saved.id === box.boxId)?.emptyTenthOz ?? 0) +
+                    boxContentsTenthOz(box.alloc, lines),
+                ),
+              },
+        )
+      : list;
   const nextKey = useRef(1);
   const [rates, setRates] = useState<RateChoice[] | null>(null);
   const [chosen, setChosen] = useState("");
@@ -260,7 +306,21 @@ export function LabelDesk({
     stale();
   };
   const change = (key: number, edit: (box: Packed) => Packed) => {
-    setPacked((before) => before.map((box) => (box.key === key ? edit(box) : box)));
+    setPacked((before) => reweigh(before.map((box) => (box.key === key ? edit(box) : box))));
+    stale();
+  };
+  const repack = (edit: (allocs: Alloc[]) => Alloc[]) => {
+    setPacked((before) => {
+      const allocs = edit(before.map((box) => box.alloc));
+      return reweigh(
+        before.map((box, index) => ({
+          ...box,
+          alloc: allocs[index] ?? box.alloc,
+          // What's inside changed, so a weight worked out from the contents is worked out again.
+          weightTyped: known ? false : box.weightTyped,
+        })),
+      );
+    });
     stale();
   };
   const pickBox = (key: number, id: string) => {
@@ -287,21 +347,39 @@ export function LabelDesk({
     setPacked((before) => {
       if (before.length >= MAX_BOXES) return before;
       const last = before[before.length - 1];
-      return [
-        ...before,
+      // The new box starts empty; the others keep what's in them until items are moved.
+      return reweigh([
+        ...before.map((box) => (known ? { ...box, weightTyped: false } : box)),
         {
           key,
           boxId: last.boxId,
           size: { ...last.size },
           weight: { lb: "", oz: "" },
-          weightTyped: true,
+          weightTyped: !known,
+          alloc: emptyAlloc(lines),
         },
-      ];
+      ]);
     });
     stale();
   };
   const removeBox = (key: number) => {
-    setPacked((before) => (before.length > 1 ? before.filter((box) => box.key !== key) : before));
+    setPacked((before) => {
+      const index = before.findIndex((box) => box.key === key);
+      if (before.length <= 1 || index < 0) return before;
+      // Its items go to the box before it.
+      const allocs = withoutBox(
+        before.map((box) => box.alloc),
+        index,
+      );
+      const kept = before
+        .filter((box) => box.key !== key)
+        .map((box, at) => ({ ...box, alloc: allocs[at] }));
+      if (kept.length === 1 && !kept[0].weightTyped) {
+        const saved = boxes.find((item) => item.id === kept[0].boxId);
+        return [{ ...kept[0], weight: startWeight(saved) }];
+      }
+      return reweigh(kept);
+    });
     stale();
   };
 
@@ -312,6 +390,26 @@ export function LabelDesk({
   const buy = useCallback(() => {
     // One press, one purchase: the ref closes the gap before the button greys out.
     if (sent.current || locked || !chosen) return;
+    if (packed.length > 1 && lines.length > 0) {
+      const allocs = packed.map((box) => box.alloc);
+      if (
+        lines.some((line) => notInBox(allocs, line) !== 0) &&
+        !window.confirm("Some items aren't in a box. Buy the labels anyway?")
+      ) {
+        return;
+      }
+      const empty = packed
+        .map((box, index) => (unitsIn(box.alloc, lines) > 0 ? 0 : index + 1))
+        .filter(Boolean);
+      if (
+        empty.length > 0 &&
+        !window.confirm(
+          `${empty.length === 1 ? `Box ${empty[0]} has` : `Boxes ${empty.join(", ")} have`} nothing in ${empty.length === 1 ? "it" : "them"}. Buy a label for ${empty.length === 1 ? "it" : "them"} anyway?`,
+        )
+      ) {
+        return;
+      }
+    }
     sent.current = true;
     startBuy(async () => {
       setError(null);
@@ -326,7 +424,7 @@ export function LabelDesk({
       }
       setError(result.error ?? "Something went wrong. Reload this page before trying again.");
     });
-  }, [slug, orderId, chosen, locked, markSent, notify]);
+  }, [slug, orderId, chosen, locked, markSent, notify, packed, lines]);
 
   // Ctrl+P (or ⌘P) buys and prints, the way it does on the bench.
   useEffect(() => {
@@ -638,14 +736,118 @@ export function LabelDesk({
           </fieldset>
           <p className="text-muted-foreground -mt-2 text-xs">
             {several
-              ? "Weigh each packed box. They're bought together as one purchase, with a label for each box."
+              ? known
+                ? "Each box's weight follows what you put in it; type over it if the scale says otherwise. The boxes are bought together, with a label for each."
+                : "Weigh each packed box. They're bought together as one purchase, with a label for each box."
               : contentsTenthOz === null
                 ? "Your shop didn't give a weight for this order, so pop it on the scale."
                 : picked && picked.emptyTenthOz > 0 && !first.weightTyped
                   ? "The weight is what your shop says the items weigh, plus this box."
                   : "The weight starts from what your shop says the items weigh."}
           </p>
-          {children}
+          {several && lines.length > 0 ? (
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm font-semibold">What goes in each box</p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={busy || locked}
+                  title="Spread the items so each box weighs about the same"
+                  onClick={() => repack(() => splitEvenly(lines, packed.length))}
+                >
+                  Split evenly
+                </Button>
+              </div>
+              <ul className="divide-border border-border flex flex-col divide-y rounded-md border">
+                {lines.map((line) => {
+                  const loose = notInBox(
+                    packed.map((box) => box.alloc),
+                    line,
+                  );
+                  return (
+                    <li
+                      key={line.id}
+                      className="flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-2.5 text-sm"
+                    >
+                      {line.photo ? (
+                        // eslint-disable-next-line @next/next/no-img-element -- the shop's own picture of the product, on the shop's image servers
+                        <img
+                          src={line.photo}
+                          alt=""
+                          loading="lazy"
+                          className="border-border size-10 shrink-0 rounded-md border object-cover"
+                        />
+                      ) : (
+                        <span className="bg-sunken size-10 shrink-0 rounded-md" aria-hidden />
+                      )}
+                      <span className="min-w-[10rem] flex-1">
+                        <span className="block font-semibold">{line.title}</span>
+                        <span className="text-muted-foreground block text-xs">
+                          {line.detail || "No item code"} · × {line.qty}
+                        </span>
+                      </span>
+                      {line.qty === 1 ? (
+                        <span
+                          role="radiogroup"
+                          aria-label={`Box for ${line.title}`}
+                          className="border-input flex overflow-hidden rounded-sm border"
+                        >
+                          {packed.map((box, index) => {
+                            const on = (box.alloc[line.id] ?? 0) > 0;
+                            return (
+                              <button
+                                key={box.key}
+                                type="button"
+                                role="radio"
+                                aria-checked={on}
+                                disabled={busy || locked}
+                                onClick={() => repack((allocs) => setQty(allocs, line, index, 1))}
+                                className={`h-[30px] px-2.5 text-xs font-semibold ${on ? "bg-teal text-on-teal" : "bg-card hover:bg-hover"}`}
+                              >
+                                Box {index + 1}
+                              </button>
+                            );
+                          })}
+                        </span>
+                      ) : (
+                        <span className="flex flex-wrap items-end gap-2">
+                          {packed.map((box, index) => (
+                            <label key={box.key} className="flex flex-col gap-1">
+                              <span className="text-muted-foreground text-xs">Box {index + 1}</span>
+                              <Input
+                                type="number"
+                                inputMode="numeric"
+                                min={0}
+                                max={line.qty}
+                                className="h-[30px] w-16"
+                                aria-label={`${line.title} in box ${index + 1}`}
+                                disabled={busy || locked}
+                                value={box.alloc[line.id] ?? 0}
+                                onChange={(event) =>
+                                  repack((allocs) =>
+                                    setQty(allocs, line, index, Number(event.target.value)),
+                                  )
+                                }
+                              />
+                            </label>
+                          ))}
+                        </span>
+                      )}
+                      {loose !== 0 && (
+                        <span className="text-brick w-full text-xs font-semibold sm:w-auto">
+                          {loose} not in a box
+                        </span>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ) : (
+            children
+          )}
         </CardContent>
       </Card>
 

@@ -515,6 +515,14 @@ export default async function ShippingOrderPage({
                     notify: setup.settings.notify_customer,
                   }}
                   testMode={easypost.testMode}
+                  lines={left.map((item) => ({
+                    id: item.line_id,
+                    title: item.title,
+                    detail: [item.variant, item.sku].filter(Boolean).join(" · "),
+                    qty: item.left,
+                    tenthOz: item.grams ? gramsToTenthOz(Number(item.grams)) : null,
+                    photo: photoOf(item) ?? null,
+                  }))}
                   setup={
                     fromGaps.length > 0
                       ? {

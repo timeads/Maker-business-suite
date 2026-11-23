@@ -217,6 +217,7 @@ export const HELP_TOPICS: HelpTopic[] = [
       "Choose a service and press “Buy & print label”, or Ctrl+P. The label opens to print, and the parcel and tracking number are recorded for you.",
     ],
     notes: [
+      "With more than one box, say what goes in each: a Box 1 / Box 2 switch for a single item, a count per box for several, or “Split evenly”. Where your shop has product weights, each box's weight follows what's in it.",
       "Each rate shows what's left of the shipping your customer paid, so you can see when a label costs more than they were charged.",
       "In Shipping → Settings you can ask for a signature on every order over an amount.",
       "Use the arrows at the top (or J and K) to go to the next order without going back to the list.",
