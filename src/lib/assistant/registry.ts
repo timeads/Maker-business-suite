@@ -121,7 +121,7 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
     feature: "stock",
     name: "Stock planning",
     description:
-      "The lead time and days of cover used when a supplier doesn't say, how often orders are reviewed, whether busy seasons are planned for, and whether checked-in deliveries are added to the shop's count.",
+      "The lead time and days of cover used when a supplier doesn't say, how often orders are reviewed, whether busy seasons are planned for, whether checked-in deliveries are added to the shop's count, and the words in an item's name that mean it is never reordered (gift cards and the like).",
     schema: stockSettingsSchema,
     defaultBody: () => DEFAULT_STOCK_SETTINGS,
   },
