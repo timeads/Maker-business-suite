@@ -1,5 +1,6 @@
 import type { ShippingSettings } from "./config";
 import {
+  MAX_BOXES,
   lbOzToTenthOz,
   normalizePhone,
   type LabelAddress,
@@ -97,6 +98,31 @@ export function parcelFrom(input: ParcelInput): { parcel: LabelParcel } | { erro
   return {
     parcel: { length: size.length, width: size.width, height: size.height, weightTenthOz },
   };
+}
+
+/**
+ * Every box of one purchase, or what's wrong with the first that isn't
+ * right. One to six boxes, and no more than 150 lb between them.
+ */
+export function parcelsFrom(
+  inputs: ParcelInput[],
+): { parcels: LabelParcel[] } | { error: string } {
+  if (inputs.length < 1) return { error: "Add a box first." };
+  if (inputs.length > MAX_BOXES) {
+    return { error: `One label purchase covers up to ${MAX_BOXES} boxes.` };
+  }
+  const parcels: LabelParcel[] = [];
+  for (const [index, input] of inputs.entries()) {
+    const parsed = parcelFrom(input);
+    if ("error" in parsed) {
+      return { error: inputs.length > 1 ? `Box ${index + 1}: ${parsed.error}` : parsed.error };
+    }
+    parcels.push(parsed.parcel);
+  }
+  if (parcels.reduce((sum, parcel) => sum + parcel.weightTenthOz, 0) > MAX_TENTH_OZ) {
+    return { error: "Together these boxes are over 150 lb, which is more than one purchase takes." };
+  }
+  return { parcels };
 }
 
 /**

@@ -52,6 +52,33 @@ export function planFulfilment(
     .filter((order) => order.fulfillmentOrderLineItems.length > 0);
 }
 
+/**
+ * The tracking to put on one fulfilment: every box's number, in order. The
+ * links are sent only when there is one for each number, so a link can never
+ * sit against the wrong number; otherwise the shop works them out itself
+ * from the carrier.
+ */
+export function trackingFor(shipment: {
+  trackingNumber: string;
+  trackingUrl: string | null;
+  trackingNumbers?: string[];
+  trackingUrls?: (string | null)[];
+}): { numbers: string[]; urls: string[] } {
+  const pairs = (
+    shipment.trackingNumbers && shipment.trackingNumbers.length > 0
+      ? shipment.trackingNumbers.map((number, index) => ({
+          number,
+          url: shipment.trackingUrls?.[index] ?? null,
+        }))
+      : [{ number: shipment.trackingNumber, url: shipment.trackingUrl }]
+  ).filter((pair) => typeof pair.number === "string" && pair.number.trim() !== "");
+  const urls = pairs.map((pair) => pair.url).filter((url): url is string => Boolean(url));
+  return {
+    numbers: pairs.map((pair) => pair.number),
+    urls: urls.length === pairs.length ? urls : [],
+  };
+}
+
 export function createShopifySender(fetchImpl: Fetch = fetch) {
   async function graphql<T>(shop: string, token: TokenSet, query: string, variables?: object) {
     try {
@@ -88,6 +115,12 @@ export function createShopifySender(fetchImpl: Fetch = fetch) {
         carrier: string;
         trackingNumber: string;
         trackingUrl: string | null;
+        /**
+         * Every box's tracking number when a parcel went in several, with each
+         * one's link (null where there is none). Left out, the single pair above is used.
+         */
+        trackingNumbers?: string[];
+        trackingUrls?: (string | null)[];
         items: { line_id: string; qty: number }[];
         notifyCustomer: boolean;
       },
@@ -103,19 +136,14 @@ export function createShopifySender(fetchImpl: Fetch = fetch) {
       if (plan.length === 0) {
         throw new ShopSendError("The shop shows nothing left to send on this order");
       }
+      const tracking = trackingFor(shipment);
       const result = await graphql<{
         fulfillmentCreate: { userErrors: { message: string }[] };
       }>(shop, token, FULFIL, {
         f: {
           lineItemsByFulfillmentOrder: plan,
-          ...(shipment.trackingNumber
-            ? {
-                trackingInfo: {
-                  numbers: [shipment.trackingNumber],
-                  urls: shipment.trackingUrl ? [shipment.trackingUrl] : [],
-                  company: shipment.carrier,
-                },
-              }
+          ...(tracking.numbers.length > 0
+            ? { trackingInfo: { ...tracking, company: shipment.carrier } }
             : {}),
           notifyCustomer: shipment.notifyCustomer,
         },

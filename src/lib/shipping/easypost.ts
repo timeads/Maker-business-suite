@@ -348,9 +348,15 @@ export type LabelParcel = {
 };
 
 export type LabelRate = {
-  /** EasyPost's id for this rate: what buying names. */
+  /**
+   * What buying names. For one box it is EasyPost's own id for the rate. For
+   * several boxes EasyPost buys by carrier and service instead, so the id is
+   * one we make from the order, carrier and service (`orderRateId`).
+   */
   id: string;
   carrier: string;
+  /** EasyPost's own code for the carrier ("USPS", "UPSDAP"): what buying several boxes names. */
+  carrierCode: string;
   /** EasyPost's own code for the service. */
   service: string;
   /** "USPS Ground Advantage" */
@@ -361,14 +367,46 @@ export type LabelRate = {
   days: number | null;
 };
 
-export type RateQuote = { shipmentId: string; mode: LabelMode | null; rates: LabelRate[] };
+/**
+ * How EasyPost holds what was quoted: one box is a "shipment"; several boxes
+ * going together are an "order" of shipments, priced and bought as one.
+ */
+export const LABEL_KINDS = ["shipment", "order"] as const;
+export type LabelKind = (typeof LABEL_KINDS)[number];
+export const isLabelKind = (value: unknown): value is LabelKind =>
+  LABEL_KINDS.includes(value as LabelKind);
+
+/** The most boxes one purchase can cover. */
+export const MAX_BOXES = 6;
+
+export type RateQuote = {
+  /** EasyPost's id for what was quoted: a shipment's, or an order's when there are several boxes. */
+  shipmentId: string;
+  kind: LabelKind;
+  boxes: number;
+  mode: LabelMode | null;
+  rates: LabelRate[];
+};
 
 export type LabelMode = "test" | "live";
 
-export type BoughtLabel = {
+/** One box's label. */
+export type BoughtBox = {
+  /** EasyPost's id for this box's shipment: what a refund is asked for by. */
   shipmentId: string;
   trackingCode: string;
   labelUrl: string | null;
+};
+
+export type BoughtLabel = {
+  /** The shipment's id, or the order's when there are several boxes. */
+  shipmentId: string;
+  kind: LabelKind;
+  /** The first box's, for the places that show one. */
+  trackingCode: string;
+  labelUrl: string | null;
+  /** Every box, in the order they were given. One entry for a single box. */
+  boxes: BoughtBox[];
   carrier: string;
   service: string;
   name: string;
@@ -395,6 +433,13 @@ type RawShipment = {
   postage_label?: { label_url?: unknown } | null;
   selected_rate?: RawRate | null;
   refund_status?: unknown;
+};
+
+type RawOrder = {
+  id?: unknown;
+  mode?: unknown;
+  rates?: unknown;
+  shipments?: unknown;
 };
 
 const text = (value: unknown) => (typeof value === "string" ? value : "");
@@ -424,6 +469,7 @@ export function normalizeRates(raw: unknown): LabelRate[] {
     const rate: LabelRate = {
       id,
       carrier: carrierName(rawCarrier),
+      carrierCode: rawCarrier,
       service,
       name: easypostServiceName(rawCarrier, service),
       price: centsToPrice(cents),
@@ -454,48 +500,123 @@ const address = (a: LabelAddress) => ({
   ...(a.residential === undefined ? {} : { residential: a.residential }),
 });
 
+/** FNV-1a over the text, 64 bits, as sixteen hex digits. Not a secret: just a short stable name. */
+function shortHash(value: string): string {
+  let hash = BigInt("0xcbf29ce484222325");
+  const prime = BigInt("0x100000001b3");
+  const mask = BigInt("0xffffffffffffffff");
+  for (const byte of new TextEncoder().encode(value)) {
+    hash = ((hash ^ BigInt(byte)) * prime) & mask;
+  }
+  return hash.toString(16).padStart(16, "0");
+}
+
 /**
- * Asks every carrier on the account what this box would cost to send.
- * Creating the shipment is free; nothing is bought until `buyLabel`.
+ * The id we give a rate on a several-box order. EasyPost buys those by
+ * carrier and service, not by rate id, so this names the three things that
+ * decide the price (which order, which carrier, which service) in a form
+ * that passes for a rate id everywhere else. A rate from an earlier quote
+ * never matches a later one, because the order's id is part of it.
+ */
+export const orderRateId = (orderId: string, carrierCode: string, service: string) =>
+  `ordrate_${shortHash(`${orderId}\n${carrierCode}\n${service}`)}`;
+
+/** An order's rates in the same shape as a shipment's, each with an id of our own. */
+export function normalizeOrderRates(orderId: string, raw: unknown): LabelRate[] {
+  const named = (Array.isArray(raw) ? (raw as RawRate[]) : []).map((item) => ({
+    ...item,
+    // Whatever id EasyPost put on it can't be bought by, so ours replaces it.
+    id: orderRateId(orderId, text(item?.carrier), text(item?.service)),
+  }));
+  return normalizeRates(named);
+}
+
+const parcelBody = (parcel: LabelParcel) => ({
+  length: parcel.length,
+  width: parcel.width,
+  height: parcel.height,
+  // Ounces, to one decimal place.
+  weight: Math.max(1, Math.round(parcel.weightTenthOz)) / 10,
+});
+
+/**
+ * Asks every carrier on the account what this would cost to send. One box is
+ * a shipment; several boxes are an order, whose rates already price all the
+ * boxes together under one service. Creating either is free; nothing is
+ * bought until `buyLabel` or `buyOrder`.
  */
 export async function getRates(
   key: string,
   input: {
     from: LabelAddress;
     to: LabelAddress;
-    parcel: LabelParcel;
+    /** One to six boxes. */
+    parcels: LabelParcel[];
     reference?: string;
     signature?: Signature;
   },
   fetchImpl: Fetch = fetch,
 ): Promise<RateQuote> {
+  const parcels = input.parcels;
+  if (!Array.isArray(parcels) || parcels.length < 1 || parcels.length > MAX_BOXES) {
+    throw new EasyPostError(
+      `A label can cover one to ${MAX_BOXES} boxes. Check the boxes and try again.`,
+      null,
+      false,
+    );
+  }
   const reference = input.reference?.trim().slice(0, 35) || undefined;
   const confirmation = CONFIRMATION[input.signature ?? "none"];
-  const shipment = await call<RawShipment>(fetchImpl, key, "POST", "/shipments", {
-    shipment: {
+  const options = {
+    label_format: "PNG",
+    label_size: "4x6",
+    ...(reference ? { print_custom_1: reference } : {}),
+    ...(confirmation ? { delivery_confirmation: confirmation } : {}),
+  };
+  const none = () =>
+    new EasyPostError("EasyPost didn't send any rates back. Try again.", null, false);
+
+  if (parcels.length === 1) {
+    const shipment = await call<RawShipment>(fetchImpl, key, "POST", "/shipments", {
+      shipment: {
+        to_address: address(input.to),
+        from_address: address(input.from),
+        parcel: parcelBody(parcels[0]),
+        options,
+        reference,
+      },
+    });
+    const shipmentId = text(shipment.id);
+    if (!shipmentId) throw none();
+    return {
+      shipmentId,
+      kind: "shipment",
+      boxes: 1,
+      mode: modeOf(shipment.mode),
+      rates: normalizeRates(shipment.rates),
+    };
+  }
+
+  const order = await call<RawOrder>(fetchImpl, key, "POST", "/orders", {
+    order: {
       to_address: address(input.to),
       from_address: address(input.from),
-      parcel: {
-        length: input.parcel.length,
-        width: input.parcel.width,
-        height: input.parcel.height,
-        // Ounces, to one decimal place.
-        weight: Math.max(1, Math.round(input.parcel.weightTenthOz)) / 10,
-      },
-      options: {
-        label_format: "PNG",
-        label_size: "4x6",
-        ...(reference ? { print_custom_1: reference } : {}),
-        ...(confirmation ? { delivery_confirmation: confirmation } : {}),
-      },
       reference,
+      options,
+      // Each box carries the options too, so every label prints the same way.
+      shipments: parcels.map((parcel) => ({ parcel: parcelBody(parcel), options })),
     },
   });
-  const shipmentId = text(shipment.id);
-  if (!shipmentId) {
-    throw new EasyPostError("EasyPost didn't send any rates back. Try again.", null, false);
-  }
-  return { shipmentId, mode: modeOf(shipment.mode), rates: normalizeRates(shipment.rates) };
+  const orderId = text(order.id);
+  if (!orderId) throw none();
+  const first = Array.isArray(order.shipments) ? (order.shipments[0] as RawShipment) : undefined;
+  return {
+    shipmentId: orderId,
+    kind: "order",
+    boxes: parcels.length,
+    mode: modeOf(order.mode) ?? modeOf(first?.mode),
+    rates: normalizeOrderRates(orderId, order.rates),
+  };
 }
 
 export type AddressCheck = {
@@ -575,6 +696,8 @@ export async function verifyAddress(
   return readAddressCheck(to, raw);
 }
 
+const httpsOnly = (url: string) => (url.startsWith("https://") ? url : null);
+
 function boughtFrom(shipment: RawShipment): BoughtLabel | null {
   const trackingCode = text(shipment.tracking_code);
   const labelUrl = text(shipment.postage_label?.label_url);
@@ -583,16 +706,43 @@ function boughtFrom(shipment: RawShipment): BoughtLabel | null {
   const rawCarrier = text(rate.carrier);
   const service = text(rate.service);
   const cents = priceToCents(rate.rate);
+  const shipmentId = text(shipment.id);
   return {
-    shipmentId: text(shipment.id),
+    shipmentId,
+    kind: "shipment",
     trackingCode,
-    labelUrl: labelUrl.startsWith("https://") ? labelUrl : null,
+    labelUrl: httpsOnly(labelUrl),
+    boxes: [{ shipmentId, trackingCode, labelUrl: httpsOnly(labelUrl) }],
     carrier: rawCarrier ? carrierName(rawCarrier) : "Carrier",
     service,
     name: rawCarrier ? easypostServiceName(rawCarrier, service) : service,
     price: cents === null ? "0.00" : centsToPrice(cents),
     currency: text(rate.currency) || "USD",
     mode: modeOf(shipment.mode) ?? "live",
+  };
+}
+
+/**
+ * A several-box order as one label purchase: every box that has a label, and
+ * what they cost together. Null when no box has one (nothing was bought).
+ */
+function boughtFromOrder(order: RawOrder): BoughtLabel | null {
+  const labels = (Array.isArray(order.shipments) ? (order.shipments as RawShipment[]) : [])
+    .map((shipment) => boughtFrom(shipment ?? {}))
+    .filter((label): label is BoughtLabel => label !== null);
+  if (labels.length === 0) return null;
+  const first = labels[0];
+  const total = labels.reduce(
+    (sum, label) => sum + (priceToCents(label.price) ?? BigInt(0)),
+    BigInt(0),
+  );
+  return {
+    ...first,
+    shipmentId: text(order.id),
+    kind: "order",
+    boxes: labels.map((label) => label.boxes[0]),
+    price: centsToPrice(total),
+    mode: modeOf(order.mode) ?? first.mode,
   };
 }
 
@@ -615,7 +765,43 @@ export async function buyLabel(
     // A 200 with no label: we can't say whether money moved.
     throw new EasyPostError("EasyPost didn't confirm the label.", null, true);
   }
-  return { ...bought, shipmentId: bought.shipmentId || shipmentId };
+  return withId(bought, shipmentId);
+}
+
+/** A label read back from EasyPost, with the id we asked by wherever the reply left it out. */
+const withId = (label: BoughtLabel, id: string): BoughtLabel =>
+  label.kind === "shipment"
+    ? {
+        ...label,
+        shipmentId: label.shipmentId || id,
+        boxes: label.boxes.map((box) => ({ ...box, shipmentId: box.shipmentId || id })),
+      }
+    : { ...label, shipmentId: label.shipmentId || id };
+
+/**
+ * Buys every box of an order under one service, in one call. This spends
+ * money on the account behind the key. The carrier and service are EasyPost's
+ * own codes, as the quote gave them.
+ */
+export async function buyOrder(
+  key: string,
+  orderId: string,
+  choice: { carrierCode: string; service: string },
+  fetchImpl: Fetch = fetch,
+): Promise<BoughtLabel> {
+  if (!choice.carrierCode || !choice.service) {
+    throw new EasyPostError("That rate can't be found. Get rates again.", null, false);
+  }
+  const order = await call<RawOrder>(fetchImpl, key, "POST", `/orders/${idPath(orderId)}/buy`, {
+    carrier: choice.carrierCode,
+    service: choice.service,
+  });
+  const bought = boughtFromOrder(order);
+  if (!bought) {
+    // A 200 with no labels: we can't say whether money moved.
+    throw new EasyPostError("EasyPost didn't confirm the labels.", null, true);
+  }
+  return withId(bought, orderId);
 }
 
 /**
@@ -635,10 +821,30 @@ export async function getShipment(
   );
   const label = boughtFrom(shipment);
   return {
-    label: label ? { ...label, shipmentId: label.shipmentId || shipmentId } : null,
+    label: label ? withId(label, shipmentId) : null,
     refundStatus: text(shipment.refund_status) || null,
   };
 }
+
+/** Looks a several-box order up again: its labels, if they were bought. */
+export async function getOrder(
+  key: string,
+  orderId: string,
+  fetchImpl: Fetch = fetch,
+): Promise<{ label: BoughtLabel | null }> {
+  const order = await call<RawOrder>(fetchImpl, key, "GET", `/orders/${idPath(orderId)}`);
+  const label = boughtFromOrder(order);
+  return { label: label ? withId(label, orderId) : null };
+}
+
+/** What really happened to a purchase, whichever kind it was. */
+export const getPurchase = (
+  key: string,
+  kind: LabelKind,
+  id: string,
+  fetchImpl: Fetch = fetch,
+): Promise<{ label: BoughtLabel | null }> =>
+  kind === "order" ? getOrder(key, id, fetchImpl) : getShipment(key, id, fetchImpl);
 
 /**
  * Asks for the postage back. Refunds aren't instant: the carrier first
@@ -666,6 +872,31 @@ export async function refundLabel(
     }
     throw err;
   }
+}
+
+/**
+ * Asks for the postage back on every box of a purchase. Each box is its own
+ * request, and every one is tried even when an earlier one is refused, so
+ * pressing again only has the refused ones left to do.
+ */
+export async function refundLabels(
+  key: string,
+  shipmentIds: string[],
+  fetchImpl: Fetch = fetch,
+): Promise<{ asked: number; failed: number; error: unknown }> {
+  let asked = 0;
+  let failed = 0;
+  let error: unknown = null;
+  for (const id of shipmentIds) {
+    try {
+      await refundLabel(key, id, fetchImpl);
+      asked += 1;
+    } catch (err) {
+      failed += 1;
+      error ??= err;
+    }
+  }
+  return { asked, failed, error };
 }
 
 /**

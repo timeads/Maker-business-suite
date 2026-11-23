@@ -384,6 +384,8 @@ async function drainShipments(): Promise<number> {
     carrier: string;
     tracking_number: string;
     tracking_url: string | null;
+    tracking_numbers?: string[] | null;
+    tracking_urls?: (string | null)[] | null;
     items: { line_id: string; qty: number }[];
     notify_customer: boolean;
   }[];
@@ -411,6 +413,9 @@ async function drainShipments(): Promise<number> {
         carrier: shipment.carrier,
         trackingNumber: shipment.tracking_number,
         trackingUrl: shipment.tracking_url,
+        // A parcel in several boxes: every tracking number, on the one fulfilment.
+        trackingNumbers: shipment.tracking_numbers ?? undefined,
+        trackingUrls: shipment.tracking_urls ?? undefined,
         items: shipment.items,
         notifyCustomer: shipment.notify_customer,
       });
