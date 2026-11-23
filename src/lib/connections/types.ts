@@ -107,6 +107,12 @@ export type StockItemRow = {
   price: number | null;
 };
 
+export type ProductPhotoRow = {
+  product_external_id: string;
+  image_url: string | null;
+  product_url: string | null;
+};
+
 /** What packing an order needs: who it's for and what is left to send. */
 export type ShippingOrderRow = {
   external_id: string;
@@ -163,6 +169,8 @@ export type SyncStore = {
     orders?: OrderRow[];
   }): Promise<void>;
   upsertStock(items: StockItemRow[]): Promise<void>;
+  /** Each product's main photo and its page in the shop. */
+  setProductPhotos(products: ProductPhotoRow[]): Promise<void>;
   /** Turns orders with workshop dates on them into bookings. Safe to repeat. */
   bookShopOrders(orders: ShopBookingOrder[]): Promise<void>;
   /** For orders already stored with upsertCommerce. */

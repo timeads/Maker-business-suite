@@ -568,3 +568,89 @@ describe("emails", () => {
     expect(await as(alice, "select id from public.emails")).toEqual([]);
   });
 });
+
+describe("product photos from the shop", () => {
+  const as = <T>(user: User, sql: string, params: unknown[] = []) =>
+    asUser(db, user, async (tx) => (await tx.query<T>(sql, params)).rows);
+
+  it("the sync notes each product's photo, and a product's photo is only ever added once", async () => {
+    await service("select public.upsert_stock_items($1, 'shopify', $2::jsonb)", [
+      tenantA,
+      JSON.stringify([
+        { external_id: "pv-1", product_external_id: "700", title: "Wool rug", on_hand: 1 },
+        { external_id: "pv-2", product_external_id: "700", title: "Wool rug", on_hand: 2 },
+      ]),
+    ]);
+    const changed = await service<{ n: number }>(
+      "select public.set_product_photos($1, 'shopify', $2::jsonb) as n",
+      [
+        tenantA,
+        JSON.stringify([
+          {
+            product_external_id: "700",
+            image_url: "https://cdn.shopify.com/rug.jpg",
+            product_url: "javascript:alert(1)",
+          },
+        ]),
+      ],
+    );
+    expect(changed[0].n).toBe(2);
+    const seen = await as<{ image_url: string; product_url: string | null }>(
+      alice,
+      "select image_url, product_url from public.stock_items where product_external_id = '700'",
+    );
+    expect(seen).toEqual([
+      { image_url: "https://cdn.shopify.com/rug.jpg", product_url: null },
+      { image_url: "https://cdn.shopify.com/rug.jpg", product_url: null },
+    ]);
+    // The same product numbers in another workspace are untouched.
+    expect(
+      (
+        await service<{ n: number }>(
+          "select public.set_product_photos($1, 'shopify', $2::jsonb) as n",
+          [
+            tenantB,
+            JSON.stringify([
+              { product_external_id: "700", image_url: "https://cdn.shopify.com/x.jpg" },
+            ]),
+          ],
+        )
+      )[0].n,
+    ).toBe(0);
+
+    const add = (tenant: string, name: string) =>
+      service<{ id: string | null }>(
+        "select public.register_product_photo($1, $2, 'image/jpeg', 2000, null, 'Wool rug', $3, 'shopify:product:700') as id",
+        [tenant, `${tenant}/${name}.jpg`, ["Product", "Wool", "bad tag!!"]],
+      ).then((rows) => rows[0].id);
+    const first = await add(tenantA, "prod-1");
+    expect(first).toMatch(/^[0-9a-f-]{36}$/);
+    expect(await add(tenantA, "prod-2")).toBeNull();
+    // Another workspace selling the same product keeps its own copy.
+    expect(await add(tenantB, "prod-1")).toMatch(/^[0-9a-f-]{36}$/);
+    const tagged = await as<{ tags: string[]; source_ref: string }>(
+      alice,
+      "select tags, source_ref from public.social_assets where id = $1",
+      [first],
+    );
+    expect([...tagged[0].tags].sort()).toEqual(["product", "wool"]);
+    expect(await as(bob, "select id from public.social_assets where id = $1", [first])).toEqual([]);
+
+    await expect(
+      as(alice, "select public.set_product_photos($1, 'shopify', '[]'::jsonb)", [tenantA]),
+    ).rejects.toThrow(/permission denied/);
+    await expect(
+      as(
+        alice,
+        "select public.register_product_photo($1, $2, 'image/jpeg', 1, null, 'x', '{}', 'r')",
+        [tenantA, `${tenantA}/sneak.jpg`],
+      ),
+    ).rejects.toThrow(/permission denied/);
+    await expect(
+      service(
+        "select public.register_product_photo($1, $2, 'image/jpeg', 1, null, 'x', '{}', 'r2')",
+        [tenantA, `${tenantB}/wrong-folder.jpg`],
+      ),
+    ).rejects.toThrow(/Bad path/);
+  });
+});

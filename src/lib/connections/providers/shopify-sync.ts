@@ -1,6 +1,7 @@
 import type {
   CustomerRow,
   OrderRow,
+  ProductPhotoRow,
   ProductRow,
   ShippingOrderRow,
   ShopBookingOrder,
@@ -421,6 +422,84 @@ export function mapShopifyVariants(variants: ShopifyVariant[]): StockItemRow[] {
  * Reads what the shop has on the shelf. Only ever reads: the count in the
  * shop changes when someone checks a delivery in, never during a sync.
  */
+type ShopifyProductPhoto = {
+  legacyResourceId: string;
+  onlineStoreUrl?: string | null;
+  featuredMedia?: { preview?: { image?: { url?: string | null } | null } | null } | null;
+  featuredImage?: { url?: string | null } | null;
+};
+
+// Two spellings of "the product's main photo": the current one, and the one
+// older shops' API versions still answer to.
+const productPhotosQuery = (
+  current: boolean,
+) => `query ProductPhotos($first: Int!, $after: String) {
+  products(first: $first, after: $after) {
+    pageInfo { hasNextPage endCursor }
+    nodes {
+      legacyResourceId onlineStoreUrl
+      ${current ? "featuredMedia { preview { image { url } } }" : "featuredImage { url }"}
+    }
+  }
+}`;
+
+const https = (value: string | null | undefined) =>
+  typeof value === "string" && value.startsWith("https://") ? value : null;
+
+export function mapProductPhotos(products: ShopifyProductPhoto[]): ProductPhotoRow[] {
+  return products.map((product) => ({
+    product_external_id: product.legacyResourceId,
+    image_url: https(product.featuredMedia?.preview?.image?.url ?? product.featuredImage?.url),
+    product_url: https(product.onlineStoreUrl),
+  }));
+}
+
+/**
+ * Notes each product's main photo and shop page. Never allowed to stop a
+ * sync: the stock count matters more than the pictures. Returns the calls made.
+ */
+async function pullProductPhotos(ctx: SyncContext, graphql: ShopifyGraphql): Promise<number> {
+  let calls = 0;
+  let current = true;
+  let after: string | null = null;
+  try {
+    for (let page = 0; page < PAGES_PER_RUN; page++) {
+      type Page = {
+        products: {
+          pageInfo: { hasNextPage: boolean; endCursor: string | null };
+          nodes: ShopifyProductPhoto[];
+        };
+      };
+      let data: Page;
+      const ask = (spelling: boolean) =>
+        graphql<Page>(ctx.externalAccountId, ctx.token, productPhotosQuery(spelling), {
+          first: 100,
+          after,
+        });
+      try {
+        calls += 1;
+        data = await ask(current);
+      } catch (err) {
+        if (err instanceof ReconnectRequiredError || !current) throw err;
+        current = false;
+        calls += 1;
+        data = await ask(false);
+      }
+      if (data.products.nodes.length > 0) {
+        await ctx.store.setProductPhotos(mapProductPhotos(data.products.nodes));
+      }
+      if (!data.products.pageInfo.hasNextPage) break;
+      after = data.products.pageInfo.endCursor;
+    }
+  } catch (err) {
+    console.warn(
+      `product photos unavailable for ${ctx.externalAccountId}:`,
+      err instanceof Error ? err.message : err,
+    );
+  }
+  return calls;
+}
+
 async function pullStock(
   ctx: SyncContext,
   graphql: ShopifyGraphql,
@@ -441,6 +520,7 @@ async function pullStock(
       await ctx.store.upsertStock(mapShopifyVariants(data.productVariants.nodes));
     }
     if (!data.productVariants.pageInfo.hasNextPage) {
+      calls += await pullProductPhotos(ctx, graphql);
       await ctx.store.recordUsage(calls);
       return { cursor: { synced_through: startedAt } };
     }

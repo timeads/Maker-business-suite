@@ -244,8 +244,12 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   kit and the app's own fonts) and uploaded as ordinary assets with their
   design kept beside them (`social_assets.design`) so they can be reopened.
   Photos are matched to drafts by asset tags (`lib/social/photo-match.ts`);
-  `logo` and `logo-light` tags are the email logo. Nothing is ever fetched
-  from a web address. Not built yet: live link checking.
+  `logo` and `logo-light` tags are the email logo. The one thing the server fetches is a
+  product's main photo, whose address the shop sync gave us, and only from
+  the shop platform's image servers (`shopPhotoAddress()` in
+  `lib/social/product-photos.ts`); a person copies those into Assets from
+  the Assets page, once per product (`source_ref`). Nothing a person types
+  is ever fetched. Not built yet: live link checking.
 - Schema changes are new files in `supabase/migrations`; never edit an
   applied migration.
 - Look: the "Tuft Life" house style (see the tuft-ui repo's DESIGN.md). Teal

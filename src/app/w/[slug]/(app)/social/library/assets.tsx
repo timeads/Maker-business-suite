@@ -16,6 +16,7 @@ import { getBrowserClient } from "@/lib/supabase/browser";
 import { cn } from "@/lib/utils";
 import {
   finishUpload,
+  importProductPhotos,
   listDesignPhotos,
   loadAssetDesign,
   removeFolder,
@@ -539,6 +540,40 @@ export function EditDesign({
           onSave={save}
         />
       )}
+    </div>
+  );
+}
+
+/** Copies product photos from the connected shop into the library, a batch at a time. */
+export function ProductPhotosButton({ slug }: { slug: string }) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const [note, setNote] = useState<{ kind: "error" | "success"; text: string } | null>(null);
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={pending}
+        onClick={() =>
+          start(async () => {
+            const result = await importProductPhotos(slug);
+            if ("error" in result) return setNote({ kind: "error", text: result.error });
+            setNote({
+              kind: "success",
+              text:
+                result.added === 0 && result.left === 0
+                  ? "Every product photo is already here."
+                  : `${result.added} product ${result.added === 1 ? "photo" : "photos"} added, tagged "product".${result.left > 0 ? ` ${result.left} more to go: press again.` : ""}`,
+            });
+            router.refresh();
+          })
+        }
+      >
+        {pending ? "Bringing them in…" : "Bring in product photos from your shop"}
+      </Button>
+      {note && <FormMessage kind={note.kind}>{note.text}</FormMessage>}
     </div>
   );
 }

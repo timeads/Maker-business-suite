@@ -147,6 +147,8 @@ describe("Shopify sync", () => {
   function pagedGraphql(pages: Page[], stockPages: Page[] = []) {
     const calls: { query: string; variables: Record<string, unknown> }[] = [];
     const stockCalls: Record<string, unknown>[] = [];
+    const photoCalls: string[] = [];
+    let photoRefusals = 0;
     const shippingCalls: Record<string, unknown>[] = [];
     const shippingQueries: string[] = [];
     let shippingFails = false;
@@ -222,6 +224,32 @@ describe("Shopify sync", () => {
       if (query.includes("ordersCount")) {
         return { all: { count: 0 }, window: { count: 0 } };
       }
+      if (query.includes("ProductPhotos")) {
+        photoCalls.push(query);
+        if (photoRefusals > 0 && query.includes("featuredMedia")) {
+          photoRefusals -= 1;
+          throw new Error("Field 'featuredMedia' doesn't exist");
+        }
+        return {
+          products: {
+            nodes: [
+              {
+                legacyResourceId: "900",
+                onlineStoreUrl: "https://shop.example/products/rug",
+                ...(query.includes("featuredMedia")
+                  ? {
+                      featuredMedia: {
+                        preview: { image: { url: "https://cdn.shopify.com/a.jpg" } },
+                      },
+                    }
+                  : { featuredImage: { url: "https://cdn.shopify.com/old.jpg" } }),
+              },
+              { legacyResourceId: "901", onlineStoreUrl: null, featuredMedia: null },
+            ],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        };
+      }
       if (query.includes("productVariants")) {
         stockCalls.push((variables ?? {}) as Record<string, unknown>);
         const page = stockPages[Math.min(stockCalls.length - 1, stockPages.length - 1)] ?? {
@@ -249,6 +277,10 @@ describe("Shopify sync", () => {
       graphql,
       calls,
       stockCalls,
+      photoCalls,
+      refusePhotosOnce() {
+        photoRefusals = 1;
+      },
       shippingCalls,
       shippingQueries,
       denyShipping: () => {
@@ -426,7 +458,7 @@ describe("Shopify sync", () => {
     });
     expect(net.calls[1].variables).toMatchObject({ after: "c1" });
     expect(result).toEqual({ cursor: { synced_through: NOW.toISOString() } });
-    expect(state.usage).toBe(5);
+    expect(state.usage).toBe(6);
   });
 
   it("a later sync only asks for what changed since the last one finished", async () => {
@@ -437,6 +469,28 @@ describe("Shopify sync", () => {
     });
     await syncShopify(ctx, net.graphql, NOW);
     expect(net.calls[0].variables.query).toBe("updated_at:>=2026-11-20T00:00:00Z status:any");
+  });
+
+  it("notes each product's main photo, and falls back to the older spelling without failing the sync", async () => {
+    const net = pagedGraphql([{ nodes: [], hasNextPage: false, endCursor: null }]);
+    const { ctx, state } = context({ type: "full" });
+    await syncShopify(ctx, net.graphql, NOW);
+    expect(state.productPhotos).toEqual([
+      {
+        product_external_id: "900",
+        image_url: "https://cdn.shopify.com/a.jpg",
+        product_url: "https://shop.example/products/rug",
+      },
+      { product_external_id: "901", image_url: null, product_url: null },
+    ]);
+
+    const older = pagedGraphql([{ nodes: [], hasNextPage: false, endCursor: null }]);
+    older.refusePhotosOnce();
+    const second = context({ type: "full" });
+    const result = await syncShopify(second.ctx, older.graphql, NOW);
+    expect(older.photoCalls).toHaveLength(2);
+    expect(second.state.productPhotos[0].image_url).toBe("https://cdn.shopify.com/old.jpg");
+    expect(result).toEqual({ cursor: { synced_through: NOW.toISOString() } });
   });
 
   it("a very long sync stops after a batch of pages and asks to be continued", async () => {

@@ -11,7 +11,15 @@ import { PhotoForm } from "../forms";
 import { socialAccess } from "../gate";
 import { loadDesignKit } from "../shared";
 import { SocialTabs } from "../tabs";
-import { AssetGrid, EditDesign, Folders, FolderTools, Uploader, type Asset } from "./assets";
+import {
+  AssetGrid,
+  EditDesign,
+  Folders,
+  FolderTools,
+  ProductPhotosButton,
+  Uploader,
+  type Asset,
+} from "./assets";
 
 export const metadata: Metadata = { title: "Assets" };
 
@@ -80,6 +88,11 @@ export default async function SocialAssetsPage({
       .order("name"),
     loadDesignKit(supabase, tenant.id),
   ]);
+  const { count: shopPhotos } = await supabase
+    .from("stock_items")
+    .select("id", { count: "exact", head: true })
+    .eq("tenant_id", tenant.id)
+    .not("image_url", "is", null);
   const all = (data ?? []) as unknown as Row[];
   const projects = (projectRows ?? []) as { id: string; name: string }[];
   const folders = ((folderRows ?? []) as { id: string; name: string }[]).map((folder) => ({
@@ -169,6 +182,9 @@ export default async function SocialAssetsPage({
       )}
 
       {entitlements.canWrite && !putAway && <Uploader slug={tenant.slug} folder={folder} />}
+      {entitlements.canWrite && !putAway && !folder && (shopPhotos ?? 0) > 0 && (
+        <ProductPhotosButton slug={tenant.slug} />
+      )}
 
       <div className="flex flex-wrap items-center gap-2">
         <form action={base} className="flex items-center gap-2">

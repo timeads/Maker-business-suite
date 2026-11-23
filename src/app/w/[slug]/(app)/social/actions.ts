@@ -10,6 +10,7 @@ import { BRAND_MODULE, KIT_KEY, brandBrief, parseBrandKit } from "@/lib/brand/ki
 import { BANNER_TAG, MAX_DESIGN_SLIDES, ownDesign } from "@/lib/brand/slides";
 import type { SlideDesign } from "@/lib/design/slide-design";
 import { draftCaption } from "@/lib/social/caption";
+import { productPhotoTags, productSourceRef, shopPhotoAddress } from "@/lib/social/product-photos";
 import { LOGO_LIGHT_TAG, LOGO_TAG, pickPhoto, type TaggedAsset } from "@/lib/social/photo-match";
 import {
   LINKS_KEY,
@@ -1001,4 +1002,94 @@ export async function sortAssets(
   if (error) return { error: OOPS };
   done(slug);
   return { changed: Number(data ?? 0) };
+}
+
+// ---------------------------------------------------------------------------
+// Product photos from the shop
+// ---------------------------------------------------------------------------
+
+const PHOTOS_PER_RUN = 30;
+
+/**
+ * Copies each product's main photo from the shop into Assets, tagged with
+ * "product" and the words of its name, so posts and emails can pick it up.
+ * A product already brought in is skipped; a few at a time, so it can be
+ * pressed again for the rest.
+ */
+export async function importProductPhotos(
+  slug: string,
+): Promise<{ added: number; left: number } | { error: string }> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: String(ctx.error) };
+  if (!process.env.SUPABASE_SECRET_KEY) {
+    return { error: "Uploads aren't switched on for this environment yet." };
+  }
+  const { data: items, error } = await ctx.supabase
+    .from("stock_items")
+    .select("provider, product_external_id, title, image_url")
+    .eq("tenant_id", ctx.tenant.id)
+    .not("image_url", "is", null)
+    .not("product_external_id", "is", null)
+    .order("title")
+    .limit(1000);
+  if (error) return { error: OOPS };
+  // One photo per product, however many sizes or colours it comes in.
+  const products = new Map<string, { title: string; address: string }>();
+  for (const item of items ?? []) {
+    const ref = productSourceRef(String(item.provider), String(item.product_external_id));
+    const address = shopPhotoAddress(item.image_url as string);
+    if (address && !products.has(ref)) products.set(ref, { title: String(item.title), address });
+  }
+  if (products.size === 0) {
+    return {
+      error: "Your shop hasn't shared any product photos yet. They arrive with the next sync.",
+    };
+  }
+  const { data: have } = await ctx.supabase
+    .from("social_assets")
+    .select("source_ref")
+    .eq("tenant_id", ctx.tenant.id)
+    .not("source_ref", "is", null)
+    .limit(1000);
+  const already = new Set((have ?? []).map((row) => row.source_ref as string));
+  const todo = [...products].filter(([ref]) => !already.has(ref));
+
+  const admin = getAdminClient();
+  let added = 0;
+  for (const [ref, product] of todo.slice(0, PHOTOS_PER_RUN)) {
+    try {
+      // `redirect: "error"`: the address was checked, and it must be the one fetched.
+      const response = await fetch(product.address, {
+        redirect: "error",
+        signal: AbortSignal.timeout(15_000),
+        headers: { Accept: "image/jpeg,image/png" },
+      });
+      const type = (response.headers.get("content-type") ?? "").split(";")[0].trim();
+      if (!response.ok || (type !== "image/jpeg" && type !== "image/png")) continue;
+      const bytes = Buffer.from(await response.arrayBuffer());
+      if (bytes.length === 0 || bytes.length > 8 * 1024 * 1024) continue;
+      const path = `${ctx.tenant.id}/${randomUUID()}.${type === "image/png" ? "png" : "jpg"}`;
+      const { error: uploadError } = await admin.storage
+        .from("social")
+        .upload(path, bytes, { contentType: type });
+      if (uploadError) continue;
+      const { data: id, error: registerError } = await admin.rpc("register_product_photo", {
+        p_tenant_id: ctx.tenant.id,
+        p_storage_path: path,
+        p_mime_type: type,
+        p_bytes: bytes.length,
+        p_created_by: ctx.user.id,
+        p_title: product.title.slice(0, 120),
+        p_tags: productPhotoTags(product.title),
+        p_source_ref: ref,
+      });
+      // Already there (someone pressed at the same moment), or it failed: don't keep the copy.
+      if (registerError || !id) await admin.storage.from("social").remove([path]);
+      else added += 1;
+    } catch (err) {
+      console.error(`Product photo skipped: ${err instanceof Error ? err.message : "unknown"}`);
+    }
+  }
+  done(slug);
+  return { added, left: Math.max(0, todo.length - PHOTOS_PER_RUN) };
 }
