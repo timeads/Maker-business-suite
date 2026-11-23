@@ -49,27 +49,31 @@ async function send(post: DuePost, deps: SocialWorkerDeps): Promise<PublishOutco
   }
   // Posts saved before several photos were possible only have the one.
   const assetIds = post.asset_ids?.length ? post.asset_ids : post.asset_id ? [post.asset_id] : [];
-  const { instagramId, storagePaths } = await withTenant(
+  const { instagramId, storagePaths, videoPath } = await withTenant(
     post.tenant_id,
     async (scope) => {
       const [{ data: connection }, { data: assets }] = await Promise.all([
         scope.select("connections", "metadata").eq("provider", "meta").maybeSingle(),
         assetIds.length
-          ? scope.select("social_assets", "id, storage_path").in("id", assetIds)
+          ? scope.select("social_assets", "id, storage_path, mime_type").in("id", assetIds)
           : Promise.resolve({ data: [] }),
       ]);
-      const paths = new Map(
-        ((assets ?? []) as unknown as { id: string; storage_path: string }[]).map((asset) => [
-          asset.id,
-          asset.storage_path,
-        ]),
-      );
+      const rows = (assets ?? []) as unknown as {
+        id: string;
+        storage_path: string;
+        mime_type: string;
+      }[];
+      const paths = new Map(rows.map((asset) => [asset.id, asset.storage_path]));
+      const video = rows.find((asset) => asset.mime_type.startsWith("video/"));
       return {
         instagramId:
           (connection as { metadata?: { instagram_id?: string | null } } | null)?.metadata
             ?.instagram_id ?? null,
         // In the order the person arranged them.
-        storagePaths: assetIds.flatMap((id) => (paths.has(id) ? [paths.get(id)!] : [])),
+        storagePaths: video
+          ? []
+          : assetIds.flatMap((id) => (paths.has(id) ? [paths.get(id)!] : [])),
+        videoPath: video?.storage_path ?? null,
       };
     },
     deps.admin,
@@ -78,6 +82,7 @@ async function send(post: DuePost, deps: SocialWorkerDeps): Promise<PublishOutco
     caption: post.caption,
     captions: post.captions ?? {},
     imageUrls: storagePaths.map(publicAssetUrl),
+    videoUrl: videoPath ? publicAssetUrl(videoPath) : null,
     channels: post.channels,
     alreadySent: post.channels.filter((c) => "id" in (post.results[c] ?? {})),
     pageId: stored.externalAccountId,

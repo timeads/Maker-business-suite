@@ -11,6 +11,8 @@ export type PublishInput = {
   captions?: Partial<Record<Channel, string>>;
   /** Public addresses the photos can be fetched from, in order. Empty for words alone. */
   imageUrls: string[];
+  /** A video to post instead of photos. It goes out as a Reel on Instagram. */
+  videoUrl?: string | null;
   channels: Channel[];
   /** Channels that already went out on an earlier try; never sent again. */
   alreadySent: Channel[];
@@ -50,8 +52,8 @@ export async function publishPost(
   const photos = input.imageUrls.slice(0, 10);
 
   /** Waits for Instagram to finish fetching whatever a container points at. */
-  const ready = async (containerId: string) => {
-    for (let attempt = 0; attempt < 5; attempt++) {
+  const ready = async (containerId: string, tries = 5, gap = 2_000) => {
+    for (let attempt = 0; attempt < tries; attempt++) {
       const status = await requestJson<{ status_code?: string }>(
         fetchImpl,
         "Meta",
@@ -59,15 +61,29 @@ export async function publishPost(
         { headers: { Authorization: `Bearer ${input.pageToken}` } },
       );
       if (status.status_code === "ERROR") {
-        throw new PermanentError("Instagram couldn't use that photo");
+        throw new PermanentError(
+          input.videoUrl
+            ? "Instagram couldn't use that video. Reels need an MP4 or MOV between 3 seconds and 15 minutes"
+            : "Instagram couldn't use that photo",
+        );
       }
-      if (status.status_code !== "IN_PROGRESS") return;
-      await wait(2_000);
+      if (status.status_code !== "IN_PROGRESS") return true;
+      await wait(gap);
     }
+    return false;
   };
 
   const senders: Record<Channel, () => Promise<string>> = {
     async facebook() {
+      if (input.videoUrl) {
+        // Facebook fetches the file itself and finishes preparing it after it answers.
+        return (
+          await post<{ id: string }>(`/${input.pageId}/videos`, {
+            file_url: input.videoUrl,
+            description: words("facebook"),
+          })
+        ).id;
+      }
       if (photos.length === 1) {
         const photo = await post<{ id: string; post_id?: string }>(`/${input.pageId}/photos`, {
           url: photos[0],
@@ -99,7 +115,23 @@ export async function publishPost(
       if (!input.instagramId) {
         throw new PermanentError("No Instagram account is linked to this Facebook Page");
       }
-      if (photos.length === 0) throw new PermanentError("Instagram posts need a photo");
+      if (input.videoUrl) {
+        const reel = await post<{ id: string }>(`/${input.instagramId}/media`, {
+          media_type: "REELS",
+          video_url: input.videoUrl,
+          caption: words("instagram"),
+        });
+        // A video takes Instagram a while to prepare: up to about four minutes here.
+        if (!(await ready(reel.id, 48, 5_000))) {
+          throw new Error("Instagram is still preparing the video. We'll try again shortly");
+        }
+        return (
+          await post<{ id: string }>(`/${input.instagramId}/media_publish`, {
+            creation_id: reel.id,
+          })
+        ).id;
+      }
+      if (photos.length === 0) throw new PermanentError("Instagram posts need a photo or a video");
       let container: { id: string };
       if (photos.length === 1) {
         container = await post<{ id: string }>(`/${input.instagramId}/media`, {

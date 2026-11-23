@@ -11,7 +11,7 @@ import { deletePost, draftPostCaption, savePost, type SocialState } from "./acti
 const textarea =
   "border-input bg-card placeholder:text-muted-foreground focus-visible:border-ochre focus-visible:ring-ochre/25 font-read w-full rounded-sm border px-[11px] py-2 text-sm outline-none focus-visible:ring-2";
 
-export type LibraryPhoto = { id: string; url: string; title: string };
+export type LibraryPhoto = { id: string; url: string; title: string; video?: boolean };
 
 export type ComposerPost = {
   id: string;
@@ -74,10 +74,15 @@ export function Composer({
   );
   const connected = facebook !== null;
   const byId = new Map(library.map((photo) => [photo.id, photo]));
+  // A video goes out on its own, so picking one replaces what was picked,
+  // and picking a photo afterwards replaces the video.
   const toggle = (id: string) =>
-    setPicked((now) =>
-      now.includes(id) ? now.filter((x) => x !== id) : now.length < 10 ? [...now, id] : now,
-    );
+    setPicked((now) => {
+      if (now.includes(id)) return now.filter((x) => x !== id);
+      if (byId.get(id)?.video || now.some((x) => byId.get(x)?.video)) return [id];
+      return now.length < 10 ? [...now, id] : now;
+    });
+  const hasVideo = picked.some((id) => byId.get(id)?.video);
   const move = (id: string, by: number) =>
     setPicked((now) => {
       const from = now.indexOf(id);
@@ -154,7 +159,10 @@ export function Composer({
 
       <fieldset className="flex flex-col gap-3">
         <legend className="pb-2 text-xs leading-tight font-semibold">
-          Photos <span className="text-muted-foreground font-normal">({picked.length} of 10)</span>
+          Photos or a video{" "}
+          <span className="text-muted-foreground font-normal">
+            {hasVideo ? "(1 video)" : `(${picked.length} of 10)`}
+          </span>
         </legend>
         {picked.map((id) => (
           <input key={id} type="hidden" name="asset" value={id} />
@@ -165,12 +173,23 @@ export function Composer({
               const photo = byId.get(id);
               return (
                 <li key={id} className="flex w-24 flex-col gap-1">
-                  {/* eslint-disable-next-line @next/next/no-img-element -- a user upload on another host */}
-                  <img
-                    src={photo?.url}
-                    alt={photo?.title || `Photo ${index + 1}`}
-                    className="border-border size-24 rounded-md border object-cover"
-                  />
+                  {photo?.video ? (
+                    <video
+                      src={`${photo.url}#t=0.1`}
+                      preload="metadata"
+                      muted
+                      playsInline
+                      aria-label={photo.title || "Video"}
+                      className="border-border size-24 rounded-md border object-cover"
+                    />
+                  ) : (
+                    // eslint-disable-next-line @next/next/no-img-element -- a user upload on another host
+                    <img
+                      src={photo?.url}
+                      alt={photo?.title || `Photo ${index + 1}`}
+                      className="border-border size-24 rounded-md border object-cover"
+                    />
+                  )}
                   <span className="flex justify-between text-xs">
                     <button
                       type="button"
@@ -206,7 +225,7 @@ export function Composer({
         {library.length > 0 && (
           <details>
             <summary className="text-ochre-text cursor-pointer text-sm font-medium">
-              Pick from your photos
+              Pick from your assets
             </summary>
             <div className="mt-3 grid max-h-72 grid-cols-4 gap-2 overflow-y-auto sm:grid-cols-6 md:grid-cols-8">
               {library.map((photo) => (
@@ -215,19 +234,34 @@ export function Composer({
                   type="button"
                   onClick={() => toggle(photo.id)}
                   aria-pressed={picked.includes(photo.id)}
-                  aria-label={photo.title || "Photo"}
+                  aria-label={photo.title || (photo.video ? "Video" : "Photo")}
                   className={cn(
-                    "overflow-hidden rounded-md border-2",
+                    "relative overflow-hidden rounded-md border-2",
                     picked.includes(photo.id) ? "border-ochre" : "border-transparent",
                   )}
                 >
-                  {/* eslint-disable-next-line @next/next/no-img-element -- a user upload on another host */}
-                  <img
-                    src={photo.url}
-                    alt=""
-                    loading="lazy"
-                    className="aspect-square w-full object-cover"
-                  />
+                  {photo.video ? (
+                    <>
+                      <video
+                        src={`${photo.url}#t=0.1`}
+                        preload="metadata"
+                        muted
+                        playsInline
+                        className="aspect-square w-full object-cover"
+                      />
+                      <span className="absolute top-0.5 right-0.5 rounded-sm bg-black/65 px-1 text-[10px] font-semibold text-white">
+                        Video
+                      </span>
+                    </>
+                  ) : (
+                    // eslint-disable-next-line @next/next/no-img-element -- a user upload on another host
+                    <img
+                      src={photo.url}
+                      alt=""
+                      loading="lazy"
+                      className="aspect-square w-full object-cover"
+                    />
+                  )}
                 </button>
               ))}
             </div>
@@ -245,7 +279,8 @@ export function Composer({
           />
           <p className="text-muted-foreground text-xs">
             JPEG or PNG, up to 5 MB each. Instagram needs JPEGs. Several photos become one
-            swipe-through post.
+            swipe-through post. For a video, add it under Assets first, then pick it here; it goes
+            out on its own, as a Reel on Instagram.
           </p>
         </div>
       </fieldset>

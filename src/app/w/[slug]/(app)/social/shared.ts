@@ -59,16 +59,15 @@ export async function composerChoices(supabase: Supabase, tenantId: string, also
     await Promise.all([
       supabase
         .from("social_assets")
-        .select("id, storage_path, title")
+        .select("id, storage_path, title, mime_type")
         .eq("tenant_id", tenantId)
         .eq("hidden", false)
-        .like("mime_type", "image/%")
         .order("created_at", { ascending: false })
         .limit(64),
       alsoPhotos.length
         ? supabase
             .from("social_assets")
-            .select("id, storage_path, title")
+            .select("id, storage_path, title, mime_type")
             .eq("tenant_id", tenantId)
             .in("id", alsoPhotos)
         : Promise.resolve({ data: [] }),
@@ -94,6 +93,7 @@ export async function composerChoices(supabase: Supabase, tenantId: string, also
       id: photo.id as string,
       url: publicAssetUrl(photo.storage_path as string),
       title: (photo.title as string) ?? "",
+      video: String(photo.mime_type ?? "").startsWith("video/"),
     }));
   const plan = parsePlan(planRow?.body);
   return {

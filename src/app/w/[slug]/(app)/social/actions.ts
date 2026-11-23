@@ -38,7 +38,7 @@ const SAVE_ERRORS: Record<string, string> = {
   locked: "This post has already gone out, so it can't be changed.",
   too_many_photos: "A post can have up to 10 photos.",
   caption_too_long: "Captions can be up to 2,200 characters.",
-  video_not_yet: "Videos can't go on a post just yet. Pick photos for now.",
+  video_alone: "A video goes out on its own. Take the photos off, or post them separately.",
 };
 
 type Ctx = Exclude<Awaited<ReturnType<typeof context>>, { error: string }>;

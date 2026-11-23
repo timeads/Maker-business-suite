@@ -166,6 +166,57 @@ describe("publishPost", () => {
     expect(carousel.get("caption")).toBe("Studio day #tufting");
   });
 
+  it("posts a video to the Page and as a Reel, waiting while Instagram prepares it", async () => {
+    let checks = 0;
+    const { impl, calls } = fakeFetch([
+      ["/p2/videos", 200, { id: "vid1" }],
+      ["/ig9/media_publish", 200, { id: "reel_post" }],
+      ["/ig9/media", 200, { id: "reel1" }],
+    ]);
+    const withStatus = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("/reel1")) {
+        checks += 1;
+        return new Response(
+          JSON.stringify({ status_code: checks < 3 ? "IN_PROGRESS" : "FINISHED" }),
+        );
+      }
+      return impl(input, init);
+    }) as Fetch;
+    const video = { ...base, imageUrls: [], videoUrl: "https://files.test/clip.mp4" };
+    const outcome = await publishPost(video, withStatus, noWait);
+    expect(outcome.results).toEqual({ facebook: { id: "vid1" }, instagram: { id: "reel_post" } });
+    expect(checks).toBe(3);
+    expect(calls[0].body).toContain("file_url=https%3A%2F%2Ffiles.test%2Fclip.mp4");
+    expect(calls[0].body).toContain("description=New+rugs+just+landed");
+    expect(calls[1].body).toContain("media_type=REELS");
+    expect(calls[1].body).toContain("video_url=https%3A%2F%2Ffiles.test%2Fclip.mp4");
+  });
+
+  it("tries a video again later when Instagram is slow, and gives up when it refuses it", async () => {
+    const video = {
+      ...base,
+      channels: ["instagram" as const],
+      imageUrls: [],
+      videoUrl: "https://files.test/clip.mp4",
+    };
+    const slow = fakeFetch([
+      ["/ig9/media", 200, { id: "reel1" }],
+      ["/reel1", 200, { status_code: "IN_PROGRESS" }],
+    ]);
+    const waiting = await publishPost(video, slow.impl, noWait);
+    expect(waiting.retry).toBe(true);
+    expect(waiting.results.instagram).toMatchObject({ error: expect.stringMatching(/preparing/) });
+    expect(slow.calls.some((c) => c.url.includes("media_publish"))).toBe(false);
+
+    const refused = fakeFetch([
+      ["/ig9/media", 200, { id: "reel1" }],
+      ["/reel1", 200, { status_code: "ERROR" }],
+    ]);
+    const outcome = await publishPost(video, refused.impl, noWait);
+    expect(outcome.retry).toBe(false);
+    expect(outcome.results.instagram).toMatchObject({ error: expect.stringMatching(/video/) });
+  });
+
   it("posts words alone to the Page feed", async () => {
     const { impl, calls } = fakeFetch([["/p2/feed", 200, { id: "p2_78" }]]);
     const outcome = await publishPost(

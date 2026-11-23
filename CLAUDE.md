@@ -126,8 +126,10 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   sends a file straight to storage with a one-time link from `startUpload`;
   `finishUpload` then checks what really arrived (type, size, path) before
   it is registered, so nothing is trusted from the browser. Folders are one
-  level (`social_folders`). A post can't carry a video yet
-  (`social_posts_photos_only` trigger) because video publishing isn't built. Caption drafts land
+  level (`social_folders`). A post carries photos or one video on
+  its own (`social_posts_photos_only` trigger); the video goes to the Page's
+  videos and to Instagram as a Reel, and a Reel still being prepared is
+  retried rather than failed. Caption drafts land
   in the caption box and are never scheduled or posted automatically.
   Posts are saved through `save_social_post_full` (up to ten photos in
   order, a caption per channel only where it differs, project, topic); it

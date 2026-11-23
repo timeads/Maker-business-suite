@@ -426,8 +426,10 @@ describe("library, projects and posts with several photos", () => {
       ]),
     ).rejects.toThrow(/mime_type/);
 
-    // A video can't ride on a post until video posting exists.
-    await expect(full(alice, tenantA, [clip])).rejects.toThrow(/video_not_yet/);
+    // A video goes out on its own, never beside photos.
+    await expect(full(alice, tenantA, [clip, still])).rejects.toThrow(/video_alone/);
+    await expect(full(alice, tenantA, [still, clip])).rejects.toThrow(/video_alone/);
+    expect(await full(alice, tenantA, [clip])).toMatch(/^[0-9a-f-]{36}$/);
 
     // Removing a folder keeps what was in it.
     await as(alice, "select public.remove_social_folder($1, $2)", [tenantA, folder]);
