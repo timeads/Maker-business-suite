@@ -19,11 +19,11 @@ export async function getLabelKey(
   return { key, connectionId: stored.connectionId };
 }
 
-/** EasyPost turned the key down: show the connection as needing a new one. */
-export async function flagLabelKey(connectionId: string): Promise<void> {
+/** A source turned the key down: show the connection as needing a new one. */
+export async function flagLabelKey(connectionId: string, name = "EasyPost"): Promise<void> {
   try {
-    await vaultTokenStore().markNeedsReconnect(connectionId, "EasyPost didn't accept the API key");
+    await vaultTokenStore().markNeedsReconnect(connectionId, `${name} didn't accept the API key`);
   } catch (err) {
-    console.error("could not flag easypost connection", err instanceof Error ? err.message : err);
+    console.error("could not flag label connection", err instanceof Error ? err.message : err);
   }
 }

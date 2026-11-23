@@ -471,7 +471,11 @@ export async function buyRedo(
     carrierCode: bought[0]?.carrier || choice.carrierCode,
     service: bought[0]?.service || choice.service,
     boxes: bought.flatMap((made) =>
-      (Array.isArray(made.shipmentPackages) ? made.shipmentPackages : []).map((box) => ({
+      // A shipment that lists no packages is still one paid-for box.
+      (Array.isArray(made.shipmentPackages) && made.shipmentPackages.length > 0
+        ? made.shipmentPackages
+        : [{ trackingNumber: null, labelUrl: null }]
+      ).map((box) => ({
         shipmentId: made.shipmentId,
         trackingNumber: typeof box?.trackingNumber === "string" ? box.trackingNumber : "",
         labelUrl:

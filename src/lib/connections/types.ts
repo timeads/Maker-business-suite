@@ -1,4 +1,11 @@
-export type ProviderKey = "shopify" | "quickbooks" | "stripe" | "meta" | "easypost";
+export type ProviderKey =
+  | "shopify"
+  | "quickbooks"
+  | "stripe"
+  | "meta"
+  | "easypost"
+  | "ups"
+  | "redo";
 
 export type ConnectionStatus = "active" | "needs_reconnect" | "disconnected";
 
@@ -9,6 +16,12 @@ export type TokenSet = {
   /** Epoch milliseconds; absent for tokens that don't expire. */
   expires_at?: number;
   refresh_expires_at?: number;
+  /**
+   * For a connection made of several typed-in keys (UPS's client id, secret
+   * and account number): the parts beside the token, by name. Kept in Vault
+   * with the rest, and just as secret.
+   */
+  secrets?: Record<string, string>;
 };
 
 export type ConnectedAccount = {
@@ -240,6 +253,8 @@ export interface ProviderAdapter {
     help?: string;
     /** Typed into a password box: an API key, never shown again. */
     secret?: boolean;
+    /** A short list to pick from instead of a box to type in; the first is the usual choice. */
+    options?: { value: string; label: string }[];
   }[];
   /** True when this environment has the provider's app credentials. */
   configured(): boolean;

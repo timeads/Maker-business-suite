@@ -277,7 +277,7 @@ export const deliveryDays = (days: number | null) =>
 
 /** One box of a bought label, as the page shows it. */
 export type LabelBox = {
-  /** EasyPost's id for this box: what a refund is asked for by. */
+  /** The source's id for this box: what a refund is asked for by. */
   shipmentId: string;
   trackingNumber: string;
   trackingUrl: string | null;
@@ -286,6 +286,11 @@ export type LabelBox = {
 
 const httpsLink = (value: unknown) =>
   typeof value === "string" && value.startsWith("https://") ? value : null;
+
+/** Where a label we keep the file of is opened from. */
+export const LABEL_FILE_PATH = "/api/shipping/label-file";
+const fileLink = (value: unknown) =>
+  typeof value === "string" && /^[0-9a-f-]{36}$/i.test(value) ? `${LABEL_FILE_PATH}/${value}` : null;
 
 /**
  * The boxes kept with a bought label (`label_parcels` on a parcel, `parcels`
@@ -300,7 +305,8 @@ export function labelBoxes(stored: unknown): LabelBox[] {
       shipmentId: typeof box.shipment_id === "string" ? box.shipment_id : "",
       trackingNumber: typeof box.tracking_number === "string" ? box.tracking_number : "",
       trackingUrl: httpsLink(box.tracking_url),
-      labelUrl: httpsLink(box.label_url),
+      // Our own copy of the label when we have one (UPS, Redo), else the carrier's link.
+      labelUrl: fileLink(box.label_file) ?? httpsLink(box.label_url),
     }));
 }
 

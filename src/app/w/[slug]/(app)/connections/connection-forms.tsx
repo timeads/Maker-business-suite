@@ -2,7 +2,7 @@
 
 import { useActionState } from "react";
 import { FormMessage } from "@/components/ui/form-message";
-import { Input, Label } from "@/components/ui/input";
+import { Input, Label, Select } from "@/components/ui/input";
 import { SubmitButton } from "@/components/ui/submit-button";
 import { disconnectConnection, startConnection, syncNow, type ConnectionState } from "./actions";
 
@@ -12,6 +12,7 @@ type Field = {
   placeholder: string;
   help?: string;
   secret?: boolean;
+  options?: { value: string; label: string }[];
 };
 
 export function ConnectForm({
@@ -39,23 +40,43 @@ export function ConnectForm({
       {fields.map((field) => (
         <div key={field.name} className="flex flex-col gap-2">
           <Label htmlFor={`${provider}-${field.name}`}>{field.label}</Label>
-          <Input
-            id={`${provider}-${field.name}`}
-            name={field.name}
-            type={field.secret ? "password" : "text"}
-            placeholder={field.placeholder}
-            autoComplete="off"
-            autoCapitalize="none"
-            spellCheck={false}
-            required
-          />
+          {field.options ? (
+            <Select
+              id={`${provider}-${field.name}`}
+              name={field.name}
+              defaultValue={field.options[0]?.value}
+            >
+              {field.options.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </Select>
+          ) : (
+            <Input
+              id={`${provider}-${field.name}`}
+              name={field.name}
+              type={field.secret ? "password" : "text"}
+              placeholder={field.placeholder}
+              autoComplete="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              required
+            />
+          )}
           {field.help && <p className="text-muted-foreground text-xs">{field.help}</p>}
         </div>
       ))}
       <FormMessage>{state.error}</FormMessage>
       <FormMessage kind="success">{state.message}</FormMessage>
       <SubmitButton
-        pendingText={withKey ? "Checking your key…" : `Opening ${providerName}…`}
+        pendingText={
+          withKey
+            ? fields.length > 1
+              ? "Checking your keys…"
+              : "Checking your key…"
+            : `Opening ${providerName}…`
+        }
         className="sm:w-fit"
       >
         {label}
