@@ -158,7 +158,14 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   add-only, tried once, and refused when the shop has more than one
   location. Suppliers and orders are manager-only; anyone on the team can
   check a delivery in. Supabase returns 1,000 rows at most, so `loadStock()`
-  pages.
+  pages. The shop's vendor on a product becomes a supplier, and items
+  with no supplier are filed under it; a supplier chosen by hand is never
+  changed by a sync. What is owed to suppliers (Balances tab, owners and
+  admins only) is a ledger typed in by hand (`supplier_ledger`: invoices,
+  payments, the supplier's own statements, credits). The balance, ageing
+  and "marked paid" states are worked out on read by `lib/stock/balance`
+  (ported from TuftStock with its tests, on whole-cents `Money`); a
+  statement re-anchors the account, and nothing derived is stored.
 - Shipping: `shipping_orders` holds what packing needs (address, what's left
   to send), kept apart from `orders` so the sales figures never carry an
   address. It is read from the shop in a separate query that is allowed to
