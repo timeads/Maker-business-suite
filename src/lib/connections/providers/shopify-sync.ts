@@ -9,6 +9,7 @@ import type {
   SyncResult,
   TokenSet,
 } from "../types";
+import { ReconnectRequiredError } from "../types";
 
 /** How far back the first sync reaches. */
 export const SHOPIFY_HISTORY_MONTHS = 24;
@@ -190,6 +191,9 @@ type ShopifyShipping = {
   legacyResourceId: string;
   displayFinancialStatus: string | null;
   note: string | null;
+  /** Grams, as a string (Shopify's UnsignedInt64). */
+  currentTotalWeight?: string | number | null;
+  currentShippingPriceSet?: Money | null;
   shippingAddress: {
     name: string | null;
     company: string | null;
@@ -202,6 +206,10 @@ type ShopifyShipping = {
     phone: string | null;
   } | null;
   shippingLines: { nodes: { title: string }[] };
+  /** Only asked for when the shop lets the app see how orders are delivered. */
+  fulfillmentOrders?: {
+    nodes: { status: string; deliveryMethod: { methodType: string } | null }[];
+  } | null;
   lineItems: {
     nodes: {
       id: string;
@@ -212,6 +220,8 @@ type ShopifyShipping = {
       customAttributes?: { key: string; value: string | null }[] | null;
       unfulfilledQuantity: number;
       requiresShipping: boolean;
+      discountedUnitPriceAfterAllDiscountsSet?: Money | null;
+      variant?: { barcode: string | null } | null;
     }[];
   };
 } | null;
@@ -219,26 +229,40 @@ type ShopifyShipping = {
 /**
  * Asked separately from the sales figures: a shop that hasn't let the app
  * see addresses still gets its dashboards, just no packing list.
+ *
+ * How each order is delivered (posted or collected) needs a permission of
+ * its own, so that part is left out for shops that haven't given it.
  */
-const SHIPPING_QUERY = `query Shipping($ids: [ID!]!) {
+const shippingQuery = (deliveryMethods: boolean) => `query Shipping($ids: [ID!]!) {
   nodes(ids: $ids) {
     ... on Order {
-      legacyResourceId displayFinancialStatus note
+      legacyResourceId displayFinancialStatus note currentTotalWeight
+      currentShippingPriceSet { shopMoney { amount } }
       shippingAddress { name company address1 address2 city provinceCode zip countryCodeV2 phone }
       shippingLines(first: 1) { nodes { title } }
+      ${deliveryMethods ? "fulfillmentOrders(first: 5) { nodes { status deliveryMethod { methodType } } }" : ""}
       lineItems(first: 100) {
-        nodes { id title variantTitle sku currentQuantity unfulfilledQuantity requiresShipping }
+        nodes {
+          id title variantTitle sku currentQuantity unfulfilledQuantity requiresShipping
+          discountedUnitPriceAfterAllDiscountsSet { shopMoney { amount } }
+          variant { barcode }
+        }
       }
     }
   }
 }`;
 
 const UNPAID = new Set(["PENDING", "AUTHORIZED", "PARTIALLY_PAID", "EXPIRED", "VOIDED"]);
+/** Without the shop's own word on it, the name of the checkout option is the best clue. */
+const PICKUP_NAME = /\b(pick ?-?up|in[- ]store|collect(ion)?)\b/i;
 
 export function mapShopifyShipping(orders: ShopifyShipping[]): ShippingOrderRow[] {
   return orders.flatMap((order) => {
     if (!order) return [];
     const address = order.shippingAddress;
+    const method = order.shippingLines.nodes[0]?.title ?? null;
+    const weight = Number(order.currentTotalWeight ?? Number.NaN);
+    const deliveries = order.fulfillmentOrders?.nodes;
     return [
       {
         external_id: order.legacyResourceId,
@@ -251,7 +275,12 @@ export function mapShopifyShipping(orders: ShopifyShipping[]): ShippingOrderRow[
         postal_code: address?.zip ?? null,
         country_code: address?.countryCodeV2 ?? null,
         phone: address?.phone ?? null,
-        shipping_method: order.shippingLines.nodes[0]?.title ?? null,
+        shipping_method: method,
+        shipping_paid: order.currentShippingPriceSet ? money(order.currentShippingPriceSet) : null,
+        weight_grams: Number.isFinite(weight) && weight > 0 ? Math.round(weight) : null,
+        pickup: deliveries
+          ? deliveries.some((delivery) => delivery.deliveryMethod?.methodType === "PICK_UP")
+          : PICKUP_NAME.test(method ?? ""),
         note: order.note,
         paid: !UNPAID.has(order.displayFinancialStatus ?? ""),
         // Only things that go in a box; a gift card or a class has nothing to send.
@@ -262,6 +291,10 @@ export function mapShopifyShipping(orders: ShopifyShipping[]): ShippingOrderRow[
             title: line.title,
             variant: line.variantTitle,
             sku: line.sku?.trim() || null,
+            barcode: line.variant?.barcode?.trim() || null,
+            price: line.discountedUnitPriceAfterAllDiscountsSet
+              ? money(line.discountedUnitPriceAfterAllDiscountsSet)
+              : null,
             qty: line.currentQuantity,
             left: Math.max(0, Math.min(line.currentQuantity, line.unfulfilledQuantity)),
           })),
@@ -270,20 +303,52 @@ export function mapShopifyShipping(orders: ShopifyShipping[]): ShippingOrderRow[
   });
 }
 
+/** What a run has learned about this shop, so it doesn't ask for the same refusal twice. */
+type ShippingAsk = { deliveryMethods: boolean };
+
 /** Reads the packing details for orders just stored. Never fails the sync. */
+const SHIPPING_BATCH = 10;
+
 async function pullShipping(
   ctx: SyncContext,
   graphql: ShopifyGraphql,
   orderIds: string[],
+  ask: ShippingAsk = { deliveryMethods: true },
 ): Promise<boolean> {
   if (orderIds.length === 0) return true;
+  const all = orderIds.map((id) => `gid://shopify/Order/${id}`);
+  // The shop caps how much one question may ask for, and each order here
+  // brings its lines with it: so a few orders at a time.
+  const batches: string[][] = [];
+  for (let i = 0; i < all.length; i += SHIPPING_BATCH)
+    batches.push(all.slice(i, i + SHIPPING_BATCH));
+  const read = async (deliveryMethods: boolean) => {
+    const nodes: ShopifyShipping[] = [];
+    for (const ids of batches) {
+      const page = await graphql<{ nodes: ShopifyShipping[] }>(
+        ctx.externalAccountId,
+        ctx.token,
+        shippingQuery(deliveryMethods),
+        { ids },
+      );
+      nodes.push(...(page.nodes ?? []));
+    }
+    return { nodes };
+  };
   try {
-    const data = await graphql<{ nodes: ShopifyShipping[] }>(
-      ctx.externalAccountId,
-      ctx.token,
-      SHIPPING_QUERY,
-      { ids: orderIds.map((id) => `gid://shopify/Order/${id}`) },
-    );
+    let data: { nodes: ShopifyShipping[] };
+    if (ask.deliveryMethods) {
+      try {
+        data = await read(true);
+      } catch (err) {
+        if (err instanceof ReconnectRequiredError) throw err;
+        // Most likely the shop hasn't shared how orders are delivered: ask for the rest.
+        ask.deliveryMethods = false;
+        data = await read(false);
+      }
+    } else {
+      data = await read(false);
+    }
     await ctx.store.upsertShipping(mapShopifyShipping(data.nodes ?? []));
     return true;
   } catch (err) {
@@ -466,6 +531,7 @@ async function pullOrders(
   let after = previous.after ?? null;
   let calls = 0;
   let addresses = true;
+  const shippingAsk = { deliveryMethods: true };
 
   // A count of what the shop says it has, beside what it hands over, so an
   // empty sync can be told apart from a shop that isn't sharing its orders.
@@ -521,6 +587,7 @@ async function pullOrders(
           ctx,
           graphql,
           data.orders.nodes.map((order) => order.legacyResourceId),
+          shippingAsk,
         );
         calls += 1;
       }

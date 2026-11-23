@@ -8,8 +8,14 @@ import { tidyTracking, trackingUrl } from "@/lib/shipping/carriers";
 import {
   SHIPPING_MODULE,
   SHIPPING_SETTINGS_KEY,
+  SLIP_LAYOUT_KEY,
+  SLIP_SECTIONS,
+  parseShippingSettings,
   shippingSettingsSchema,
+  slipLayoutSchema,
+  type SlipSection,
 } from "@/lib/shipping/config";
+import { formatHoldDate, isHoldDate, todayIn } from "@/lib/shipping/queue";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
 
@@ -90,10 +96,63 @@ export async function recordParcel(
     };
   }
   done(slug);
-  if (orderId) redirect(`/w/${slug}/shipping?sent=${data as number}`);
+  if (orderId) {
+    // From the packing bench, straight back to it for the next order.
+    const bench = text(formData, "back") === "scan" ? "/scan" : "";
+    redirect(`/w/${slug}/shipping${bench}?sent=${data as number}`);
+  }
   return { message: `Parcel ${data as number} recorded.` };
 }
 
+const pick = (ids: string[]) => [...new Set(ids.filter((id) => UUID.test(id)))].slice(0, 500);
+const count = (n: number, one: string, many: string) => (n === 1 ? one : many.replace("%", `${n}`));
+
+/**
+ * Sets orders aside, with a note and (if wanted) the day they come back.
+ * `until` is a YYYY-MM-DD day in the workspace's own time zone, or null.
+ */
+export async function holdOrders(
+  slug: string,
+  ids: string[],
+  note: string,
+  until: string | null,
+): Promise<ShippingState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const day = until?.trim() || null;
+  if (day && !isHoldDate(day, todayIn(ctx.tenant.timezone, new Date()))) {
+    return { error: "Pick a day after today, or hold it until you release it." };
+  }
+  const { data, error } = await ctx.supabase.rpc("hold_shipping_orders", {
+    p_tenant_id: ctx.tenant.id,
+    p_ids: pick(ids),
+    p_note: note.trim().slice(0, 300),
+    p_until: day,
+  });
+  if (error) {
+    return { error: error.message.includes("after today") ? "Pick a day after today." : OOPS };
+  }
+  done(slug);
+  const n = Number(data ?? 0);
+  if (n === 0) return { error: "Nothing there can be held: it's been sent or cancelled." };
+  return {
+    message: `${count(n, "On hold", "% orders on hold")}${day ? ` until ${formatHoldDate(day)}` : ""}.`,
+  };
+}
+
+export async function releaseOrders(slug: string, ids: string[]): Promise<ShippingState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const { data, error } = await ctx.supabase.rpc("release_shipping_orders", {
+    p_tenant_id: ctx.tenant.id,
+    p_ids: pick(ids),
+  });
+  if (error) return { error: OOPS };
+  done(slug);
+  return { message: count(Number(data ?? 0), "Back in the queue.", "% orders back in the queue.") };
+}
+
+/** The hold form on an order's own page. */
 export async function setHold(
   slug: string,
   orderId: string,
@@ -101,16 +160,63 @@ export async function setHold(
   _prev: ShippingState,
   formData: FormData,
 ): Promise<ShippingState> {
+  if (!hold) return releaseOrders(slug, [orderId]);
+  return holdOrders(slug, [orderId], text(formData, "reason"), text(formData, "until") || null);
+}
+
+/**
+ * Someone has opened an order whose hold ran out: it stops saying "Back from
+ * hold". A hold that is still running is left alone.
+ */
+export async function seenBackFromHold(slug: string, orderId: string): Promise<void> {
+  if (!UUID.test(orderId)) return;
+  const ctx = await context(slug);
+  if ("error" in ctx) return;
+  const { data } = await ctx.supabase.rpc("clear_ended_shipping_hold", { p_id: orderId });
+  if (data === true) done(slug);
+}
+
+/** Pickup orders are packed and waiting at the counter. Kept here; your shop isn't told. */
+export async function markPickupReady(slug: string, ids: string[]): Promise<ShippingState> {
   const ctx = await context(slug);
   if ("error" in ctx) return { error: ctx.error };
-  const { error } = await ctx.supabase.rpc("set_shipping_hold", {
-    p_id: orderId,
-    p_hold: hold,
-    p_reason: text(formData, "reason"),
+  const { data, error } = await ctx.supabase.rpc("mark_pickup_ready", {
+    p_tenant_id: ctx.tenant.id,
+    p_ids: pick(ids),
   });
   if (error) return { error: OOPS };
   done(slug);
-  return { message: hold ? "On hold." : "Back in the queue." };
+  const n = Number(data ?? 0);
+  if (n === 0) return { error: "None of those are pickup orders still waiting to be packed." };
+  return { message: count(n, "Ready for pickup.", "% orders ready for pickup.") };
+}
+
+export async function markPickedUp(
+  slug: string,
+  orderId: string,
+  _prev: ShippingState,
+  _formData: FormData,
+): Promise<ShippingState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const { error } = await ctx.supabase.rpc("mark_picked_up", { p_id: orderId });
+  if (error) return { error: OOPS };
+  done(slug);
+  return { message: "Picked up. It's off your list." };
+}
+
+export async function undoPickup(
+  slug: string,
+  orderId: string,
+  _prev: ShippingState,
+  _formData: FormData,
+): Promise<ShippingState> {
+  const ctx = await context(slug, true);
+  if ("error" in ctx) return { error: ctx.error };
+  const { error } = await ctx.supabase.rpc("undo_pickup", { p_id: orderId });
+  if (error) return { error: OOPS };
+  done(slug);
+  return { message: "Stepped back." };
 }
 
 /** Notes that these slips have been printed, so they aren't printed twice. */
@@ -151,8 +257,23 @@ export async function saveShippingSettings(
 ): Promise<ShippingState> {
   const ctx = await context(slug, true);
   if ("error" in ctx) return { error: ctx.error };
+  const country = text(formData, "ship_from_country").toUpperCase() || "US";
+  if (!/^[A-Z]{2}$/.test(country)) {
+    return { error: "The country parcels leave from is two letters, like US, CA or GB." };
+  }
+  // The older slip note and item-code switch now live in the slip layout;
+  // what was saved is carried along so a workspace that hasn't moved keeps it.
+  const { data: saved } = await ctx.supabase
+    .from("configs")
+    .select("body")
+    .eq("tenant_id", ctx.tenant.id)
+    .eq("module", SHIPPING_MODULE)
+    .eq("key", SHIPPING_SETTINGS_KEY)
+    .maybeSingle();
+  const before = parseShippingSettings(saved?.body);
   const parsed = shippingSettingsSchema.safeParse({
     version: 1,
+    ship_from_country: country,
     ship_from: {
       name: text(formData, "from_name"),
       address1: text(formData, "from_address1"),
@@ -160,14 +281,14 @@ export async function saveShippingSettings(
       city_line: text(formData, "from_city_line"),
       country: text(formData, "from_country"),
     },
-    slip_note: text(formData, "slip_note"),
-    slip_show_sku: formData.get("slip_show_sku") === "on",
+    slip_note: before.slip_note,
+    slip_show_sku: before.slip_show_sku,
     default_carrier: text(formData, "default_carrier") || "USPS",
     mark_sent_in_shop: formData.get("mark_sent_in_shop") === "on",
     notify_customer: formData.get("notify_customer") === "on",
   });
   if (!parsed.success) {
-    return { error: "Keep each address line under 120 characters and the note under 600." };
+    return { error: "Keep each address line under 120 characters." };
   }
   const { error } = await ctx.supabase.rpc("save_config", {
     p_tenant_id: ctx.tenant.id,
@@ -178,4 +299,41 @@ export async function saveShippingSettings(
   if (error) return { error: OOPS };
   done(slug);
   return { message: "Saved." };
+}
+
+/** What a packing slip shows, and in what order. */
+export async function saveSlipLayout(
+  slug: string,
+  _prev: ShippingState,
+  formData: FormData,
+): Promise<ShippingState> {
+  const ctx = await context(slug, true);
+  if ("error" in ctx) return { error: ctx.error };
+  const known = (id: string): id is SlipSection =>
+    (SLIP_SECTIONS as readonly string[]).includes(id);
+  const order = [...new Set(text(formData, "order").split(",").filter(known))];
+  const parsed = slipLayoutSchema.safeParse({
+    version: 1,
+    sections: [...order, ...SLIP_SECTIONS.filter((id) => !order.includes(id))].map((id) => ({
+      id,
+      on: formData.get(`on:${id}`) === "on",
+    })),
+    show_sku: formData.get("show_sku") === "on",
+    show_price: formData.get("show_price") === "on",
+    text_size: text(formData, "text_size") || "normal",
+    message: text(formData, "message"),
+    footer: text(formData, "footer"),
+  });
+  if (!parsed.success) {
+    return { error: "Keep the thank-you message under 600 characters and the footer under 120." };
+  }
+  const { error } = await ctx.supabase.rpc("save_config", {
+    p_tenant_id: ctx.tenant.id,
+    p_module: SHIPPING_MODULE,
+    p_key: SLIP_LAYOUT_KEY,
+    p_body: parsed.data,
+  });
+  if (error) return { error: OOPS };
+  done(slug);
+  return { message: "Saved. Your next slips will print this way." };
 }

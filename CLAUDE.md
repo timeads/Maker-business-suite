@@ -176,7 +176,13 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   shipments leave the rest in the queue); undoing one is manager-only. We do
   not buy postage: no label provider has been chosen. Telling the shop a
   parcel went (`shopify-fulfil.ts`) follows the same once-only queue as
-  stock receipts.
+  stock receipts. The to-ship queue's views (ready, pickup, priority,
+  on hold, international) and "back from hold" are worked out on read by
+  `lib/shipping/queue.ts`, so a hold with an end date needs no timer.
+  Pickup steps are kept here, not sent to the shop. The packing slip's
+  layout is a config (`slip_layout`); its barcode (`code128.ts`) is what
+  Scan & pack reads. Packing details are asked of the shop ten orders at a
+  time, and without delivery methods if the shop won't share them.
 - Code with no signed-in member (public pages, the worker) asks
   `moduleOpen()` in `lib/module-access.ts`, which uses the same resolver as
   `getEntitlements()`.

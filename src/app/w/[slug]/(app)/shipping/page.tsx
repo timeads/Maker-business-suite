@@ -1,143 +1,150 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
 import { daysFromNow } from "@/lib/bookings/slots";
-import { hasAddress, queueOf } from "@/lib/shipping/carriers";
+import { formatMoney } from "@/lib/dashboard/format";
+import { countryName, hasAddress } from "@/lib/shipping/carriers";
+import {
+  QUEUE_VIEWS,
+  cleanSearch,
+  formatHoldDate,
+  formatWeight,
+  holdChoices,
+  holdState,
+  inQueueView,
+  isOpen,
+  isPriority,
+  isQueueView,
+  queueCounts,
+  shipStatus,
+  todayIn,
+  type QueueView,
+} from "@/lib/shipping/queue";
 import { createClient } from "@/lib/supabase/server";
-import { ORDER_FIELDS, itemsSummary, loadShippingSetup, type ShippingOrder } from "./data";
+import { cn } from "@/lib/utils";
+import {
+  ORDER_FIELDS,
+  itemsSummary,
+  loadOpenOrders,
+  loadShippingSetup,
+  placeOf,
+  type ShippingOrder,
+} from "./data";
 import { shippingAccess } from "./gate";
+import { QueueTable, type QueueRow } from "./queue-table";
 import { ShippingTabs } from "./tabs";
 
 export const metadata: Metadata = { title: "Shipping" };
+
+/** More rows than this on one screen helps nobody; the chips and the search narrow it. */
+const MOST_SHOWN = 300;
+
+const EMPTY: Record<QueueView, string> = {
+  ready: "All caught up. New orders appear here as they come in.",
+  pickup: "Nobody is waiting to collect an order.",
+  priority: "No rush orders right now.",
+  unpaid: "Every open order has been paid for.",
+  hold: "Nothing is on hold.",
+  international: "Nothing is waiting to go abroad.",
+  all: "No open orders.",
+};
 
 export default async function ShippingPage({
   params,
   searchParams,
 }: {
   params: Promise<{ slug: string }>;
-  searchParams: Promise<{ sent?: string }>;
+  searchParams: Promise<{ sent?: string; view?: string; q?: string }>;
 }) {
   const { slug } = await params;
   const access = await shippingAccess(slug, `/w/${slug}/shipping`);
   if (!access.ok) return access.upsell;
-  const { tenant } = access;
+  const { tenant, entitlements } = access;
   const base = `/w/${tenant.slug}/shipping`;
-  const justSent = /^\d{1,9}$/.test((await searchParams).sent ?? "")
-    ? (await searchParams).sent
-    : null;
+  const query = await searchParams;
+  const justSent = /^\d{1,9}$/.test(query.sent ?? "") ? query.sent : null;
+  const view: QueueView = isQueueView(query.view) ? query.view : "ready";
+  const q = cleanSearch(query.q);
 
   const supabase = await createClient();
-  const [{ data }, setup, { count: sentThisWeek }] = await Promise.all([
-    supabase
-      .from("shipping_orders")
-      .select(ORDER_FIELDS)
-      .eq("tenant_id", tenant.id)
-      .gt("units_left", 0)
-      .eq("cancelled", false)
-      .order("placed_at")
-      .limit(500),
+  const [open, setup, found] = await Promise.all([
+    loadOpenOrders(supabase, tenant.id),
     loadShippingSetup(supabase, tenant.id),
-    supabase
-      .from("shipments")
-      .select("id", { count: "exact", head: true })
-      .eq("tenant_id", tenant.id)
-      .is("voided_at", null)
-      .gte("shipped_at", daysFromNow(-7)),
+    q
+      ? supabase
+          .from("shipping_orders")
+          .select(ORDER_FIELDS)
+          .eq("tenant_id", tenant.id)
+          .or(`name.ilike."%${q}%",email.ilike."%${q}%",recipient.ilike."%${q}%"`)
+          .order("placed_at", { ascending: false })
+          .limit(100)
+      : null,
   ]);
-  const orders = (data ?? []) as unknown as ShippingOrder[];
-  const ready = orders.filter((order) => queueOf(order) === "ready");
-  const held = orders.filter((order) => queueOf(order) === "hold");
-  const unpaid = orders.filter((order) => queueOf(order) === "unpaid");
-  const oldest = ready[0]?.placed_at;
-  const waitingDays = oldest
-    ? Math.max(0, Math.floor((Date.parse(daysFromNow(0)) - Date.parse(oldest)) / 86_400_000))
-    : 0;
-  const unprinted = ready.filter((order) => !order.slip_printed_at);
+  const today = todayIn(tenant.timezone, new Date(daysFromNow(0)));
+  const home = setup.settings.ship_from_country;
+  const counts = queueCounts(open, today, home);
+  const matching = found
+    ? ((found.data ?? []) as unknown as ShippingOrder[])
+    : open.filter((order) => inQueueView(order, view, today, home));
+  const shown = matching.slice(0, MOST_SHOWN);
+  const unprinted = open.filter(
+    (order) => inQueueView(order, "ready", today, home) && !order.slip_printed_at,
+  );
+
   const day = new Intl.DateTimeFormat("en-US", {
     timeZone: tenant.timezone,
     month: "short",
     day: "numeric",
   });
-  const stats = [
-    { label: "Ready to send", value: String(ready.length), note: "paid and waiting on you" },
-    {
-      label: "Longest wait",
-      value: ready.length ? `${waitingDays}d` : "–",
-      note: ready.length ? "since the oldest was ordered" : "nothing waiting",
-    },
-    { label: "On hold", value: String(held.length), note: "set aside by your team" },
-    {
-      label: "Sent this week",
-      value: String(sentThisWeek ?? 0),
-      note: "parcels in the last 7 days",
-    },
-  ];
-
-  const list = (rows: ShippingOrder[]) => (
-    <ul className="divide-border flex flex-col divide-y">
-      {rows.map((order) => {
-        const part = order.items.some((item) => item.left < item.qty);
-        return (
-          <li key={order.id}>
-            <Link
-              href={`${base}/orders/${order.id}`}
-              className="hover:bg-hover -mx-2 flex flex-wrap items-start gap-x-4 gap-y-1 rounded-sm px-2 py-2.5 text-sm"
-            >
-              <span className="text-muted-foreground w-16 shrink-0 tabular-nums">
-                {order.name ?? "Order"}
-              </span>
-              <span className="min-w-0 flex-1 basis-56">
-                <span className="font-read font-semibold">
-                  {order.recipient ?? "No name on this order"}
-                </span>
-                <span className="text-muted-foreground">
-                  {" "}
-                  ·{" "}
-                  {[
-                    order.city,
-                    order.region,
-                    order.country_code !== "US" ? order.country_code : null,
-                  ]
-                    .filter(Boolean)
-                    .join(", ") || "no address"}
-                </span>
-                <span className="text-text-2 font-read block">{itemsSummary(order)}</span>
-                {order.on_hold && order.hold_reason && (
-                  <span className="text-muted-foreground font-read block text-xs">
-                    {order.hold_reason}
-                  </span>
-                )}
-              </span>
-              <span className="flex flex-wrap items-center justify-end gap-1.5">
-                {!hasAddress(order) && <Badge tone="bad">Needs an address</Badge>}
-                {part && <Badge tone="waiting">Part sent</Badge>}
-                {order.slip_printed_at && <Badge tone="good">Slip printed</Badge>}
-                {order.shipping_method && <Badge>{order.shipping_method}</Badge>}
-                <span className="text-muted-foreground w-14 text-right tabular-nums">
-                  {day.format(new Date(order.placed_at))}
-                </span>
-              </span>
-            </Link>
-          </li>
-        );
-      })}
-    </ul>
-  );
+  const rows: QueueRow[] = shown.map((order) => {
+    const stillOpen = isOpen(order);
+    const hold = stillOpen ? holdState(order, today) : "none";
+    return {
+      id: order.id,
+      name: order.name ?? "Order",
+      placed: day.format(new Date(order.placed_at)),
+      customer: order.recipient ?? "No name on this order",
+      email: order.email,
+      items: stillOpen
+        ? itemsSummary(order)
+        : order.items.map((item) => `${item.qty} × ${item.title}`).join(", "),
+      weight: formatWeight(order.weight_grams, home === "US"),
+      chose: order.shipping_method ?? "–",
+      priority: stillOpen && isPriority(order.shipping_method),
+      paid:
+        order.shipping_paid === null
+          ? "–"
+          : Number(order.shipping_paid) === 0
+            ? "Free"
+            : formatMoney(Number(order.shipping_paid), tenant.currency),
+      place: order.pickup ? "Collecting" : placeOf(order, home, countryName) || "No address",
+      needsAddress: stillOpen && !order.pickup && !hasAddress(order),
+      open: stillOpen,
+      status: stillOpen ? null : shipStatus(order, today).label,
+      hold,
+      holdUntil: hold === "held" && order.hold_until ? formatHoldDate(order.hold_until) : "",
+      holdNote: order.hold_reason,
+      unpaid: !order.paid,
+      pickup: order.pickup,
+      pickupReady: Boolean(order.pickup_ready_at),
+      partSent: stillOpen && order.items.some((item) => item.left < item.qty),
+      slipPrinted: Boolean(order.slip_printed_at),
+    };
+  });
 
   return (
     <>
       <PageHeader
         title="Shipping"
-        description="What's waiting to go out, oldest first. Open an order to pack it and record its tracking."
+        description="What's waiting to go out, oldest first. Tick orders to print their slips or set them aside; open one to pack it and record its tracking."
       >
-        {ready.length > 0 && (
+        {counts.ready > 0 && (
           <Button asChild variant="outline" size="sm">
             <Link href={`${base}/slips`}>
               Print packing slips
-              {unprinted.length > 0 && unprinted.length < ready.length
+              {unprinted.length > 0 && unprinted.length < counts.ready
                 ? ` (${unprinted.length} new)`
                 : ""}
             </Link>
@@ -155,52 +162,71 @@ export default async function ShippingPage({
         </p>
       )}
 
-      <dl className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {stats.map((stat) => (
-          <div key={stat.label} className="bg-card border-border rounded-lg border px-4 py-3">
-            <dt className="text-muted-foreground text-xs font-semibold">{stat.label}</dt>
-            <dd className="mt-1 text-2xl leading-none font-bold tabular-nums">{stat.value}</dd>
-            <dd className="text-muted-foreground mt-1.5 text-xs">{stat.note}</dd>
-          </div>
-        ))}
-      </dl>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <nav aria-label="Queues" className="flex flex-1 flex-wrap gap-1">
+          {QUEUE_VIEWS.map((chip) => {
+            const active = chip.key === view && !q;
+            return (
+              <Link
+                key={chip.key}
+                href={chip.key === "ready" ? base : `${base}?view=${chip.key}`}
+                aria-current={active ? "page" : undefined}
+                className={cn(
+                  "rounded-full px-3 py-1.5 text-sm whitespace-nowrap transition-colors duration-150",
+                  active ? "bg-teal font-semibold text-white" : "text-text-2 hover:bg-hover",
+                )}
+              >
+                {chip.label}
+                <span className="ml-1.5 tabular-nums opacity-80">{counts[chip.key]}</span>
+              </Link>
+            );
+          })}
+        </nav>
+        <form action={base} role="search" className="flex w-full gap-2 sm:w-80">
+          <Input
+            name="q"
+            type="search"
+            defaultValue={q}
+            maxLength={60}
+            placeholder="Find any order — #, email or name"
+            aria-label="Find any order"
+          />
+        </form>
+      </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Ready to send</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {ready.length === 0 ? (
-            <p className="text-muted-foreground text-sm">
-              {setup.connected
-                ? "All caught up. New orders appear here as they come in."
-                : "Connect your shop under Connections and your orders to send will appear here."}
-            </p>
-          ) : (
-            list(ready)
-          )}
-        </CardContent>
-      </Card>
-
-      {held.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>On hold</CardTitle>
-            <CardDescription>Set aside until you take them off hold.</CardDescription>
-          </CardHeader>
-          <CardContent>{list(held)}</CardContent>
-        </Card>
+      {q && (
+        <p className="text-sm">
+          {matching.length === 0
+            ? `Nothing matches “${q}”.`
+            : `${matching.length === 100 ? "The newest 100 orders" : matching.length === 1 ? "1 order" : `${matching.length} orders`} matching “${q}”, sent or not.`}{" "}
+          <Link href={view === "ready" ? base : `${base}?view=${view}`} className="underline">
+            Clear the search
+          </Link>
+        </p>
       )}
-      {unpaid.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Waiting on payment</CardTitle>
-            <CardDescription>
-              Not paid in full yet. They move up once the payment lands.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>{list(unpaid)}</CardContent>
-        </Card>
+
+      {rows.length === 0 ? (
+        !q && (
+          <p className="bg-card border-border text-muted-foreground rounded-lg border px-4 py-8 text-center text-sm">
+            {setup.connected || open.length > 0
+              ? EMPTY[view]
+              : "Connect your shop under Connections and your orders to ship will appear here."}
+          </p>
+        )
+      ) : (
+        <QueueTable
+          slug={tenant.slug}
+          rows={rows}
+          canWrite={entitlements.canWrite}
+          today={today}
+          choices={holdChoices(today)}
+        />
+      )}
+      {matching.length > shown.length && (
+        <p className="text-muted-foreground text-sm">
+          Showing the oldest {shown.length} of {matching.length}. Use a chip or the search to narrow
+          it down.
+        </p>
       )}
     </>
   );

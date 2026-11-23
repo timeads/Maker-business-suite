@@ -25,7 +25,13 @@ const service = <T>(sql: string, params: unknown[] = []) =>
 const as = <T>(user: User, sql: string, params: unknown[] = []) =>
   asUser(db, user, async (tx) => (await tx.query<T>(sql, params)).rows);
 
-async function shopOrder(tenant: string, id: string, email: string, customer: string) {
+async function shopOrder(
+  tenant: string,
+  id: string,
+  email: string,
+  customer: string,
+  extra: Record<string, unknown> = {},
+) {
   await service(
     "select public.upsert_commerce_batch($1, 'shopify', $2::jsonb, '[]'::jsonb, $3::jsonb)",
     [
@@ -59,8 +65,11 @@ async function shopOrder(tenant: string, id: string, email: string, customer: st
         country_code: "us",
         phone: "555-0100",
         shipping_method: "Standard",
+        shipping_paid: 12,
+        weight_grams: 1361,
         note: "Leave with the neighbour",
         paid: true,
+        ...extra,
         items: [
           { line_id: "l1", title: "Wool rug", variant: "Large", sku: "RUG-L", qty: 2, left: 2 },
           { line_id: "l2", title: "Yarn bundle", variant: null, sku: null, qty: 3, left: 3 },
@@ -256,6 +265,235 @@ describe("sending orders out", () => {
     expect(row.slip_printed_at).not.toBeNull();
     // The shop is the authority on what's left once it has been told.
     expect(row.units_left).toBe(5);
+  });
+});
+
+describe("the fuller queue: what the shopper chose, holds with a date, pickup, the report", () => {
+  type More = {
+    shipping_paid: string | null;
+    weight_grams: number | null;
+    pickup: boolean;
+    on_hold: boolean;
+    hold_reason: string;
+    hold_until: string | null;
+    pickup_ready_at: string | null;
+    picked_up_at: string | null;
+  };
+  const more = async (id: string) =>
+    (
+      await db.query<More>(
+        "select shipping_paid::text, weight_grams::int, pickup, on_hold, hold_reason, hold_until::text, pickup_ready_at::text, picked_up_at::text from public.shipping_orders where id = $1",
+        [id],
+      )
+    ).rows[0];
+  const day = async (offset: number) =>
+    (
+      await db.query<{ d: string }>(
+        "select ((now() at time zone 'America/New_York')::date + $1::int)::text as d",
+        [offset],
+      )
+    ).rows[0].d;
+  let held: string;
+  let collect: string;
+  let theirs: string;
+
+  beforeAll(async () => {
+    held = await shopOrder(tenantA, "1002", "kit@example.com", "c2");
+    collect = await shopOrder(tenantA, "1003", "lee@example.com", "c3", {
+      pickup: true,
+      shipping_method: "Studio pickup",
+      shipping_paid: 0,
+    });
+    theirs = await shopOrder(tenantB, "2002", "moe@example.com", "c8", { pickup: true });
+  });
+
+  it("stores what the shopper chose and paid, the weight, and whether it's a pickup", async () => {
+    expect(await more(held)).toMatchObject({
+      shipping_paid: "12.00",
+      weight_grams: 1361,
+      pickup: false,
+    });
+    expect(await more(collect)).toMatchObject({ shipping_paid: "0.00", pickup: true });
+    // A sync that doesn't know these (an older worker) leaves them empty rather than failing.
+    await service("select public.upsert_shipping_orders($1, 'shopify', $2::jsonb)", [
+      tenantA,
+      JSON.stringify([{ external_id: "1002", recipient: "Kit", paid: true, items: [] }]),
+    ]);
+    expect(await more(held)).toMatchObject({
+      shipping_paid: null,
+      weight_grams: null,
+      pickup: false,
+    });
+    await shopOrder(tenantA, "1002", "kit@example.com", "c2");
+  });
+
+  it("anyone on the team holds several orders at once, with a note and a day to come back", async () => {
+    const until = await day(3);
+    const n = await as<{ n: number }>(
+      carol,
+      "select public.hold_shipping_orders($1, $2, $3, $4::date) as n",
+      [tenantA, [held, collect, theirs], `  ${"x".repeat(400)}  `, until],
+    );
+    // Only this workspace's orders are touched.
+    expect(n[0].n).toBe(2);
+    const row = await more(held);
+    expect(row).toMatchObject({ on_hold: true, hold_until: until });
+    expect(row.hold_reason).toHaveLength(300);
+    expect((await more(theirs)).on_hold).toBe(false);
+    await expect(
+      as(carol, "select public.hold_shipping_orders($1, $2, '', $3::date)", [
+        tenantA,
+        [held],
+        await day(0),
+      ]),
+    ).rejects.toThrow(/Pick a day after today/);
+  });
+
+  it("a hold still running isn't cleared by opening the order; one whose day has come is", async () => {
+    const opened = () =>
+      as<{ ok: boolean }>(carol, "select public.clear_ended_shipping_hold($1) as ok", [held]);
+    expect((await opened())[0].ok).toBe(false);
+    expect((await more(held)).on_hold).toBe(true);
+    await db.query("update public.shipping_orders set hold_until = $2::date where id = $1", [
+      held,
+      await day(0),
+    ]);
+    expect((await opened())[0].ok).toBe(true);
+    expect(await more(held)).toMatchObject({ on_hold: false, hold_until: null, hold_reason: "" });
+  });
+
+  it("releases in bulk, and a sync keeps a hold and its date", async () => {
+    const until = await day(5);
+    await as(carol, "select public.hold_shipping_orders($1, $2, 'Waiting on yarn', $3::date)", [
+      tenantA,
+      [held],
+      until,
+    ]);
+    await shopOrder(tenantA, "1002", "kit@example.com", "c2");
+    expect(await more(held)).toMatchObject({ on_hold: true, hold_until: until });
+    const n = await as<{ n: number }>(carol, "select public.release_shipping_orders($1, $2) as n", [
+      tenantA,
+      [held, collect, theirs],
+    ]);
+    expect(n[0].n).toBe(2);
+    expect(await more(held)).toMatchObject({ on_hold: false, hold_until: null, hold_reason: "" });
+  });
+
+  it("a pickup is marked ready, then collected; only a manager steps it back", async () => {
+    const ready = await as<{ n: number }>(carol, "select public.mark_pickup_ready($1, $2) as n", [
+      tenantA,
+      [held, collect, theirs],
+    ]);
+    // Not the order being posted, and not another workspace's pickup.
+    expect(ready[0].n).toBe(1);
+    expect((await more(collect)).pickup_ready_at).not.toBeNull();
+    expect((await more(theirs)).pickup_ready_at).toBeNull();
+    await expect(as(carol, "select public.mark_picked_up($1)", [held])).rejects.toThrow(
+      /not for pickup/,
+    );
+    await as(carol, "select public.mark_picked_up($1)", [collect]);
+    expect((await more(collect)).picked_up_at).not.toBeNull();
+    // A sync leaves the pickup steps alone.
+    await shopOrder(tenantA, "1003", "lee@example.com", "c3", { pickup: true });
+    expect((await more(collect)).picked_up_at).not.toBeNull();
+    // Collected orders can't be put on hold.
+    const n = await as<{ n: number }>(
+      carol,
+      "select public.hold_shipping_orders($1, $2, '', null) as n",
+      [tenantA, [collect]],
+    );
+    expect(n[0].n).toBe(0);
+
+    await expect(as(carol, "select public.undo_pickup($1)", [collect])).rejects.toThrow(
+      /Only owners and admins/,
+    );
+    await as(alice, "select public.undo_pickup($1)", [collect]);
+    let row = await more(collect);
+    expect(row.picked_up_at).toBeNull();
+    expect(row.pickup_ready_at).not.toBeNull();
+    await as(alice, "select public.undo_pickup($1)", [collect]);
+    row = await more(collect);
+    expect(row.pickup_ready_at).toBeNull();
+  });
+
+  it("nobody holds, releases, collects or reads the report across workspaces", async () => {
+    await expect(
+      as(bob, "select public.hold_shipping_orders($1, $2, '', null)", [tenantA, [held]]),
+    ).rejects.toThrow(/Workspace not found/);
+    await expect(
+      as(bob, "select public.release_shipping_orders($1, $2)", [tenantA, [held]]),
+    ).rejects.toThrow(/Workspace not found/);
+    await expect(
+      as(bob, "select public.mark_pickup_ready($1, $2)", [tenantA, [collect]]),
+    ).rejects.toThrow(/Workspace not found/);
+    for (const fn of ["mark_picked_up", "undo_pickup", "clear_ended_shipping_hold"]) {
+      await expect(as(bob, `select public.${fn}($1)`, [collect])).rejects.toThrow(
+        /Order not found/,
+      );
+    }
+    await expect(as(bob, "select public.shipping_report($1, 30)", [tenantA])).rejects.toThrow(
+      /Workspace not found/,
+    );
+    // Naming your own workspace doesn't reach someone else's orders either.
+    const n = await as<{ n: number }>(
+      bob,
+      "select public.hold_shipping_orders($1, $2, '', null) as n",
+      [tenantB, [held]],
+    );
+    expect(n[0].n).toBe(0);
+    expect((await more(held)).on_hold).toBe(false);
+  });
+
+  it("the report sets postage against what shoppers paid, counting each order once", async () => {
+    type Report = {
+      parcels: number;
+      priced: number;
+      orders: number;
+      postage: number;
+      collected: number;
+      margin: number;
+      avg_days: number | null;
+      destinations: { country: string; region: string | null; parcels: number }[];
+    };
+    const report = async (user: User, tenant: string) =>
+      (await as<{ r: Report }>(user, "select public.shipping_report($1, 30) as r", [tenant]))[0].r;
+    // So far in A: parcel 1 for order 1001 (8.40), parcel 2 undone, parcel 3 not on an order (8.40).
+    const before = await report(carol, tenantA);
+    expect(before).toMatchObject({
+      parcels: 2,
+      priced: 2,
+      orders: 1,
+      postage: 16.8,
+      collected: 12,
+      margin: -4.8,
+      destinations: [{ country: "US", region: "NY", parcels: 1 }],
+    });
+    // Two boxes for one order: both postages count, the shopper's shipping once.
+    await ship(carol, tenantA, held, [{ line_id: "l1", qty: 2 }]);
+    await ship(carol, tenantA, held, []);
+    const after = await report(carol, tenantA);
+    expect(after).toMatchObject({
+      parcels: 4,
+      orders: 2,
+      postage: 33.6,
+      collected: 24,
+      margin: -9.6,
+      destinations: [{ country: "US", region: "NY", parcels: 3 }],
+    });
+    // The other workspace's report is its own.
+    expect(await report(bob, tenantB)).toMatchObject({ parcels: 1, orders: 1, postage: 8.4 });
+  });
+
+  it("forgetting a shopper takes the hold note with their address", async () => {
+    await as(carol, "select public.hold_shipping_orders($1, $2, 'Lee asked us to wait', null)", [
+      tenantA,
+      [collect],
+    ]);
+    expect((await more(collect)).hold_reason).toBe("Lee asked us to wait");
+    await service("select public.redact_customer($1, 'shopify', 'c3', 'lee@example.com')", [
+      tenantA,
+    ]);
+    expect((await more(collect)).hold_reason).toBe("");
   });
 });
 

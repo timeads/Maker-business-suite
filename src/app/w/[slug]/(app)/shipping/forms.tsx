@@ -1,19 +1,32 @@
 "use client";
 
-import { useActionState, useState } from "react";
-import { Printer } from "lucide-react";
+import { useActionState, useEffect, useState } from "react";
+import { ArrowDown, ArrowUp, Printer } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FormMessage } from "@/components/ui/form-message";
-import { Input, Label } from "@/components/ui/input";
+import { Input, Label, Select } from "@/components/ui/input";
 import { SubmitButton } from "@/components/ui/submit-button";
 import { CARRIERS, guessCarrier } from "@/lib/shipping/carriers";
 import {
+  SLIP_SECTION_NAMES,
+  SLIP_TEXT_SIZES,
+  type SlipLayout,
+  type SlipSection,
+} from "@/lib/shipping/config";
+import { formatHoldDate } from "@/lib/shipping/queue";
+import {
+  markPickedUp,
+  markPickupReady,
   recordParcel,
   saveShippingSettings,
+  saveSlipLayout,
+  seenBackFromHold,
   setHold,
+  undoPickup,
   voidParcel,
   type ShippingState,
 } from "./actions";
+import { HoldPickerField, type HoldChoice } from "./hold-picker";
 
 const textarea =
   "border-input bg-card placeholder:text-muted-foreground focus-visible:border-ochre focus-visible:ring-ochre/25 w-full rounded-sm border px-[11px] py-2 text-sm outline-none focus-visible:ring-2";
@@ -50,6 +63,8 @@ export function ParcelForm({
   shopDefault,
   notifyDefault,
   currency,
+  quiet = false,
+  backTo,
 }: {
   slug: string;
   orderId: string | null;
@@ -60,12 +75,17 @@ export function ParcelForm({
   shopDefault: boolean;
   notifyDefault: boolean;
   currency: string;
+  /** Another button on the screen is the main one. */
+  quiet?: boolean;
+  /** Where to land once it's recorded. */
+  backTo?: "scan";
 }) {
   const [state, action] = useActionState(recordParcel.bind(null, slug, orderId), {});
   const [carrier, setCarrier] = useState(defaultCarrier);
   const [inShop, setInShop] = useState(shopOffered && shopDefault);
   return (
     <form action={action} className="flex flex-col gap-4">
+      {backTo && <input type="hidden" name="back" value={backTo} />}
       {!orderId && (
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="flex flex-col gap-1.5">
@@ -181,7 +201,7 @@ export function ParcelForm({
       )}
       <Result state={state} />
       <SubmitButton
-        variant={orderId ? "default" : "outline"}
+        variant={orderId && !quiet ? "default" : "outline"}
         pendingText="Recording…"
         className="sm:w-fit"
       >
@@ -194,37 +214,112 @@ export function ParcelForm({
 export function HoldForm({
   slug,
   orderId,
-  onHold,
+  hold,
   reason,
+  until,
+  today,
+  choices,
 }: {
   slug: string;
   orderId: string;
-  onHold: boolean;
+  /** "back": its day has come, so it is in the queue again. */
+  hold: "none" | "held" | "back";
   reason: string;
+  until: string | null;
+  today: string;
+  choices: HoldChoice[];
 }) {
-  const [state, action] = useActionState(setHold.bind(null, slug, orderId, !onHold), {});
+  const held = hold === "held";
+  const [state, action] = useActionState(setHold.bind(null, slug, orderId, !held), {});
   return (
-    <form action={action} className="flex flex-col gap-2">
-      {onHold ? (
+    <form action={action} className="flex flex-col gap-3">
+      {held ? (
         <p className="text-sm">
-          On hold{reason ? <span className="font-read">: {reason}</span> : "."}
+          On hold{until ? ` until ${formatHoldDate(until)}` : ""}
+          {reason ? <span className="font-read">: {reason}</span> : "."}
+          {until && (
+            <span className="text-muted-foreground block text-xs">
+              It comes back to Ready to ship that day.
+            </span>
+          )}
         </p>
       ) : (
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="hold-reason">Why it&apos;s waiting</Label>
-          <Input
-            id="hold-reason"
-            name="reason"
-            maxLength={300}
-            placeholder="Waiting on yarn, checking the address…"
-          />
-        </div>
+        <>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="hold-reason">Why it&apos;s waiting</Label>
+            <Input
+              id="hold-reason"
+              name="reason"
+              maxLength={300}
+              placeholder="Waiting on yarn, checking the address…"
+            />
+          </div>
+          <HoldPickerField id="hold-until" today={today} choices={choices} />
+        </>
       )}
       <Result state={state} />
       <SubmitButton variant="outline" size="sm" pendingText="Saving…" className="w-fit">
-        {onHold ? "Take it off hold" : "Put on hold"}
+        {held ? "Release it" : "Put on hold"}
       </SubmitButton>
     </form>
+  );
+}
+
+/** Opening an order whose hold has run out is what stops it saying "Back from hold". */
+export function SeenBackFromHold({ slug, orderId }: { slug: string; orderId: string }) {
+  useEffect(() => {
+    void seenBackFromHold(slug, orderId);
+  }, [slug, orderId]);
+  return null;
+}
+
+/** The two steps of an in-store pickup. Kept here; the shop isn't told. */
+export function PickupForm({
+  slug,
+  orderId,
+  ready,
+  pickedUp,
+  canUndo,
+}: {
+  slug: string;
+  orderId: string;
+  ready: boolean;
+  pickedUp: boolean;
+  canUndo: boolean;
+}) {
+  const [readyState, readyAction] = useActionState(
+    async (): Promise<ShippingState> => markPickupReady(slug, [orderId]),
+    {},
+  );
+  const [pickedState, pickedAction] = useActionState(markPickedUp.bind(null, slug, orderId), {});
+  const [undoState, undoAction] = useActionState(undoPickup.bind(null, slug, orderId), {});
+  return (
+    <div className="flex flex-col gap-3">
+      {!ready && !pickedUp && (
+        <form action={readyAction} className="flex flex-col gap-2">
+          <Result state={readyState} />
+          <SubmitButton pendingText="Saving…" className="w-fit">
+            Mark ready for pickup
+          </SubmitButton>
+        </form>
+      )}
+      {ready && !pickedUp && (
+        <form action={pickedAction} className="flex flex-col gap-2">
+          <Result state={pickedState} />
+          <SubmitButton pendingText="Saving…" className="w-fit">
+            Mark picked up
+          </SubmitButton>
+        </form>
+      )}
+      {canUndo && (ready || pickedUp) && (
+        <form action={undoAction} className="flex flex-col items-start gap-1">
+          <SubmitButton variant="ghost" size="sm" pendingText="Undoing…">
+            {pickedUp ? "Not picked up after all" : "Not ready after all"}
+          </SubmitButton>
+          <FormMessage>{undoState.error}</FormMessage>
+        </form>
+      )}
+    </div>
   );
 }
 
@@ -258,8 +353,7 @@ export function ShippingSettingsForm({
       city_line: string;
       country: string;
     };
-    slip_note: string;
-    slip_show_sku: boolean;
+    ship_from_country: string;
     default_carrier: string;
     mark_sent_in_shop: boolean;
     notify_customer: boolean;
@@ -271,7 +365,7 @@ export function ShippingSettingsForm({
   return (
     <form action={action} className="flex flex-col gap-5">
       <fieldset className="flex flex-col gap-3">
-        <legend className="mb-2 text-sm font-semibold">On your packing slips</legend>
+        <legend className="mb-2 text-sm font-semibold">Where you ship from</legend>
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="from-name">Your name or business</Label>
@@ -314,23 +408,24 @@ export function ShippingSettingsForm({
               defaultValue={from.country}
             />
           </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="from-country-code">Country code parcels leave from</Label>
+            <Input
+              id="from-country-code"
+              name="ship_from_country"
+              maxLength={2}
+              minLength={2}
+              pattern="[A-Za-z]{2}"
+              defaultValue={settings.ship_from_country}
+              className="w-20 uppercase"
+              aria-describedby="from-country-code-help"
+              required
+            />
+            <span id="from-country-code-help" className="text-muted-foreground text-xs">
+              Two letters, like US, CA or GB. Orders going anywhere else show under International.
+            </span>
+          </div>
         </div>
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="slip-note">A note at the bottom</Label>
-          <textarea
-            id="slip-note"
-            name="slip_note"
-            rows={3}
-            maxLength={600}
-            defaultValue={settings.slip_note}
-            placeholder="Thank you for supporting a small studio! Care: shake out, don't machine wash."
-            className={`${textarea} font-read`}
-          />
-        </div>
-        <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" name="slip_show_sku" defaultChecked={settings.slip_show_sku} />
-          Show item codes, for whoever is picking
-        </label>
       </fieldset>
 
       <fieldset className="flex flex-col gap-3">
@@ -378,8 +473,115 @@ export function ShippingSettingsForm({
         </label>
       </fieldset>
       <Result state={state} />
-      <SubmitButton pendingText="Saving…" className="sm:w-fit">
+      <SubmitButton variant="outline" pendingText="Saving…" className="sm:w-fit">
         Save settings
+      </SubmitButton>
+    </form>
+  );
+}
+
+/** What a packing slip shows and in what order. The preview beside it is drawn by the page. */
+export function SlipLayoutForm({ slug, layout }: { slug: string; layout: SlipLayout }) {
+  const [state, action] = useActionState(saveSlipLayout.bind(null, slug), {});
+  const [order, setOrder] = useState<SlipSection[]>(layout.sections.map((section) => section.id));
+  const on = new Map(layout.sections.map((section) => [section.id, section.on]));
+  const move = (index: number, by: -1 | 1) =>
+    setOrder((before) => {
+      const next = [...before];
+      const to = index + by;
+      if (to < 0 || to >= next.length) return before;
+      [next[index], next[to]] = [next[to], next[index]];
+      return next;
+    });
+  return (
+    <form action={action} className="flex flex-col gap-5">
+      <input type="hidden" name="order" value={order.join(",")} />
+      <fieldset className="flex flex-col gap-1">
+        <legend className="mb-2 text-sm font-semibold">
+          What&apos;s on the slip, top to bottom
+        </legend>
+        <ul className="divide-border border-border flex flex-col divide-y rounded-md border">
+          {order.map((id, index) => (
+            <li key={id} className="flex items-center gap-2 px-3 py-1.5">
+              <label className="flex flex-1 items-center gap-2 text-sm">
+                <input type="checkbox" name={`on:${id}`} defaultChecked={on.get(id) ?? true} />
+                {SLIP_SECTION_NAMES[id]}
+              </label>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={index === 0}
+                aria-label={`Move ${SLIP_SECTION_NAMES[id]} up`}
+                onClick={() => move(index, -1)}
+              >
+                <ArrowUp />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={index === order.length - 1}
+                aria-label={`Move ${SLIP_SECTION_NAMES[id]} down`}
+                onClick={() => move(index, 1)}
+              >
+                <ArrowDown />
+              </Button>
+            </li>
+          ))}
+        </ul>
+        <p className="text-muted-foreground mt-1 text-xs">
+          The barcode is what Scan &amp; pack reads to open an order.
+        </p>
+      </fieldset>
+
+      <fieldset className="flex flex-col gap-2">
+        <legend className="mb-2 text-sm font-semibold">Items</legend>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" name="show_sku" defaultChecked={layout.show_sku} />
+          Show item codes (SKU), for whoever is picking
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" name="show_price" defaultChecked={layout.show_price} />
+          Show prices
+        </label>
+      </fieldset>
+
+      <div className="flex flex-col gap-1.5 sm:max-w-xs">
+        <Label htmlFor="slip-text-size">Text size</Label>
+        <Select id="slip-text-size" name="text_size" defaultValue={layout.text_size}>
+          {SLIP_TEXT_SIZES.map((size) => (
+            <option key={size} value={size}>
+              {size[0].toUpperCase() + size.slice(1)}
+            </option>
+          ))}
+        </Select>
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="slip-message">Thank-you message</Label>
+        <textarea
+          id="slip-message"
+          name="message"
+          rows={3}
+          maxLength={600}
+          defaultValue={layout.message}
+          placeholder="Thank you for supporting a small studio! Care: shake out, don't machine wash."
+          className={`${textarea} font-read`}
+        />
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="slip-footer">Footer</Label>
+        <Input
+          id="slip-footer"
+          name="footer"
+          maxLength={120}
+          defaultValue={layout.footer}
+          placeholder="Questions? hello@yourstudio.com"
+        />
+      </div>
+      <Result state={state} />
+      <SubmitButton pendingText="Saving…" className="sm:w-fit">
+        Save slip layout
       </SubmitButton>
     </form>
   );

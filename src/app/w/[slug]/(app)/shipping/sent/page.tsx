@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
-import { daysFromNow } from "@/lib/bookings/slots";
 import { formatMoney } from "@/lib/dashboard/format";
+import { countryName } from "@/lib/shipping/carriers";
 import { createClient } from "@/lib/supabase/server";
+import { cn } from "@/lib/utils";
 import { canManage } from "@/lib/tenants";
 import { loadShippingSetup } from "../data";
 import { ParcelForm, VoidButton } from "../forms";
@@ -30,13 +32,34 @@ type Parcel = {
   shop_error: string | null;
 };
 
-export default async function SentParcelsPage({ params }: { params: Promise<{ slug: string }> }) {
+/** Worked out in the database (`shipping_report`), so the sums are exact. */
+type Report = {
+  days: number;
+  parcels: number;
+  priced: number;
+  orders: number;
+  postage: number;
+  collected: number;
+  margin: number;
+  avg_days: number | null;
+  destinations: { country: string; region: string | null; parcels: number }[];
+};
+const RANGES = [30, 90] as const;
+
+export default async function SentParcelsPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ slug: string }>;
+  searchParams: Promise<{ range?: string }>;
+}) {
   const { slug } = await params;
+  const range = (await searchParams).range === "90" ? 90 : 30;
   const access = await shippingAccess(slug, `/w/${slug}/shipping/sent`);
   if (!access.ok) return access.upsell;
   const { tenant, role, entitlements } = access;
   const supabase = await createClient();
-  const [{ data }, setup] = await Promise.all([
+  const [{ data }, setup, { data: reported }] = await Promise.all([
     supabase
       .from("shipments")
       .select(
@@ -46,12 +69,12 @@ export default async function SentParcelsPage({ params }: { params: Promise<{ sl
       .order("number", { ascending: false })
       .limit(300),
     loadShippingSetup(supabase, tenant.id),
+    supabase.rpc("shipping_report", { p_tenant_id: tenant.id, p_days: range }),
   ]);
   const parcels = (data ?? []) as Parcel[];
-  const live = parcels.filter((parcel) => !parcel.voided_at);
-  const month = live.filter((parcel) => parcel.shipped_at >= daysFromNow(-30));
-  const spent = month.reduce((sum, parcel) => sum + Number(parcel.cost ?? 0), 0);
-  const priced = month.filter((parcel) => parcel.cost !== null).length;
+  const report = (reported ?? null) as Report | null;
+  const money = (value: number) => formatMoney(Number(value), tenant.currency);
+  const home = setup.settings.ship_from_country;
   const when = new Intl.DateTimeFormat("en-US", {
     timeZone: tenant.timezone,
     month: "short",
@@ -63,25 +86,118 @@ export default async function SentParcelsPage({ params }: { params: Promise<{ sl
 
   return (
     <>
-      <PageHeader title="Shipping" description="Every parcel you've recorded, newest first." />
+      <PageHeader
+        title="Shipping"
+        description="What shipping cost you against what shoppers paid, and every parcel you've recorded, newest first."
+      />
       <ShippingTabs slug={tenant.slug} />
 
-      <dl className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <div className="bg-card border-border rounded-lg border px-4 py-3">
-          <dt className="text-muted-foreground text-xs font-semibold">Last 30 days</dt>
-          <dd className="mt-1 text-2xl leading-none font-bold tabular-nums">{month.length}</dd>
-          <dd className="text-muted-foreground mt-1.5 text-xs">parcels sent</dd>
-        </div>
-        <div className="bg-card border-border rounded-lg border px-4 py-3">
-          <dt className="text-muted-foreground text-xs font-semibold">Postage</dt>
-          <dd className="mt-1 text-2xl leading-none font-bold tabular-nums">
-            {priced ? formatMoney(spent, tenant.currency) : "–"}
-          </dd>
-          <dd className="text-muted-foreground mt-1.5 text-xs">
-            {priced ? `across ${priced} with a cost noted` : "note the cost when you record one"}
-          </dd>
-        </div>
-      </dl>
+      {report && (
+        <section aria-labelledby="report-title" className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <h2 id="report-title" className="text-base font-bold">
+              Report
+            </h2>
+            <nav aria-label="Report range" className="flex gap-1">
+              {RANGES.map((days) => (
+                <Link
+                  key={days}
+                  href={
+                    days === 30
+                      ? `/w/${tenant.slug}/shipping/sent`
+                      : `/w/${tenant.slug}/shipping/sent?range=${days}`
+                  }
+                  scroll={false}
+                  aria-current={days === range ? "page" : undefined}
+                  className={cn(
+                    "rounded-full px-3 py-1 text-sm whitespace-nowrap transition-colors duration-150",
+                    days === range
+                      ? "bg-teal font-semibold text-white"
+                      : "text-text-2 hover:bg-hover",
+                  )}
+                >
+                  Last {days} days
+                </Link>
+              ))}
+            </nav>
+          </div>
+          <dl className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+            {[
+              {
+                label: "Parcels sent",
+                value: String(report.parcels),
+                note: `for ${report.orders} order${report.orders === 1 ? "" : "s"}`,
+              },
+              {
+                label: "Postage spent",
+                value: report.priced ? money(report.postage) : "–",
+                note: report.priced
+                  ? report.priced < report.parcels
+                    ? `${report.parcels - report.priced} parcel${report.parcels - report.priced === 1 ? " has" : "s have"} no cost noted`
+                    : "what you paid the carriers"
+                  : "note the cost when you record one",
+              },
+              {
+                label: "Shipping collected",
+                value: report.orders ? money(report.collected) : "–",
+                note: "what shoppers paid at checkout",
+              },
+              {
+                label: "Margin",
+                value:
+                  report.priced && report.orders
+                    ? `${report.margin < 0 ? "−" : "+"}${money(Math.abs(report.margin))}`
+                    : "–",
+                note:
+                  report.margin < 0
+                    ? "postage cost more than you collected"
+                    : "collected, less postage",
+                bad: report.priced > 0 && report.orders > 0 && report.margin < 0,
+              },
+              {
+                label: "Order to shipped",
+                value: report.avg_days === null ? "–" : `${report.avg_days} days`,
+                note: "on average, to the first parcel",
+              },
+            ].map((stat) => (
+              <div key={stat.label} className="bg-card border-border rounded-lg border px-4 py-3">
+                <dt className="text-muted-foreground text-xs font-semibold">{stat.label}</dt>
+                <dd
+                  className={cn(
+                    "mt-1 text-2xl leading-none font-bold tabular-nums",
+                    stat.bad && "text-brick",
+                  )}
+                >
+                  {stat.value}
+                </dd>
+                <dd className="text-muted-foreground mt-1.5 text-xs">{stat.note}</dd>
+              </div>
+            ))}
+          </dl>
+          {report.destinations.length > 0 && (
+            <div className="bg-card border-border rounded-lg border px-4 py-3">
+              <h3 className="text-muted-foreground text-xs font-semibold">Top destinations</h3>
+              <ol className="mt-2 grid gap-x-8 gap-y-1 text-sm sm:grid-cols-2 lg:grid-cols-4">
+                {report.destinations.map((place) => (
+                  <li
+                    key={`${place.country}-${place.region ?? ""}`}
+                    className="flex justify-between gap-3"
+                  >
+                    <span className="truncate">
+                      {place.country === home
+                        ? (place.region ?? countryName(place.country))
+                        : [place.region, countryName(place.country)].filter(Boolean).join(", ")}
+                    </span>
+                    <span className="text-muted-foreground tabular-nums">
+                      {place.parcels} parcel{place.parcels === 1 ? "" : "s"}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
+        </section>
+      )}
 
       <Card>
         <CardContent className="pt-5">

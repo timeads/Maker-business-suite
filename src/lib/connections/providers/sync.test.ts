@@ -148,16 +148,38 @@ describe("Shopify sync", () => {
     const calls: { query: string; variables: Record<string, unknown> }[] = [];
     const stockCalls: Record<string, unknown>[] = [];
     const shippingCalls: Record<string, unknown>[] = [];
+    const shippingQueries: string[] = [];
     let shippingFails = false;
+    let deliveryMethodsFail = false;
+    let pickup = false;
     const graphql = (async (_shop: string, _token: TokenSet, query: string, variables?: object) => {
       if (query.includes("shippingAddress")) {
         shippingCalls.push((variables ?? {}) as Record<string, unknown>);
+        shippingQueries.push(query);
         if (shippingFails) throw new Error("Access denied for shippingAddress field");
+        const withDelivery = query.includes("fulfillmentOrders");
+        if (withDelivery && deliveryMethodsFail) {
+          throw new Error("Access denied for fulfillmentOrders field");
+        }
         return {
           nodes: ((variables as { ids: string[] }).ids ?? []).map((id) => ({
             legacyResourceId: id.split("/").pop(),
             displayFinancialStatus: "PAID",
             note: null,
+            currentTotalWeight: "1361",
+            currentShippingPriceSet: money("8.50"),
+            ...(withDelivery
+              ? {
+                  fulfillmentOrders: {
+                    nodes: [
+                      {
+                        status: "OPEN",
+                        deliveryMethod: { methodType: pickup ? "PICK_UP" : "SHIPPING" },
+                      },
+                    ],
+                  },
+                }
+              : {}),
             shippingAddress: {
               name: "Sam Shopper",
               company: null,
@@ -169,7 +191,7 @@ describe("Shopify sync", () => {
               countryCodeV2: "US",
               phone: null,
             },
-            shippingLines: { nodes: [{ title: "Standard" }] },
+            shippingLines: { nodes: [{ title: pickup ? "Studio pickup" : "Standard" }] },
             lineItems: {
               nodes: [
                 {
@@ -180,6 +202,8 @@ describe("Shopify sync", () => {
                   currentQuantity: 2,
                   unfulfilledQuantity: 1,
                   requiresShipping: true,
+                  discountedUnitPriceAfterAllDiscountsSet: money("100.00"),
+                  variant: { barcode: " 0123456789012 " },
                 },
                 {
                   id: "gid://shopify/LineItem/502",
@@ -226,8 +250,15 @@ describe("Shopify sync", () => {
       calls,
       stockCalls,
       shippingCalls,
+      shippingQueries,
       denyShipping: () => {
         shippingFails = true;
+      },
+      denyDeliveryMethods: () => {
+        deliveryMethodsFail = true;
+      },
+      makePickup: () => {
+        pickup = true;
       },
     };
   }
@@ -258,6 +289,9 @@ describe("Shopify sync", () => {
         region: "NY",
         country_code: "US",
         shipping_method: "Standard",
+        shipping_paid: 8.5,
+        weight_grams: 1361,
+        pickup: false,
         paid: true,
         items: [
           {
@@ -265,12 +299,43 @@ describe("Shopify sync", () => {
             title: "Wool rug",
             variant: "Large",
             sku: "RUG-L",
+            barcode: "0123456789012",
+            price: 100,
             qty: 2,
             left: 1,
           },
         ],
       }),
     ]);
+  });
+
+  it("knows a pickup from how the shop says the order is delivered", async () => {
+    const net = pagedGraphql([{ nodes: [shopifyOrder("7")], hasNextPage: false, endCursor: null }]);
+    net.makePickup();
+    const { ctx, state } = context({ type: "full" });
+    await syncShopify(ctx, net.graphql, NOW);
+    expect(state.shipping[0]).toMatchObject({ pickup: true, shipping_method: "Studio pickup" });
+  });
+
+  it("a shop that won't say how orders are delivered still gets its packing list", async () => {
+    const net = pagedGraphql([
+      { nodes: [shopifyOrder("1")], hasNextPage: true, endCursor: "c1" },
+      { nodes: [shopifyOrder("2")], hasNextPage: false, endCursor: null },
+    ]);
+    net.denyDeliveryMethods();
+    net.makePickup();
+    const { ctx, state } = context({ type: "full" });
+    await syncShopify(ctx, net.graphql, NOW);
+    // Asked in full once, then without the delivery part for the rest of the run.
+    expect(net.shippingQueries.map((query) => query.includes("fulfillmentOrders"))).toEqual([
+      true,
+      false,
+      false,
+    ]);
+    expect(state.shipping.map((order) => order.external_id)).toEqual(["1", "2"]);
+    // Falls back on the name of the checkout option.
+    expect(state.shipping.every((order) => order.pickup)).toBe(true);
+    expect(state.shipping[0]).toMatchObject({ shipping_paid: 8.5, weight_grams: 1361 });
   });
 
   it("a shop that won't share addresses still gets its sales, and is asked only once", async () => {
@@ -283,7 +348,12 @@ describe("Shopify sync", () => {
     const result = await syncShopify(ctx, net.graphql, NOW);
     expect(state.orders.map((o) => o.external_id)).toEqual(["1", "2"]);
     expect(state.shipping).toEqual([]);
-    expect(net.shippingCalls).toHaveLength(1);
+    // One page's worth: the full question, then once more without the delivery
+    // part in case that was the trouble. The second page isn't asked at all.
+    expect(net.shippingCalls).toHaveLength(2);
+    expect(net.shippingCalls.every((call) => String(call.ids) === "gid://shopify/Order/1")).toBe(
+      true,
+    );
     expect(result.cursor).toBeDefined();
   });
 

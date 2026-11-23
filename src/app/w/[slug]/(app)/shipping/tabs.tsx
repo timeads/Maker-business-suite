@@ -6,7 +6,9 @@ export function ShippingTabs({ slug }: { slug: string }) {
     <SectionTabs
       label="Shipping"
       tabs={[
-        { href: base, name: "To send", exact: true },
+        { href: base, name: "To ship", exact: true },
+        { href: `${base}/all`, name: "All orders" },
+        { href: `${base}/scan`, name: "Scan & pack" },
         { href: `${base}/sent`, name: "Sent" },
         { href: `${base}/settings`, name: "Settings" },
       ]}

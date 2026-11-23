@@ -34,9 +34,13 @@ import { APPEARANCE_KEY, DEFAULT_APPEARANCE, appearanceSchema } from "../brand/a
 import { BRAND_MODULE, KIT_KEY, brandKitSchema } from "../brand/kit";
 import {
   DEFAULT_SHIPPING_SETTINGS,
+  DEFAULT_SLIP_LAYOUT,
   SHIPPING_MODULE,
   SHIPPING_SETTINGS_KEY,
+  SLIP_LAYOUT_KEY,
+  SLIP_SECTION_NAMES,
   shippingSettingsSchema,
+  slipLayoutSchema,
 } from "../shipping/config";
 import {
   DEFAULT_STOCK_SETTINGS,
@@ -127,9 +131,19 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
     feature: "shipping",
     name: "Shipping and packing slips",
     description:
-      "The return address and note printed on packing slips, the usual carrier, and whether recording a parcel also marks the order as sent in the shop and emails the customer.",
+      "The return address printed on packing slips, the country parcels leave from (anything going elsewhere counts as international), the usual carrier, and whether recording a parcel also marks the order as sent in the shop and emails the customer.",
     schema: shippingSettingsSchema,
     defaultBody: () => DEFAULT_SHIPPING_SETTINGS,
+  },
+  {
+    module: SHIPPING_MODULE,
+    key: SLIP_LAYOUT_KEY,
+    feature: "shipping",
+    name: "Packing slip layout",
+    description:
+      "Which sections a packing slip shows and in what order (ship-to address, shipping method, items, order note, thank-you message, order barcode), whether items show their code and price, the text size, the thank-you message and the footer line.",
+    schema: slipLayoutSchema,
+    defaultBody: () => DEFAULT_SLIP_LAYOUT,
   },
   {
     module: SOCIAL_MODULE,
@@ -296,16 +310,30 @@ export function describeConfig(entry: ConfigEntry, body: unknown): string[] {
       value.show_posts ? "Shows recent posts" : "Links only",
     ];
   }
-  if (entry.module === SHIPPING_MODULE) {
-    const from = (value.ship_from ?? {}) as Record<string, string>;
+  if (entry.module === SHIPPING_MODULE && entry.key === SLIP_LAYOUT_KEY) {
+    const sections = list("sections") as { id: keyof typeof SLIP_SECTION_NAMES; on?: boolean }[];
     const clip = (text: unknown) => {
       const t = String(text ?? "").replace(/\s+/g, " ");
       return t ? `"${t.slice(0, 90)}${t.length > 90 ? "…" : ""}"` : "nothing";
     };
     return [
+      `Shows, top to bottom: ${
+        sections
+          .filter((section) => section.on !== false)
+          .map((section) => SLIP_SECTION_NAMES[section.id] ?? section.id)
+          .join(", ") || "nothing"
+      }`,
+      `Items show: ${[value.show_sku ? "codes" : null, value.show_price ? "prices" : null].filter(Boolean).join(" and ") || "names only"}`,
+      `Text size: ${value.text_size}`,
+      `Thank-you message: ${clip(value.message)}`,
+      `Footer: ${clip(value.footer)}`,
+    ];
+  }
+  if (entry.module === SHIPPING_MODULE) {
+    const from = (value.ship_from ?? {}) as Record<string, string>;
+    return [
       `Slips are from: ${[from.name, from.address1, from.city_line].filter(Boolean).join(", ") || "no address yet"}`,
-      `Note at the bottom of each slip: ${clip(value.slip_note)}`,
-      value.slip_show_sku ? "Slips show item codes" : "Slips leave item codes off",
+      `Parcels leave from: ${value.ship_from_country ?? "US"}`,
       `Usual carrier: ${value.default_carrier}`,
       value.mark_sent_in_shop
         ? `Parcels are marked as sent in the shop${value.notify_customer ? ", and the shop emails the customer" : ""}`

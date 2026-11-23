@@ -119,7 +119,13 @@ export type ShippingOrderRow = {
   postal_code: string | null;
   country_code: string | null;
   phone: string | null;
+  /** The option the shopper picked at checkout. */
   shipping_method: string | null;
+  /** What they paid for it. */
+  shipping_paid: number | null;
+  weight_grams: number | null;
+  /** They're collecting it, so there's nothing to post. */
+  pickup: boolean;
   note: string | null;
   paid: boolean;
   items: {
@@ -127,6 +133,9 @@ export type ShippingOrderRow = {
     title: string;
     variant: string | null;
     sku: string | null;
+    barcode: string | null;
+    /** What one of them cost the shopper. */
+    price: number | null;
     qty: number;
     left: number;
   }[];
