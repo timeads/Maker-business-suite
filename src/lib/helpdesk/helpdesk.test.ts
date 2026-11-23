@@ -9,7 +9,7 @@ import {
   type InboundEmail,
   type PostmarkInbound,
 } from "./inbound";
-import { buildReplyRequest, replySubject, sendReply } from "./reply";
+import { ReplyRefused, buildReplyRequest, replyProblem, replySubject, sendReply } from "./reply";
 
 const DOMAIN = "in.makersuite.test";
 const KEY = "0123456789abcdef0123456789abcdef";
@@ -253,6 +253,17 @@ describe("sending a reply", () => {
         status: 422,
       })) as typeof fetch;
     await expect(sendReply(reply, refused)).rejects.toThrow(/refused/);
+    const pending = (async () =>
+      new Response(
+        JSON.stringify({ ErrorCode: 412, Message: "pending approval for someone@example.com" }),
+        { status: 422 },
+      )) as typeof fetch;
+    const err = await sendReply(reply, pending).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ReplyRefused);
+    expect((err as Error).message).not.toContain("example.com");
+    expect(replyProblem(err)).toMatch(/waiting for approval/);
+    expect(replyProblem(new ReplyRefused(422, 400))).toMatch(/hasn't been confirmed/);
+    expect(replyProblem(new Error("network"))).toMatch(/try again/);
   });
 });
 
