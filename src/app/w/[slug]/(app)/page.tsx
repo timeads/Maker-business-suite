@@ -4,23 +4,23 @@ import { notFound } from "next/navigation";
 import {
   Boxes,
   CalendarDays,
-  ChevronRight,
   Inbox,
   LineChart,
   Megaphone,
   MessagesSquare,
   Truck,
 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
+import { formatMoney } from "@/lib/dashboard/format";
 import { requireUser } from "@/lib/auth";
 import { daysFromNow, formatTime, localDay } from "@/lib/bookings/slots";
 import { getEntitlements } from "@/lib/entitlements";
 import type { ModuleKey } from "@/lib/modules";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
+import { HomeCards } from "./home-cards";
 
 export const metadata: Metadata = { title: "Today" };
 
@@ -109,6 +109,17 @@ export default async function WorkspaceHomePage({ params }: { params: Promise<{ 
             .eq("key", "kit")
         : skip,
     ]);
+
+  const { data: recentOrders } = has("dashboard")
+    ? await supabase
+        .from("orders")
+        .select("net_sales")
+        .eq("tenant_id", tenant.id)
+        .is("cancelled_at", null)
+        .gte("processed_at", daysFromNow(-7))
+        .limit(1000)
+    : { data: null };
+  const weekOrders = (recentOrders ?? []) as { net_sales: number | null }[];
 
   const rows: Row[] = [];
   if (has("helpdesk")) {
@@ -234,7 +245,15 @@ export default async function WorkspaceHomePage({ params }: { params: Promise<{ 
       key: "dashboard",
       icon: LineChart,
       name: "Money",
-      headline: "Sales, margins and cash",
+      headline: weekOrders.length
+        ? `${formatMoney(
+            weekOrders.reduce((sum, o) => sum + Number(o.net_sales ?? 0), 0),
+            tenant.currency,
+          )} in sales this week`
+        : "No sales in the last 7 days",
+      detail: weekOrders.length
+        ? `${plural(weekOrders.length, "order", "orders")} in the last 7 days`
+        : "Sales, margins and cash",
       waiting: false,
       href: `${base}/dashboard`,
     });
@@ -300,39 +319,17 @@ export default async function WorkspaceHomePage({ params }: { params: Promise<{ 
           )}
         </Card>
       ) : (
-        <ul className="bg-card border-border divide-border flex flex-col divide-y overflow-hidden rounded-lg border">
-          {rows.map((row) => (
-            <li key={row.key}>
-              <Link
-                href={row.href}
-                className="hover:bg-hover focus-visible:bg-hover flex items-center gap-4 px-4 py-3.5 transition-colors duration-150 outline-none"
-              >
-                <span
-                  className={
-                    row.waiting
-                      ? "bg-ochre-soft text-ochre-text flex size-9 shrink-0 items-center justify-center rounded-md"
-                      : "bg-sunken text-muted-foreground flex size-9 shrink-0 items-center justify-center rounded-md"
-                  }
-                >
-                  <row.icon className="size-4" aria-hidden />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="text-muted-foreground block text-xs font-semibold">
-                    {row.name}
-                  </span>
-                  <span className={row.waiting ? "block font-semibold" : "block"}>
-                    {row.headline}
-                  </span>
-                  {row.detail && (
-                    <span className="text-muted-foreground block text-sm">{row.detail}</span>
-                  )}
-                </span>
-                {row.waiting && <Badge tone="waiting">Needs you</Badge>}
-                <ChevronRight className="text-muted-foreground size-4 shrink-0" aria-hidden />
-              </Link>
-            </li>
-          ))}
-        </ul>
+        <HomeCards
+          slug={tenant.slug}
+          cards={rows.map(({ key, name, headline, detail, waiting: wants, href }) => ({
+            key,
+            name,
+            headline,
+            detail,
+            waiting: wants,
+            href,
+          }))}
+        />
       )}
 
       {canManage(role) && (
