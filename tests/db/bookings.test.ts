@@ -612,3 +612,144 @@ describe("the business's own changes", () => {
     ).rejects.toThrow(/permission denied/);
   });
 });
+
+describe("bookings sold through the shop", () => {
+  const as = <T>(user: User, sql: string, params: unknown[] = []) =>
+    asUser(db, user, async (tx) => (await tx.query<T>(sql, params)).rows);
+  type Result = { result: string; booking_id?: string; oversold?: boolean };
+  const book = async (
+    tenant: string,
+    session: string,
+    order: string,
+    seats: number,
+    email = "shopper@example.com",
+  ) =>
+    (
+      await service<{ r: Result }>(
+        "select public.book_from_shop($1, $2, $3, '#1001', 'Sam Shopper', $4, $5, 9000, $6) as r",
+        [tenant, session, order, email, seats, `shop-token-${order}-${session}`],
+      )
+    )[0].r;
+
+  it("a workshop is tied to one shop product, by its managers only", async () => {
+    const svc = await makeService(alice, tenantA, "workshop", 0, 3);
+    await as(alice, "select public.set_service_shop_product($1, '8001', '9001')", [svc]);
+    const other = await makeService(alice, tenantA, "workshop", 0, 3);
+    await expect(
+      as(alice, "select public.set_service_shop_product($1, '8001', '9002')", [other]),
+    ).rejects.toThrow(/product_taken/);
+    await expect(
+      as(bob, "select public.set_service_shop_product($1, '8009', '9009')", [svc]),
+    ).rejects.toThrow(/Workspace not found|Only owners/);
+    await expect(
+      as(alice, "select public.set_service_shop_product($1, 'abc', null)", [svc]),
+    ).rejects.toThrow(/check/);
+    // The same product number in another workspace is that workspace's own business.
+    const bobs = await makeService(bob, tenantB, "workshop", 0, 3);
+    await as(bob, "select public.set_service_shop_product($1, '8001', '9001')", [bobs]);
+  });
+
+  it("the date picker sees coming, open dates with seats left, and nothing else", async () => {
+    const svc = await makeService(alice, tenantA, "workshop", 0, 2);
+    await as(alice, "select public.set_service_shop_product($1, '8100', '9100')", [svc]);
+    const open = await makeSession(alice, svc, 48);
+    const hidden = await makeSession(alice, svc, 72);
+    await as(alice, "select public.update_session($1, null, null, true, true, '')", [hidden]).catch(
+      () => db.query("update public.sessions set private = true where id = $1", [hidden]),
+    );
+    await book(tenantA, open, "501", 1);
+    const data = (
+      await service<{
+        d: { service: { variant_id: string }; sessions: { id: string; seats_left: number }[] };
+      }>("select public.shop_booking_dates($1, '8100') as d", [tenantA])
+    )[0].d;
+    expect(data.service.variant_id).toBe("9100");
+    expect(data.sessions).toEqual([expect.objectContaining({ id: open, seats_left: 1 })]);
+    expect(JSON.stringify(data)).not.toContain("shopper@example.com");
+    // Another workspace asking for that product gets nothing.
+    expect(
+      (
+        await service<{ d: unknown }>("select public.shop_booking_dates($1, '8100') as d", [
+          tenantB,
+        ])
+      )[0]?.d ?? null,
+    ).toBeNull();
+    await expect(
+      as(alice, "select public.shop_booking_dates($1, '8100')", [tenantA]),
+    ).rejects.toThrow(/permission denied/);
+  });
+
+  it("an order becomes one booking however often the shop repeats it, and follows refunds", async () => {
+    const svc = await makeService(alice, tenantA, "workshop", 0, 4);
+    const session = await makeSession(alice, svc, 48);
+    const first = await book(tenantA, session, "601", 2);
+    expect(first).toMatchObject({ result: "booked", oversold: false });
+    expect(await book(tenantA, session, "601", 2)).toMatchObject({
+      result: "unchanged",
+      booking_id: first.booking_id,
+    });
+    // One of the two seats was refunded.
+    expect(await book(tenantA, session, "601", 1)).toMatchObject({ result: "resized" });
+    const { rows } = await db.query<{ seats: number; status: string; shop_order_name: string }>(
+      "select seats, status, shop_order_name from public.bookings where id = $1",
+      [first.booking_id],
+    );
+    expect(rows[0]).toEqual({ seats: 1, status: "confirmed", shop_order_name: "#1001" });
+    // The rest was refunded too.
+    expect(await book(tenantA, session, "601", 0)).toMatchObject({ result: "cancelled" });
+    expect(await book(tenantA, session, "601", 0)).toMatchObject({ result: "unchanged" });
+    // A cancelled order frees its seats.
+    await book(tenantA, session, "602", 3);
+    expect(
+      (
+        await service<{ n: number }>("select public.cancel_shop_order($1, '602') as n", [tenantA])
+      )[0].n,
+    ).toBe(1);
+    expect(
+      (
+        await service<{ n: number }>("select public.cancel_shop_order($1, '602') as n", [tenantA])
+      )[0].n,
+    ).toBe(0);
+  });
+
+  it("a paid order is never dropped: a full, closed or cancelled date is booked and flagged", async () => {
+    const svc = await makeService(alice, tenantA, "workshop", 0, 2);
+    const session = await makeSession(alice, svc, 48);
+    await book(tenantA, session, "701", 2);
+    expect(await book(tenantA, session, "702", 1)).toMatchObject({
+      result: "booked",
+      oversold: true,
+    });
+    await db.query(
+      "update public.sessions set bookings_closed = true, private = true where id = $1",
+      [session],
+    );
+    expect(await book(tenantA, session, "703", 1)).toMatchObject({ result: "booked" });
+  });
+
+  it("an order can't book into another workspace's date, and only the server can call it", async () => {
+    const svc = await makeService(alice, tenantA, "workshop", 0, 2);
+    const session = await makeSession(alice, svc, 48);
+    expect(await book(tenantB, session, "801", 1)).toEqual({ result: "no_session" });
+    await expect(
+      as(alice, "select public.book_from_shop($1, $2, '802', '#1', 'A', 'a@a.test', 1, 0, 't')", [
+        tenantA,
+        session,
+      ]),
+    ).rejects.toThrow(/permission denied/);
+    await expect(
+      as(alice, "select public.cancel_shop_order($1, '801')", [tenantA]),
+    ).rejects.toThrow(/permission denied/);
+    // The same order number in two workspaces stays apart.
+    const bobSvc = await makeService(bob, tenantB, "workshop", 0, 2);
+    const bobSession = await makeSession(bob, bobSvc, 48);
+    await book(tenantA, session, "900", 1);
+    await book(tenantB, bobSession, "900", 1);
+    await service("select public.cancel_shop_order($1, '900')", [tenantB]);
+    const mine = await as<{ status: string }>(
+      alice,
+      "select status from public.bookings where shop_order_id = '900'",
+    );
+    expect(mine).toEqual([{ status: "confirmed" }]);
+  });
+});

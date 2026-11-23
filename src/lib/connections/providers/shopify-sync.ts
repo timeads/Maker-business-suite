@@ -3,6 +3,7 @@ import type {
   OrderRow,
   ProductRow,
   ShippingOrderRow,
+  ShopBookingOrder,
   StockItemRow,
   SyncContext,
   SyncResult,
@@ -24,7 +25,7 @@ export type ShopifyGraphql = <T>(
 
 type Money = { shopMoney: { amount: string } } | null;
 
-type ShopifyOrder = {
+export type ShopifyOrder = {
   legacyResourceId: string;
   name: string;
   email: string | null;
@@ -55,6 +56,7 @@ type ShopifyOrder = {
       variantTitle: string | null;
       sku: string | null;
       currentQuantity: number;
+      customAttributes?: { key: string; value: string | null }[] | null;
       discountedUnitPriceAfterAllDiscountsSet: Money;
       product: {
         legacyResourceId: string;
@@ -81,6 +83,7 @@ const ORDER_FIELDS = `
   lineItems(first: 100) {
     nodes {
       id title variantTitle sku currentQuantity
+      customAttributes { key value }
       discountedUnitPriceAfterAllDiscountsSet { shopMoney { amount } }
       product { legacyResourceId title vendor productType status updatedAt }
       variant { inventoryItem { unitCost { amount } } }
@@ -206,6 +209,7 @@ type ShopifyShipping = {
       variantTitle: string | null;
       sku: string | null;
       currentQuantity: number;
+      customAttributes?: { key: string; value: string | null }[] | null;
       unfulfilledQuantity: number;
       requiresShipping: boolean;
     }[];
@@ -379,6 +383,49 @@ const monthsAgo = (months: number, from: Date) => {
   return date.toISOString();
 };
 
+const SESSION_KEY = "Session ID";
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The orders that carry workshop dates. The product page's date picker puts
+ * the date's id on the cart line as "Session ID"; lines for the same date
+ * are added together. The seats are what the order holds now, so a refunded
+ * seat is a seat given back.
+ */
+export function shopBookingsFrom(orders: ShopifyOrder[]): ShopBookingOrder[] {
+  const out: ShopBookingOrder[] = [];
+  for (const order of orders) {
+    const byDate = new Map<string, { seats: number; amount_cents: number }>();
+    for (const line of order.lineItems.nodes) {
+      const id = line.customAttributes?.find((a) => a.key === SESSION_KEY)?.value?.trim() ?? "";
+      if (!UUID.test(id)) continue;
+      const key = id.toLowerCase();
+      const seats = Math.max(0, Math.trunc(line.currentQuantity));
+      const soFar = byDate.get(key) ?? { seats: 0, amount_cents: 0 };
+      byDate.set(key, {
+        seats: soFar.seats + seats,
+        amount_cents:
+          soFar.amount_cents +
+          Math.round(money(line.discountedUnitPriceAfterAllDiscountsSet) * 100) * seats,
+      });
+    }
+    if (byDate.size === 0) continue;
+    const name = [order.customer?.firstName, order.customer?.lastName]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+    out.push({
+      external_id: order.legacyResourceId,
+      name: order.name,
+      cancelled: order.cancelledAt !== null,
+      customer_name: name,
+      email: order.email,
+      lines: [...byDate].map(([session_id, line]) => ({ session_id, ...line })),
+    });
+  }
+  return out;
+}
+
 /**
  * The search that finds every order changed since a moment. Written the way
  * the shop's search reads it for certain: whole seconds, no quotes, and
@@ -458,6 +505,8 @@ async function pullOrders(
     calls += 1;
     if (data.orders.nodes.length > 0) {
       await ctx.store.upsertCommerce(mapShopifyOrders(data.orders.nodes));
+      const dated = shopBookingsFrom(data.orders.nodes);
+      if (dated.length > 0) await ctx.store.bookShopOrders(dated);
       // One refusal means the shop hasn't shared addresses; don't ask again this run.
       if (addresses) {
         addresses = await pullShipping(
@@ -533,6 +582,8 @@ async function handleWebhook(ctx: SyncContext, graphql: ShopifyGraphql): Promise
     );
     if (data.order) {
       await ctx.store.upsertCommerce(mapShopifyOrders([data.order]));
+      const dated = shopBookingsFrom([data.order]);
+      if (dated.length > 0) await ctx.store.bookShopOrders(dated);
       await pullShipping(ctx, graphql, [data.order.legacyResourceId]);
     }
     await ctx.store.recordUsage(2);

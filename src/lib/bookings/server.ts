@@ -55,6 +55,8 @@ export type ServiceRow = {
   price_cents: number;
   capacity: number;
   active: boolean;
+  /** Set when this is sold through the business's own shop, not here. */
+  shop_product_id?: string | null;
 };
 
 export type SessionAvailability = {
@@ -66,7 +68,7 @@ export type SessionAvailability = {
 };
 
 const SERVICE_COLUMNS =
-  "id, kind, name, slug, description, duration_minutes, price_cents, capacity, active";
+  "id, kind, name, slug, description, duration_minutes, price_cents, capacity, active, shop_product_id";
 
 /** How far ahead appointment times are offered. */
 export const BOOKING_WINDOW_DAYS = 28;
@@ -297,6 +299,34 @@ export type ReserveInput = {
   answers: Record<string, string>;
 };
 
+export type ShopBookingDates = {
+  workspace: { name: string; timezone: string };
+  service: { name: string; duration_minutes: number; variant_id: string | null };
+  sessions: { id: string; starts_at: string; seats_left: number }[];
+};
+
+/**
+ * What the date picker on a shop's product page shows: the workshop sold by
+ * that product and its coming dates. Null when there is no such workshop.
+ */
+export async function getShopBookingDates(
+  slug: string,
+  productId: string,
+  admin: SupabaseClient = getAdminClient(),
+): Promise<ShopBookingDates | null> {
+  if (!/^[0-9]{1,20}$/.test(productId)) return null;
+  const tenant = await getPublicWorkspace(slug, admin);
+  if (!tenant) return null;
+  const { data, error } = await admin.rpc("shop_booking_dates", {
+    p_tenant_id: tenant.id,
+    p_product_id: productId,
+  });
+  if (error) throw new Error(`Could not load dates: ${error.message}`);
+  const found = data as Omit<ShopBookingDates, "workspace"> | null;
+  if (!found?.service) return null;
+  return { workspace: { name: tenant.name, timezone: tenant.timezone }, ...found };
+}
+
 export type ReserveResult =
   | { ok: true; redirectTo: string }
   | { ok: false; reason: "full" | "taken" | "gone" | "payments_off" | "failed" };
@@ -308,6 +338,8 @@ export type ReserveResult =
 export async function reserve(input: ReserveInput): Promise<ReserveResult> {
   const admin = getAdminClient();
   const { tenant, service } = input;
+  // Sold in the shop: the shop takes the payment, so nothing is booked here.
+  if (service.shop_product_id) return { ok: false, reason: "gone" };
   const paid = service.price_cents > 0;
   const payout = paid ? await getLivePayoutAccount(tenant.id, admin) : null;
   if (paid && (!payout?.ready || !process.env.STRIPE_SECRET_KEY)) {

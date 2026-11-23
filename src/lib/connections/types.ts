@@ -129,6 +129,20 @@ export type ShippingOrderRow = {
   }[];
 };
 
+/**
+ * A shop order that carries workshop dates: each line names the date it is
+ * for (the date picker on the product page put it there).
+ */
+export type ShopBookingOrder = {
+  external_id: string;
+  /** The order number as the shopper sees it, e.g. #1042. */
+  name: string;
+  cancelled: boolean;
+  customer_name: string;
+  email: string | null;
+  lines: { session_id: string; seats: number; amount_cents: number }[];
+};
+
 /** Where a sync puts what it fetched. Always scoped to the job's workspace and provider. */
 export type SyncStore = {
   upsertCommerce(batch: {
@@ -137,6 +151,8 @@ export type SyncStore = {
     orders?: OrderRow[];
   }): Promise<void>;
   upsertStock(items: StockItemRow[]): Promise<void>;
+  /** Turns orders with workshop dates on them into bookings. Safe to repeat. */
+  bookShopOrders(orders: ShopBookingOrder[]): Promise<void>;
   /** For orders already stored with upsertCommerce. */
   upsertShipping(orders: ShippingOrderRow[]): Promise<void>;
   saveSnapshots(rows: SnapshotRow[]): Promise<void>;

@@ -15,6 +15,11 @@ const eslintConfig = defineConfig([
       ],
     },
   },
+  {
+    // The date picker runs on a shop's own pages, not inside this app.
+    files: ["public/booking-widget.js"],
+    rules: { "@next/next/no-location-assign-relative-destination": "off" },
+  },
   globalIgnores([".next/**", "out/**", "build/**", "next-env.d.ts", "playwright-report/**"]),
 ]);
 

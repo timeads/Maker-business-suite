@@ -126,6 +126,10 @@ export default async function ServicePage({
             </Button>
           </div>
         </form>
+      ) : service.shop_product_id ? (
+        <p className="text-muted-foreground">
+          This one is booked through our shop. Find it there to pick your date.
+        </p>
       ) : nothing ? (
         <p className="text-muted-foreground">There are no times open right now. Check back soon.</p>
       ) : !canPay ? (

@@ -117,6 +117,14 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   `configs` (bookings / emails) and is read by `claim_booking_emails` in the
   database; the worker only adds the words. Tools with several views use
   `<SectionTabs>` under the page header.
+  A workshop can instead be sold through the business's own shop
+  (`services.shop_product_id`): the date picker on the product page
+  (`public/booking-widget.js`, plain JS in a shadow root, reads
+  `/api/book/shop`) puts the date on the cart line as "Session ID", the
+  shop takes the payment, and the order sync turns it into a booking with
+  `book_from_shop` (once per order and date; the seats follow refunds; a
+  full or closed date is still booked and flagged). Such a workshop can't
+  be booked or paid for on our own pages.
 - Social: members write posts through `save_social_post`; the worker claims
   due posts (`claim_due_social_posts`) and records each channel's answer with
   `finish_social_post`, which merges results so a channel that went out is

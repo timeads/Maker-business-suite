@@ -250,3 +250,35 @@ export async function saveBookingForm(
   revalidatePath(`/w/${slug}/bookings`, "layout");
   return { message: "Saved." };
 }
+
+/** Ties a workshop to the shop product that sells it, or unties it. */
+export async function setShopProduct(
+  slug: string,
+  serviceId: string,
+  _prev: BookingsState,
+  formData: FormData,
+): Promise<BookingsState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  // "product:variant" from the list, or the two numbers typed by hand.
+  const [pickedProduct, pickedVariant] = text(formData, "pick").split(":");
+  const product = (text(formData, "product_id") || pickedProduct || "").replace(/\D/g, "");
+  const variant = (text(formData, "variant_id") || pickedVariant || "").replace(/\D/g, "");
+  if (formData.get("intent") !== "remove" && !product) {
+    return { error: "Choose the product that sells this workshop." };
+  }
+  const { error } = await ctx.supabase.rpc("set_service_shop_product", {
+    p_service_id: serviceId,
+    p_product_id: formData.get("intent") === "remove" ? null : product,
+    p_variant_id: formData.get("intent") === "remove" ? null : variant || null,
+  });
+  if (error) {
+    return {
+      error: error.message.includes("product_taken")
+        ? "Another workshop is already sold by that product."
+        : "That didn't save. Check the numbers and try again.",
+    };
+  }
+  revalidatePath(`/w/${slug}/bookings`, "layout");
+  return { message: formData.get("intent") === "remove" ? "Removed." : "Saved." };
+}

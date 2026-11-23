@@ -4,6 +4,7 @@ import type {
   ProductRow,
   SnapshotRow,
   ShippingOrderRow,
+  ShopBookingOrder,
   StockItemRow,
   SyncStore,
 } from "./types";
@@ -17,6 +18,7 @@ export function memoryStore() {
     stock: [] as StockItemRow[],
     shipping: [] as ShippingOrderRow[],
     snapshots: [] as SnapshotRow[],
+    shopBookings: [] as ShopBookingOrder[],
     redacted: [] as { externalId: string; email: string | null }[],
     purged: 0,
     usage: 0,
@@ -33,6 +35,9 @@ export function memoryStore() {
     },
     async upsertStock(items) {
       state.stock.push(...items);
+    },
+    async bookShopOrders(orders) {
+      state.shopBookings.push(...orders);
     },
     async saveSnapshots(rows) {
       state.snapshots.push(...rows);

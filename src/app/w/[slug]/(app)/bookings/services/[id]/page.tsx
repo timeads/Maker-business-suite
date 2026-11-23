@@ -8,6 +8,7 @@ import { formatWhen } from "@/lib/bookings/slots";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
 import { AddSessionForm, AvailabilityForm, ServiceForm, type ServiceValues } from "../../forms";
+import { ShopProductCard } from "../../shop-product";
 import { bookingsAccess } from "../../gate";
 
 export const metadata: Metadata = { title: "Bookings" };
@@ -30,13 +31,28 @@ export default async function ServicePage({
   const supabase = await createClient();
   const { data } = await supabase
     .from("services")
-    .select("id, kind, name, description, duration_minutes, price_cents, capacity, active")
+    .select(
+      "id, kind, name, description, duration_minutes, price_cents, capacity, active, shop_product_id, shop_variant_id",
+    )
     .eq("id", id)
     .eq("tenant_id", tenant.id)
     .maybeSingle();
-  const service = data as ServiceValues | null;
+  const service = data as
+    (ServiceValues & { shop_product_id: string | null; shop_variant_id: string | null }) | null;
   if (!service) notFound();
 
+  const { data: items } = await supabase
+    .from("stock_items")
+    .select("external_id, product_external_id, title, variant_title")
+    .eq("tenant_id", tenant.id)
+    .eq("provider", "shopify")
+    .not("product_external_id", "is", null)
+    .order("title")
+    .limit(500);
+  const shopProducts = (items ?? []).map((item) => ({
+    value: `${item.product_external_id}:${item.external_id}`,
+    label: `${item.title}${item.variant_title ? ` — ${item.variant_title}` : ""}`,
+  }));
   const [{ data: sessions }, { data: rules }] = await Promise.all([
     supabase
       .from("sessions")
@@ -132,6 +148,17 @@ export default async function ServicePage({
             )}
           </CardContent>
         </Card>
+      )}
+
+      {service.kind === "workshop" && canEdit && (
+        <ShopProductCard
+          slug={tenant.slug}
+          serviceId={service.id}
+          productId={service.shop_product_id}
+          variantId={service.shop_variant_id}
+          site={(process.env.NEXT_PUBLIC_SITE_URL ?? "").replace(/\/+$/, "")}
+          products={shopProducts}
+        />
       )}
 
       {canEdit && (
