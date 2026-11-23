@@ -258,6 +258,12 @@ export type RatesInput = {
   signature?: string;
   /** Other orders going in the same parcel; this order must be the oldest of them. */
   withIds?: string[];
+  /**
+   * "zpl" when this computer prints straight to a Zebra (its own setting, kept
+   * in its browser): the label is asked for in the printer's format. It is
+   * part of what was priced, so buying must send the same again.
+   */
+  labelFormat?: string;
 };
 
 const TOGETHER_CHANGED =
@@ -378,6 +384,8 @@ async function prepareRequest(
       parcels: parsed.parcels,
       reference,
       signature: isSignature(input.signature) ? input.signature : "none",
+      // Left out entirely for a picture, so that request is what it always was.
+      ...(input.labelFormat === "zpl" ? { labelFormat: "zpl" as const } : {}),
     },
   };
 }
@@ -667,10 +675,32 @@ async function keepLabel(tenantId: string, quoteId: string, label: SourceLabel):
   const tries = label.source === "easypost" ? 2 : 3;
   for (let attempt = 0; attempt < tries; attempt++) {
     const { data, error } = await save(attempt);
-    if (!error && (label.source === "easypost" || data === true)) return true;
+    if (!error && (label.source === "easypost" || data === true)) {
+      if (label.source === "easypost") await keepEasyPostFiles(tenantId, quoteId, label);
+      return true;
+    }
     console.error("could not keep bought label", error?.message ?? "the quote was not waiting");
   }
   return false;
+}
+
+/**
+ * An EasyPost label bought for a Zebra brings its ZPL: kept beside the label
+ * so it can be printed again. The label is already safe by now, with its
+ * link, so this is tried once and never stands in the way.
+ */
+async function keepEasyPostFiles(tenantId: string, quoteId: string, label: SourceLabel) {
+  if (label.files.length === 0) return;
+  try {
+    const { error } = await getAdminClient().rpc("keep_label_files", {
+      p_tenant_id: tenantId,
+      p_quote_id: quoteId,
+      p_files: label.files,
+    });
+    if (error) console.error("could not keep label file", error.message);
+  } catch (err) {
+    console.error("could not keep label file", err instanceof Error ? err.message : err);
+  }
 }
 
 const tracked = (label: SourceLabel) => {

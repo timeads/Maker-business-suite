@@ -396,6 +396,8 @@ export type BoughtBox = {
   shipmentId: string;
   trackingCode: string;
   labelUrl: string | null;
+  /** Where the label's ZPL is, when EasyPost says so apart from `labelUrl`. */
+  zplUrl?: string | null;
 };
 
 export type BoughtLabel = {
@@ -430,7 +432,7 @@ type RawShipment = {
   mode?: unknown;
   rates?: unknown;
   tracking_code?: unknown;
-  postage_label?: { label_url?: unknown } | null;
+  postage_label?: { label_url?: unknown; label_zpl_url?: unknown } | null;
   selected_rate?: RawRate | null;
   refund_status?: unknown;
 };
@@ -554,6 +556,8 @@ export async function getRates(
     parcels: LabelParcel[];
     reference?: string;
     signature?: Signature;
+    /** "zpl" asks for the label in a Zebra's own format; EasyPost keeps that with the shipment. */
+    labelFormat?: "zpl";
   },
   fetchImpl: Fetch = fetch,
 ): Promise<RateQuote> {
@@ -568,7 +572,7 @@ export async function getRates(
   const reference = input.reference?.trim().slice(0, 35) || undefined;
   const confirmation = CONFIRMATION[input.signature ?? "none"];
   const options = {
-    label_format: "PNG",
+    label_format: input.labelFormat === "zpl" ? "ZPL" : "PNG",
     label_size: "4x6",
     ...(reference ? { print_custom_1: reference } : {}),
     ...(confirmation ? { delivery_confirmation: confirmation } : {}),
@@ -702,6 +706,7 @@ function boughtFrom(shipment: RawShipment): BoughtLabel | null {
   const trackingCode = text(shipment.tracking_code);
   const labelUrl = text(shipment.postage_label?.label_url);
   if (!trackingCode && !labelUrl) return null;
+  const zplUrl = httpsOnly(text(shipment.postage_label?.label_zpl_url));
   const rate = shipment.selected_rate ?? {};
   const rawCarrier = text(rate.carrier);
   const service = text(rate.service);
@@ -712,7 +717,14 @@ function boughtFrom(shipment: RawShipment): BoughtLabel | null {
     kind: "shipment",
     trackingCode,
     labelUrl: httpsOnly(labelUrl),
-    boxes: [{ shipmentId, trackingCode, labelUrl: httpsOnly(labelUrl) }],
+    boxes: [
+      {
+        shipmentId,
+        trackingCode,
+        labelUrl: httpsOnly(labelUrl),
+        ...(zplUrl ? { zplUrl } : {}),
+      },
+    ],
     carrier: rawCarrier ? carrierName(rawCarrier) : "Carrier",
     service,
     name: rawCarrier ? easypostServiceName(rawCarrier, service) : service,

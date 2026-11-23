@@ -363,8 +363,10 @@ export function buildShipRequest(account: string, request: LabelRequest, service
         ),
       },
       LabelSpecification: {
-        LabelImageFormat: { Code: "GIF" },
+        // A Zebra's own format when the computer asking prints straight to one, else a picture.
+        LabelImageFormat: { Code: request.labelFormat === "zpl" ? "ZPL" : "GIF" },
         HTTPUserAgent: "Mozilla/4.5",
+        ...(request.labelFormat === "zpl" ? { LabelStockSize: { Height: "6", Width: "4" } } : {}),
       },
     },
   };

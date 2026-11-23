@@ -8,6 +8,7 @@ import {
   refundLabels as refundEasyPostLabels,
   type BoughtLabel,
 } from "../easypost";
+import { downloadEasyPostLabel, labelKind } from "./files";
 import {
   buyRedo,
   downloadRedoLabel,
@@ -66,12 +67,18 @@ export function easypostSource(fetchImpl: Fetch = fetch): LabelSource<SourceAcce
         rates: quote.rates.map((rate) => ({
           ...rate,
           source: "easypost" as const,
-          ref: { shipment_id: quote.shipmentId, kind: quote.kind },
+          ref: {
+            shipment_id: quote.shipmentId,
+            kind: quote.kind,
+            // EasyPost was asked for a Zebra's format when it made this shipment; remembered
+            // here, on the quote the server keeps, so buying knows to fetch the ZPL.
+            ...(request.labelFormat === "zpl" ? { label_format: "zpl" } : {}),
+          },
         })),
       };
     },
     async buy(access, purchase) {
-      return fromEasyPost(
+      const label = fromEasyPost(
         purchase.kind === "order"
           ? await buyEasyPostOrder(
               access.key,
@@ -85,6 +92,17 @@ export function easypostSource(fetchImpl: Fetch = fetch): LabelSource<SourceAcce
             )
           : await buyEasyPostLabel(access.key, purchase.shipmentId, purchase.rate.id, fetchImpl),
       );
+      if (purchase.rate.ref?.label_format !== "zpl") return label;
+      // The money is spent. The ZPL is fetched so it can be printed and kept; a
+      // file that won't come is still at EasyPost, and its link is kept as always.
+      const files: LabelFile[] = [];
+      for (const [index, box] of label.boxes.entries()) {
+        const link = box.zplUrl ?? box.labelUrl;
+        if (!link) continue;
+        const file = await downloadEasyPostLabel(link, fetchImpl);
+        if (file) files.push({ box: index + 1, ...file });
+      }
+      return { ...label, files };
     },
     async lookUp(access, what) {
       const { label } = await getEasyPostPurchase(
@@ -155,9 +173,15 @@ export function upsSource(fetchImpl: Fetch = fetch): LabelSource<UpsAccess> {
         price: made.price,
         currency: made.currency,
         mode: access.test ? "test" : "live",
-        files: made.boxes.flatMap((box, index): LabelFile[] =>
-          box.label ? [{ box: index + 1, contentType: "image/gif", data: box.label }] : [],
-        ),
+        files: made.boxes.flatMap((box, index): LabelFile[] => {
+          if (!box.label) return [];
+          // UPS sends a picture, or ZPL when that was asked for: kept as what it really is.
+          const sniffed = labelKind(box.label);
+          const asked = purchase.request?.labelFormat === "zpl" ? "text/plain" : "image/gif";
+          const contentType =
+            sniffed === "text/plain" || sniffed === "image/gif" ? sniffed : asked;
+          return [{ box: index + 1, contentType, data: box.label }];
+        }),
       };
     },
     async lookUp() {

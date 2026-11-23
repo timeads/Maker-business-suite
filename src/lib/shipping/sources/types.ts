@@ -46,6 +46,13 @@ export type LabelRequest = {
   parcels: LabelParcel[];
   reference?: string;
   signature: Signature;
+  /**
+   * "zpl" when the computer asking prints straight to a Zebra: the label is
+   * asked for in the printer's own format instead of as a picture. Left out
+   * otherwise, so a request for a picture is exactly what it always was. Part
+   * of what is fingerprinted: what is bought is the format that was priced.
+   */
+  labelFormat?: "zpl";
 };
 
 /**
