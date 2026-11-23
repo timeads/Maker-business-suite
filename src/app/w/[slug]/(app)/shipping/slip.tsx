@@ -1,7 +1,12 @@
 import { formatMoney } from "@/lib/dashboard/format";
 import { addressLines } from "@/lib/shipping/carriers";
 import { code128 } from "@/lib/shipping/code128";
-import type { ShippingSettings, SlipLayout, SlipSection } from "@/lib/shipping/config";
+import {
+  shipFromCityLine,
+  type ShippingSettings,
+  type SlipLayout,
+  type SlipSection,
+} from "@/lib/shipping/config";
 import type { ShippingOrder } from "./data";
 
 const SIZES: Record<SlipLayout["text_size"], string> = {
@@ -51,7 +56,9 @@ export function PackingSlip({
   currency: string;
 }) {
   const from = settings.ship_from;
-  const fromLines = [from.address1, from.address2, from.city_line, from.country].filter(Boolean);
+  const fromLines = [from.address1, from.address2, shipFromCityLine(from), from.country].filter(
+    Boolean,
+  );
   const items = order.items.filter((item) => item.left > 0);
   const placed = new Intl.DateTimeFormat("en-US", { timeZone, dateStyle: "long" }).format(
     new Date(order.placed_at),

@@ -101,7 +101,8 @@ export interface SlideContent {
   color?: string;
   /** A logo image to place on the closing slide. */
   logo?: string | null;
-  brand?: BrandId;
+  /** A built-in brand by id, or a workspace's own kit as the kit itself. */
+  brand?: BrandId | BrandKit;
 }
 
 // Average character width as a share of the font size, per font, for fitting without measuring.
@@ -279,7 +280,8 @@ export function buildSlide(
           : "statement";
   if (chosen === "split" && photos.length === 0) chosen = "statement";
 
-  const c = schemeFor(content.color, kit.id);
+  // The kit itself, not its id: a workspace's own kit borrows a built-in id.
+  const c = schemeFor(content.color, kit);
   const D = kit.display;
   const light = kit.palette[kit.light];
   const pop = kit.palette[kit.overPhoto];
@@ -684,9 +686,9 @@ export function relayout(
 }
 
 /** Change a slide's colour and carry its text, shapes and decoration over to the colours that go with the new one. */
-export function recolor(slide: Slide, color: string): Slide {
-  const from = schemeFor(slide.bg, slide.brand);
-  const to = schemeFor(color, slide.brand);
+export function recolor(slide: Slide, color: string, brand: unknown = slide.brand): Slide {
+  const from = schemeFor(slide.bg, brand);
+  const to = schemeFor(color, brand);
   // Over a full photo the text stays light whatever the colour underneath.
   if (slide.image) return { ...slide, bg: to.bg };
   const swap = (hex: string | undefined | null): string | undefined => {

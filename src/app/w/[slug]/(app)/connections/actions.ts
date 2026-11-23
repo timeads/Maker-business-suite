@@ -39,7 +39,43 @@ async function context(slug: string, provider: string) {
   return { user, tenant: ctx.tenant, provider: provider as ProviderKey, adapter } as const;
 }
 
-/** Sends the person to the provider to approve the connection. */
+/**
+ * For providers that connect with a pasted API key: checks it with the
+ * provider and saves it in one step. The key goes straight to Vault through
+ * `save_connection`; it is never logged, echoed back or put in a URL.
+ */
+async function connectWithKey(
+  slug: string,
+  ctx: Extract<Awaited<ReturnType<typeof context>>, { adapter: unknown }>,
+  input: Record<string, string>,
+): Promise<ConnectionState> {
+  try {
+    const account = await ctx.adapter.connectWithKey!(input);
+    const { error } = await getAdminClient().rpc("save_connection", {
+      p_tenant_id: ctx.tenant.id,
+      p_provider: ctx.provider,
+      p_external_account_id: account.externalAccountId,
+      p_display_name: account.displayName,
+      p_scopes: account.scopes,
+      p_token: account.token,
+      p_connected_by: ctx.user.id,
+      p_metadata: account.metadata ?? {},
+    });
+    if (error) throw new Error(error.message);
+  } catch (err) {
+    if (err instanceof ConnectError) return { error: err.message };
+    console.error(`${ctx.provider} connect failed`, err instanceof Error ? err.message : err);
+    return { error: `Something went wrong connecting ${ctx.adapter.name}. Try again in a moment.` };
+  }
+  revalidatePath(`/w/${slug}/connections`);
+  revalidatePath(`/w/${slug}/shipping`, "layout");
+  return { message: `${ctx.adapter.name} is connected.` };
+}
+
+/**
+ * Sends the person to the provider to approve the connection, or, for a
+ * provider that takes an API key, checks and saves the key right here.
+ */
 export async function startConnection(
   slug: string,
   provider: string,
@@ -55,6 +91,8 @@ export async function startConnection(
     const value = formData.get(field.name);
     input[field.name] = typeof value === "string" ? value : "";
   }
+
+  if (ctx.adapter.connectWithKey) return connectWithKey(slug, ctx, input);
 
   const state = randomBytes(24).toString("base64url");
   const site = await getSiteUrl();

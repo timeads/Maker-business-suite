@@ -9,3 +9,6 @@ export { computeDraftPo, largestRemainder } from "./draft-po";
 export type { DraftPoLineInput, DraftPoLine, DraftPoResult } from "./draft-po";
 export { DEFAULT_LEAD_TIME_DAYS, DEFAULT_COVERAGE_DAYS, DEFAULT_REVIEW_BUFFER_DAYS } from "./types";
 export type { ReorderInput, ReorderResult, MoqAppliesTo } from "./types";
+export { casePackOf, roundUpToCase, casesFor, caseLabel, startingQty } from "./case-pack";
+export { daysBetween, median, observedLeadTimeDays } from "./lead-time";
+export type { LeadTimeSample, ObservedLeadTime } from "./lead-time";

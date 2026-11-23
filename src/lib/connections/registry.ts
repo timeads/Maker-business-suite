@@ -1,3 +1,4 @@
+import { createEasyPostAdapter } from "./providers/easypost";
 import { createMetaAdapter } from "./providers/meta";
 import { createQuickBooksAdapter } from "./providers/quickbooks";
 import { createShopifyAdapter } from "./providers/shopify";
@@ -9,9 +10,16 @@ const adapters: Record<ProviderKey, ProviderAdapter> = {
   quickbooks: createQuickBooksAdapter(),
   stripe: createStripeAdapter(),
   meta: createMetaAdapter(),
+  easypost: createEasyPostAdapter(),
 };
 
-export const PROVIDER_ORDER: readonly ProviderKey[] = ["shopify", "quickbooks", "stripe", "meta"];
+export const PROVIDER_ORDER: readonly ProviderKey[] = [
+  "shopify",
+  "quickbooks",
+  "stripe",
+  "meta",
+  "easypost",
+];
 
 export function isProviderKey(value: unknown): value is ProviderKey {
   return typeof value === "string" && value in adapters;

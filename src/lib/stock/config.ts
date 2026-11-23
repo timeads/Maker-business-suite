@@ -18,6 +18,11 @@ export const stockSettingsSchema = z.object({
   seasonality: z.boolean().default(true),
   /** When a delivery is checked in, add it to the shop's own count too. */
   push_to_shop: z.boolean().default(false),
+  /**
+   * Never plan for an item whose name carries one of these (any capitals).
+   * It works on read, so taking a word off brings the items straight back.
+   */
+  skip_words: z.array(z.string().trim().min(2).max(40)).max(20).default(["gift card"]),
 });
 export type StockSettings = z.infer<typeof stockSettingsSchema>;
 

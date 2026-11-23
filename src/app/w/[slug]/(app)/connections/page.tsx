@@ -20,6 +20,8 @@ type ConnectionRow = {
   status: ConnectionStatus;
   last_synced_at: string | null;
   last_error: string | null;
+  /** Nothing secret lives here: a currency, a handle, whether a key is a test key. */
+  metadata: Record<string, unknown> | null;
 };
 
 const ERRORS: Record<string, (name: string) => string> = {
@@ -78,7 +80,9 @@ export default async function ConnectionsPage({
   const supabase = await createClient();
   const { data } = await supabase
     .from("connections")
-    .select("provider, external_account_id, display_name, status, last_synced_at, last_error")
+    .select(
+      "provider, external_account_id, display_name, status, last_synced_at, last_error, metadata",
+    )
     .eq("tenant_id", tenant.id);
   const rows = new Map(((data as ConnectionRow[] | null) ?? []).map((row) => [row.provider, row]));
 
@@ -98,7 +102,8 @@ export default async function ConnectionsPage({
         <h1 className="text-2xl font-semibold tracking-tight">Connections</h1>
         <p className="text-muted-foreground">
           Link the tools you already use. You sign in with them directly — we never see your
-          password, and you can disconnect at any time.
+          password, and you can disconnect at any time. Where a tool asks for an API key instead, we
+          lock it away and never show it again.
         </p>
       </header>
 
@@ -120,6 +125,9 @@ export default async function ConnectionsPage({
           const status = row?.status ?? "none";
           const live = status === "active" || status === "needs_reconnect";
           const available = adapter.configured() && serverReady;
+          // Connected with a pasted key: no account id worth showing, nothing to sync.
+          const withKey = Boolean(adapter.connectWithKey);
+          const testKey = withKey && row?.metadata?.mode === "test";
 
           return (
             <Card key={key}>
@@ -136,23 +144,34 @@ export default async function ConnectionsPage({
                     <dt className="text-muted-foreground">Account</dt>
                     <dd>
                       {row.display_name ?? row.external_account_id}
-                      {row.display_name && (
+                      {row.display_name && !withKey && (
                         <span className="text-muted-foreground"> ({row.external_account_id})</span>
                       )}
                     </dd>
-                    <dt className="text-muted-foreground">Last synced</dt>
-                    <dd>
-                      {row.last_synced_at
-                        ? `${timeFormat.format(new Date(row.last_synced_at))}`
-                        : "Not yet"}
-                    </dd>
+                    {!withKey && (
+                      <>
+                        <dt className="text-muted-foreground">Last synced</dt>
+                        <dd>
+                          {row.last_synced_at
+                            ? `${timeFormat.format(new Date(row.last_synced_at))}`
+                            : "Not yet"}
+                        </dd>
+                      </>
+                    )}
                   </dl>
+                )}
+                {live && testKey && (
+                  <p className="bg-ochre-soft text-ochre-text w-fit rounded-md px-3 py-2 text-sm font-medium">
+                    Test mode: labels are not real. Connect a production key when you&apos;re ready
+                    to send parcels.
+                  </p>
                 )}
 
                 {status === "needs_reconnect" && (
                   <FormMessage>
-                    {adapter.name} stopped accepting our access, so its data isn&apos;t updating.
-                    Reconnect to pick up where it left off.
+                    {withKey
+                      ? `${adapter.name} stopped accepting the saved key. Paste a current one to carry on.`
+                      : `${adapter.name} stopped accepting our access, so its data isn't updating. Reconnect to pick up where it left off.`}
                   </FormMessage>
                 )}
                 {status === "active" && row?.last_error && (
@@ -178,6 +197,7 @@ export default async function ConnectionsPage({
                         providerName={adapter.name}
                         fields={adapter.connectFields}
                         label={live ? `Reconnect ${adapter.name}` : `Connect ${adapter.name}`}
+                        withKey={withKey}
                       />
                     )}
                     {live && (
@@ -185,7 +205,12 @@ export default async function ConnectionsPage({
                         slug={tenant.slug}
                         provider={key}
                         providerName={adapter.name}
-                        canSync={status === "active"}
+                        canSync={status === "active" && !withKey}
+                        disconnectNote={
+                          withKey
+                            ? "We'll forget the key. Labels you already bought stay as they are."
+                            : undefined
+                        }
                       />
                     )}
                   </>

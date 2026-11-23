@@ -497,6 +497,467 @@ describe("the fuller queue: what the shopper chose, holds with a date, pickup, t
   });
 });
 
+describe("buying labels: boxes, quotes and the purchase", () => {
+  let labelA: string;
+  let labelB: string;
+  const RATES = [
+    {
+      id: "rate_ground",
+      carrier: "USPS",
+      service: "GroundAdvantage",
+      name: "USPS Ground Advantage",
+      price: "6.40",
+      currency: "USD",
+      days: 4,
+    },
+    {
+      id: "rate_priority",
+      carrier: "USPS",
+      service: "Priority",
+      name: "USPS Priority Mail",
+      price: "9.85",
+      currency: "USD",
+      days: 2,
+    },
+  ];
+  const quote = (
+    tenant: string,
+    order: string,
+    by: User,
+    shipment: string,
+    rates: object[] = RATES,
+  ) =>
+    service<{ id: string }>("select public.save_label_quote($1, $2, $3, $4, $5::jsonb) as id", [
+      tenant,
+      order,
+      by.id,
+      shipment,
+      JSON.stringify(rates),
+    ]).then((rows) => rows[0].id);
+  const claim = (user: User, order: string, rate: string) =>
+    as<{ c: { quote_id: string; provider_shipment_id: string; rate: { price: string } } }>(
+      user,
+      "select public.claim_label_purchase($1, $2) as c",
+      [order, rate],
+    ).then((rows) => rows[0].c);
+  const bought = (tenant: string, quoteId: string, tracking = "9400100000000000000001") =>
+    service<{ ok: boolean }>(
+      "select public.mark_label_bought($1, $2, 'USPS', 'Ground Advantage', $3, 'https://tools.usps.com/go/TrackConfirmAction?tLabels=' || $3, 'https://labels.example/label.png', 'test', 6.40) as ok",
+      [tenant, quoteId, tracking],
+    ).then((rows) => rows[0].ok);
+  const quoteRow = async (id: string) =>
+    (
+      await db.query<{
+        status: string;
+        shipment_id: string | null;
+        tracking_number: string | null;
+        price: string | null;
+      }>(
+        "select status, shipment_id, tracking_number, price from public.shipping_label_quotes where id = $1",
+        [id],
+      )
+    ).rows[0];
+  const boxes = (user: User) =>
+    as<{ id: string; name: string; is_default: boolean; tenant_id: string }>(
+      user,
+      "select id, name, is_default, tenant_id from public.shipping_boxes where archived_at is null order by created_at, name",
+    );
+  const saveBox = (
+    user: User,
+    tenant: string,
+    id: string | null,
+    name: string,
+    isDefault = false,
+    length = 12,
+  ) =>
+    as<{ id: string }>(
+      user,
+      "select public.save_shipping_box($1, $2, $3, 'box', $4, 9, 4, 6.5, $5) as id",
+      [tenant, id, name, length, isDefault],
+    ).then((rows) => rows[0].id);
+
+  beforeAll(async () => {
+    labelA = await shopOrder(tenantA, "5001", "lee@example.com", "c50");
+    labelB = await shopOrder(tenantB, "6001", "ash@example.com", "c60");
+  });
+
+  it("EasyPost can be saved as a connection, and an unknown provider still can't", async () => {
+    const rows = await service<{ id: string }>(
+      "select public.save_connection($1, 'easypost', 'easypost-a', 'EasyPost (test key)', '{}', $2::jsonb, $3, $4::jsonb) as id",
+      [
+        tenantA,
+        JSON.stringify({ access_token: "test-key-not-real" }),
+        alice.id,
+        JSON.stringify({ mode: "test" }),
+      ],
+    );
+    expect(rows[0].id).toBeTruthy();
+    // The key is in Vault, not on the row a member can read.
+    const seen = await as<Record<string, unknown>>(
+      carol,
+      "select provider, status, metadata from public.connections where provider = 'easypost'",
+    );
+    expect(seen).toEqual([{ provider: "easypost", status: "active", metadata: { mode: "test" } }]);
+    expect(JSON.stringify(seen).includes("test-key-not-real")).toBe(false);
+    expect(await as(bob, "select id from public.connections where provider = 'easypost'")).toEqual(
+      [],
+    );
+    const token = await service<{ token: { access_token: string } }>(
+      "select token from public.get_provider_token($1, 'easypost')",
+      [tenantA],
+    );
+    expect(token[0].token.access_token).toBe("test-key-not-real");
+    await expect(
+      as(alice, "select * from public.get_provider_token($1, 'easypost')", [tenantA]),
+    ).rejects.toThrow(/permission denied/);
+    await expect(
+      service("select public.save_connection($1, 'fedex', 'x', 'x', '{}', '{}'::jsonb, $2)", [
+        tenantA,
+        alice.id,
+      ]),
+    ).rejects.toThrow(/connections_provider_check/);
+  });
+
+  it("only owners and admins keep the box list; the first box is the usual one", async () => {
+    await expect(saveBox(carol, tenantA, null, "Small")).rejects.toThrow(/Only owners and admins/);
+    const small = await saveBox(alice, tenantA, null, "Small");
+    const big = await saveBox(alice, tenantA, null, "Big", false, 24);
+    expect((await boxes(carol)).map((b) => [b.name, b.is_default])).toEqual([
+      ["Small", true],
+      ["Big", false],
+    ]);
+    // Making another the usual one takes it from the first: never two, never none.
+    await saveBox(alice, tenantA, big, "Big", true, 24);
+    expect((await boxes(alice)).map((b) => [b.name, b.is_default])).toEqual([
+      ["Small", false],
+      ["Big", true],
+    ]);
+    // Editing the usual box without saying "usual" leaves it the usual one.
+    await saveBox(alice, tenantA, big, "Big rug box", false, 26);
+    expect((await boxes(alice)).filter((b) => b.is_default).map((b) => b.name)).toEqual([
+      "Big rug box",
+    ]);
+    // Removing the usual box hands that to the oldest one left.
+    await expect(as(carol, "select public.archive_shipping_box($1)", [big])).rejects.toThrow(
+      /Only owners and admins/,
+    );
+    await as(alice, "select public.archive_shipping_box($1)", [big]);
+    expect((await boxes(alice)).map((b) => [b.name, b.is_default])).toEqual([["Small", true]]);
+    await expect(as(alice, "select public.archive_shipping_box($1)", [big])).rejects.toThrow(
+      /Box not found/,
+    );
+    expect(small).toBeTruthy();
+  });
+
+  it("box sizes are kept within what a carrier takes", async () => {
+    for (const length of [0, -1, 109]) {
+      await expect(saveBox(alice, tenantA, null, "Odd", false, length)).rejects.toThrow(/check/);
+    }
+    await expect(saveBox(alice, tenantA, null, "   ")).rejects.toThrow(/check/);
+    await expect(
+      as(alice, "select public.save_shipping_box($1, null, 'Crate', 'crate', 12, 9, 4, 0, false)", [
+        tenantA,
+      ]),
+    ).rejects.toThrow(/check/);
+  });
+
+  it("boxes stay inside their workspace", async () => {
+    const theirs = await saveBox(bob, tenantB, null, "Bob's box");
+    const mine = await boxes(alice);
+    expect(mine.length).toBeGreaterThan(0);
+    expect(mine.every((b) => b.tenant_id === tenantA)).toBe(true);
+    expect((await boxes(bob)).map((b) => b.name)).toEqual(["Bob's box"]);
+    await expect(saveBox(alice, tenantB, null, "Sneaky")).rejects.toThrow(/Only owners and admins/);
+    await expect(saveBox(alice, tenantA, theirs, "Sneaky")).rejects.toThrow(/Box not found/);
+    await expect(as(alice, "select public.archive_shipping_box($1)", [theirs])).rejects.toThrow(
+      /Box not found/,
+    );
+    await expect(
+      as(
+        alice,
+        "insert into public.shipping_boxes (tenant_id, name, length_in, width_in, height_in) values ($1, 'x', 1, 1, 1)",
+        [tenantA],
+      ),
+    ).rejects.toThrow(/permission denied/);
+    await expect(as(alice, "update public.shipping_boxes set name = 'x'")).rejects.toThrow(
+      /permission denied/,
+    );
+    // Bob's default is untouched by anything Alice did.
+    expect((await boxes(bob))[0].is_default).toBe(true);
+  });
+
+  it("only the server writes quotes; members read their own workspace's and nobody else's", async () => {
+    const mine = await quote(tenantA, labelA, carol, "shp_a1");
+    await quote(tenantB, labelB, bob, "shp_b1");
+    const seen = await as<{ id: string; tenant_id: string }>(
+      carol,
+      "select id, tenant_id from public.shipping_label_quotes",
+    );
+    expect(seen).toEqual([{ id: mine, tenant_id: tenantA }]);
+    const theirs = await as<{ tenant_id: string }>(
+      bob,
+      "select tenant_id from public.shipping_label_quotes",
+    );
+    expect(theirs).toEqual([{ tenant_id: tenantB }]);
+
+    for (const call of [
+      [
+        "select public.save_label_quote($1, $2, $3, 'shp_forged', '[]'::jsonb)",
+        [tenantA, labelA, alice.id],
+      ],
+      [
+        "select public.mark_label_bought($1, $2, 'USPS', '', 't', null, null, 'live', 1)",
+        [tenantA, mine],
+      ],
+      ["select public.release_label_purchase($1, $2)", [tenantA, mine]],
+      [
+        "insert into public.shipping_label_quotes (tenant_id, shipping_order_id, provider_shipment_id) values ($1, $2, 'shp_forged')",
+        [tenantA, labelA],
+      ],
+      ["update public.shipping_label_quotes set status = 'bought' where tenant_id = $1", [tenantA]],
+    ] as [string, unknown[]][]) {
+      await expect(as(alice, call[0], call[1]), call[0]).rejects.toThrow(/permission denied/);
+    }
+    // Even the server can't file a quote against another workspace's order, or for a stranger.
+    await expect(quote(tenantA, labelB, alice, "shp_x")).rejects.toThrow(/Order not found/);
+    await expect(quote(tenantA, labelA, bob, "shp_x")).rejects.toThrow(/Workspace not found/);
+    // A quote holds prices and EasyPost's ids. No name, no street.
+    const { rows } = await db.query("select * from public.shipping_label_quotes where id = $1", [
+      mine,
+    ]);
+    expect(JSON.stringify(rows[0])).not.toMatch(/Sam Shopper|Mill Lane|12534|555-0100/);
+  });
+
+  it("asking for rates again replaces the open quote instead of piling them up", async () => {
+    const again = await quote(tenantA, labelA, carol, "shp_a2");
+    const { rows } = await db.query<{ id: string; provider_shipment_id: string }>(
+      "select id, provider_shipment_id from public.shipping_label_quotes where shipping_order_id = $1",
+      [labelA],
+    );
+    expect(rows).toEqual([{ id: again, provider_shipment_id: "shp_a2" }]);
+  });
+
+  it("can't buy a rate that wasn't quoted for this order", async () => {
+    const other = await shopOrder(tenantA, "5002", "kit@example.com", "c51");
+    await quote(tenantA, other, carol, "shp_other", [{ ...RATES[0], id: "rate_other_order" }]);
+    // A rate id made up in the browser, and one that belongs to a different order.
+    await expect(claim(carol, labelA, "rate_made_up")).rejects.toThrow(/not quoted for this order/);
+    await expect(claim(carol, labelA, "rate_other_order")).rejects.toThrow(
+      /not quoted for this order/,
+    );
+    // Another workspace's order, even with its own real rate id.
+    await expect(claim(alice, labelB, "rate_ground")).rejects.toThrow(/Order not found/);
+    await expect(claim(bob, labelA, "rate_ground")).rejects.toThrow(/Order not found/);
+    const { rows } = await db.query(
+      "select 1 from public.shipping_label_quotes where status <> 'quoted'",
+    );
+    expect(rows).toHaveLength(0);
+  });
+
+  it("rates run out after twenty minutes", async () => {
+    await db.query(
+      "update public.shipping_label_quotes set created_at = now() - interval '21 minutes' where shipping_order_id = $1",
+      [labelA],
+    );
+    await expect(claim(carol, labelA, "rate_ground")).rejects.toThrow(/not quoted for this order/);
+    await db.query(
+      "update public.shipping_label_quotes set created_at = now() where shipping_order_id = $1",
+      [labelA],
+    );
+  });
+
+  it("a second press is refused while the first is being bought; a refusal by EasyPost frees it", async () => {
+    const first = await claim(carol, labelA, "rate_ground");
+    expect(first.provider_shipment_id).toBe("shp_a2");
+    expect(first.rate.price).toBe("6.40");
+    // The same press again, and a team-mate with fresh rates of their own.
+    await expect(claim(carol, labelA, "rate_ground")).rejects.toThrow(/still being finished/);
+    await quote(tenantA, labelA, alice, "shp_a3");
+    await expect(claim(alice, labelA, "rate_priority")).rejects.toThrow(/still being finished/);
+
+    // EasyPost said no: nothing was charged, so buying is possible again.
+    expect(
+      (
+        await service<{ ok: boolean }>("select public.release_label_purchase($1, $2) as ok", [
+          tenantA,
+          first.quote_id,
+        ])
+      )[0].ok,
+    ).toBe(true);
+    expect((await quoteRow(first.quote_id)).status).toBe("released");
+    // A released quote can't be marked as bought afterwards, nor released twice.
+    expect(await bought(tenantA, first.quote_id)).toBe(false);
+    expect(
+      (
+        await service<{ ok: boolean }>("select public.release_label_purchase($1, $2) as ok", [
+          tenantA,
+          first.quote_id,
+        ])
+      )[0].ok,
+    ).toBe(false);
+  });
+
+  it("a bought label is kept before the parcel exists, then recorded through record_shipment", async () => {
+    const mine = await claim(alice, labelA, "rate_priority");
+    expect(mine.provider_shipment_id).toBe("shp_a3");
+    // Another workspace's server call can't touch it.
+    expect(await bought(tenantB, mine.quote_id)).toBe(false);
+    expect(await bought(tenantA, mine.quote_id)).toBe(true);
+    const kept = await quoteRow(mine.quote_id);
+    expect(kept).toMatchObject({
+      status: "bought",
+      shipment_id: null,
+      tracking_number: "9400100000000000000001",
+      price: "6.40",
+    });
+    // Paid for but not yet a parcel: buying again is refused, whoever asks.
+    await quote(tenantA, labelA, carol, "shp_a4");
+    await expect(claim(carol, labelA, "rate_ground")).rejects.toThrow(/still being finished/);
+
+    await expect(
+      as(bob, "select public.record_label_shipment($1, false, false)", [mine.quote_id]),
+    ).rejects.toThrow(/Label not found/);
+    const n = (
+      await as<{ n: number }>(carol, "select public.record_label_shipment($1, true, true) as n", [
+        mine.quote_id,
+      ])
+    )[0].n;
+    const { rows } = await db.query<Record<string, unknown>>(
+      "select id, carrier, service, tracking_number, tracking_url, cost, items, shop_status, notify_customer, label_provider, label_shipment_id, label_url, label_mode, recipient from public.shipments where tenant_id = $1 and number = $2",
+      [tenantA, n],
+    );
+    expect(rows[0]).toMatchObject({
+      carrier: "USPS",
+      service: "Ground Advantage",
+      tracking_number: "9400100000000000000001",
+      cost: "6.40",
+      shop_status: "pending",
+      notify_customer: true,
+      label_provider: "easypost",
+      label_shipment_id: "shp_a3",
+      label_url: "https://labels.example/label.png",
+      label_mode: "test",
+      recipient: "Sam Shopper",
+    });
+    expect(
+      (rows[0].items as { line_id: string; qty: number }[]).map((i) => [i.line_id, i.qty]),
+    ).toEqual([
+      ["l1", 2],
+      ["l2", 3],
+    ]);
+    expect((await orderRow(labelA)).units_left).toBe(0);
+    expect(await quoteRow(mine.quote_id)).toMatchObject({
+      status: "recorded",
+      shipment_id: rows[0].id,
+    });
+    // Recording it twice isn't possible.
+    await expect(
+      as(carol, "select public.record_label_shipment($1, false, false)", [mine.quote_id]),
+    ).rejects.toThrow(/Label not found/);
+    await expect(claim(carol, labelA, "rate_ground")).rejects.toThrow(/Nothing left to send/);
+  });
+
+  it("refuses another label for the same order inside thirty seconds", async () => {
+    // The shop syncs and says there is still something to send.
+    await shopOrder(tenantA, "5001", "lee@example.com", "c50");
+    expect((await orderRow(labelA)).units_left).toBe(5);
+    await expect(claim(carol, labelA, "rate_ground")).rejects.toThrow(/bought moments ago/);
+    await db.query(
+      "update public.shipments set shipped_at = now() - interval '31 seconds' where label_shipment_id = 'shp_a3'",
+    );
+    const later = await claim(carol, labelA, "rate_ground");
+    expect(later.provider_shipment_id).toBe("shp_a4");
+    await service("select public.release_label_purchase($1, $2)", [tenantA, later.quote_id]);
+  });
+
+  it("voiding a label is for owners and admins; it marks the refund and puts the items back", async () => {
+    await db.query(
+      "update public.shipping_orders set items = jsonb_build_array(jsonb_build_object('line_id', 'l1', 'title', 'Wool rug', 'variant', 'Large', 'qty', 2, 'left', 0)), units_left = 0 where id = $1",
+      [labelA],
+    );
+    const parcel = (
+      await db.query<{ id: string }>(
+        "select id from public.shipments where label_shipment_id = 'shp_a3'",
+      )
+    ).rows[0].id;
+    await expect(as(carol, "select public.void_label_shipment($1)", [parcel])).rejects.toThrow(
+      /Only owners and admins/,
+    );
+    await expect(as(bob, "select public.void_label_shipment($1)", [parcel])).rejects.toThrow(
+      /Shipment not found/,
+    );
+    const untouched = await db.query<{
+      voided_at: string | null;
+      label_refund_status: string | null;
+    }>("select voided_at, label_refund_status from public.shipments where id = $1", [parcel]);
+    expect(untouched.rows[0]).toEqual({ voided_at: null, label_refund_status: null });
+
+    await as(alice, "select public.void_label_shipment($1)", [parcel]);
+    const { rows } = await db.query<{
+      voided_at: string | null;
+      label_refund_status: string;
+      label_refund_at: string | null;
+    }>(
+      "select voided_at, label_refund_status, label_refund_at from public.shipments where id = $1",
+      [parcel],
+    );
+    expect(rows[0].voided_at).not.toBeNull();
+    expect(rows[0].label_refund_status).toBe("requested");
+    expect(rows[0].label_refund_at).not.toBeNull();
+    expect((await orderRow(labelA)).units_left).toBe(2);
+    await expect(as(alice, "select public.void_label_shipment($1)", [parcel])).rejects.toThrow(
+      /Shipment not found/,
+    );
+  });
+
+  it("a label bought after the order was marked as sent is still kept, without a name or address", async () => {
+    const late = await shopOrder(tenantA, "5003", "jo@example.com", "c52");
+    await quote(tenantA, late, carol, "shp_late");
+    const mine = await claim(carol, late, "rate_ground");
+    // Someone records the parcel by hand while EasyPost is being asked.
+    await ship(alice, tenantA, late, []);
+    expect(await bought(tenantA, mine.quote_id, "9400100000000000000009")).toBe(true);
+    const n = (
+      await as<{ n: number }>(carol, "select public.record_label_shipment($1, true, true) as n", [
+        mine.quote_id,
+      ])
+    )[0].n;
+    const { rows } = await db.query<Record<string, unknown>>(
+      "select shipping_order_id, order_name, recipient, destination, note, shop_status, label_shipment_id, tracking_number from public.shipments where tenant_id = $1 and number = $2",
+      [tenantA, n],
+    );
+    expect(rows[0]).toMatchObject({
+      shipping_order_id: null,
+      order_name: "#5003",
+      recipient: null,
+      destination: null,
+      shop_status: "skipped",
+      label_shipment_id: "shp_late",
+      tracking_number: "9400100000000000000009",
+    });
+    expect(String(rows[0].note)).toMatch(/already marked as sent/);
+    expect((await quoteRow(mine.quote_id)).status).toBe("recorded");
+  });
+
+  it("one label can never become two parcels, and a cancelled order can't have one bought", async () => {
+    await expect(
+      db.query(
+        "update public.shipments set label_provider = 'easypost', label_shipment_id = 'shp_late' where tenant_id = $1 and number = 1",
+        [tenantA],
+      ),
+    ).rejects.toThrow(/shipments_one_parcel_per_label/);
+    await expect(
+      db.query(
+        "update public.shipments set label_url = 'http://plain.example/label.png' where label_shipment_id = 'shp_late'",
+      ),
+    ).rejects.toThrow(/check/);
+    const gone = await shopOrder(tenantA, "5004", "max@example.com", "c53");
+    await quote(tenantA, gone, carol, "shp_gone");
+    await db.query("update public.shipping_orders set cancelled = true where id = $1", [gone]);
+    await expect(claim(carol, gone, "rate_ground")).rejects.toThrow(/cancelled/);
+  });
+});
+
 describe("privacy", () => {
   it("forgetting a shopper blanks their address on orders and shipments, in that workspace only", async () => {
     await service("select public.redact_customer($1, 'shopify', 'c1', 'sam@example.com')", [

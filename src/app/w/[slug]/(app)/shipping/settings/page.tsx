@@ -3,7 +3,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { PageHeader } from "@/components/ui/page-header";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
-import { loadShippingSetup, type ShippingOrder } from "../data";
+import { BoxesForm } from "../box-forms";
+import { loadBoxes, loadShippingSetup, type ShippingOrder } from "../data";
 import { ShippingSettingsForm, SlipLayoutForm } from "../forms";
 import { shippingAccess } from "../gate";
 import { PackingSlip } from "../slip";
@@ -71,13 +72,17 @@ export default async function ShippingSettingsPage({
   const access = await shippingAccess(slug, `/w/${slug}/shipping/settings`);
   if (!access.ok) return access.upsell;
   const { tenant, role, entitlements } = access;
-  const setup = await loadShippingSetup(await createClient(), tenant.id);
+  const supabase = await createClient();
+  const [setup, boxes] = await Promise.all([
+    loadShippingSetup(supabase, tenant.id),
+    loadBoxes(supabase, tenant.id),
+  ]);
 
   return (
     <>
       <PageHeader
         title="Shipping"
-        description="What your packing slips say, and what happens when you record a parcel."
+        description="What your packing slips say, the boxes you pack in, and what happens when you record a parcel."
       />
       <ShippingTabs slug={tenant.slug} />
       {canManage(role) && entitlements.canWrite ? (
@@ -115,6 +120,18 @@ export default async function ShippingSettingsPage({
                 settings={setup.settings}
                 canSend={setup.canSend}
               />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>Boxes</CardTitle>
+              <CardDescription>
+                The boxes and envelopes you pack in, so buying a label starts with the right size
+                and weight. Connect EasyPost under Connections to buy labels.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <BoxesForm slug={tenant.slug} boxes={boxes} />
             </CardContent>
           </Card>
         </>

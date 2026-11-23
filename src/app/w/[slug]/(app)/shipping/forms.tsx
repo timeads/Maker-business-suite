@@ -10,6 +10,7 @@ import { CARRIERS, guessCarrier } from "@/lib/shipping/carriers";
 import {
   SLIP_SECTION_NAMES,
   SLIP_TEXT_SIZES,
+  shipFromParts,
   type SlipLayout,
   type SlipSection,
 } from "@/lib/shipping/config";
@@ -323,12 +324,34 @@ export function PickupForm({
   );
 }
 
-export function VoidButton({ slug, shipmentId }: { slug: string; shipmentId: string }) {
+export function VoidButton({
+  slug,
+  shipmentId,
+  label = false,
+}: {
+  slug: string;
+  shipmentId: string;
+  /** Its postage was bought here, so undoing it also asks for the money back. */
+  label?: boolean;
+}) {
   const [state, action] = useActionState(voidParcel.bind(null, slug, shipmentId), {});
   return (
-    <form action={action} className="flex flex-col items-end gap-1">
-      <SubmitButton variant="ghost" size="sm" pendingText="Undoing…">
-        Undo
+    <form
+      action={action}
+      className="flex flex-col items-end gap-1"
+      onSubmit={(event) => {
+        if (
+          label &&
+          !window.confirm(
+            "Void this label? We'll ask EasyPost to refund the postage and put its items back on your to-send list. Don't use the label after this.",
+          )
+        ) {
+          event.preventDefault();
+        }
+      }}
+    >
+      <SubmitButton variant="ghost" size="sm" pendingText={label ? "Asking EasyPost…" : "Undoing…"}>
+        {label ? "Void label" : "Undo"}
       </SubmitButton>
       {(state.error || state.message) && (
         <span className="text-muted-foreground max-w-56 text-right text-xs">
@@ -351,6 +374,10 @@ export function ShippingSettingsForm({
       address1: string;
       address2: string;
       city_line: string;
+      city: string;
+      region: string;
+      postal_code: string;
+      phone: string;
       country: string;
     };
     ship_from_country: string;
@@ -362,6 +389,7 @@ export function ShippingSettingsForm({
 }) {
   const [state, action] = useActionState(saveShippingSettings.bind(null, slug), {});
   const from = settings.ship_from;
+  const town = shipFromParts(from);
   return (
     <form action={action} className="flex flex-col gap-5">
       <fieldset className="flex flex-col gap-3">
@@ -390,14 +418,50 @@ export function ShippingSettingsForm({
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="from-city">Town, state and postcode</Label>
+            <Label htmlFor="from-city">Town or city</Label>
             <Input
               id="from-city"
-              name="from_city_line"
+              name="from_city"
               maxLength={120}
-              defaultValue={from.city_line}
-              placeholder="Hudson, NY 12534"
+              defaultValue={town.city}
+              placeholder="Hudson"
             />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="from-region">State</Label>
+              <Input
+                id="from-region"
+                name="from_region"
+                maxLength={60}
+                defaultValue={town.region}
+                placeholder="NY"
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="from-postal">ZIP or postcode</Label>
+              <Input
+                id="from-postal"
+                name="from_postal_code"
+                maxLength={20}
+                defaultValue={town.postal_code}
+                placeholder="12534"
+              />
+            </div>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="from-phone">Phone</Label>
+            <Input
+              id="from-phone"
+              name="from_phone"
+              type="tel"
+              maxLength={30}
+              defaultValue={from.phone}
+              aria-describedby="from-phone-help"
+            />
+            <span id="from-phone-help" className="text-muted-foreground text-xs">
+              Carriers ask for one on every label. It isn&apos;t printed on packing slips.
+            </span>
           </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="from-country">Country</Label>
