@@ -140,7 +140,9 @@ export function createShopifyAdapter(fetchImpl: Fetch = fetch): ProviderAdapter 
         help: "The .myshopify.com address you see in your Shopify admin.",
       },
     ],
-    pollEveryHours: null,
+    // The shop tells us about each order as it happens; this hourly look is
+    // the safety net for a notification that never arrived.
+    pollEveryHours: 1,
     configured: () => Boolean(process.env.SHOPIFY_CLIENT_ID && process.env.SHOPIFY_CLIENT_SECRET),
 
     beginConnect({ state, redirectUri, input }) {
