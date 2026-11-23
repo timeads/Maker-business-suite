@@ -169,7 +169,11 @@ export function inkOn(kit: BrandKit, slide: Slide): string {
  * anywhere else is taken out, so a saved design can never point at another site or workspace.
  * Null when nothing usable is left.
  */
-export function ownDesign(raw: unknown, home: string, maxSlides = MAX_DESIGN_SLIDES): SlideDesign | null {
+export function ownDesign(
+  raw: unknown,
+  home: string,
+  maxSlides = MAX_DESIGN_SLIDES,
+): SlideDesign | null {
   const design = normalizeDesign(raw);
   if (!design || !home || !FORMATS[design.format]) return null;
   const mine = (url: string) => url.startsWith(home) && !url.slice(home.length).includes("..");

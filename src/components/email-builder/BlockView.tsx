@@ -2,8 +2,17 @@
 
 /* eslint-disable @next/next/no-img-element -- pictures in an email sit on other hosts, at addresses not known ahead of time */
 
-import { useLayoutEffect, useRef } from "react";
-import { BadgeCheck, Code2, ImageIcon, Link2, PlayCircle, Share2, ShoppingBag } from "lucide-react";
+import { useContext, useLayoutEffect, useRef } from "react";
+import {
+  BadgeCheck,
+  Code2,
+  ImageIcon,
+  Link2,
+  Loader2,
+  PlayCircle,
+  Share2,
+  ShoppingBag,
+} from "lucide-react";
 import {
   FONTS,
   SOCIAL_NETWORKS,
@@ -24,12 +33,14 @@ import {
   type Section,
 } from "@/lib/design";
 import { readableInk } from "@/lib/design/slide-design";
-import { useBuilder } from "./context";
+import { BuilderContext, useBuilder } from "./context";
 import { InlineText } from "./InlineText";
 import { FOCUS_LINK, caretToEnd, undoKey } from "./shared";
 
 const marginFor = (align: ButtonAlign) =>
   align === "center" ? "0 auto" : align === "right" ? "0 0 0 auto" : "0";
+
+const NONE_RENDERING: ReadonlySet<string> = new Set();
 
 function Empty({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
   return (
@@ -129,6 +140,8 @@ export function BlockView({
 }) {
   const g = doc.globalStyles;
   const ink = section.styles.textColor ?? g.text.p.color;
+  // Banners whose picture is being drawn. A block shown outside the builder has none.
+  const rendering = useContext(BuilderContext)?.rendering ?? NONE_RENDERING;
   switch (block.type) {
     case "heading":
     case "paragraph": {
@@ -258,7 +271,8 @@ export function BlockView({
         />
       );
     case "banner": {
-      if (block.image)
+      const drawing = rendering.has(block.id);
+      if (block.image && !drawing)
         return (
           <img
             src={block.image}
@@ -273,7 +287,8 @@ export function BlockView({
         <div
           style={{
             background: bg,
-            color: readableInk(bg, false),
+            // The banner's own text colour, so the stand-in already looks like the brand.
+            color: block.design.slides[0].layers[0]?.color ?? readableInk(bg, false),
             padding: "40px 32px",
             fontFamily: FONTS[g.text.h1.font].stack,
           }}
@@ -283,7 +298,13 @@ export function BlockView({
             className="mt-3 flex items-center gap-1.5 text-xs"
             style={{ fontFamily: FONTS.arial.stack }}
           >
-            The banner picture has not been made yet.
+            {drawing ? (
+              <>
+                <Loader2 className="size-3.5 animate-spin" aria-hidden /> Making the banner picture…
+              </>
+            ) : (
+              "The banner picture hasn't been made yet. Use Edit design in the panel."
+            )}
           </div>
         </div>
       );

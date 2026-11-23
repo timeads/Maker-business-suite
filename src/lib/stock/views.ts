@@ -30,8 +30,7 @@ export const VIEWS = [
   ["hidden", "Not reordering"],
 ] as const;
 export type ViewKey = (typeof VIEWS)[number][0];
-export const isViewKey = (value: unknown): value is ViewKey =>
-  VIEWS.some(([key]) => key === value);
+export const isViewKey = (value: unknown): value is ViewKey => VIEWS.some(([key]) => key === value);
 
 export const VIEW_NOTES: Partial<Record<ViewKey, string>> = {
   atrisk: "Your best sellers (the top fifth by sales) that need ordering within a week.",

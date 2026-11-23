@@ -588,8 +588,8 @@ export function SlideStudio({
           </div>
           {missing > 0 && (
             <p role="alert" className="bg-brick-soft rounded-sm px-3 py-2 text-xs">
-              {missing === 1 ? "A photo" : "Some photos"} in this design couldn&apos;t be loaded,
-              so {missing === 1 ? "it is" : "they are"} left blank here. Replace{" "}
+              {missing === 1 ? "A photo" : "Some photos"} in this design couldn&apos;t be loaded, so{" "}
+              {missing === 1 ? "it is" : "they are"} left blank here. Replace{" "}
               {missing === 1 ? "it" : "them"} from your assets before you save.
             </p>
           )}
@@ -833,7 +833,7 @@ export function SlideStudio({
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <h4 className="text-sm font-bold">
-                  {single ? "The banner" : `Picture ${index + 1}`}
+                  {single ? "This picture" : `Picture ${index + 1}`}
                 </h4>
                 <Button type="button" variant="outline" size="sm" onClick={addText}>
                   <Type aria-hidden /> Add text
@@ -924,6 +924,7 @@ export function SlideStudio({
                   <div key={p.id} className="flex items-center gap-2">
                     {/* eslint-disable-next-line @next/next/no-img-element -- an upload in the workspace's own storage */}
                     <img
+                      crossOrigin="anonymous"
                       src={p.url}
                       alt=""
                       className="border-border size-10 shrink-0 rounded border object-cover"
@@ -945,7 +946,9 @@ export function SlideStudio({
                       size="sm"
                       className={iconButton}
                       aria-label={`Take ${p.contain ? "the logo" : `photo ${i + 1}`} off`}
-                      onClick={() => updateSlide((sl) => withoutPicIn(kit, sl, p.id, design.format))}
+                      onClick={() =>
+                        updateSlide((sl) => withoutPicIn(kit, sl, p.id, design.format))
+                      }
                     >
                       <Trash2 aria-hidden />
                     </Button>
@@ -975,7 +978,12 @@ export function SlideStudio({
                   >
                     <ImageIcon aria-hidden /> Add a photo
                   </Button>
-                  <Button type="button" variant="ghost" size="sm" onClick={() => setPicking("fill")}>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setPicking("fill")}
+                  >
                     {slide.image ? "Swap the photo behind" : "Photo behind everything"}
                   </Button>
                   {slide.image && (

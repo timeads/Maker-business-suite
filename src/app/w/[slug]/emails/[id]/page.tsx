@@ -3,11 +3,12 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { workspaceTemplates } from "@/lib/brand/email";
-import { BRAND_MODULE, KIT_KEY, parseBrandKit } from "@/lib/brand/kit";
+import { BRAND_MODULE, KIT_KEY, parseBrandKit, toDesignKit } from "@/lib/brand/kit";
 import { normalizeDoc } from "@/lib/design";
 import { getEntitlements } from "@/lib/entitlements";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
+import { loadLogos } from "../actions";
 import { BuilderMount } from "./mount";
 
 export const metadata: Metadata = { title: "Email builder" };
@@ -28,7 +29,7 @@ export default async function EmailBuilderPage({
   if (!/^[0-9a-f-]{36}$/i.test(id)) notFound();
 
   const supabase = await createClient();
-  const [{ data: row }, { data: kitRow }] = await Promise.all([
+  const [{ data: row }, { data: kitRow }, logos] = await Promise.all([
     supabase
       .from("emails")
       .select("id, doc")
@@ -42,6 +43,7 @@ export default async function EmailBuilderPage({
       .eq("module", BRAND_MODULE)
       .eq("key", KIT_KEY)
       .maybeSingle(),
+    loadLogos(slug),
   ]);
   if (!row) {
     return (
@@ -63,7 +65,8 @@ export default async function EmailBuilderPage({
       brandName={kit?.name ?? ctx.tenant.name}
       swatches={kit?.colors ?? []}
       starters={kit ? workspaceTemplates(kit) : []}
-      logo={null}
+      kit={kit ? toDesignKit(kit) : null}
+      logos={logos}
       canKeepShared={canManage(ctx.role)}
     />
   );

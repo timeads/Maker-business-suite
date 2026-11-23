@@ -215,9 +215,7 @@ export async function fitDesign(design: SlideDesign, kit?: KitLike): Promise<Sli
   return {
     ...design,
     slides: await Promise.all(
-      design.slides.map((s) =>
-        s.layout && !s.fit ? fitSlideMeasured(s, design.format, kit) : s,
-      ),
+      design.slides.map((s) => (s.layout && !s.fit ? fitSlideMeasured(s, design.format, kit) : s)),
     ),
   };
 }

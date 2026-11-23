@@ -82,8 +82,7 @@ function PhotoGrid({
   const words = search.trim().toLowerCase();
   const shown = words
     ? photos.filter(
-        (p) =>
-          p.title.toLowerCase().includes(words) || p.tags.some((tag) => tag.includes(words)),
+        (p) => p.title.toLowerCase().includes(words) || p.tags.some((tag) => tag.includes(words)),
       )
     : photos;
   return (
@@ -113,6 +112,7 @@ function PhotoGrid({
               >
                 {/* eslint-disable-next-line @next/next/no-img-element -- an upload in the workspace's own storage */}
                 <img
+                  crossOrigin="anonymous"
                   src={photo.url}
                   alt=""
                   loading="lazy"

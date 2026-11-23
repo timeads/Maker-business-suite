@@ -3,8 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth";
-import { newWorkspaceEmail } from "@/lib/brand/email";
-import { emailFromWriting, writeEmail } from "@/lib/brand/write-email";
+import { newWorkspaceEmail, workspaceTemplates } from "@/lib/brand/email";
+import { emailFromWriting, logoForHeader, writeEmail } from "@/lib/brand/write-email";
 import { BRAND_MODULE, KIT_KEY, parseBrandKit, type BrandKitConfig } from "@/lib/brand/kit";
 import {
   normalizeDoc,
@@ -15,6 +15,7 @@ import {
   type SavedSection,
 } from "@/lib/design";
 import { getEntitlements } from "@/lib/entitlements";
+import { pickLogoAsset, pickPhoto, type TaggedAsset } from "@/lib/social/photo-match";
 import { publicAssetUrl } from "@/lib/social/worker";
 import { getAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -56,6 +57,34 @@ async function loadKit(ctx: Ctx): Promise<BrandKitConfig | null> {
   return parseBrandKit(data?.body);
 }
 
+type Picture = TaggedAsset & { url: string };
+
+/** The workspace's pictures with their names and tags, newest first. Videos and put-away files are left out. */
+async function loadPictures(ctx: Ctx): Promise<Picture[]> {
+  const { data } = await ctx.supabase
+    .from("social_assets")
+    .select("id, storage_path, title, tags, mime_type")
+    .eq("tenant_id", ctx.tenant.id)
+    .eq("hidden", false)
+    .like("mime_type", "image/%")
+    .order("created_at", { ascending: false })
+    .limit(500);
+  return (data ?? []).map((row) => ({
+    id: row.id as string,
+    url: publicAssetUrl(row.storage_path as string),
+    title: (row.title as string) ?? "",
+    tags: (row.tags as string[] | null) ?? [],
+    mimeType: row.mime_type as string,
+  }));
+}
+
+/** The workspace's logos: the assets tagged `logo` and `logo-light`. */
+const logosFrom = (pictures: Picture[]) => {
+  const onLight = pickLogoAsset(pictures)?.url ?? null;
+  const light = pickLogoAsset(pictures, true)?.url ?? null;
+  return { onLight, onDark: light === onLight ? null : light };
+};
+
 /** Starts a new email from one of the workspace's starters and opens it in the builder. */
 export async function createEmail(
   slug: string,
@@ -67,7 +96,13 @@ export async function createEmail(
   const kit = await loadKit(ctx);
   if (!kit)
     return { error: "Set up your brand kit first, so the email comes out in your colours." };
-  const doc = newWorkspaceEmail(kit, String(formData.get("template") ?? "") || null);
+  const templateId = String(formData.get("template") ?? "") || null;
+  const template = workspaceTemplates(kit).find((t) => t.id === templateId);
+  const logos = logosFrom(await loadPictures(ctx));
+  const plain = newWorkspaceEmail(kit, template?.id ?? null);
+  // The workspace's own logo, when one is tagged in its assets, in the copy that reads on the header.
+  const logo = logoForHeader(plain, logos);
+  const doc = logo ? newWorkspaceEmail(kit, template?.id ?? null, logo) : plain;
   const { data, error } = await ctx.supabase.rpc("save_email", {
     p_tenant_id: ctx.tenant.id,
     p_email_id: null,
@@ -149,10 +184,23 @@ export async function writeEmailWithClaude(
           "Claude couldn't write this one. Try saying it another way, or start from a template.",
       };
     }
+    // A photo to go with the words is chosen from the workspace's own assets by their tags and
+    // names: what was asked for, and what the email turned out to be about. Nothing is fetched.
+    const pictures = await loadPictures(ctx);
+    const about = [
+      ask,
+      draft.written.subject,
+      draft.written.banner.headline,
+      ...draft.written.sections.map((section) => section.heading),
+    ].join(" ");
+    const match = pickPhoto(pictures, about);
     const { data, error } = await ctx.supabase.rpc("save_email", {
       p_tenant_id: ctx.tenant.id,
       p_email_id: null,
-      p_doc: emailFromWriting(kit, draft.written),
+      p_doc: emailFromWriting(kit, draft.written, {
+        photo: match ? { url: match.asset.url, alt: match.asset.title } : null,
+        logos: logosFrom(pictures),
+      }),
       p_prompt: ask,
     });
     if (error || !data)
@@ -253,23 +301,20 @@ export async function storeTemplates(slug: string, list: EmailTemplate[]): Promi
   await storeShared(ctx, "templates", normalizeTemplates(list));
 }
 
-/** The workspace's library photos, for the builder's photo picker. */
+/** The workspace's library photos, for the builder's photo picker and the banner designer. */
 export async function listPhotos(
   slug: string,
-): Promise<{ id: string; url: string; title: string }[]> {
+): Promise<{ id: string; url: string; title: string; tags: string[] }[]> {
   const ctx = await context(slug);
   if ("error" in ctx) return [];
-  const { data } = await ctx.supabase
-    .from("social_assets")
-    .select("id, storage_path, title")
-    .eq("tenant_id", ctx.tenant.id)
-    .eq("hidden", false)
-    .like("mime_type", "image/%")
-    .order("created_at", { ascending: false })
-    .limit(200);
-  return (data ?? []).map((row) => ({
-    id: row.id as string,
-    url: publicAssetUrl(row.storage_path as string),
-    title: (row.title as string) ?? "",
-  }));
+  return (await loadPictures(ctx)).map(({ id, url, title, tags }) => ({ id, url, title, tags }));
+}
+
+/** The workspace's logos, for the builder's logo block: for light backgrounds and for dark ones. */
+export async function loadLogos(
+  slug: string,
+): Promise<{ onLight: string | null; onDark: string | null }> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { onLight: null, onDark: null };
+  return logosFrom(await loadPictures(ctx));
 }

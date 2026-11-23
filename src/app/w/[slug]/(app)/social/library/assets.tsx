@@ -3,15 +3,27 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useActionState, useRef, useState, useTransition } from "react";
-import { Film, Folder as FolderIcon, Upload } from "lucide-react";
+import { Film, Folder as FolderIcon, Paintbrush, Upload } from "lucide-react";
+import { DesignDialog } from "@/components/slides/DesignDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { FormMessage } from "@/components/ui/form-message";
 import { Input, Select } from "@/components/ui/input";
 import { SubmitButton } from "@/components/ui/submit-button";
+import type { BrandKit } from "@/lib/design/brands";
+import type { SlideDesign } from "@/lib/design/slide-design";
 import { getBrowserClient } from "@/lib/supabase/browser";
 import { cn } from "@/lib/utils";
-import { finishUpload, removeFolder, saveFolder, sortAssets, startUpload } from "../actions";
+import {
+  finishUpload,
+  listDesignPhotos,
+  loadAssetDesign,
+  removeFolder,
+  saveFolder,
+  sortAssets,
+  startUpload,
+} from "../actions";
+import { designTitle, saveDesignAsPictures } from "../designed";
 
 export type Asset = {
   id: string;
@@ -456,6 +468,77 @@ export function AssetGrid({
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+/**
+ * Opens a designed picture in the designer again. Saving makes a new picture and puts the old
+ * one away, unless a post that has gone out used it; that one stays where it is.
+ */
+export function EditDesign({
+  slug,
+  assetId,
+  title,
+  kit,
+  jpeg,
+  libraryHref,
+}: {
+  slug: string;
+  assetId: string;
+  title: string;
+  kit: BrandKit;
+  /** Whether the picture is a JPEG, which the new one then is too. */
+  jpeg: boolean;
+  /** The library as it is being looked at, without a picture open. */
+  libraryHref: string;
+}) {
+  const router = useRouter();
+  const [design, setDesign] = useState<SlideDesign | null>(null);
+  const [problem, setProblem] = useState("");
+  const [opening, startOpening] = useTransition();
+  const open = () =>
+    startOpening(async () => {
+      setProblem("");
+      const found = await loadAssetDesign(slug, assetId);
+      if ("error" in found) setProblem(found.error);
+      else setDesign(found.design);
+    });
+  const save = async (next: SlideDesign) => {
+    const [picture] = await saveDesignAsPictures(slug, next, kit, {
+      jpeg,
+      title: title || designTitle(next, "Designed picture"),
+      replaces: assetId,
+    });
+    setDesign(null);
+    router.replace(`${libraryHref}${libraryHref.includes("?") ? "&" : "?"}open=${picture.id}`, {
+      scroll: false,
+    });
+    router.refresh();
+  };
+  return (
+    <div className="flex flex-col gap-2 border-t pt-4">
+      <p className="text-muted-foreground text-xs">
+        This picture was made in the designer, so its words, colours and photos can still be
+        changed. Saving makes a new picture; a post that has already gone out keeps the old one.
+      </p>
+      <Button type="button" variant="outline" className="w-fit" disabled={opening} onClick={open}>
+        <Paintbrush aria-hidden /> {opening ? "Opening…" : "Edit design"}
+      </Button>
+      <FormMessage>{problem}</FormMessage>
+      {design && (
+        <DesignDialog
+          initial={design}
+          kit={kit}
+          loadPhotos={() => listDesignPhotos(slug)}
+          title="Edit this design"
+          description="Click any text to change it, drag to move it, or change the layout, colour and photos. The new picture is made when you save."
+          saveLabel="Save the new picture"
+          single
+          onClose={() => setDesign(null)}
+          onSave={save}
+        />
+      )}
     </div>
   );
 }

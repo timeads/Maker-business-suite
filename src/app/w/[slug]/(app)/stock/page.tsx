@@ -9,7 +9,8 @@ import { draftOrders, isPlanned, relativeDay } from "@/lib/stock/plan";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
 import { startSuggestedOrder } from "./actions";
-import { loadStock } from "./data";
+import { loadIncoming, loadStock } from "./data";
+import { StartOrderButton } from "./forms";
 import { stockAccess } from "./gate";
 import { StockTabs } from "./tabs";
 
@@ -23,7 +24,16 @@ export default async function StockPage({ params }: { params: Promise<{ slug: st
   const canEdit = canManage(role) && entitlements.canWrite;
   const base = `/w/${tenant.slug}/stock`;
 
-  const { rows, today, link, suppliers } = await loadStock(await createClient(), tenant);
+  const supabase = await createClient();
+  const [{ rows, today, link, suppliers }, { incoming }] = await Promise.all([
+    loadStock(supabase, tenant),
+    loadIncoming(supabase, tenant),
+  ]);
+  const day = (value: string) =>
+    new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short", day: "numeric" }).format(
+      new Date(`${value}T12:00:00Z`),
+    );
+  const lateCount = incoming.filter((order) => order.late).length;
   const planned = rows.filter(isPlanned);
   const due = planned.filter((row) => row.due);
   const orders = draftOrders(rows, today);
@@ -124,9 +134,7 @@ export default async function StockPage({ params }: { params: Promise<{ slug: st
                 </div>
                 {canEdit && (
                   <form action={startSuggestedOrder.bind(null, tenant.slug, order.supplier.id)}>
-                    <Button type="submit" variant="outline" size="sm">
-                      Start this order
-                    </Button>
+                    <StartOrderButton />
                   </form>
                 )}
               </CardHeader>
@@ -168,8 +176,13 @@ export default async function StockPage({ params }: { params: Promise<{ slug: st
                                 relativeDay(row.plan.reorderDate, today)
                               )}
                             </td>
-                            <td className="py-2 text-right font-semibold tabular-nums">
-                              {line.qty}
+                            <td className="py-2 text-right tabular-nums">
+                              <span className="font-semibold">{line.qty}</span>
+                              {line.cases && (
+                                <span className="text-muted-foreground block text-xs">
+                                  {line.cases}
+                                </span>
+                              )}
                             </td>
                           </tr>
                         );
@@ -180,6 +193,60 @@ export default async function StockPage({ params }: { params: Promise<{ slug: st
               </CardContent>
             </Card>
           ))}
+
+          {incoming.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Incoming</CardTitle>
+                <CardDescription>
+                  Orders you&apos;ve sent that haven&apos;t all arrived, the longest-awaited first
+                  {lateCount > 0 ? `. ${lateCount} ${lateCount === 1 ? "is" : "are"} late.` : "."}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ul className="divide-border flex flex-col divide-y">
+                  {incoming.map((order) => (
+                    <li key={order.id}>
+                      <Link
+                        href={`${base}/orders/${order.number}`}
+                        className="hover:bg-hover -mx-2 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-sm px-2 py-2.5 text-sm"
+                      >
+                        <span className="text-muted-foreground w-14 tabular-nums">
+                          #{order.number}
+                        </span>
+                        <span className="min-w-0 flex-1 basis-40 font-semibold">
+                          {order.supplierName}
+                        </span>
+                        <span className="text-muted-foreground tabular-nums">
+                          {order.units} unit{order.units === 1 ? "" : "s"} to come
+                          {order.shipments.length > 0 &&
+                            ` · ${order.shipments.length} tracking number${order.shipments.length === 1 ? "" : "s"}`}
+                        </span>
+                        {order.stage === "arrived" ? (
+                          <Badge tone="good">Here: check it in</Badge>
+                        ) : order.late ? (
+                          <Badge tone="bad">
+                            {order.daysLate} day{order.daysLate === 1 ? "" : "s"} late
+                          </Badge>
+                        ) : order.stage === "shipped" ? (
+                          <Badge tone="open">Shipped</Badge>
+                        ) : (
+                          <Badge tone="closed">Not shipped yet</Badge>
+                        )}
+                        <span className="text-muted-foreground w-28 text-right">
+                          {order.stage === "arrived"
+                            ? ""
+                            : order.expected
+                              ? `due ${day(order.expected)}`
+                              : "no date yet"}
+                        </span>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </CardContent>
+            </Card>
+          )}
 
           {unassigned.length > 0 && (
             <Card>

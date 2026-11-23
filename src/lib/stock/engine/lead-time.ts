@@ -1,10 +1,10 @@
 /**
  * Observed lead time = the actual elapsed days from when a PO was sent to the
  * supplier (sentAt) to when its goods arrived (first receipt, or a shipment's
- * delivered date). Pure functions only — the DB loader lives in
- * the Suppliers page. Surfaced next to each supplier's
- * configured leadTimeDays so the owner can adopt reality; never auto-applied
- * (no silent changes to the reorder math).
+ * delivered date). Pure functions only — the loader is `loadIncoming` in the
+ * Stock pages' data.ts. Surfaced next to each supplier's configured lead time
+ * so the owner can adopt reality; never auto-applied (no silent changes to the
+ * reorder math).
  */
 
 export interface LeadTimeSample {
@@ -26,9 +26,7 @@ export function median(values: number[]): number | null {
   if (values.length === 0) return null;
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 1
-    ? sorted[mid]!
-    : Math.round((sorted[mid - 1]! + sorted[mid]!) / 2);
+  return sorted.length % 2 === 1 ? sorted[mid]! : Math.round((sorted[mid - 1]! + sorted[mid]!) / 2);
 }
 
 /**

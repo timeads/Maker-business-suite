@@ -30,6 +30,10 @@ export interface Builder {
   insertSaved: (id: string, index?: number) => void;
   renameSaved: (id: string, name: string) => void;
   deleteSaved: (id: string) => void;
+  /** Banners whose picture is being drawn and kept. */
+  rendering: ReadonlySet<string>;
+  /** Open a banner in the designer. */
+  editBanner: (id: string) => void;
 }
 
 export const BuilderContext = createContext<Builder | null>(null);

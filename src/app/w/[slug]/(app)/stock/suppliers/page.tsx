@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { PageHeader } from "@/components/ui/page-header";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
-import { loadStock } from "../data";
+import { loadIncoming, loadStock } from "../data";
 import { SupplierForm } from "../forms";
 import { stockAccess } from "../gate";
 import { StockTabs } from "../tabs";
@@ -17,7 +17,11 @@ export default async function SuppliersPage({ params }: { params: Promise<{ slug
   if (!access.ok) return access.upsell;
   const { tenant, role, entitlements } = access;
   const canEdit = canManage(role) && entitlements.canWrite;
-  const { suppliers, rows } = await loadStock(await createClient(), tenant);
+  const supabase = await createClient();
+  const [{ suppliers, rows }, { leadTimes }] = await Promise.all([
+    loadStock(supabase, tenant),
+    loadIncoming(supabase, tenant),
+  ]);
   const itemCount = (id: string) => rows.filter((row) => row.item.supplier_id === id).length;
 
   return (
@@ -44,6 +48,17 @@ export default async function SuppliersPage({ params }: { params: Promise<{ slug
                         {s.moq > 1 &&
                           ` · smallest order ${s.moq}${s.moq_applies_to === "sku" ? " per item" : ""}`}
                       </span>
+                      {leadTimes.has(s.id) && (
+                        <Badge
+                          tone={
+                            leadTimes.get(s.id)!.days > s.lead_time_days + 3 ? "waiting" : "closed"
+                          }
+                        >
+                          Really takes about {leadTimes.get(s.id)!.days} days (
+                          {leadTimes.get(s.id)!.sampleSize} order
+                          {leadTimes.get(s.id)!.sampleSize === 1 ? "" : "s"})
+                        </Badge>
+                      )}
                     </summary>
                     {canEdit ? (
                       <div className="pt-4">
@@ -69,7 +84,8 @@ export default async function SuppliersPage({ params }: { params: Promise<{ slug
             <CardTitle>Add a supplier</CardTitle>
             <CardDescription>
               &quot;Days to arrive&quot; is from placing the order to having it on the shelf.
-              &quot;Each order covers&quot; is how long you want one order to last.
+              &quot;Each order covers&quot; is how long you want one order to last. Once orders have
+              arrived, we show how long each supplier really took, so you can match it.
             </CardDescription>
           </CardHeader>
           <CardContent>

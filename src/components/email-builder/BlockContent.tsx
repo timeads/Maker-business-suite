@@ -3,11 +3,12 @@
 /* eslint-disable @next/next/no-img-element -- pictures in an email sit on other hosts, at addresses not known ahead of time */
 
 import { useState } from "react";
-import { ImageIcon, Trash2 } from "lucide-react";
+import { ImageIcon, Paintbrush, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "./ui";
 import { alignOf, safeHref, safeUrl, sanitizeHtml, type Block, type CodeBlock } from "@/lib/design";
 import { useBuilder } from "./context";
+import { useHost } from "./host";
 import { PhotoPicker } from "./PhotoPicker";
 import { LogoContent, SocialContent, VideoContent } from "./MoreBlockContent";
 import { AlignField, Field, NumberField, Segmented, TextField } from "./fields";
@@ -227,7 +228,7 @@ export function BlockContent({ block }: { block: Block }) {
           {block.image && (
             <img src={block.image} alt="" className="border-border w-full rounded border" />
           )}
-          <Note>The banner is a picture made with your brand&apos;s own fonts and colours.</Note>
+          <BannerDesignButton id={block.id} />
           <TextField
             label="What the banner says"
             value={block.alt}
@@ -316,4 +317,29 @@ export function BlockContent({ block }: { block: Block }) {
         </div>
       );
   }
+}
+
+/** Opens a banner in the designer, or says what is needed first. */
+function BannerDesignButton({ id }: { id: string }) {
+  const { editBanner, rendering } = useBuilder();
+  const { kit } = useHost();
+  const busy = rendering.has(id);
+  return (
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={() => editBanner(id)}
+        disabled={busy || !kit}
+      >
+        <Paintbrush aria-hidden /> {busy ? "Making the picture…" : "Edit design"}
+      </Button>
+      <Note>
+        {kit
+          ? "The banner is a picture made in your brand's colours and lettering. Edit design changes its words, colours, layout or photo."
+          : "The banner is a picture made in your brand's colours. Set up your brand kit under Settings to design one."}
+      </Note>
+    </>
+  );
 }

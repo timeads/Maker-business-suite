@@ -23,7 +23,13 @@ describe("aggregateSpend", () => {
     const lines = [
       line({ poId: "po1", sku: "SKU-A", qtyOrdered: 10, unitCost: D("2.00") }), // 20
       line({ poId: "po1", sku: "SKU-B", qtyOrdered: 5, unitCost: D("3.00"), title: "Yarn B" }), // 15
-      line({ poId: "po2", sku: "SKU-A", qtyOrdered: 4, unitCost: D("2.50"), date: new Date("2026-07-02T00:00:00Z") }), // 10
+      line({
+        poId: "po2",
+        sku: "SKU-A",
+        qtyOrdered: 4,
+        unitCost: D("2.50"),
+        date: new Date("2026-07-02T00:00:00Z"),
+      }), // 10
     ];
     const r = aggregateSpend(lines, null);
     expect(r.total).toBe("45.00");
@@ -61,8 +67,23 @@ describe("aggregateSpend", () => {
 
   it("groups null-SKU lines by title and tracks the most recent vendor", () => {
     const lines = [
-      line({ sku: null, title: "Custom dye", supplierName: "VendorX", date: new Date("2026-05-01T00:00:00Z"), qtyOrdered: 1, unitCost: D("100") }),
-      line({ sku: null, title: "Custom dye", supplierName: "VendorY", supplierId: "sup2", date: new Date("2026-06-01T00:00:00Z"), qtyOrdered: 1, unitCost: D("50") }),
+      line({
+        sku: null,
+        title: "Custom dye",
+        supplierName: "VendorX",
+        date: new Date("2026-05-01T00:00:00Z"),
+        qtyOrdered: 1,
+        unitCost: D("100"),
+      }),
+      line({
+        sku: null,
+        title: "Custom dye",
+        supplierName: "VendorY",
+        supplierId: "sup2",
+        date: new Date("2026-06-01T00:00:00Z"),
+        qtyOrdered: 1,
+        unitCost: D("50"),
+      }),
     ];
     const r = aggregateSpend(lines, null);
     const row = r.bySku.find((s) => s.title === "Custom dye")!;

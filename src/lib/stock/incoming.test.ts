@@ -94,7 +94,10 @@ describe("summarizeIncoming", () => {
         order({
           id: "d",
           number: 4,
-          shipments: [parcel({ expectedOn: "2026-10-07" }), parcel({ id: "s2", arrivedOn: "2026-10-02" })],
+          shipments: [
+            parcel({ expectedOn: "2026-10-07" }),
+            parcel({ id: "s2", arrivedOn: "2026-10-02" }),
+          ],
         }),
       ],
       TODAY,

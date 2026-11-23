@@ -32,7 +32,37 @@ describe("emails in a workspace's own brand", () => {
     expect(text).not.toMatch(/tufttheworld|Tuft the World|#0051ff|#213838|#f5edeb|#ffe813/i);
     expect(text).toContain("https://wildthread.example");
     expect(text).toContain('Wild \\"Thread\\" Studio');
-    expect(text).not.toContain('"type":"banner"');
+    // Banners are back, designed with the workspace's own kit: its colours and nothing else,
+    // no picture yet (it is drawn when the email is opened), in the banner shape.
+    const banners = templates.flatMap((template) =>
+      template.sections.flatMap((section) =>
+        section.rows.flatMap((row) =>
+          row.columns.flatMap((column) =>
+            column.blocks.flatMap((block) => (block.type === "banner" ? [block] : [])),
+          ),
+        ),
+      ),
+    );
+    expect(banners).toHaveLength(2);
+    const own = new Set([...kit.colors.map((c) => c.hex), "#ffffff"]);
+    for (const banner of banners) {
+      expect(banner.image).toBe("");
+      expect(banner.design.format).toBe("3:2");
+      expect(banner.design.slides).toHaveLength(1);
+      const slide = banner.design.slides[0];
+      expect(slide.brand).toBeUndefined();
+      const used = [
+        slide.bg,
+        slide.grid,
+        slide.wave,
+        ...slide.layers.flatMap((l) => [l.color, l.plateColor, l.scribble]),
+      ].filter((hex): hex is string => Boolean(hex));
+      for (const hex of used) expect(own.has(hex), hex).toBe(true);
+      expect(slide.layers.some((l) => l.role === "headline" && l.text.trim())).toBe(true);
+    }
+    // The announcement opens on the main colour; the sale's banner stands out in the accent.
+    expect(banners[0].design.slides[0].bg).toBe("#9cc4d9");
+    expect(banners[1].design.slides[0].bg).toBe("#b5532c");
     for (const template of templates) {
       // A pale main colour gets dark words on it, not the usual light ones.
       const button = template.globalStyles.button;

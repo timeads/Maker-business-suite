@@ -10,11 +10,13 @@ import {
   type RowLayout,
 } from "@/lib/design";
 import { useBuilder } from "./context";
+import { useHost } from "./host";
 import type { DragSource } from "./dnd";
 import { BLOCK_ICONS } from "./shared";
 
-// A new banner needs the banner designer, and products need the shop's photo picker. Neither is here yet, so neither is
-// offered; one already in an email still shows and can be moved, copied or deleted.
+// Products need the shop's photo picker, which is not here yet, so they are not offered; one already in an email
+// still shows and can be moved, copied or deleted. A banner is drawn in the workspace's brand, so it is offered
+// once there is a brand kit to draw it with.
 const TILES: BlockType[] = [
   "image",
   "heading",
@@ -22,6 +24,7 @@ const TILES: BlockType[] = [
   "button",
   "divider",
   "spacer",
+  "banner",
   "footer",
   "social",
   "video",
@@ -84,6 +87,8 @@ function Pill({ layout }: { layout: RowLayout }) {
 
 /** Everything that can be added to the email: content blocks, and rows of columns to put them in. */
 export function BlocksPanel() {
+  const { kit } = useHost();
+  const tiles = kit ? TILES : TILES.filter((t) => t !== "banner");
   return (
     <div className="space-y-6 p-4">
       <div className="space-y-2">
@@ -92,7 +97,7 @@ export function BlocksPanel() {
           <p className="text-muted-foreground text-xs">Drag onto the email, or click to add.</p>
         </div>
         <div className="grid grid-cols-3 gap-2">
-          {TILES.map((t) => (
+          {tiles.map((t) => (
             <Tile key={t} type={t} />
           ))}
         </div>

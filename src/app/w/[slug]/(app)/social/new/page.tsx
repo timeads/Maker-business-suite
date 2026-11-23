@@ -4,7 +4,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { createClient } from "@/lib/supabase/server";
 import { Composer } from "../composer";
 import { socialAccess } from "../gate";
-import { composerChoices, defaultSlot, socialChannels } from "../shared";
+import { composerChoices, defaultSlot, loadDesignKit, socialChannels } from "../shared";
 
 export const metadata: Metadata = { title: "New post" };
 
@@ -21,9 +21,10 @@ export default async function NewPostPage({
   if (!access.ok) return access.upsell;
   const { tenant } = access;
   const supabase = await createClient();
-  const [channels, choices] = await Promise.all([
+  const [channels, choices, kit] = await Promise.all([
     socialChannels(supabase, tenant.id),
     composerChoices(supabase, tenant.id, []),
+    loadDesignKit(supabase, tenant.id),
   ]);
   const suggestion = defaultSlot(new Date(), tenant.timezone);
 
@@ -46,6 +47,7 @@ export default async function NewPostPage({
             timezone={tenant.timezone}
             facebook={channels.facebook}
             instagram={channels.instagram}
+            kit={kit}
           />
         </CardContent>
       </Card>

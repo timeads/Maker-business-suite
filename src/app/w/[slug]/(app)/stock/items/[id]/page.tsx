@@ -129,7 +129,7 @@ export default async function StockItemPage({
       )}
       {manager && left === "rule" && (
         <Card>
-          <CardHeader>
+          <CardHeader className="pb-5">
             <CardTitle>Reordering</CardTitle>
             <CardDescription>
               This one is left out because its name matches a word under Stock → Settings

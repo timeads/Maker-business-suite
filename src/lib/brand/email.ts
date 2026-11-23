@@ -1,14 +1,18 @@
 import { BRANDS } from "../design/brands";
 import type { EmailDoc } from "../design/email-doc";
 import { builtInTemplates, docFromTemplate, type EmailTemplate } from "../design/email-templates";
-import { contrast, luminance, saturation, type BrandKitConfig } from "./kit";
+import { contentOf } from "../design/slide-layouts";
+import { contrast, luminance, saturation, toDesignKit, type BrandKitConfig } from "./kit";
+import { bannerDesign } from "./slides";
 
 /**
  * Emails in a workspace's own colours. The starter templates are drawn once
  * in the built-in look and then recoloured: every built-in colour is swapped
  * for the workspace's colour that does the same job, and the built-in name
- * and web address for the workspace's own. Nothing here is stored; a saved
- * email keeps its own styles.
+ * and web address for the workspace's own. A banner is not recoloured but
+ * designed afresh with the workspace's kit, so its layout, colours and
+ * lettering are the workspace's; its picture is drawn when the email is
+ * opened. Nothing here is stored; a saved email keeps its own styles.
  */
 
 type Roles = { dark: string; light: string; primary: string; accent: string };
@@ -49,20 +53,38 @@ function recolour<T>(value: T, kit: BrandKitConfig, roles: Roles): T {
   return JSON.parse(text) as T;
 }
 
-/** The starter templates in the workspace's colours, without the banner pictures. */
+/** The starter templates in the workspace's colours, each banner designed with the workspace's kit. */
 export function workspaceTemplates(kit: BrandKitConfig): EmailTemplate[] {
   const roles = emailRoles(kit);
+  const designKit = toDesignKit(kit);
+  const nameOf = (hex: string) => kit.colors.find((c) => c.hex === hex)?.name;
   return builtInTemplates("ttw").map((template) => {
     const out = recolour(template, kit, roles);
-    out.sections = out.sections
-      .map((section) => ({
-        ...section,
-        // A banner is a drawn picture in the built-in look; a workspace starts without one.
-        rows: section.rows.filter(
-          (row) => !row.columns.some((col) => col.blocks.some((block) => block.type === "banner")),
-        ),
-      }))
-      .filter((section) => section.rows.length > 0);
+    for (const section of out.sections) {
+      for (const row of section.rows) {
+        for (const column of row.columns) {
+          column.blocks = column.blocks.map((block) => {
+            if (block.type !== "banner") return block;
+            // Only the words and the kind of banner are kept; everything drawn is the workspace's.
+            const slide = block.design.slides[0];
+            const { kicker, headline, body, badge } = contentOf(slide);
+            const offer = slide.layout === "sale" || Boolean(badge);
+            return {
+              ...block,
+              image: "",
+              design: bannerDesign(
+                designKit,
+                { kicker, headline, body, badge },
+                {
+                  layout: offer ? "sale" : "statement",
+                  color: nameOf(offer ? roles.accent : roles.primary),
+                },
+              ),
+            };
+          });
+        }
+      }
+    }
     // Words on a coloured band or button must be readable whatever the main colour is.
     for (const section of out.sections) {
       const bg = section.styles.contentBg;

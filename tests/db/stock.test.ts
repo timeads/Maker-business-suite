@@ -20,6 +20,7 @@ const TABLES = [
   "purchase_orders",
   "purchase_order_lines",
   "stock_receipts",
+  "purchase_order_shipments",
 ];
 
 async function tenantFor(owner: User, name: string): Promise<string> {
@@ -525,5 +526,415 @@ describe("what's owed to suppliers", () => {
     ).rejects.toThrow(/permission denied/);
 
     await as(alice, "select public.remove_ledger_entry($1, $2)", [tenantA, mine[0].id]);
+  });
+});
+
+describe("stock, round two: cases, drafts in one go, order money and tracking", () => {
+  let dye: string;
+  let bobSupplier: string;
+  let bobItem: string;
+  const KEY = "11111111-2222-4333-8444-555555555555";
+  const poByNumber = async (tenant: string, number: number) =>
+    (
+      await db.query<{
+        id: string;
+        status: string;
+        supplier_id: string;
+        expected_on: string | null;
+        shipping_cost: string;
+        tax_rate_pct: string;
+        adjustments: { label: string; amount: string }[];
+      }>(
+        "select id, status, supplier_id, expected_on::text, shipping_cost, tax_rate_pct, adjustments from public.purchase_orders where tenant_id = $1 and number = $2",
+        [tenant, number],
+      )
+    ).rows[0];
+  const lineRows = async (poId: string) =>
+    (
+      await db.query<{
+        stock_item_id: string;
+        qty_ordered: number;
+        unit_cost: string;
+        supplier_sku: string | null;
+        note: string;
+      }>(
+        "select stock_item_id, qty_ordered, unit_cost, supplier_sku, note from public.purchase_order_lines where po_id = $1 and qty_ordered > 0 order by qty_ordered",
+        [poId],
+      )
+    ).rows;
+  const draft = (user: User, tenant: string, key: string, orders: object[]) =>
+    as<{ numbers: number[] }>(
+      user,
+      "select public.draft_purchase_orders($1, $2, $3::jsonb) as numbers",
+      [tenant, key, JSON.stringify(orders)],
+    ).then((rows) => rows[0].numbers);
+
+  beforeAll(async () => {
+    dye = await newSupplier(alice, tenantA, "Dye Works");
+    bobSupplier = (
+      await db.query<{ id: string }>(
+        "select id from public.suppliers where tenant_id = $1 and name = 'Clay Co'",
+        [tenantB],
+      )
+    ).rows[0].id;
+    bobItem = await itemId(tenantB, "b-v1");
+  });
+
+  it("an item's case size, smallest order and supplier code are the workspace's own, kept across syncs", async () => {
+    await as(
+      alice,
+      "select public.save_stock_item_plan($1, $2, $3, 14, null, 3, false, 36, 72, ' HM-77 ')",
+      [tenantA, yarn, supplierA],
+    );
+    await service("select public.upsert_stock_items($1, 'shopify', $2::jsonb)", [
+      tenantA,
+      JSON.stringify(items("a")),
+    ]);
+    const { rows } = await db.query(
+      "select case_pack, moq, supplier_sku, hidden, supplier_id, lead_time_days, safety_stock from public.stock_items where id = $1",
+      [yarn],
+    );
+    expect(rows[0]).toEqual({
+      case_pack: 36,
+      moq: 72,
+      supplier_sku: "HM-77",
+      hidden: false,
+      supplier_id: supplierA,
+      lead_time_days: 14,
+      safety_stock: 3,
+    });
+    // Planning is for owners and admins of that workspace.
+    await expect(
+      as(
+        carol,
+        "select public.save_stock_item_plan($1, $2, null, null, null, 0, false, null, null, '')",
+        [tenantA, yarn],
+      ),
+    ).rejects.toThrow(/Only owners and admins/);
+    await expect(
+      as(bob, "select public.save_stock_item_plan($1, $2, null, null, null, 0, true, 5, 5, 'X')", [
+        tenantB,
+        yarn,
+      ]),
+    ).rejects.toThrow(/Item not found/);
+    await expect(
+      as(
+        alice,
+        "select public.save_stock_item_plan($1, $2, $3, null, null, 0, false, null, null, '')",
+        [tenantA, yarn, bobSupplier],
+      ),
+    ).rejects.toThrow(/Supplier not found/);
+    await expect(
+      as(
+        alice,
+        "select public.save_stock_item_plan($1, $2, null, null, null, 0, false, 0, null, '')",
+        [tenantA, rug],
+      ),
+    ).rejects.toThrow(/check constraint/);
+  });
+
+  it('"don\'t reorder" can be set for several items at once, brought back, and survives a sync', async () => {
+    const hide = (user: User, tenant: string, ids: string[], hidden: boolean) =>
+      as<{ n: number }>(user, "select public.set_stock_items_hidden($1, $2, $3) as n", [
+        tenant,
+        ids,
+        hidden,
+      ]).then((rows) => rows[0].n);
+    expect(await hide(alice, tenantA, [rug, yarn], true)).toBe(2);
+    // Pressing it again changes nothing.
+    expect(await hide(alice, tenantA, [rug, yarn], true)).toBe(0);
+    await service("select public.upsert_stock_items($1, 'shopify', $2::jsonb)", [
+      tenantA,
+      JSON.stringify(items("a")),
+    ]);
+    const hidden = async () =>
+      (
+        await db.query<{ hidden: boolean; case_pack: number | null }>(
+          "select hidden, case_pack from public.stock_items where id = any($1) order by case_pack nulls first",
+          [[rug, yarn]],
+        )
+      ).rows;
+    // Hidden stays through the sync, and hiding left the rest of the planning alone.
+    expect(await hidden()).toEqual([
+      { hidden: true, case_pack: null },
+      { hidden: true, case_pack: 36 },
+    ]);
+    // Another workspace's owner can't reach these items, and a member can't hide anything.
+    expect(await hide(bob, tenantB, [rug, yarn], false)).toBe(0);
+    await expect(hide(carol, tenantA, [rug], false)).rejects.toThrow(/Only owners and admins/);
+    await expect(hide(bob, tenantA, [rug], false)).rejects.toThrow(
+      /Workspace not found|Only owners/,
+    );
+    expect((await hidden()).every((row) => row.hidden)).toBe(true);
+    expect(await hide(alice, tenantA, [rug, yarn], false)).toBe(2);
+  });
+
+  it("drafts one order per supplier in one go, and a second press makes nothing new", async () => {
+    const orders = [
+      {
+        supplier_id: supplierA,
+        expected_on: "2027-02-01",
+        lines: [{ stock_item_id: yarn, qty: 72, unit_cost: "8.50" }],
+      },
+      {
+        supplier_id: dye,
+        expected_on: "",
+        lines: [
+          { stock_item_id: rug, qty: 6, unit_cost: "60.00", supplier_sku: "RUG-X", note: "" },
+        ],
+      },
+    ];
+    const before = (
+      await db.query<{ n: number }>(
+        "select count(*)::int as n from public.purchase_orders where tenant_id = $1",
+        [tenantA],
+      )
+    ).rows[0].n;
+    const first = await draft(alice, tenantA, KEY, orders);
+    expect(first).toHaveLength(2);
+    expect(first[1]).toBe(first[0] + 1);
+    // The double click: same key, same orders back, nothing added.
+    expect(await draft(alice, tenantA, KEY, orders)).toEqual(first);
+    // Even if what's ticked has changed in between, the key still names the first press.
+    expect(await draft(alice, tenantA, KEY, [orders[0]])).toEqual(first);
+    const after = (
+      await db.query<{ n: number }>(
+        "select count(*)::int as n from public.purchase_orders where tenant_id = $1",
+        [tenantA],
+      )
+    ).rows[0].n;
+    expect(after - before).toBe(2);
+
+    const toMill = await poByNumber(tenantA, first[0]);
+    expect([toMill.status, toMill.supplier_id, toMill.expected_on]).toEqual([
+      "draft",
+      supplierA,
+      "2027-02-01",
+    ]);
+    // A line with no code of its own takes the item's.
+    expect(await lineRows(toMill.id)).toEqual([
+      { stock_item_id: yarn, qty_ordered: 72, unit_cost: "8.50", supplier_sku: "HM-77", note: "" },
+    ]);
+    const toDye = await poByNumber(tenantA, first[1]);
+    expect(toDye.expected_on).toBeNull();
+    expect((await lineRows(toDye.id))[0].supplier_sku).toBe("RUG-X");
+
+    // A new key is a new press.
+    const again = await draft(alice, tenantA, "99999999-2222-4333-8444-555555555555", [orders[1]]);
+    expect(again).toEqual([first[1] + 1]);
+  });
+
+  it("only owners and admins draft orders, and never with another workspace's supplier or items", async () => {
+    const one = (supplier: string, item: string) => [
+      {
+        supplier_id: supplier,
+        expected_on: "",
+        lines: [{ stock_item_id: item, qty: 1, unit_cost: 1 }],
+      },
+    ];
+    const key = "aaaaaaaa-2222-4333-8444-555555555555";
+    await expect(draft(carol, tenantA, key, one(supplierA, rug))).rejects.toThrow(
+      /Only owners and admins/,
+    );
+    await expect(draft(bob, tenantA, key, one(supplierA, rug))).rejects.toThrow(
+      /Workspace not found|Only owners/,
+    );
+    await expect(draft(bob, tenantB, key, one(supplierA, bobItem))).rejects.toThrow(
+      /Supplier not found/,
+    );
+    await expect(draft(bob, tenantB, key, one(bobSupplier, rug))).rejects.toThrow(/Item not found/);
+    await expect(
+      as(alice, "select public.draft_purchase_orders($1, null, '[]'::jsonb)", [tenantA]),
+    ).rejects.toThrow(/request key/);
+    // A key used in one workspace means nothing in another.
+    const theirs = await draft(bob, tenantB, KEY, one(bobSupplier, bobItem));
+    expect(theirs).toHaveLength(1);
+    expect((await poByNumber(tenantB, theirs[0])).supplier_id).toBe(bobSupplier);
+    // None of those refusals left anything behind.
+    expect(
+      (
+        await db.query<{ n: number }>(
+          "select count(*)::int as n from public.purchase_orders where request_key = $1",
+          [key],
+        )
+      ).rows[0].n,
+    ).toBe(0);
+  });
+
+  it("saves shipping, tax and named adjustments, and lets lines change until the order is closed", async () => {
+    const [number] = await draft(alice, tenantA, "bbbbbbbb-2222-4333-8444-555555555555", [
+      {
+        supplier_id: supplierA,
+        expected_on: "",
+        lines: [
+          { stock_item_id: yarn, qty: 36, unit_cost: "8.50" },
+          { stock_item_id: rug, qty: 2, unit_cost: "60" },
+        ],
+      },
+    ]);
+    const order = await poByNumber(tenantA, number);
+    const save = (user: User, lines: object[], shipping: unknown, tax: unknown, adj: object[]) =>
+      as(
+        user,
+        "select public.save_purchase_order($1, $2::jsonb, 'Thanks', '2027-03-01', $3, $4, $5::jsonb)",
+        [order.id, JSON.stringify(lines), shipping, tax, JSON.stringify(adj)],
+      );
+    const yarnLine = { stock_item_id: yarn, qty: 72, unit_cost: "8.25", note: "Blue only" };
+    await save(
+      alice,
+      [yarnLine, { stock_item_id: rug, qty: 2, unit_cost: "60" }],
+      "25.5",
+      "8.875",
+      [
+        { label: " Pallet fee ", amount: "12.345" },
+        { label: "Loyalty discount", amount: -10 },
+        { label: "", amount: 5 },
+        { label: "Nothing", amount: 0 },
+      ],
+    );
+    const saved = await poByNumber(tenantA, number);
+    expect(Number(saved.shipping_cost)).toBe(25.5);
+    expect(Number(saved.tax_rate_pct)).toBe(8.875);
+    expect(saved.adjustments).toEqual([
+      { label: "Pallet fee", amount: "12.35" },
+      { label: "Loyalty discount", amount: "-10.00" },
+    ]);
+    expect(saved.expected_on).toBe("2027-03-01");
+    expect((await lineRows(order.id)).map((l) => [l.qty_ordered, l.unit_cost, l.note])).toEqual([
+      [2, "60.00", ""],
+      [72, "8.25", "Blue only"],
+    ]);
+
+    await expect(save(alice, [yarnLine], -1, 0, [])).rejects.toThrow(/not valid/);
+    await expect(save(alice, [yarnLine], 0, 101, [])).rejects.toThrow(/not valid/);
+    await expect(save(carol, [yarnLine], 0, 0, [])).rejects.toThrow(/Only owners and admins/);
+    await expect(save(bob, [yarnLine], 0, 0, [])).rejects.toThrow(/Order not found/);
+
+    // After it has gone out, quantities and costs can still be put right...
+    await as(alice, "select public.set_purchase_order_status($1, 'ordered')", [order.id]);
+    await as(
+      carol,
+      "select public.receive_po_line(l.id, 30, false) from public.purchase_order_lines l where l.po_id = $1 and l.stock_item_id = $2",
+      [order.id, yarn],
+    );
+    // ...including taking a line off (the rug never shipped) and re-pricing another.
+    await save(alice, [{ ...yarnLine, qty: 60, unit_cost: "8.00" }], 0, 0, []);
+    const { rows: now } = await db.query<{
+      stock_item_id: string;
+      qty_ordered: number;
+      qty_received: number;
+      unit_cost: string;
+    }>(
+      "select stock_item_id, qty_ordered, qty_received, unit_cost from public.purchase_order_lines where po_id = $1 order by qty_ordered",
+      [order.id],
+    );
+    expect(now).toEqual([
+      { stock_item_id: rug, qty_ordered: 0, qty_received: 0, unit_cost: "60.00" },
+      // What was checked in is kept whatever happens to the line.
+      { stock_item_id: yarn, qty_ordered: 60, qty_received: 30, unit_cost: "8.00" },
+    ]);
+    expect((await poByNumber(tenantA, number)).status).toBe("partial");
+    // ...but an order that has gone out can't be emptied, and a closed one is finished.
+    await expect(save(alice, [], 0, 0, [])).rejects.toThrow(/Add something/);
+    await as(alice, "select public.set_purchase_order_status($1, 'closed')", [order.id]);
+    await expect(save(alice, [yarnLine], 0, 0, [])).rejects.toThrow(/finished/);
+  });
+
+  it("tracks what's on its way: tracking numbers per order, each workspace's own", async () => {
+    const [number] = await draft(alice, tenantA, "cccccccc-2222-4333-8444-555555555555", [
+      {
+        supplier_id: supplierA,
+        expected_on: "2027-01-10",
+        lines: [{ stock_item_id: yarn, qty: 36, unit_cost: "8.50" }],
+      },
+    ]);
+    const order = await poByNumber(tenantA, number);
+    const add = (user: User, poId: string, tracking: string, arrived: string | null = null) =>
+      as<{ id: string }>(
+        user,
+        "select public.save_po_shipment($1, null, 'UPS', $2, '2027-01-08', $3::date, 'By sea') as id",
+        [poId, tracking, arrived],
+      ).then((rows) => rows[0].id);
+    // Nothing to track until the order has been sent.
+    await expect(add(alice, order.id, "1Z999AA10123456784")).rejects.toThrow(/have been sent/);
+    await as(alice, "select public.set_purchase_order_status($1, 'ordered')", [order.id]);
+    const first = await add(alice, order.id, " 1z999 aa1-0123456784 ");
+    // The same number again (a second press, or typed with spaces) is the same parcel.
+    expect(await add(alice, order.id, "1Z999AA10123456784", "2027-01-09")).toBe(first);
+    const second = await add(alice, order.id, "1Z999AA10123456999");
+    await expect(add(alice, order.id, "x")).rejects.toThrow(/not valid/);
+
+    // Bob's own order, so both workspaces have rows to keep apart.
+    const [bobNumber] = await draft(bob, tenantB, "dddddddd-2222-4333-8444-555555555555", [
+      {
+        supplier_id: bobSupplier,
+        expected_on: "",
+        lines: [{ stock_item_id: bobItem, qty: 3, unit_cost: 4 }],
+      },
+    ]);
+    const bobOrder = await poByNumber(tenantB, bobNumber);
+    await as(bob, "select public.set_purchase_order_status($1, 'ordered')", [bobOrder.id]);
+    await add(bob, bobOrder.id, "1Z999AA10123456784");
+
+    const mine = await as<{ tenant_id: string; tracking: string; arrived_on: string | null }>(
+      alice,
+      "select tenant_id, tracking, arrived_on::text from public.purchase_order_shipments order by created_at",
+    );
+    expect(mine.map((row) => [row.tenant_id, row.tracking, row.arrived_on])).toEqual([
+      [tenantA, "1Z999AA10123456784", "2027-01-09"],
+      [tenantA, "1Z999AA10123456999", null],
+    ]);
+    const theirs = await as<{ tenant_id: string }>(
+      bob,
+      "select tenant_id from public.purchase_order_shipments",
+    );
+    expect(theirs).toEqual([{ tenant_id: tenantB }]);
+    // The whole team can see tracking; nobody writes the table directly.
+    expect(await as(carol, "select id from public.purchase_order_shipments")).toHaveLength(2);
+    for (const user of [alice, bob, carol]) {
+      await expect(
+        as(user, "update public.purchase_order_shipments set note = 'x'"),
+      ).rejects.toThrow(/permission denied/);
+      await expect(
+        as(
+          user,
+          "insert into public.purchase_order_shipments (tenant_id, po_id, tracking) values ($1, $2, 'ABCD1234')",
+          [tenantA, order.id],
+        ),
+      ).rejects.toThrow(/permission denied/);
+    }
+
+    // Adding, changing and removing are for that workspace's owners and admins.
+    await expect(add(carol, order.id, "1Z999AA10123450000")).rejects.toThrow(
+      /Only owners and admins/,
+    );
+    await expect(add(bob, order.id, "1Z999AA10123450000")).rejects.toThrow(/Order not found/);
+    await expect(
+      as(bob, "select public.save_po_shipment($1, $2, 'UPS', 'HIJACK123', null, null, '')", [
+        bobOrder.id,
+        first,
+      ]),
+    ).rejects.toThrow(/Tracking number not found/);
+    await expect(as(bob, "select public.remove_po_shipment($1)", [second])).rejects.toThrow(
+      /Tracking number not found/,
+    );
+    await expect(as(carol, "select public.remove_po_shipment($1)", [second])).rejects.toThrow(
+      /Only owners and admins/,
+    );
+
+    // Taking a number off keeps the row, hides nothing from the record, and frees the number.
+    await as(alice, "select public.remove_po_shipment($1)", [second]);
+    await expect(as(alice, "select public.remove_po_shipment($1)", [second])).rejects.toThrow(
+      /Tracking number not found/,
+    );
+    const left = await as<{ id: string; removed: boolean }>(
+      alice,
+      "select id, removed_at is not null as removed from public.purchase_order_shipments order by created_at",
+    );
+    expect(left).toEqual([
+      { id: first, removed: false },
+      { id: second, removed: true },
+    ]);
+    expect(await add(alice, order.id, "1Z999AA10123456999")).not.toBe(second);
   });
 });

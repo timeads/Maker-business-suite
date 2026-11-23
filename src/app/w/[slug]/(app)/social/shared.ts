@@ -1,4 +1,7 @@
 import { localDay } from "@/lib/bookings/slots";
+import { BRAND_MODULE, KIT_KEY, parseBrandKit, toDesignKit } from "@/lib/brand/kit";
+import type { BrandKit } from "@/lib/design/brands";
+import { matchPhotos } from "@/lib/social/photo-match";
 import { PLAN_KEY, SOCIAL_MODULE, parsePlan } from "@/lib/social/plan";
 import { publicAssetUrl } from "@/lib/social/worker";
 import type { createClient } from "@/lib/supabase/server";
@@ -53,13 +56,41 @@ export const STATUS_LABELS: Record<string, string> = {
   failed: "Didn't post",
 };
 
+/** The workspace's kit as the designer draws with it, or null until a brand kit is set up. */
+export async function loadDesignKit(
+  supabase: Supabase,
+  tenantId: string,
+): Promise<BrandKit | null> {
+  const { data } = await supabase
+    .from("configs")
+    .select("body")
+    .eq("tenant_id", tenantId)
+    .eq("module", BRAND_MODULE)
+    .eq("key", KIT_KEY)
+    .maybeSingle();
+  const kit = parseBrandKit(data?.body);
+  return kit ? toDesignKit(kit) : null;
+}
+
+// `designed` is the design's version number when the asset has a design, so the design itself
+// (which can be large) is only fetched when someone opens it.
+const LIBRARY_COLUMNS = "id, storage_path, title, mime_type, tags, designed:design->v";
+type LibraryRow = {
+  id: string;
+  storage_path: string;
+  title: string | null;
+  mime_type: string | null;
+  tags: string[] | null;
+  designed: unknown;
+};
+
 /** What the composer offers to pick from: recent photos, open projects and the plan's topics. */
 export async function composerChoices(supabase: Supabase, tenantId: string, alsoPhotos: string[]) {
   const [{ data: recent }, { data: mine }, { data: projects }, { data: planRow }] =
     await Promise.all([
       supabase
         .from("social_assets")
-        .select("id, storage_path, title, mime_type")
+        .select(LIBRARY_COLUMNS)
         .eq("tenant_id", tenantId)
         .eq("hidden", false)
         .order("created_at", { ascending: false })
@@ -67,7 +98,7 @@ export async function composerChoices(supabase: Supabase, tenantId: string, also
       alsoPhotos.length
         ? supabase
             .from("social_assets")
-            .select("id, storage_path, title, mime_type")
+            .select(LIBRARY_COLUMNS)
             .eq("tenant_id", tenantId)
             .in("id", alsoPhotos)
         : Promise.resolve({ data: [] }),
@@ -87,13 +118,16 @@ export async function composerChoices(supabase: Supabase, tenantId: string, also
         .maybeSingle(),
     ]);
   const seen = new Set<string>();
-  const library = [...(mine ?? []), ...(recent ?? [])]
-    .filter((photo) => !seen.has(photo.id as string) && seen.add(photo.id as string))
+  const rows = [...(mine ?? []), ...(recent ?? [])] as unknown as LibraryRow[];
+  const library = rows
+    .filter((photo) => !seen.has(photo.id) && seen.add(photo.id))
     .map((photo) => ({
-      id: photo.id as string,
-      url: publicAssetUrl(photo.storage_path as string),
-      title: (photo.title as string) ?? "",
+      id: photo.id,
+      url: publicAssetUrl(photo.storage_path),
+      title: photo.title ?? "",
       video: String(photo.mime_type ?? "").startsWith("video/"),
+      tags: photo.tags ?? [],
+      designed: photo.designed != null,
     }));
   const plan = parsePlan(planRow?.body);
   return {
@@ -102,4 +136,21 @@ export async function composerChoices(supabase: Supabase, tenantId: string, also
     topics: plan.topics.map((topic) => ({ id: topic.id, name: topic.name })),
     plan,
   };
+}
+
+/**
+ * Why each photo on a drafted post fits its topic, worked out again from the tags each time
+ * the post is opened: the same simple match that picked it, so the note is always true.
+ */
+export function photoReasons(
+  library: { id: string; title: string; tags: string[]; video: boolean }[],
+  photoIds: string[],
+  about: string,
+): Record<string, string> {
+  const onPost = library
+    .filter((photo) => photoIds.includes(photo.id))
+    .map((photo) => ({ ...photo, mimeType: photo.video ? "video/mp4" : "image/jpeg" }));
+  return Object.fromEntries(
+    matchPhotos(onPost, about, { limit: 10 }).map((match) => [match.asset.id, match.reason]),
+  );
 }

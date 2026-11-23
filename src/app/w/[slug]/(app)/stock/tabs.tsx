@@ -11,7 +11,12 @@ export function StockTabs({ slug, manager = false }: { slug: string; manager?: b
         { href: `${base}/items`, name: "Everything" },
         { href: `${base}/orders`, name: "Orders" },
         { href: `${base}/suppliers`, name: "Suppliers" },
-        ...(manager ? [{ href: `${base}/balances`, name: "Balances" }] : []),
+        ...(manager
+          ? [
+              { href: `${base}/balances`, name: "Balances" },
+              { href: `${base}/spend`, name: "Spend" },
+            ]
+          : []),
         { href: `${base}/settings`, name: "Settings" },
       ]}
     />

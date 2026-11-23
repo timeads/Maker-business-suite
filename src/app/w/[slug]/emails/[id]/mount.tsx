@@ -4,6 +4,8 @@ import { useMemo } from "react";
 import { EmailBuilder } from "@/components/email-builder/EmailBuilder";
 import type { BuilderHost } from "@/components/email-builder/host";
 import type { EmailDoc, EmailTemplate } from "@/lib/design";
+import type { BrandKit } from "@/lib/design/brands";
+import { designTitle, saveDesignAsPictures } from "../../(app)/social/designed";
 import {
   listPhotos,
   loadSavedSections,
@@ -21,7 +23,8 @@ export function BuilderMount({
   brandName,
   swatches,
   starters,
-  logo,
+  kit,
+  logos,
   canKeepShared,
 }: {
   slug: string;
@@ -30,7 +33,10 @@ export function BuilderMount({
   brandName: string;
   swatches: { name: string; hex: string }[];
   starters: EmailTemplate[];
-  logo: string | null;
+  /** The workspace's kit as the banner designer draws with it, or null until a brand kit is set up. */
+  kit: BrandKit | null;
+  /** The assets tagged `logo` and `logo-light`. */
+  logos: { onLight: string | null; onDark: string | null };
   canKeepShared: boolean;
 }) {
   const host = useMemo<BuilderHost>(
@@ -42,7 +48,22 @@ export function BuilderMount({
       loadTemplates: () => loadTemplates(slug),
       storeTemplates: (list) => storeTemplates(slug, list),
       listPhotos: () => listPhotos(slug),
-      logos: { badge: null, dark: logo, light: logo },
+      logos: { badge: null, dark: logos.onLight, light: logos.onDark ?? logos.onLight },
+      kit,
+      // The picture is drawn here in the browser, sent straight to the workspace's storage with a
+      // one-time link, and registered (with its design) by the server, which gives back its address.
+      makeBanner: async (design) => {
+        if (!kit) throw new Error("Set up your brand kit first, so the banner is in your colours.");
+        const [picture] = await saveDesignAsPictures(slug, design, kit, {
+          jpeg: false,
+          title: `Banner: ${designTitle(design, "email")}`,
+          banner: true,
+        });
+        if (!/^https:\/\//.test(picture.url)) {
+          throw new Error("The picture was saved, but its address can't be used in an email.");
+        }
+        return picture.url;
+      },
       checkLinks: async () => ({
         unavailable:
           "Checking links live isn't switched on yet. Open each link once before you send.",
@@ -52,7 +73,7 @@ export function BuilderMount({
       swatches,
       starters,
     }),
-    [slug, id, logo, canKeepShared, brandName, swatches, starters],
+    [slug, id, logos, kit, canKeepShared, brandName, swatches, starters],
   );
   return (
     <>

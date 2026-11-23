@@ -9,8 +9,9 @@ import { createClient } from "@/lib/supabase/server";
 import { cn } from "@/lib/utils";
 import { PhotoForm } from "../forms";
 import { socialAccess } from "../gate";
+import { loadDesignKit } from "../shared";
 import { SocialTabs } from "../tabs";
-import { AssetGrid, Folders, FolderTools, Uploader, type Asset } from "./assets";
+import { AssetGrid, EditDesign, Folders, FolderTools, Uploader, type Asset } from "./assets";
 
 export const metadata: Metadata = { title: "Assets" };
 
@@ -24,6 +25,8 @@ type Row = {
   project_id: string | null;
   folder_id: string | null;
   hidden: boolean;
+  /** Set when the picture was made in the designer and can be opened again. */
+  designed: unknown;
 };
 
 const KINDS = [
@@ -58,10 +61,12 @@ export default async function SocialAssetsPage({
   const putAway = query.put_away === "1";
 
   const supabase = await createClient();
-  const [{ data }, { data: folderRows }, { data: projectRows }] = await Promise.all([
+  const [{ data }, { data: folderRows }, { data: projectRows }, kit] = await Promise.all([
     supabase
       .from("social_assets")
-      .select("id, storage_path, mime_type, bytes, title, tags, project_id, folder_id, hidden")
+      .select(
+        "id, storage_path, mime_type, bytes, title, tags, project_id, folder_id, hidden, designed:design->v",
+      )
       .eq("tenant_id", tenant.id)
       .eq("hidden", putAway)
       .order("created_at", { ascending: false })
@@ -73,8 +78,9 @@ export default async function SocialAssetsPage({
       .eq("tenant_id", tenant.id)
       .is("archived_at", null)
       .order("name"),
+    loadDesignKit(supabase, tenant.id),
   ]);
-  const all = (data ?? []) as Row[];
+  const all = (data ?? []) as unknown as Row[];
   const projects = (projectRows ?? []) as { id: string; name: string }[];
   const folders = ((folderRows ?? []) as { id: string; name: string }[]).map((folder) => ({
     ...folder,
@@ -238,18 +244,31 @@ export default async function SocialAssetsPage({
                 className="border-border w-full rounded-md border object-contain"
               />
             )}
-            <PhotoForm
-              key={open.id}
-              slug={tenant.slug}
-              photo={{
-                id: open.id,
-                title: open.title,
-                tags: open.tags ?? [],
-                projectId: open.project_id,
-                hidden: open.hidden,
-              }}
-              projects={projects}
-            />
+            <div className="flex flex-col gap-5">
+              <PhotoForm
+                key={open.id}
+                slug={tenant.slug}
+                photo={{
+                  id: open.id,
+                  title: open.title,
+                  tags: open.tags ?? [],
+                  projectId: open.project_id,
+                  hidden: open.hidden,
+                }}
+                projects={projects}
+              />
+              {open.designed != null && kit && (
+                <EditDesign
+                  key={`design-${open.id}`}
+                  slug={tenant.slug}
+                  assetId={open.id}
+                  title={open.title}
+                  kit={kit}
+                  jpeg={open.mime_type === "image/jpeg"}
+                  libraryHref={link({ open: null })}
+                />
+              )}
+            </div>
           </CardContent>
         </Card>
       )}

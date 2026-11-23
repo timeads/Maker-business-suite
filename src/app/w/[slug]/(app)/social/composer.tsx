@@ -1,17 +1,37 @@
 "use client";
 
+import Link from "next/link";
 import { useActionState, useRef, useState } from "react";
+import { DesignDialog } from "@/components/slides/DesignDialog";
 import { Button } from "@/components/ui/button";
 import { FormMessage } from "@/components/ui/form-message";
 import { Input, Label, Select } from "@/components/ui/input";
 import { SubmitButton } from "@/components/ui/submit-button";
+import { starterDesignFor } from "@/lib/brand/slides";
+import type { BrandKit } from "@/lib/design/brands";
+import type { SlideDesign } from "@/lib/design/slide-design";
 import { cn } from "@/lib/utils";
-import { deletePost, draftPostCaption, savePost, type SocialState } from "./actions";
+import {
+  deletePost,
+  draftPostCaption,
+  listDesignPhotos,
+  loadAssetDesign,
+  savePost,
+  type SocialState,
+} from "./actions";
+import { designTitle, saveDesignAsPictures } from "./designed";
 
 const textarea =
   "border-input bg-card placeholder:text-muted-foreground focus-visible:border-ochre focus-visible:ring-ochre/25 font-read w-full rounded-sm border px-[11px] py-2 text-sm outline-none focus-visible:ring-2";
 
-export type LibraryPhoto = { id: string; url: string; title: string; video?: boolean };
+export type LibraryPhoto = {
+  id: string;
+  url: string;
+  title: string;
+  video?: boolean;
+  /** Made in the designer, so it can be opened and changed. */
+  designed?: boolean;
+};
 
 export type ComposerPost = {
   id: string;
@@ -37,6 +57,8 @@ export function Composer({
   library,
   projects,
   topics,
+  kit,
+  photoNotes = {},
 }: {
   slug: string;
   post?: ComposerPost;
@@ -50,6 +72,10 @@ export function Composer({
   library: LibraryPhoto[];
   projects: { id: string; name: string }[];
   topics: { id: string; name: string }[];
+  /** The workspace's kit for the designer, or null until a brand kit is set up. */
+  kit: BrandKit | null;
+  /** Why a photo already on a drafted post was picked, by photo. */
+  photoNotes?: Record<string, string>;
 }) {
   const [state, save] = useActionState(savePost.bind(null, slug, post?.id ?? null), {});
   const [caption, setCaption] = useState(post?.caption ?? "");
@@ -59,6 +85,18 @@ export function Composer({
     facebook: Boolean(post?.captions.facebook),
     instagram: Boolean(post?.captions.instagram),
   });
+  // Photos that arrived after the page was drawn: ones just designed, or matched to a draft.
+  const [extra, setExtra] = useState<LibraryPhoto[]>([]);
+  // Why a photo was put on the post without being asked for, by photo.
+  const [notes, setNotes] = useState<Record<string, string>>(photoNotes);
+  // A photo that fits the draft, offered when the post already has photos of its own.
+  const [offer, setOffer] = useState<(LibraryPhoto & { reason: string }) | null>(null);
+  // The designer, open on a new design or on one being changed.
+  const [designing, setDesigning] = useState<{
+    design: SlideDesign;
+    replaces: string | null;
+  } | null>(null);
+  const [designNote, setDesignNote] = useState("");
   const captionRef = useRef<HTMLTextAreaElement>(null);
   const [draftState, draft, drafting] = useActionState<SocialState, FormData>(
     async (prev, formData) => {
@@ -68,12 +106,25 @@ export function Composer({
         setAiDraft(result.draft);
         captionRef.current?.focus();
       }
+      const match = result.photo;
+      if (match && !picked.includes(match.id)) {
+        const photo = { id: match.id, url: match.url, title: match.title };
+        setExtra((now) => (now.some((x) => x.id === photo.id) ? now : [...now, photo]));
+        if (picked.length === 0) {
+          // One photo at most is added by itself, and only to a post that has none.
+          setPicked([match.id]);
+          setNotes((now) => ({ ...now, [match.id]: match.reason }));
+          setOffer(null);
+        } else {
+          setOffer({ ...photo, reason: match.reason });
+        }
+      }
       return result;
     },
     {},
   );
   const connected = facebook !== null;
-  const byId = new Map(library.map((photo) => [photo.id, photo]));
+  const byId = new Map([...library, ...extra].map((photo) => [photo.id, photo]));
   // A video goes out on its own, so picking one replaces what was picked,
   // and picking a photo afterwards replaces the video.
   const toggle = (id: string) =>
@@ -83,6 +134,49 @@ export function Composer({
       return now.length < 10 ? [...now, id] : now;
     });
   const hasVideo = picked.some((id) => byId.get(id)?.video);
+  const firstPhoto = picked.map((id) => byId.get(id)).find((photo) => photo && !photo.video);
+
+  const openDesigner = (photo?: string) => {
+    if (!kit) return;
+    setDesignNote("");
+    setDesigning({ design: starterDesignFor(kit, { photo }), replaces: null });
+  };
+  const editDesign = async (id: string) => {
+    setDesignNote("");
+    const found = await loadAssetDesign(slug, id);
+    if ("error" in found) return setDesignNote(found.error);
+    setDesigning({ design: found.design, replaces: id });
+  };
+  /** Draws the pictures, keeps them in the assets and puts them on the post, in order. */
+  const saveDesign = async (design: SlideDesign) => {
+    if (!kit || !designing) return;
+    const replaces = designing.replaces;
+    const others = picked.filter((id) => !byId.get(id)?.video && id !== replaces);
+    if (others.length + design.slides.length > 10) {
+      throw new Error("A post can have up to 10 photos. Take some off first, then save again.");
+    }
+    const pictures = await saveDesignAsPictures(slug, design, kit, {
+      jpeg: true,
+      title: designTitle(design, "Designed picture"),
+      replaces,
+    });
+    const made = pictures.map((picture) => ({ ...picture, designed: true }));
+    setExtra((now) => [...now, ...made]);
+    setPicked((now) => {
+      const ids = made.map((picture) => picture.id);
+      // A changed design takes the old picture's place; new ones go on the end. A video steps aside.
+      const photos = now.filter((id) => !byId.get(id)?.video);
+      return replaces && photos.includes(replaces)
+        ? photos.flatMap((id) => (id === replaces ? ids : [id]))
+        : [...photos, ...ids];
+    });
+    setDesigning(null);
+    setDesignNote(
+      replaces
+        ? "The new picture is on this post and in your assets. Save the post to keep it."
+        : `${made.length === 1 ? "Your picture is" : `Your ${made.length} pictures are`} on this post and in your assets. Save the post to keep ${made.length === 1 ? "it" : "them"}.`,
+    );
+  };
   const move = (id: string, by: number) =>
     setPicked((now) => {
       const from = now.indexOf(id);
@@ -94,301 +188,403 @@ export function Composer({
     });
 
   return (
-    <form action={save} className="flex flex-col gap-6">
-      <input type="hidden" name="ai_draft" value={aiDraft} />
-      <div className="flex flex-col gap-2">
-        <Label htmlFor="brief">Want a first draft?</Label>
-        <div className="flex flex-col gap-2 sm:flex-row">
-          <Input
-            id="brief"
-            name="brief"
-            maxLength={1000}
-            placeholder="What's the post about? e.g. new autumn colours, restock on Friday"
-            className="sm:flex-1"
-          />
-          <Button type="submit" variant="outline" formAction={draft} disabled={drafting}>
-            {drafting ? "Drafting…" : "Draft with Claude"}
-          </Button>
-        </div>
-        <p className="text-muted-foreground text-xs">
-          The draft goes into the caption box for you to edit. Nothing is posted until you say so.
-        </p>
-        <FormMessage>{draftState.error}</FormMessage>
-      </div>
-
-      <div className="flex flex-col gap-2">
-        <Label htmlFor="caption">Caption</Label>
-        <textarea
-          id="caption"
-          name="caption"
-          ref={captionRef}
-          rows={6}
-          maxLength={2200}
-          value={caption}
-          onChange={(event) => setCaption(event.target.value)}
-          className={textarea}
+    <>
+      {/* Outside the form, so nothing typed in the designer can submit the post. */}
+      {designing && kit && (
+        <DesignDialog
+          initial={designing.design}
+          kit={kit}
+          loadPhotos={() => listDesignPhotos(slug)}
+          title={designing.replaces ? "Edit this design" : "Design an image"}
+          description="Click any text to change it, drag to move it, or change the layout, colour and photos. The pictures are made when you save."
+          saveLabel={designing.replaces ? "Save the new picture" : "Save to this post"}
+          single={Boolean(designing.replaces)}
+          onClose={() => setDesigning(null)}
+          onSave={saveDesign}
         />
-        <p className="text-muted-foreground text-xs tabular-nums">{caption.length} / 2,200</p>
-        {(["facebook", "instagram"] as const).map((channel) => {
-          const name = channel === "facebook" ? "Facebook" : "Instagram";
-          return (
-            <div key={channel} className="flex flex-col gap-2">
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  name={`own_${channel}`}
-                  checked={own[channel]}
-                  onChange={(event) => setOwn({ ...own, [channel]: event.target.checked })}
-                />
-                Different words for {name}
-              </label>
-              {own[channel] && (
-                <textarea
-                  name={`caption_${channel}`}
-                  rows={4}
-                  maxLength={2200}
-                  defaultValue={post?.captions[channel] ?? caption}
-                  aria-label={`Caption for ${name}`}
-                  className={textarea}
-                />
-              )}
-            </div>
-          );
-        })}
-      </div>
+      )}
+      <form action={save} className="flex flex-col gap-6">
+        <input type="hidden" name="ai_draft" value={aiDraft} />
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="brief">Want a first draft?</Label>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Input
+              id="brief"
+              name="brief"
+              maxLength={1000}
+              placeholder="What's the post about? e.g. new autumn colours, restock on Friday"
+              className="sm:flex-1"
+            />
+            <Button type="submit" variant="outline" formAction={draft} disabled={drafting}>
+              {drafting ? "Drafting…" : "Draft with Claude"}
+            </Button>
+          </div>
+          <p className="text-muted-foreground text-xs">
+            The draft goes into the caption box for you to edit. Nothing is posted until you say so.
+          </p>
+          <FormMessage>{draftState.error}</FormMessage>
+        </div>
 
-      <fieldset className="flex flex-col gap-3">
-        <legend className="pb-2 text-xs leading-tight font-semibold">
-          Photos or a video{" "}
-          <span className="text-muted-foreground font-normal">
-            {hasVideo ? "(1 video)" : `(${picked.length} of 10)`}
-          </span>
-        </legend>
-        {picked.map((id) => (
-          <input key={id} type="hidden" name="asset" value={id} />
-        ))}
-        {picked.length > 0 && (
-          <ol className="flex flex-wrap gap-3">
-            {picked.map((id, index) => {
-              const photo = byId.get(id);
-              return (
-                <li key={id} className="flex w-24 flex-col gap-1">
-                  {photo?.video ? (
-                    <video
-                      src={`${photo.url}#t=0.1`}
-                      preload="metadata"
-                      muted
-                      playsInline
-                      aria-label={photo.title || "Video"}
-                      className="border-border size-24 rounded-md border object-cover"
-                    />
-                  ) : (
-                    // eslint-disable-next-line @next/next/no-img-element -- a user upload on another host
-                    <img
-                      src={photo?.url}
-                      alt={photo?.title || `Photo ${index + 1}`}
-                      className="border-border size-24 rounded-md border object-cover"
-                    />
-                  )}
-                  <span className="flex justify-between text-xs">
-                    <button
-                      type="button"
-                      onClick={() => move(id, -1)}
-                      disabled={index === 0}
-                      aria-label="Move earlier"
-                      className="disabled:opacity-30"
-                    >
-                      ←
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => toggle(id)}
-                      className="text-brick hover:underline"
-                    >
-                      Remove
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => move(id, 1)}
-                      disabled={index === picked.length - 1}
-                      aria-label="Move later"
-                      className="disabled:opacity-30"
-                    >
-                      →
-                    </button>
-                  </span>
-                </li>
-              );
-            })}
-          </ol>
-        )}
-        {library.length > 0 && (
-          <details>
-            <summary className="text-ochre-text cursor-pointer text-sm font-medium">
-              Pick from your assets
-            </summary>
-            <div className="mt-3 grid max-h-72 grid-cols-4 gap-2 overflow-y-auto sm:grid-cols-6 md:grid-cols-8">
-              {library.map((photo) => (
-                <button
-                  key={photo.id}
-                  type="button"
-                  onClick={() => toggle(photo.id)}
-                  aria-pressed={picked.includes(photo.id)}
-                  aria-label={photo.title || (photo.video ? "Video" : "Photo")}
-                  className={cn(
-                    "relative overflow-hidden rounded-md border-2",
-                    picked.includes(photo.id) ? "border-ochre" : "border-transparent",
-                  )}
-                >
-                  {photo.video ? (
-                    <>
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="caption">Caption</Label>
+          <textarea
+            id="caption"
+            name="caption"
+            ref={captionRef}
+            rows={6}
+            maxLength={2200}
+            value={caption}
+            onChange={(event) => setCaption(event.target.value)}
+            className={textarea}
+          />
+          <p className="text-muted-foreground text-xs tabular-nums">{caption.length} / 2,200</p>
+          {(["facebook", "instagram"] as const).map((channel) => {
+            const name = channel === "facebook" ? "Facebook" : "Instagram";
+            return (
+              <div key={channel} className="flex flex-col gap-2">
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    name={`own_${channel}`}
+                    checked={own[channel]}
+                    onChange={(event) => setOwn({ ...own, [channel]: event.target.checked })}
+                  />
+                  Different words for {name}
+                </label>
+                {own[channel] && (
+                  <textarea
+                    name={`caption_${channel}`}
+                    rows={4}
+                    maxLength={2200}
+                    defaultValue={post?.captions[channel] ?? caption}
+                    aria-label={`Caption for ${name}`}
+                    className={textarea}
+                  />
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <fieldset className="flex flex-col gap-3">
+          <legend className="pb-2 text-xs leading-tight font-semibold">
+            Photos or a video{" "}
+            <span className="text-muted-foreground font-normal">
+              {hasVideo ? "(1 video)" : `(${picked.length} of 10)`}
+            </span>
+          </legend>
+          {picked.map((id) => (
+            <input key={id} type="hidden" name="asset" value={id} />
+          ))}
+          {picked.length > 0 && (
+            <ol className="flex flex-wrap gap-3">
+              {picked.map((id, index) => {
+                const photo = byId.get(id);
+                return (
+                  <li key={id} className="flex w-24 flex-col gap-1">
+                    {photo?.video ? (
                       <video
                         src={`${photo.url}#t=0.1`}
                         preload="metadata"
                         muted
                         playsInline
+                        aria-label={photo.title || "Video"}
+                        className="border-border size-24 rounded-md border object-cover"
+                      />
+                    ) : (
+                      // eslint-disable-next-line @next/next/no-img-element -- a user upload on another host
+                      <img
+                        src={photo?.url}
+                        alt={photo?.title || `Photo ${index + 1}`}
+                        className="border-border size-24 rounded-md border object-cover"
+                      />
+                    )}
+                    <span className="flex justify-between text-xs">
+                      <button
+                        type="button"
+                        onClick={() => move(id, -1)}
+                        disabled={index === 0}
+                        aria-label="Move earlier"
+                        className="disabled:opacity-30"
+                      >
+                        ←
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => toggle(id)}
+                        className="text-brick hover:underline"
+                      >
+                        Remove
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => move(id, 1)}
+                        disabled={index === picked.length - 1}
+                        aria-label="Move later"
+                        className="disabled:opacity-30"
+                      >
+                        →
+                      </button>
+                    </span>
+                    {photo?.designed && kit && (
+                      <button
+                        type="button"
+                        onClick={() => void editDesign(id)}
+                        className="text-ochre-text text-left text-xs hover:underline"
+                      >
+                        Edit design
+                      </button>
+                    )}
+                  </li>
+                );
+              })}
+            </ol>
+          )}
+          {picked
+            .filter((id) => notes[id])
+            .map((id) => (
+              <p key={id} className="bg-note rounded-sm px-3 py-2 text-xs">
+                {byId.get(id)?.title ? `“${byId.get(id)?.title}”` : "This photo"} is here because it{" "}
+                {notes[id]}. Keep it only if it suits the post.{" "}
+                <button
+                  type="button"
+                  onClick={() => toggle(id)}
+                  className="text-brick font-semibold hover:underline"
+                >
+                  Take it off
+                </button>
+              </p>
+            ))}
+          {offer && !picked.includes(offer.id) && (
+            <p className="bg-note flex flex-wrap items-center gap-2 rounded-sm px-3 py-2 text-xs">
+              {/* eslint-disable-next-line @next/next/no-img-element -- a user upload on another host */}
+              <img src={offer.url} alt="" className="size-8 rounded-sm object-cover" />
+              <span>
+                {offer.title ? `“${offer.title}”` : "A photo"} might suit this post: it{" "}
+                {offer.reason}.
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  toggle(offer.id);
+                  setOffer(null);
+                }}
+                className="text-ochre-text font-semibold hover:underline"
+              >
+                Add it
+              </button>
+            </p>
+          )}
+          <div className="flex flex-col gap-1.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!kit}
+                onClick={() => openDesigner()}
+              >
+                Design an image
+              </Button>
+              {kit && firstPhoto && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => openDesigner(firstPhoto.url)}
+                >
+                  Design around the first photo
+                </Button>
+              )}
+            </div>
+            <p className="text-muted-foreground text-xs">
+              {kit ? (
+                "Words on a colour or a photo, in your brand's look. Make one picture or several; each is saved to your assets and added here."
+              ) : (
+                <>
+                  Designed pictures use your colours.{" "}
+                  <Link
+                    href={`/w/${slug}/settings/brand`}
+                    className="text-ochre-text hover:underline"
+                  >
+                    Set up your brand kit
+                  </Link>{" "}
+                  first.
+                </>
+              )}
+            </p>
+            {designNote && <p className="bg-note rounded-sm px-3 py-2 text-xs">{designNote}</p>}
+          </div>
+          {library.length > 0 && (
+            <details>
+              <summary className="text-ochre-text cursor-pointer text-sm font-medium">
+                Pick from your assets
+              </summary>
+              <div className="mt-3 grid max-h-72 grid-cols-4 gap-2 overflow-y-auto sm:grid-cols-6 md:grid-cols-8">
+                {library.map((photo) => (
+                  <button
+                    key={photo.id}
+                    type="button"
+                    onClick={() => toggle(photo.id)}
+                    aria-pressed={picked.includes(photo.id)}
+                    aria-label={photo.title || (photo.video ? "Video" : "Photo")}
+                    className={cn(
+                      "relative overflow-hidden rounded-md border-2",
+                      picked.includes(photo.id) ? "border-ochre" : "border-transparent",
+                    )}
+                  >
+                    {photo.video ? (
+                      <>
+                        <video
+                          src={`${photo.url}#t=0.1`}
+                          preload="metadata"
+                          muted
+                          playsInline
+                          className="aspect-square w-full object-cover"
+                        />
+                        <span className="absolute top-0.5 right-0.5 rounded-sm bg-black/65 px-1 text-[10px] font-semibold text-white">
+                          Video
+                        </span>
+                      </>
+                    ) : (
+                      // eslint-disable-next-line @next/next/no-img-element -- a user upload on another host
+                      <img
+                        src={photo.url}
+                        alt=""
+                        loading="lazy"
                         className="aspect-square w-full object-cover"
                       />
-                      <span className="absolute top-0.5 right-0.5 rounded-sm bg-black/65 px-1 text-[10px] font-semibold text-white">
-                        Video
-                      </span>
-                    </>
-                  ) : (
-                    // eslint-disable-next-line @next/next/no-img-element -- a user upload on another host
-                    <img
-                      src={photo.url}
-                      alt=""
-                      loading="lazy"
-                      className="aspect-square w-full object-cover"
-                    />
-                  )}
-                </button>
-              ))}
-            </div>
-          </details>
-        )}
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="photos">Add new photos</Label>
-          <input
-            id="photos"
-            name="photos"
-            type="file"
-            multiple
-            accept="image/jpeg,image/png"
-            className="file:border-input text-sm file:mr-3 file:rounded-sm file:border file:bg-transparent file:px-3 file:py-1.5 file:text-sm file:font-semibold"
-          />
-          <p className="text-muted-foreground text-xs">
-            JPEG or PNG, up to 5 MB each. Instagram needs JPEGs. Several photos become one
-            swipe-through post. For a video, add it under Assets first, then pick it here; it goes
-            out on its own, as a Reel on Instagram.
-          </p>
-        </div>
-      </fieldset>
-
-      <fieldset className="flex flex-col gap-2">
-        <legend className="pb-2 text-xs leading-tight font-semibold">Post to</legend>
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            name="channel_facebook"
-            defaultChecked={post?.channels.length ? post.channels.includes("facebook") : connected}
-            disabled={!connected}
-          />
-          Facebook{facebook ? ` · ${facebook}` : ""}
-        </label>
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            name="channel_instagram"
-            defaultChecked={
-              post?.channels.length ? post.channels.includes("instagram") : instagram !== null
-            }
-            disabled={instagram === null}
-          />
-          Instagram{instagram ? ` · @${instagram}` : ""}
-        </label>
-        {!connected ? (
-          <p className="text-muted-foreground text-xs">
-            Connect Facebook &amp; Instagram on the Connections page to schedule posts. You can
-            still save drafts.
-          </p>
-        ) : (
-          instagram === null && (
+                    )}
+                  </button>
+                ))}
+              </div>
+            </details>
+          )}
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="photos">Add new photos</Label>
+            <input
+              id="photos"
+              name="photos"
+              type="file"
+              multiple
+              accept="image/jpeg,image/png"
+              className="file:border-input text-sm file:mr-3 file:rounded-sm file:border file:bg-transparent file:px-3 file:py-1.5 file:text-sm file:font-semibold"
+            />
             <p className="text-muted-foreground text-xs">
-              No Instagram business account is linked to this Facebook Page.
+              JPEG or PNG, up to 5 MB each. Instagram needs JPEGs. Several photos become one
+              swipe-through post. For a video, add it under Assets first, then pick it here; it goes
+              out on its own, as a Reel on Instagram.
             </p>
-          )
+          </div>
+        </fieldset>
+
+        <fieldset className="flex flex-col gap-2">
+          <legend className="pb-2 text-xs leading-tight font-semibold">Post to</legend>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              name="channel_facebook"
+              defaultChecked={
+                post?.channels.length ? post.channels.includes("facebook") : connected
+              }
+              disabled={!connected}
+            />
+            Facebook{facebook ? ` · ${facebook}` : ""}
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              name="channel_instagram"
+              defaultChecked={
+                post?.channels.length ? post.channels.includes("instagram") : instagram !== null
+              }
+              disabled={instagram === null}
+            />
+            Instagram{instagram ? ` · @${instagram}` : ""}
+          </label>
+          {!connected ? (
+            <p className="text-muted-foreground text-xs">
+              Connect Facebook &amp; Instagram on the Connections page to schedule posts. You can
+              still save drafts.
+            </p>
+          ) : (
+            instagram === null && (
+              <p className="text-muted-foreground text-xs">
+                No Instagram business account is linked to this Facebook Page.
+              </p>
+            )
+          )}
+        </fieldset>
+
+        {(projects.length > 0 || topics.length > 0) && (
+          <div className="grid gap-4 sm:grid-cols-2">
+            {topics.length > 0 && (
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="topic">Topic</Label>
+                <Select id="topic" name="topic" defaultValue={post?.topic ?? defaults.topic ?? ""}>
+                  <option value="">No topic</option>
+                  {topics.map((topic) => (
+                    <option key={topic.id} value={topic.id}>
+                      {topic.name}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+            )}
+            {projects.length > 0 && (
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="project">Project</Label>
+                <Select
+                  id="project"
+                  name="project"
+                  defaultValue={post?.projectId ?? defaults.projectId ?? ""}
+                >
+                  <option value="">No project</option>
+                  {projects.map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.name}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+            )}
+          </div>
         )}
-      </fieldset>
 
-      {(projects.length > 0 || topics.length > 0) && (
-        <div className="grid gap-4 sm:grid-cols-2">
-          {topics.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <div className="grid gap-4 sm:grid-cols-2">
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="topic">Topic</Label>
-              <Select id="topic" name="topic" defaultValue={post?.topic ?? defaults.topic ?? ""}>
-                <option value="">No topic</option>
-                {topics.map((topic) => (
-                  <option key={topic.id} value={topic.id}>
-                    {topic.name}
-                  </option>
-                ))}
-              </Select>
+              <Label htmlFor="day">Date</Label>
+              <Input id="day" name="day" type="date" defaultValue={post?.day ?? defaults.day} />
             </div>
-          )}
-          {projects.length > 0 && (
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="project">Project</Label>
-              <Select
-                id="project"
-                name="project"
-                defaultValue={post?.projectId ?? defaults.projectId ?? ""}
-              >
-                <option value="">No project</option>
-                {projects.map((project) => (
-                  <option key={project.id} value={project.id}>
-                    {project.name}
-                  </option>
-                ))}
-              </Select>
+              <Label htmlFor="time">Time</Label>
+              <Input id="time" name="time" type="time" defaultValue={post?.time ?? defaults.time} />
             </div>
-          )}
-        </div>
-      )}
-
-      <div className="flex flex-col gap-2">
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="day">Date</Label>
-            <Input id="day" name="day" type="date" defaultValue={post?.day ?? defaults.day} />
           </div>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="time">Time</Label>
-            <Input id="time" name="time" type="time" defaultValue={post?.time ?? defaults.time} />
-          </div>
+          <p className="text-muted-foreground text-xs">
+            In your workspace&apos;s timezone ({timezone.replace(/_/g, " ")}).
+          </p>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" name="keep_date" defaultChecked={post ? post.planned : true} />
+            If I save this as a draft, keep it pencilled in for then
+          </label>
         </div>
-        <p className="text-muted-foreground text-xs">
-          In your workspace&apos;s timezone ({timezone.replace(/_/g, " ")}).
-        </p>
-        <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" name="keep_date" defaultChecked={post ? post.planned : true} />
-          If I save this as a draft, keep it pencilled in for then
-        </label>
-      </div>
 
-      <FormMessage>{state.error}</FormMessage>
-      <div className="flex flex-wrap gap-3">
-        <SubmitButton name="intent" value="schedule" pendingText="Saving…" disabled={!connected}>
-          Schedule
-        </SubmitButton>
-        <SubmitButton name="intent" value="now" variant="outline" disabled={!connected}>
-          Post now
-        </SubmitButton>
-        <SubmitButton name="intent" value="draft" variant="outline">
-          Save as draft
-        </SubmitButton>
-      </div>
-    </form>
+        <FormMessage>{state.error}</FormMessage>
+        <div className="flex flex-wrap gap-3">
+          <SubmitButton name="intent" value="schedule" pendingText="Saving…" disabled={!connected}>
+            Schedule
+          </SubmitButton>
+          <SubmitButton name="intent" value="now" variant="outline" disabled={!connected}>
+            Post now
+          </SubmitButton>
+          <SubmitButton name="intent" value="draft" variant="outline">
+            Save as draft
+          </SubmitButton>
+        </div>
+      </form>
+    </>
   );
 }
 

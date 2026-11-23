@@ -9,12 +9,7 @@ import { guessCarrier, tidyTracking } from "@/lib/shipping/carriers";
 import { Money } from "@/lib/stock/balance/money";
 import { STOCK_MODULE, STOCK_SETTINGS_KEY, stockSettingsSchema } from "@/lib/stock/config";
 import { startingQty } from "@/lib/stock/engine";
-import {
-  draftOrders,
-  draftOrdersForItems,
-  type DraftOrder,
-  type StockRow,
-} from "@/lib/stock/plan";
+import { draftOrders, draftOrdersForItems, type DraftOrder, type StockRow } from "@/lib/stock/plan";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
 import { loadStock } from "./data";

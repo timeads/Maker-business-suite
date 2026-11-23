@@ -1,14 +1,10 @@
 "use client";
 
-import {
-  saveDesignedPictures,
-  startUpload,
-  type DesignedPicture,
-} from "@/app/w/[slug]/(app)/social/actions";
 import type { BrandKit } from "@/lib/design/brands";
 import type { SlideDesign } from "@/lib/design/slide-design";
 import { renderSlideBlob } from "@/lib/design/slide-render";
 import { getBrowserClient } from "@/lib/supabase/browser";
+import { saveDesignedPictures, startUpload, type DesignedPicture } from "./actions";
 
 /**
  * Turns a design into pictures in the workspace's assets. Each slide is drawn here in the

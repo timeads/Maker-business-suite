@@ -11,7 +11,9 @@ import {
   STATUS_LABELS,
   composerChoices,
   defaultSlot,
+  loadDesignKit,
   localFields,
+  photoReasons,
   socialChannels,
 } from "../shared";
 
@@ -51,7 +53,16 @@ export default async function PostPage({
         ? [post.asset_id as string]
         : []
   ) as string[];
-  const choices = await composerChoices(supabase, tenant.id, photoIds);
+  const [choices, kit] = await Promise.all([
+    composerChoices(supabase, tenant.id, photoIds),
+    loadDesignKit(supabase, tenant.id),
+  ]);
+  // On a draft Claude wrote, say why each photo that fits the topic is there.
+  const topic = choices.plan.topics.find((t) => t.id === post.topic);
+  const photoNotes =
+    post.status === "draft" && post.ai_draft && topic
+      ? photoReasons(choices.library, photoIds, `${topic.name} ${topic.about}`)
+      : {};
   const photoUrls = photoIds.flatMap((photoId) => {
     const found = choices.library.find((photo) => photo.id === photoId);
     return found ? [found.url] : [];
@@ -118,6 +129,8 @@ export default async function PostPage({
                 library={choices.library}
                 projects={choices.projects}
                 topics={choices.topics}
+                kit={kit}
+                photoNotes={photoNotes}
               />
             </CardContent>
           </Card>

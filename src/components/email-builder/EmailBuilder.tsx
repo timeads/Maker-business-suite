@@ -20,6 +20,7 @@ import {
   BLOCK_LABELS,
   LAYOUT_NAMES,
   allBlocks,
+  bannerWords,
   cloneSection,
   docChecks,
   docId,
@@ -30,11 +31,15 @@ import {
   newRow,
   normalizeDoc,
   renderDocHtml,
+  type Block,
   type BlockType,
   type EmailDoc,
   type RowLayout,
   type SavedSection,
 } from "@/lib/design";
+import { bannerDesign } from "@/lib/brand/slides";
+import type { SlideDesign } from "@/lib/design/slide-design";
+import { BannerDialog } from "./BannerDialog";
 import { BuilderContext, type Builder, type Device, type Selection } from "./context";
 import { useDocHistory } from "./useDocHistory";
 import { useAutosave } from "./useAutosave";
@@ -172,6 +177,8 @@ export function EmailBuilder({
   const [exiting, setExiting] = useState(false);
   const [dragged, setDragged] = useState<DragSource | null>(null);
   const [drop, setDrop] = useState<Drop | null>(null);
+  const [bannerId, setBannerId] = useState<string | null>(null);
+  const [rendering, setRendering] = useState<ReadonlySet<string>>(new Set());
 
   // What is saved is the document made safe and bounded, so a half-typed address never reaches the database.
   const save = (d: EmailDoc) => host.save(normalizeDoc(d));
@@ -215,9 +222,24 @@ export function EmailBuilder({
     return { sectionId: section.id, rowIndex: section.rows.length };
   }, [doc, selection]);
 
+  /** A new block. A banner starts in the workspace's own colours and lettering, with its own web address. */
+  const { kit, makeBanner } = host;
+  const makeBlock = useCallback(
+    (type: BlockType): Block => {
+      const block = newBlock(type, doc.brand);
+      if (block.type !== "banner" || !kit) return block;
+      return {
+        ...block,
+        link: kit.site ? `https://${kit.site}` : "",
+        design: bannerDesign(kit, { headline: "Your headline" }),
+      };
+    },
+    [doc.brand, kit],
+  );
+
   const addBlock = useCallback(
     (type: BlockType) => {
-      const block = newBlock(type, doc.brand);
+      const block = makeBlock(type);
       const beside = selection?.kind === "block" ? findBlock(doc, selection.id) : null;
       dispatch({
         type: "insertBlock",
@@ -226,7 +248,7 @@ export function EmailBuilder({
       });
       select({ kind: "block", id: block.id });
     },
-    [doc, selection, dispatch, rowPlace],
+    [doc, selection, dispatch, rowPlace, makeBlock],
   );
 
   const addRow = useCallback(
@@ -324,6 +346,66 @@ export function EmailBuilder({
   const renameSaved = (savedId: string, name: string) =>
     storeSaved(saved.map((x) => (x.id === savedId ? { ...x, name: name.slice(0, 40) } : x)));
   const deleteSaved = (savedId: string) => storeSaved(saved.filter((x) => x.id !== savedId));
+
+  /**
+   * Draw a banner's picture and keep it. `changed` says the design has just been edited, so the
+   * design and the words read out for it are stored too; a failure is then the caller's to show.
+   */
+  const renderBanner = useCallback(
+    async (blockId: string, design: SlideDesign, changed: boolean) => {
+      setRendering((s) => new Set(s).add(blockId));
+      try {
+        const image = await makeBanner(design);
+        if (changed) {
+          const words = bannerWords(design);
+          dispatch({
+            type: "updateBlock",
+            id: blockId,
+            patch: {
+              design,
+              image,
+              alt: [words.kicker, words.headline, words.badge].filter(Boolean).join(". "),
+            },
+          });
+        } else {
+          // A picture that was simply missing is filled in without becoming something to undo.
+          dispatch({ type: "updateBlock", id: blockId, patch: { image } }, { quiet: true });
+        }
+      } catch (err) {
+        if (changed) throw err;
+        toast.error(
+          `The banner picture could not be made: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      } finally {
+        setRendering((s) => {
+          const next = new Set(s);
+          next.delete(blockId);
+          return next;
+        });
+      }
+    },
+    [dispatch, makeBanner],
+  );
+
+  // A banner with a design but no picture yet (a new email, one Claude wrote, a banner just
+  // added) gets its picture made, once. Without a brand kit there is nothing to draw it with.
+  const tried = useRef(new Set<string>());
+  useEffect(() => {
+    if (!kit) return;
+    const waiting = allBlocks(doc).filter(
+      (block) => block.type === "banner" && !block.image && !tried.current.has(block.id),
+    );
+    if (waiting.length === 0) return;
+    // After this draw, so the page is on screen (and its typefaces asked for) before any drawing starts.
+    const timer = window.setTimeout(() => {
+      for (const block of waiting) {
+        if (block.type !== "banner" || tried.current.has(block.id)) continue;
+        tried.current.add(block.id);
+        void renderBanner(block.id, block.design, false);
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [doc, renderBanner, kit]);
 
   const html = () => renderDocHtml(doc);
   const copy = async () => {
@@ -502,7 +584,7 @@ export function EmailBuilder({
       return;
     }
     if (source.source === "tile") {
-      const block = newBlock(source.blockType, doc.brand);
+      const block = makeBlock(source.blockType);
       dispatch({ type: "insertBlock", block, at });
       select({ kind: "block", id: block.id });
     } else if (source.source === "pill") {
@@ -566,7 +648,10 @@ export function EmailBuilder({
     insertSaved,
     renameSaved,
     deleteSaved,
+    rendering,
+    editBanner: setBannerId,
   };
+  const banner = bannerId ? findBlock(doc, bannerId)?.block : null;
 
   return (
     <HostContext.Provider value={host}>
@@ -622,6 +707,17 @@ export function EmailBuilder({
             {dragged && <DragCard source={dragged} doc={doc} saved={saved} />}
           </DragOverlay>
           {preview && <PreviewDialog open onOpenChange={setPreview} />}
+          {bannerId && banner?.type === "banner" && (
+            <BannerDialog
+              key={bannerId}
+              design={banner.design}
+              onClose={() => setBannerId(null)}
+              onUse={async (design) => {
+                await renderBanner(bannerId, design, true);
+                setBannerId(null);
+              }}
+            />
+          )}
           <Toaster />
         </DndContext>
       </BuilderContext.Provider>

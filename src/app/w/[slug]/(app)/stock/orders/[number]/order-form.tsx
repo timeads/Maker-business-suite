@@ -138,6 +138,12 @@ export function OrderForm({
           supplier, or what really arrived, until it&apos;s closed.
         </p>
       )}
+      {lines.length === 0 && addable.length === 0 && (
+        <p className="font-read text-sm">
+          This supplier has no items yet. Under Everything, tick what you buy from them and use
+          &quot;Give the ticked items to&quot;, then come back to add them here.
+        </p>
+      )}
       {lines.length > 0 && (
         <div className="overflow-x-auto">
           <table className="w-full min-w-[860px] text-left text-sm">
@@ -461,9 +467,7 @@ export function OrderForm({
               </div>
             </>
           ) : (
-            <p className="text-muted-foreground">
-              The total shows once every amount is a number.
-            </p>
+            <p className="text-muted-foreground">The total shows once every amount is a number.</p>
           )}
         </dl>
       </div>

@@ -2,7 +2,9 @@ import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { csvCell } from "@/lib/bookings/emails";
 import { getEntitlements } from "@/lib/entitlements";
+import { caseLabel } from "@/lib/stock/engine";
 import { itemName } from "@/lib/stock/plan";
+import { computePoTotals, parseAdjustments } from "@/lib/stock/po/totals";
 import { createClient } from "@/lib/supabase/server";
 import { getTenantContext } from "@/lib/tenants";
 
@@ -23,7 +25,7 @@ export async function GET(
   const { data: order } = await supabase
     .from("purchase_orders")
     .select(
-      "number, purchase_order_lines(qty_ordered, unit_cost, stock_items(title, variant_title, sku))",
+      "number, shipping_cost, tax_rate_pct, adjustments, purchase_order_lines(qty_ordered, unit_cost, supplier_sku, note, stock_items(title, variant_title, sku, case_pack))",
     )
     .eq("tenant_id", ctx.tenant.id)
     .eq("number", Number(number))
@@ -33,18 +35,58 @@ export async function GET(
     order.purchase_order_lines as unknown as {
       qty_ordered: number;
       unit_cost: number;
-      stock_items: { title: string; variant_title: string | null; sku: string | null };
+      supplier_sku: string | null;
+      note: string | null;
+      stock_items: {
+        title: string;
+        variant_title: string | null;
+        sku: string | null;
+        case_pack: number | null;
+      };
     }[]
   ).filter((line) => line.qty_ordered > 0);
-  const rows = [
-    ["SKU", "Item", "Quantity", "Cost each", "Total"],
-    ...lines.map((line) => [
+  const priced = lines.map((line) => ({
+    qtyOrdered: line.qty_ordered,
+    unitCost: Number(line.unit_cost).toFixed(2),
+  }));
+  const adjustments = parseAdjustments(order.adjustments);
+  const totals = computePoTotals({
+    lines: priced,
+    shippingCost: String(order.shipping_cost ?? "0"),
+    taxRatePct: String(order.tax_rate_pct ?? "0"),
+    adjustments,
+  });
+  const lineTotal = (index: number) =>
+    computePoTotals({
+      lines: [priced[index]],
+      shippingCost: 0,
+      taxRatePct: 0,
+      adjustments: [],
+    }).subtotal.toFixed(2);
+  const footer = (label: string, value: string) => ["", "", label, "", "", "", value, ""];
+  const rows: (string | number)[][] = [
+    ["SKU", "Your code", "Item", "Quantity", "Cases", "Cost each", "Total", "Note"],
+    ...lines.map((line, index) => [
       line.stock_items.sku ?? "",
+      line.supplier_sku ?? "",
       itemName(line.stock_items),
       line.qty_ordered,
-      Number(line.unit_cost).toFixed(2),
-      (line.qty_ordered * Number(line.unit_cost)).toFixed(2),
+      caseLabel(line.qty_ordered, line.stock_items.case_pack) ?? "",
+      priced[index].unitCost,
+      lineTotal(index),
+      line.note ?? "",
     ]),
+    ...(totals.total.equals(totals.subtotal)
+      ? []
+      : [
+          footer("Items", totals.subtotal.toFixed(2)),
+          ...(totals.shipping.isZero() ? [] : [footer("Shipping", totals.shipping.toFixed(2))]),
+          ...(totals.tax.isZero()
+            ? []
+            : [footer(`Tax (${Number(order.tax_rate_pct)}%)`, totals.tax.toFixed(2))]),
+          ...adjustments.map((a) => footer(a.label, a.amount)),
+          footer("Total", totals.total.toFixed(2)),
+        ]),
   ];
   return new NextResponse(rows.map((row) => row.map(csvCell).join(",")).join("\r\n") + "\r\n", {
     headers: {

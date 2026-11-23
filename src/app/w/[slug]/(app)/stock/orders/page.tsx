@@ -2,11 +2,14 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { FormMessage } from "@/components/ui/form-message";
 import { PageHeader } from "@/components/ui/page-header";
 import { formatMoney } from "@/lib/dashboard/format";
 import { ORDER_STATUS } from "@/lib/stock/plan";
+import { computePoTotals, parseAdjustments } from "@/lib/stock/po/totals";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
+import { stockToday } from "../data";
 import { NewOrderForm } from "../forms";
 import { stockAccess } from "../gate";
 import { StockTabs } from "../tabs";
@@ -19,12 +22,24 @@ type Row = {
   status: string;
   expected_on: string | null;
   created_at: string;
+  shipping_cost: number | string;
+  tax_rate_pct: number | string;
+  adjustments: unknown;
   suppliers: { name: string } | null;
   purchase_order_lines: { qty_ordered: number; qty_received: number; unit_cost: number }[];
 };
 
-export default async function StockOrdersPage({ params }: { params: Promise<{ slug: string }> }) {
+const count = (value: string | undefined) => Math.max(0, Number.parseInt(value ?? "0", 10) || 0);
+
+export default async function StockOrdersPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ slug: string }>;
+  searchParams: Promise<{ new?: string; nosupplier?: string; enough?: string; off?: string }>;
+}) {
   const { slug } = await params;
+  const flags = await searchParams;
   const access = await stockAccess(slug, `/w/${slug}/stock/orders`);
   if (!access.ok) return access.upsell;
   const { tenant, role, entitlements } = access;
@@ -33,7 +48,7 @@ export default async function StockOrdersPage({ params }: { params: Promise<{ sl
     supabase
       .from("purchase_orders")
       .select(
-        "id, number, status, expected_on, created_at, suppliers(name), purchase_order_lines(qty_ordered, qty_received, unit_cost)",
+        "id, number, status, expected_on, created_at, shipping_cost, tax_rate_pct, adjustments, suppliers(name), purchase_order_lines(qty_ordered, qty_received, unit_cost)",
       )
       .eq("tenant_id", tenant.id)
       .order("number", { ascending: false })
@@ -46,6 +61,21 @@ export default async function StockOrdersPage({ params }: { params: Promise<{ sl
       .order("name"),
   ]);
   const orders = (data ?? []) as unknown as Row[];
+  const today = stockToday(tenant.timezone);
+  // Orders just drafted from the items ticked under Everything.
+  const fresh = new Set(
+    (flags.new ?? "")
+      .split("-")
+      .map((n) => Number.parseInt(n, 10))
+      .filter((n) => n > 0),
+  );
+  const drafted = orders.filter((o) => fresh.has(o.number) && o.status === "draft");
+  const leftOut = [
+    count(flags.nosupplier) > 0 &&
+      `${count(flags.nosupplier)} had no supplier (see Everything → No supplier)`,
+    count(flags.enough) > 0 && `${count(flags.enough)} had enough in stock for now`,
+    count(flags.off) > 0 && `${count(flags.off)} are set not to be reordered`,
+  ].filter(Boolean);
   const open = orders.filter((o) => ["draft", "ordered", "partial"].includes(o.status));
   const past = orders.filter((o) => !["draft", "ordered", "partial"].includes(o.status));
   const day = (value: string) =>
@@ -57,11 +87,20 @@ export default async function StockOrdersPage({ params }: { params: Promise<{ sl
       {rows.map((order) => {
         const units = order.purchase_order_lines.reduce((n, l) => n + l.qty_ordered, 0);
         const got = order.purchase_order_lines.reduce((n, l) => n + l.qty_received, 0);
-        const cost = order.purchase_order_lines.reduce(
-          (n, l) => n + l.qty_ordered * Number(l.unit_cost),
-          0,
-        );
+        const cost = computePoTotals({
+          lines: order.purchase_order_lines.map((l) => ({
+            qtyOrdered: l.qty_ordered,
+            unitCost: Number(l.unit_cost).toFixed(2),
+          })),
+          shippingCost: String(order.shipping_cost ?? "0"),
+          taxRatePct: String(order.tax_rate_pct ?? "0"),
+          adjustments: parseAdjustments(order.adjustments),
+        }).total.toNumber();
         const status = ORDER_STATUS[order.status] ?? ORDER_STATUS.draft;
+        const late =
+          ["ordered", "partial"].includes(order.status) &&
+          order.expected_on !== null &&
+          order.expected_on < today;
         return (
           <li key={order.id}>
             <Link
@@ -70,7 +109,11 @@ export default async function StockOrdersPage({ params }: { params: Promise<{ sl
             >
               <span className="text-muted-foreground w-14 tabular-nums">#{order.number}</span>
               <span className="min-w-0 flex-1 basis-40 font-semibold">{order.suppliers?.name}</span>
+              {fresh.has(order.number) && order.status === "draft" && (
+                <Badge tone="waiting">Just drafted</Badge>
+              )}
               <Badge tone={status.tone}>{status.label}</Badge>
+              {late && <Badge tone="bad">Late</Badge>}
               <span className="text-muted-foreground w-44 text-right tabular-nums">
                 {order.status === "partial" ? `${got} of ${units}` : units} units ·{" "}
                 {formatMoney(cost, tenant.currency)}
@@ -91,6 +134,17 @@ export default async function StockOrdersPage({ params }: { params: Promise<{ sl
     <>
       <PageHeader title="Stock" description="What you've ordered, and what has arrived." />
       <StockTabs slug={tenant.slug} manager={canManage(role)} />
+      {drafted.length > 0 && (
+        <FormMessage kind="success">
+          {drafted.length} draft orders are ready, one for each supplier:{" "}
+          {drafted
+            .map((o) => `#${o.number} ${o.suppliers?.name ?? ""}`.trim())
+            .reverse()
+            .join(", ")}
+          . Open each to check the quantities, then send it.
+          {leftOut.length > 0 && ` Left off: ${leftOut.join("; ")}.`}
+        </FormMessage>
+      )}
       <Card>
         <CardHeader>
           <CardTitle>Open orders</CardTitle>
@@ -98,13 +152,14 @@ export default async function StockOrdersPage({ params }: { params: Promise<{ sl
         <CardContent className="flex flex-col gap-4">
           {open.length === 0 ? (
             <p className="text-muted-foreground text-sm">
-              Nothing on order. Suggested orders are under &quot;To order&quot;.
+              Nothing on order. Suggested orders are under &quot;To order&quot;, or tick items under
+              &quot;Everything&quot; to draft your own.
             </p>
           ) : (
             list(open)
           )}
           {canManage(role) && entitlements.canWrite && (suppliers ?? []).length > 0 && (
-            <div className="border-border border-t pt-4">
+            <div id="new-order" className="border-border scroll-mt-6 border-t pt-4">
               <NewOrderForm
                 slug={tenant.slug}
                 suppliers={(suppliers ?? []) as { id: string; name: string }[]}

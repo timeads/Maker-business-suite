@@ -240,7 +240,7 @@ begin
   perform private.write_po_lines(v_po, p_lines);
   if v_po.status <> 'draft' and not exists (
     select 1 from public.purchase_order_lines l
-    where l.po_id = v_po.id and (l.qty_ordered > 0 or l.qty_received > 0)
+    where l.po_id = v_po.id and l.qty_ordered > 0
   ) then
     raise exception 'Add something to the order first' using errcode = 'P0001';
   end if;
