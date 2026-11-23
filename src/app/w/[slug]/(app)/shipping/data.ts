@@ -16,6 +16,7 @@ import {
   type StoredGroup,
 } from "@/lib/shipping/merge";
 import type { QueueFacts } from "@/lib/shipping/queue";
+import { LABEL_SOURCES, type LabelSourceKey } from "@/lib/shipping/sources/types";
 
 export type ShippingOrder = {
   id: string;
@@ -106,22 +107,45 @@ export async function loadBoxes(supabase: SupabaseClient, tenantId: string): Pro
   return (data ?? []) as unknown as SavedBox[];
 }
 
+export type LabelConnections = {
+  /** Sources ready to quote and buy, in the order they are asked. */
+  active: LabelSourceKey[];
+  /** Sources whose saved key has stopped working. */
+  needsReconnect: LabelSourceKey[];
+  /** Sources that say their labels are practice ones (a test key, UPS's test system). */
+  testMode: LabelSourceKey[];
+};
+
 /**
- * Whether the workspace can buy labels. Only what members may read is named
- * here: the status and the details (test or production). The key itself is
- * in Vault and never comes near this query.
+ * Which places the workspace can buy labels from. Only what members may read
+ * is named here: each connection's status and details (test or production).
+ * The keys themselves are in Vault and never come near this query.
  */
-export async function loadLabelConnection(supabase: SupabaseClient, tenantId: string) {
+export async function loadLabelConnections(
+  supabase: SupabaseClient,
+  tenantId: string,
+): Promise<LabelConnections> {
   const { data } = await supabase
     .from("connections")
-    .select("status, metadata")
+    .select("provider, status, metadata")
     .eq("tenant_id", tenantId)
-    .eq("provider", "easypost")
-    .maybeSingle();
-  const metadata = (data?.metadata ?? {}) as Record<string, unknown>;
+    .in("provider", [...LABEL_SOURCES]);
+  const rows = (data ?? []) as {
+    provider: string;
+    status: string;
+    metadata: Record<string, unknown> | null;
+  }[];
+  const withStatus = (status: string) =>
+    LABEL_SOURCES.filter((key) =>
+      rows.some((row) => row.provider === key && row.status === status),
+    );
+  const active = withStatus("active");
   return {
-    status: (data?.status ?? "none") as "active" | "needs_reconnect" | "disconnected" | "none",
-    testMode: metadata.mode === "test",
+    active,
+    needsReconnect: withStatus("needs_reconnect"),
+    testMode: active.filter((key) =>
+      rows.some((row) => row.provider === key && row.metadata?.mode === "test"),
+    ),
   };
 }
 
@@ -134,6 +158,8 @@ export type UnfinishedLabel = {
   tracking_number: string | null;
   label_url: string | null;
   label_mode: string | null;
+  /** Where it was (or may have been) bought. */
+  provider: string;
   buying_at: string | null;
   /** How many boxes the purchase covers. */
   box_count: number;
@@ -149,7 +175,7 @@ export async function loadUnfinishedLabels(
   const { data } = await supabase
     .from("shipping_label_quotes")
     .select(
-      "id, status, carrier, service, tracking_number, label_url, label_mode, buying_at, box_count, parcels",
+      "id, status, provider, carrier, service, tracking_number, label_url, label_mode, buying_at, box_count, parcels",
     )
     .eq("tenant_id", tenantId)
     // On the order the label was bought on, or on one that is riding along with it.

@@ -14,6 +14,7 @@ import {
   downloadRedoLabel,
   getRedoRates,
   readSigOption,
+  redoSignatureOption,
   voidRedo,
   type RedoAccess,
 } from "./redo";
@@ -191,6 +192,15 @@ export function redoSource(fetchImpl: Fetch = fetch): LabelSource<RedoAccess> {
     canLookUp: false,
     maxBoxes: MAX_BOXES,
     async quote(access, request, quoteRef) {
+      // A price without the signature that was asked for would be the wrong price.
+      if (request.signature !== "none" && !(await redoSignatureOption(access, fetchImpl))) {
+        return {
+          shipmentId: null,
+          mode: null,
+          rates: [],
+          note: "Redo can't add a signature to a label from here, so its prices are left out when one is needed.",
+        };
+      }
       const rates = await getRedoRates(access, request, fetchImpl);
       return {
         shipmentId: null,

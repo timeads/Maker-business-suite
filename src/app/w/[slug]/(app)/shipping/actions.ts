@@ -16,9 +16,17 @@ import {
   slipLayoutSchema,
   type SlipSection,
 } from "@/lib/shipping/config";
-import { EasyPostError, refundLabels } from "@/lib/shipping/easypost";
+import { EasyPostError } from "@/lib/shipping/easypost";
+import { getLabelAccess, withLabelSource, type Held } from "@/lib/shipping/label-access";
 import { labelBoxes } from "@/lib/shipping/labels";
-import { flagLabelKey, getLabelKey } from "@/lib/shipping/label-key";
+import { flagLabelKey } from "@/lib/shipping/label-key";
+import { labelSource } from "@/lib/shipping/sources";
+import {
+  SourceError,
+  isLabelSource,
+  type LabelSourceKey,
+  type Refunds,
+} from "@/lib/shipping/sources/types";
 import { formatHoldDate, isHoldDate, todayIn } from "@/lib/shipping/queue";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
@@ -264,40 +272,60 @@ export async function voidParcel(
     .eq("merged_with", shipmentId)
     .is("voided_at", null);
   const together = (riders ?? 0) > 0;
-  const label =
-    parcel && !parcel.voided_at && parcel.label_provider === "easypost"
-      ? (parcel.label_shipment_id as string | null)
+  // A label we bought is voided where it was bought: EasyPost, the business's own UPS account or Redo.
+  const sourceKey: LabelSourceKey | null =
+    parcel && !parcel.voided_at && isLabelSource(parcel.label_provider)
+      ? parcel.label_provider
       : null;
+  const label = sourceKey ? (parcel?.label_shipment_id as string | null) : null;
+  const name = sourceKey ? labelSource(sourceKey).name : "";
 
-  if (label) {
-    // A label we bought: ask for the money back first. If EasyPost won't,
-    // the parcel stays exactly as it is.
+  if (label && sourceKey) {
+    // Ask for the money back first. If the source won't, the parcel stays exactly as it is.
     const nothingChanged = "Nothing has changed here.";
-    let held: Awaited<ReturnType<typeof getLabelKey>>;
+    let held: Held<LabelSourceKey>;
     try {
-      held = await getLabelKey(ctx.tenant.id);
+      held = await getLabelAccess(ctx.tenant.id, sourceKey);
     } catch {
       return {
-        error: `We couldn't void this label because EasyPost needs connecting again (under Connections). ${nothingChanged}`,
+        error: `We couldn't void this label because ${name} needs connecting again (under Connections). ${nothingChanged}`,
       };
     }
-    // Each box has its own label to refund. A parcel from before boxes were
-    // kept one by one has just the one, named by the label's own id.
-    const boxIds = labelBoxes(parcel?.label_parcels)
-      .map((box) => box.shipmentId)
-      .filter(Boolean);
-    const refunds = await refundLabels(held.key, boxIds.length > 0 ? boxIds : [label]);
+    // Each box has its own label to refund (or they share one shipment, which
+    // is asked for once). A parcel from before boxes were kept one by one has
+    // just the one, named by the label's own id.
+    const boxIds = [
+      ...new Set(
+        labelBoxes(parcel?.label_parcels)
+          .map((box) => box.shipmentId)
+          .filter(Boolean),
+      ),
+    ];
+    let refunds: Refunds;
+    try {
+      refunds = await withLabelSource(
+        ctx.tenant.id,
+        sourceKey,
+        (access) =>
+          labelSource(sourceKey).refund(access as never, boxIds.length > 0 ? boxIds : [label]),
+        held,
+      );
+    } catch (err) {
+      refunds = { asked: 0, failed: 1, error: err };
+    }
     if (refunds.failed > 0) {
       const err = refunds.error;
-      if (err instanceof ReconnectRequiredError) await flagLabelKey(held.connectionId);
+      if (err instanceof ReconnectRequiredError) await flagLabelKey(held.connectionId, name);
       const why =
-        err instanceof ReconnectRequiredError || err instanceof EasyPostError
+        err instanceof ReconnectRequiredError ||
+        err instanceof EasyPostError ||
+        err instanceof SourceError
           ? err.message
-          : "EasyPost couldn't be reached.";
+          : `${name} couldn't be reached.`;
       return {
         error:
           refunds.asked > 0
-            ? `EasyPost took the refund request for ${refunds.asked} of this parcel's ${refunds.asked + refunds.failed} labels, but not the rest. ${why} The parcel is unchanged here; press it again to ask for the rest.`
+            ? `${name} took the refund request for ${refunds.asked} of this parcel's ${refunds.asked + refunds.failed} labels, but not the rest. ${why} The parcel is unchanged here; press it again to ask for the rest.`
             : `We couldn't void this label. ${why} ${nothingChanged}`,
       };
     }
@@ -309,7 +337,7 @@ export async function voidParcel(
   if (error) {
     return {
       error: label
-        ? "EasyPost has the refund request, but we couldn't undo the parcel here. Press it again in a moment."
+        ? `${name} has the refund request, but we couldn't undo the parcel here. Press it again in a moment.`
         : OOPS,
     };
   }
@@ -323,7 +351,11 @@ export async function voidParcel(
       : " Its items are back on the to-send list.";
   return {
     message: label
-      ? `Refund requested. EasyPost pays it back once the carrier confirms the label wasn't used, which can take a few weeks.${shop}`
+      ? sourceKey === "ups"
+        ? `Voided with UPS, so it won't be billed to your account.${shop}`
+        : sourceKey === "redo"
+          ? `Cancelled through Redo. The postage goes back on your Redo labels balance once the carrier confirms the label wasn't used.${shop}`
+          : `Refund requested. EasyPost pays it back once the carrier confirms the label wasn't used, which can take a few weeks.${shop}`
       : data === "sent"
         ? "Undone here. Your shop still shows it as sent, so cancel the fulfilment there too."
         : "Undone. Its items are back on the to-send list.",

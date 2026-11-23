@@ -127,7 +127,8 @@ export default async function ShippingSettingsPage({
               <CardTitle>Boxes</CardTitle>
               <CardDescription>
                 The boxes and envelopes you pack in, so buying a label starts with the right size
-                and weight. Connect EasyPost under Connections to buy labels.
+                and weight. Connect EasyPost, your own UPS account or Redo under Connections to buy
+                labels.
               </CardDescription>
             </CardHeader>
             <CardContent>

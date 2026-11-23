@@ -321,6 +321,7 @@ export default async function SentParcelsPage({
                               slug={tenant.slug}
                               shipmentId={parcel.id}
                               label={Boolean(parcel.label_provider)}
+                              source={parcel.label_provider}
                             />
                           )}
                         </td>

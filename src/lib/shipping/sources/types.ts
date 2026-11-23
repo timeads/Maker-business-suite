@@ -72,6 +72,8 @@ export type SourceQuote = {
   mode: LabelMode | null;
   /** The source's own id for what was quoted, when it keeps one (EasyPost). */
   shipmentId: string | null;
+  /** Why there are no rates, when the source can say. */
+  note?: string;
 };
 
 /** A label's own file, for sources that hand back the image rather than a link. */

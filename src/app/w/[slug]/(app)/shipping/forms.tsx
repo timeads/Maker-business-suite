@@ -328,29 +328,34 @@ export function VoidButton({
   slug,
   shipmentId,
   label = false,
+  source = "easypost",
 }: {
   slug: string;
   shipmentId: string;
   /** Its postage was bought here, so undoing it also asks for the money back. */
   label?: boolean;
+  /** Where it was bought: "easypost", "ups" or "redo". */
+  source?: string | null;
 }) {
+  const via = source === "ups" ? "UPS" : source === "redo" ? "Redo" : "EasyPost";
+  const ask =
+    source === "ups"
+      ? "Void this label? We'll cancel it with UPS so it isn't billed, and put its items back on your to-send list. Don't use the label after this."
+      : source === "redo"
+        ? "Void this label? We'll ask Redo to cancel it and put the postage back on your labels balance, and put its items back on your to-send list. Don't use the label after this."
+        : "Void this label? We'll ask EasyPost to refund the postage and put its items back on your to-send list. Don't use the label after this.";
   const [state, action] = useActionState(voidParcel.bind(null, slug, shipmentId), {});
   return (
     <form
       action={action}
       className="flex flex-col items-end gap-1"
       onSubmit={(event) => {
-        if (
-          label &&
-          !window.confirm(
-            "Void this label? We'll ask EasyPost to refund the postage and put its items back on your to-send list. Don't use the label after this.",
-          )
-        ) {
+        if (label && !window.confirm(ask)) {
           event.preventDefault();
         }
       }}
     >
-      <SubmitButton variant="ghost" size="sm" pendingText={label ? "Asking EasyPost…" : "Undoing…"}>
+      <SubmitButton variant="ghost" size="sm" pendingText={label ? `Asking ${via}…` : "Undoing…"}>
         {label ? "Void label" : "Undo"}
       </SubmitButton>
       {(state.error || state.message) && (

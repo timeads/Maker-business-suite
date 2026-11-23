@@ -1,5 +1,6 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth";
@@ -9,42 +10,72 @@ import { trackingUrl } from "@/lib/shipping/carriers";
 import {
   EasyPostError,
   MAX_BOXES,
-  buyLabel as buyFromEasyPost,
-  buyOrder,
-  getPurchase,
-  getRates,
   isLabelKind,
   isSignature,
   serviceWithoutCarrier,
   verifyAddress,
   type AddressCheck,
-  type BoughtLabel,
   type LabelKind,
 } from "@/lib/shipping/easypost";
-import { flagLabelKey, getLabelKey } from "@/lib/shipping/label-key";
+import {
+  getLabelAccess,
+  matchesFingerprint,
+  requestFingerprint,
+  withLabelSource,
+  type Held,
+} from "@/lib/shipping/label-access";
+import { flagLabelKey } from "@/lib/shipping/label-key";
 import {
   missingShipFrom,
   missingShipTo,
   parcelsFrom,
   parseInches,
   parseOunces,
-  rateChoice,
   shipFromAddress,
   shipToAddress,
   withShipToEdit,
-  type RateChoice,
   type ShipToEdit,
   type SavedBox,
 } from "@/lib/shipping/labels";
 import { groupName, parseWith } from "@/lib/shipping/merge";
 import { isInternational, todayIn } from "@/lib/shipping/queue";
+import { labelSource } from "@/lib/shipping/sources";
+import {
+  mergeRates,
+  sourceRateChoice,
+  type SourceRateChoice,
+} from "@/lib/shipping/sources/rates";
+import {
+  SOURCE_NAMES,
+  SourceError,
+  isLabelSource,
+  type LabelRequest,
+  type LabelSourceKey,
+  type SourceLabel,
+  type SourceQuote,
+  type SourceRate,
+} from "@/lib/shipping/sources/types";
+import { upsChecksAddress, validateUpsAddress } from "@/lib/shipping/sources/ups";
 import { getAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
 import type { ShippingState } from "./actions";
-import { BOX_FIELDS, ORDER_FIELDS, loadGroup, loadShippingSetup, type ShippingOrder } from "./data";
+import {
+  BOX_FIELDS,
+  ORDER_FIELDS,
+  loadGroup,
+  loadLabelConnections,
+  loadShippingSetup,
+  type ShippingOrder,
+} from "./data";
 
-export type RatesState = { error?: string; rates?: RateChoice[] };
+export type RatesState = {
+  error?: string;
+  /** One list from every connected source, cheapest first. */
+  rates?: SourceRateChoice[];
+  /** A short word on each source that couldn't be asked, so its prices are missing. */
+  notes?: string[];
+};
 /** `bought`: money was spent. The screen must stop offering to buy. */
 export type BuyState = { error?: string; bought?: boolean };
 
@@ -53,8 +84,10 @@ const NOT_ALLOWED = "Only owners and admins can do that.";
 const READ_ONLY =
   "This workspace is read-only because its plan has ended. Pick a plan to make changes.";
 const OOPS = "That didn't save. Please try again.";
-const NOT_CONNECTED =
-  "EasyPost needs connecting again. An owner or admin can do that under Connections.";
+const NOTHING_CONNECTED =
+  "No postage account is connected. An owner or admin can connect EasyPost, UPS or Redo under Connections.";
+const needsConnecting = (source: LabelSourceKey) =>
+  `${SOURCE_NAMES[source]} needs connecting again. An owner or admin can do that under Connections.`;
 const INTERNATIONAL =
   "International labels need a customs form, which isn't built yet. Buy this one elsewhere and record it below.";
 const UUID = /^[0-9a-f-]{36}$/i;
@@ -73,27 +106,41 @@ async function context(slug: string, managersOnly = false) {
 const text = (formData: FormData, name: string) => String(formData.get(name) ?? "").trim();
 const done = (slug: string) => revalidatePath(`/w/${slug}/shipping`, "layout");
 
-/** The workspace's key, or a sentence saying why there isn't one. */
-async function labelKey(tenantId: string) {
+/** A source's sign-in for this workspace, or a sentence saying why there isn't one. */
+async function labelAccess<K extends LabelSourceKey>(
+  tenantId: string,
+  source: K,
+): Promise<Held<K> | { error: string }> {
   try {
-    return await getLabelKey(tenantId);
+    return await getLabelAccess(tenantId, source);
   } catch (err) {
     if (!(err instanceof ReconnectRequiredError)) {
-      console.error("easypost key read failed", err instanceof Error ? err.message : err);
+      console.error(`${source} key read failed`, err instanceof Error ? err.message : err);
     }
-    return { error: NOT_CONNECTED } as const;
+    return { error: needsConnecting(source) };
   }
 }
 
-/** A sentence for the person, whatever went wrong talking to EasyPost. */
-async function explain(err: unknown, connectionId: string): Promise<string> {
+/** A plain "no" or "no answer" from a source, in words safe to show. */
+const isSourceError = (err: unknown): err is EasyPostError | SourceError =>
+  err instanceof EasyPostError || err instanceof SourceError;
+
+/** A sentence for the person, whatever went wrong talking to a source. */
+async function explain(
+  err: unknown,
+  connectionId: string,
+  source: LabelSourceKey = "easypost",
+): Promise<string> {
   if (err instanceof ReconnectRequiredError) {
-    await flagLabelKey(connectionId);
-    return err.message;
+    await flagLabelKey(connectionId, SOURCE_NAMES[source]);
+    // What a source's own client says is written for people; anything else isn't.
+    return /^[a-z]+ (is not connected|needs to be reconnected|has no)/.test(err.message)
+      ? needsConnecting(source)
+      : err.message;
   }
-  if (err instanceof EasyPostError) return err.message;
-  console.error("easypost call failed", err instanceof Error ? err.message : err);
-  return "Something went wrong talking to EasyPost. Try again in a moment.";
+  if (isSourceError(err)) return err.message;
+  console.error(`${source} call failed`, err instanceof Error ? err.message : err);
+  return `Something went wrong talking to ${SOURCE_NAMES[source]}. Try again in a moment.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -220,21 +267,25 @@ export type RatesInput = {
 const TOGETHER_CHANGED =
   "These orders can't go together any more. Go back to Shipping and open them again.";
 
+type Ctx = Exclude<Awaited<ReturnType<typeof context>>, { error: string }>;
+type Prepared = {
+  stored: ShippingOrder;
+  riders: string[];
+  /** Both addresses, every box, the signature and the reference: what a carrier is asked. */
+  request: LabelRequest;
+};
+
 /**
- * Asks EasyPost what this order would cost to send. Both addresses come from
- * what is stored (the order, the settings): the browser only says which boxes
- * and what each weighs. The answer is kept server-side as a quote, which is
- * what a purchase is later checked against.
+ * Builds what a carrier is asked from what is stored (the order, the
+ * settings) and what is on the screen (boxes, weights, this label's address
+ * changes). Used to get rates, and again when buying from a source that
+ * keeps nothing on its side, so the same checks run both times.
  */
-export async function getLabelRates(
-  slug: string,
+async function prepareRequest(
+  ctx: Ctx,
   orderId: string,
   input: RatesInput,
-): Promise<RatesState> {
-  const ctx = await context(slug);
-  if ("error" in ctx) return { error: ctx.error };
-  if (!UUID.test(orderId)) return { error: OOPS };
-
+): Promise<Prepared | { error: string }> {
   const [{ data }, setup] = await Promise.all([
     ctx.supabase
       .from("shipping_orders")
@@ -319,10 +370,10 @@ export async function getLabelRates(
   );
   if ("error" in parsed) return { error: parsed.error };
 
-  const held = await labelKey(ctx.tenant.id);
-  if ("error" in held) return { error: held.error };
-  try {
-    const quote = await getRates(held.key, {
+  return {
+    stored,
+    riders,
+    request: {
       from: shipFromAddress(setup.settings),
       to: {
         ...shipToAddress(order, home),
@@ -331,49 +382,145 @@ export async function getLabelRates(
       parcels: parsed.parcels,
       reference,
       signature: isSignature(input.signature) ? input.signature : "none",
-    });
-    if (quote.rates.length === 0) {
-      return {
-        error:
-          quote.kind === "order"
-            ? "No carrier offered a rate for these boxes together. Check the address, sizes and weights, or send them as separate parcels."
-            : "No carrier offered a rate for this box. Check the address, size and weight, and that a carrier is switched on in EasyPost.",
-      };
-    }
-    // Only prices and EasyPost's own ids are kept: no address. An order on
-    // its own is stored exactly as it always was.
-    const kept = {
-      p_tenant_id: ctx.tenant.id,
-      p_shipping_order_id: stored.id,
-      p_created_by: ctx.user.id,
-      p_provider_shipment_id: quote.shipmentId,
-      p_rates: quote.rates,
-      p_kind: quote.kind,
-      p_boxes: quote.boxes,
+    },
+  };
+}
+
+/** How long one source gets to answer before the list goes on without it. */
+const QUOTE_MS = 30_000;
+
+const within = <T>(ms: number, name: string, work: Promise<T>): Promise<T> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    work,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new SourceError(`${name} didn't answer in time.`, null, true)),
+        ms,
+      );
+    }),
+  ]).finally(() => clearTimeout(timer));
+};
+
+type Answer = { source: LabelSourceKey; quote?: SourceQuote; problem?: string };
+
+/** Asks one source for its prices. Never throws: a source in trouble is a note, not an error. */
+async function askSource<K extends LabelSourceKey>(
+  tenantId: string,
+  key: K,
+  request: LabelRequest,
+  quoteRef: string,
+): Promise<Answer> {
+  const source = labelSource(key);
+  if (request.parcels.length > source.maxBoxes) {
+    return {
+      source: key,
+      problem: `${source.name} takes up to ${source.maxBoxes} boxes in one purchase.`,
     };
-    const { error } =
-      riders.length > 0
-        ? await getAdminClient().rpc("save_group_label_quote", {
-            ...kept,
-            // Which orders these prices are for; only this exact set can buy them.
-            p_rider_ids: riders,
-          })
-        : await getAdminClient().rpc("save_label_quote", kept);
-    if (error) {
-      console.error("could not save label quote", error.message);
-      return { error: "We got rates but couldn't keep them. Try again." };
-    }
-    return { rates: quote.rates.map(rateChoice) };
+  }
+  const held = await labelAccess(tenantId, key);
+  if ("error" in held) return { source: key, problem: held.error };
+  try {
+    const quote = await within(
+      QUOTE_MS,
+      source.name,
+      withLabelSource(tenantId, key, (access) => source.quote(access, request, quoteRef), held),
+    );
+    return { source: key, quote, problem: quote.rates.length === 0 ? quote.note : undefined };
   } catch (err) {
-    return { error: await explain(err, held.connectionId) };
+    return { source: key, problem: await explain(err, held.connectionId, key) };
   }
 }
 
-export type AddressState = { error?: string; check?: AddressCheck };
+/**
+ * Asks every connected source what this order would cost to send, and puts
+ * the answers in one list, cheapest first. A source that errors or is slow is
+ * left out with a short note; the list is still shown. Both addresses come
+ * from what is stored (the order, the settings): the browser only says which
+ * boxes and what each weighs. The list is kept server-side as a quote, each
+ * rate with its source and that source's own ids, which is what a purchase
+ * is later checked against.
+ */
+export async function getLabelRates(
+  slug: string,
+  orderId: string,
+  input: RatesInput,
+): Promise<RatesState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  if (!UUID.test(orderId)) return { error: OOPS };
+  const prepared = await prepareRequest(ctx, orderId, input ?? { boxes: [] });
+  if ("error" in prepared) return { error: prepared.error };
+  const { stored, riders, request } = prepared;
+
+  const connections = await loadLabelConnections(ctx.supabase, ctx.tenant.id);
+  if (connections.active.length === 0) {
+    return {
+      error:
+        connections.needsReconnect.length > 0
+          ? needsConnecting(connections.needsReconnect[0])
+          : NOTHING_CONNECTED,
+    };
+  }
+
+  // Ours: it makes every rate id belong to this quote and no other.
+  const quoteRef = `quote_${randomUUID().replace(/-/g, "")}`;
+  const answers = await Promise.all(
+    connections.active.map((key) => askSource(ctx.tenant.id, key, request, quoteRef)),
+  );
+  const several = request.parcels.length > 1;
+  const one = connections.active.length === 1;
+  const rates = mergeRates(answers.flatMap((answer) => answer.quote?.rates ?? [])).slice(0, 80);
+  const notes = answers
+    .filter((answer) => answer.problem)
+    .map((answer) => `${SOURCE_NAMES[answer.source]} isn't in this list. ${answer.problem}`);
+  if (rates.length === 0) {
+    const problems = answers.filter((answer) => answer.problem);
+    if (problems.length > 0) {
+      // With one source its own words are the whole story, as they always were.
+      return { error: one ? problems[0].problem : notes.join(" ") };
+    }
+    return {
+      error: several
+        ? "No carrier offered a rate for these boxes together. Check the address, sizes and weights, or send them as separate parcels."
+        : `No carrier offered a rate for this box. Check the address, size and weight, and that a carrier is switched on in ${connections.active.map((key) => SOURCE_NAMES[key]).join(" or ")}.`,
+    };
+  }
+
+  // Only prices and the sources' own ids are kept: no address. EasyPost's id
+  // for what it quoted stays where it always was; without EasyPost, ours stands in.
+  const easypost = answers.find((answer) => answer.source === "easypost")?.quote;
+  const { error } = await getAdminClient().rpc("save_label_quote_from", {
+    p_tenant_id: ctx.tenant.id,
+    p_shipping_order_id: stored.id,
+    p_created_by: ctx.user.id,
+    p_provider: easypost?.shipmentId ? "easypost" : rates[0].source,
+    p_provider_shipment_id: easypost?.shipmentId ?? quoteRef,
+    p_rates: rates,
+    p_kind: several ? "order" : "shipment",
+    p_boxes: request.parcels.length,
+    // Which orders these prices are for; only this exact set can buy them.
+    p_rider_ids: riders,
+    p_request_hash: requestFingerprint(request),
+  });
+  if (error) {
+    console.error("could not save label quote", error.message);
+    return { error: "We got rates but couldn't keep them. Try again." };
+  }
+  return { rates: rates.map(sourceRateChoice), ...(notes.length > 0 ? { notes } : {}) };
+}
+
+export type AddressState = {
+  error?: string;
+  check?: AddressCheck;
+  /** No connected account can check addresses: nothing to show, and nothing wrong. */
+  skipped?: boolean;
+};
 
 /**
- * Asks the carriers' address book about the address on the screen. Nothing
- * is saved: the answer only tells the person whether to look again.
+ * Asks the carriers' address book about the address on the screen: EasyPost's
+ * when it is connected, else UPS's own (US addresses), else not at all.
+ * Nothing is saved: the answer only tells the person whether to look again.
  */
 export async function checkLabelAddress(
   slug: string,
@@ -383,7 +530,7 @@ export async function checkLabelAddress(
   const ctx = await context(slug);
   if ("error" in ctx) return { error: ctx.error };
   if (!UUID.test(orderId)) return { error: OOPS };
-  const [{ data }, setup] = await Promise.all([
+  const [{ data }, setup, connections] = await Promise.all([
     ctx.supabase
       .from("shipping_orders")
       .select(ORDER_FIELDS)
@@ -391,6 +538,7 @@ export async function checkLabelAddress(
       .eq("id", orderId)
       .maybeSingle(),
     loadShippingSetup(ctx.supabase, ctx.tenant.id),
+    loadLabelConnections(ctx.supabase, ctx.tenant.id),
   ]);
   const stored = data as unknown as ShippingOrder | null;
   if (!stored) return { error: "We couldn't find that order." };
@@ -398,14 +546,29 @@ export async function checkLabelAddress(
   if (!order) return { error: "That address doesn't look right. Check each box and try again." };
   const gaps = missingShipTo(order);
   if (gaps.length > 0) return { error: `The address is missing ${gaps.join(", ")}.` };
-  const held = await labelKey(ctx.tenant.id);
+  const to = shipToAddress(order, setup.settings.ship_from_country);
+  const checker: "easypost" | "ups" | null = connections.active.includes("easypost")
+    ? "easypost"
+    : connections.active.includes("ups") && upsChecksAddress(to.country)
+      ? "ups"
+      : null;
+  if (!checker) return { skipped: true };
+  const held = await labelAccess(ctx.tenant.id, checker);
   if ("error" in held) return { error: held.error };
   try {
     return {
-      check: await verifyAddress(held.key, shipToAddress(order, setup.settings.ship_from_country)),
+      check:
+        checker === "easypost"
+          ? await verifyAddress((held as Held<"easypost">).access.key, to)
+          : await withLabelSource(
+              ctx.tenant.id,
+              "ups",
+              (access) => validateUpsAddress(access, to),
+              held as Held<"ups">,
+            ),
     };
   } catch (err) {
-    return { error: await explain(err, held.connectionId) };
+    return { error: await explain(err, held.connectionId, checker) };
   }
 }
 
@@ -415,11 +578,15 @@ export async function checkLabelAddress(
 
 type Claim = {
   quote_id: string;
+  /** Which source the chosen rate is bought from. */
+  provider?: unknown;
   provider_shipment_id: string;
   /** A shipment (one box) or an order (several). */
   kind?: unknown;
+  /** The fingerprint of what was priced, for sources that are sent it again. */
+  request_hash?: unknown;
   /** The rate as the server stored it when it was quoted. */
-  rate?: { carrierCode?: unknown; service?: unknown } | null;
+  rate?: (Partial<SourceRate> & { id?: unknown }) | null;
 };
 
 const CLAIM_ERRORS: [match: string, message: string][] = [
@@ -457,37 +624,58 @@ const CLAIM_ERRORS: [match: string, message: string][] = [
   ],
 ];
 
-/** Keeps a paid-for label's details; tried twice, because losing them matters. */
-async function keepLabel(tenantId: string, quoteId: string, label: BoughtLabel): Promise<boolean> {
-  const save = () =>
-    getAdminClient().rpc("mark_label_bought", {
-      p_tenant_id: tenantId,
-      p_quote_id: quoteId,
-      p_carrier: label.carrier,
-      p_service: serviceWithoutCarrier(label.carrier, label.name),
-      p_tracking_number: label.trackingCode,
-      p_tracking_url: label.trackingCode ? trackingUrl(label.carrier, label.trackingCode) : null,
-      p_label_url: label.labelUrl,
-      p_label_mode: label.mode,
-      // Text, so the price reaches the database exactly as EasyPost gave it.
-      p_price: label.price,
-      // Every box: what a refund is asked for by, its tracking and its label.
-      p_parcels: label.boxes.map((box) => ({
-        shipment_id: box.shipmentId,
-        tracking_number: box.trackingCode,
-        tracking_url: box.trackingCode ? trackingUrl(label.carrier, box.trackingCode) : null,
-        label_url: box.labelUrl,
-      })),
-    });
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const { error } = await save();
-    if (!error) return true;
-    console.error("could not keep bought label", error.message);
+/**
+ * Keeps a paid-for label's details; tried more than once, because losing
+ * them matters. A label from EasyPost is kept exactly as it always was. One
+ * from UPS or Redo also brings its own id and the label's file; if those
+ * won't save, the last try leaves the file out so the tracking number and
+ * the id a void needs are kept whatever happens.
+ */
+async function keepLabel(tenantId: string, quoteId: string, label: SourceLabel): Promise<boolean> {
+  const parcels = label.boxes.map((box) => ({
+    shipment_id: box.shipmentId,
+    tracking_number: box.trackingCode,
+    tracking_url: box.trackingCode ? trackingUrl(label.carrier, box.trackingCode) : null,
+    label_url: box.labelUrl,
+  }));
+  const service = serviceWithoutCarrier(label.carrier, label.name);
+  const save = (attempt: number) =>
+    label.source === "easypost"
+      ? getAdminClient().rpc("mark_label_bought", {
+          p_tenant_id: tenantId,
+          p_quote_id: quoteId,
+          p_carrier: label.carrier,
+          p_service: service,
+          p_tracking_number: label.trackingCode,
+          p_tracking_url: label.trackingCode ? trackingUrl(label.carrier, label.trackingCode) : null,
+          p_label_url: label.labelUrl,
+          p_label_mode: label.mode,
+          // Text, so the price reaches the database exactly as EasyPost gave it.
+          p_price: label.price,
+          // Every box: what a refund is asked for by, its tracking and its label.
+          p_parcels: parcels,
+        })
+      : getAdminClient().rpc("mark_label_bought_from", {
+          p_tenant_id: tenantId,
+          p_quote_id: quoteId,
+          p_provider_shipment_id: label.shipmentId,
+          p_carrier: label.carrier,
+          p_service: service,
+          p_label_mode: label.mode,
+          p_price: label.price,
+          p_parcels: parcels,
+          p_files: attempt < 2 ? label.files : [],
+        });
+  const tries = label.source === "easypost" ? 2 : 3;
+  for (let attempt = 0; attempt < tries; attempt++) {
+    const { data, error } = await save(attempt);
+    if (!error && (label.source === "easypost" || data === true)) return true;
+    console.error("could not keep bought label", error?.message ?? "the quote was not waiting");
   }
   return false;
 }
 
-const tracked = (label: BoughtLabel) => {
+const tracked = (label: SourceLabel) => {
   const codes = label.boxes.map((box) => box.trackingCode).filter(Boolean);
   if (codes.length === 0) return "";
   return codes.length === 1
@@ -499,10 +687,18 @@ const tracked = (label: BoughtLabel) => {
  * Buys the chosen rate and records the parcel. This spends real money, so:
  *  - the purchase is claimed in the database first, under a lock on the
  *    order; a second press, another tab or another person is refused;
- *  - only a rate the server itself quoted for this order can be bought;
- *  - several boxes are bought in one call, so it is all of them or none;
- *  - once EasyPost has taken the money the label is written down before the
- *    parcel is recorded, and every message from then on says it WAS bought.
+ *  - only a rate the server itself quoted for this order can be bought, from
+ *    the source that quoted it, with that source's own ids as the server
+ *    stored them;
+ *  - a source that keeps nothing between quote and purchase (UPS, Redo) is
+ *    sent the request again, rebuilt here and checked against the quote's
+ *    fingerprint, so what is bought is what was priced;
+ *  - several boxes are bought as one purchase;
+ *  - once the money is taken the label is written down before the parcel is
+ *    recorded, and every message from then on says it WAS bought;
+ *  - when we can't tell whether it went through, nothing is released: the
+ *    order stays locked until the label is checked (EasyPost) or a person
+ *    has looked in the account it would have been bought on (UPS, Redo).
  */
 export async function buyLabel(
   slug: string,
@@ -512,6 +708,8 @@ export async function buyLabel(
   shop?: { markSent: boolean; notify: boolean },
   /** Other orders going in the same parcel, exactly as they were when rates were asked for. */
   withIds?: string[],
+  /** The boxes and address as they stood when rates were asked for. */
+  input?: RatesInput,
 ): Promise<BuyState> {
   const ctx = await context(slug);
   if ("error" in ctx) return { error: ctx.error };
@@ -544,6 +742,9 @@ export async function buyLabel(
   }
   const claim = claimed as Claim;
   const kind: LabelKind = isLabelKind(claim.kind) ? claim.kind : "shipment";
+  const sourceKey: LabelSourceKey = isLabelSource(claim.provider) ? claim.provider : "easypost";
+  const source = labelSource(sourceKey);
+  const name = source.name;
   const release = async () => {
     const { error } = await getAdminClient().rpc("release_label_purchase", {
       p_tenant_id: ctx.tenant.id,
@@ -552,47 +753,88 @@ export async function buyLabel(
     if (error) console.error("could not release label purchase", error.message);
   };
 
-  const held = await labelKey(ctx.tenant.id);
+  // EasyPost holds what it quoted. Any other source is sent it again, and
+  // only if it is exactly what the server priced.
+  let request: LabelRequest | null = null;
+  if (sourceKey !== "easypost") {
+    const prepared = input
+      ? await prepareRequest(ctx, orderId, { ...input, withIds: riders })
+      : { error: "Those rates have run out. Press Get rates again, then choose one." };
+    if ("error" in prepared) {
+      await release();
+      return { error: `${prepared.error} Nothing was bought.` };
+    }
+    if (!matchesFingerprint(claim.request_hash, prepared.request)) {
+      await release();
+      return {
+        error:
+          "Something about this order or its boxes changed after these rates were fetched. Press Get rates again, then choose one. Nothing was bought.",
+      };
+    }
+    request = prepared.request;
+  }
+
+  const held = await labelAccess(ctx.tenant.id, sourceKey);
   if ("error" in held) {
     await release();
     return { error: `${held.error} Nothing was bought.` };
   }
 
-  let label: BoughtLabel;
+  let label: SourceLabel;
   try {
-    label =
-      kind === "order"
-        ? await buyOrder(held.key, claim.provider_shipment_id, {
-            // EasyPost's own codes, from the quote the server kept; nothing from the browser.
-            carrierCode: String(claim.rate?.carrierCode ?? ""),
-            service: String(claim.rate?.service ?? ""),
-          })
-        : await buyFromEasyPost(held.key, claim.provider_shipment_id, rateId);
+    label = await withLabelSource(
+      ctx.tenant.id,
+      sourceKey,
+      (access) =>
+        // Everything here is from the quote the server kept; nothing from the browser.
+        source.buy(access as never, {
+          rate: { ...(claim.rate ?? {}), id: rateId },
+          shipmentId: claim.provider_shipment_id,
+          kind,
+          quoteId: claim.quote_id,
+          request,
+        }),
+      held,
+    );
   } catch (err) {
-    const refused = !(err instanceof EasyPostError && err.uncertain);
-    // One box: a plain "no" means nothing was charged. Several boxes are
-    // bought one after another on EasyPost's side, so even a plain "no" is
-    // checked before we say nothing was bought (a bad key aside: that buys nothing).
-    if (refused && (kind === "shipment" || !(err instanceof EasyPostError))) {
+    const refused = !(isSourceError(err) && err.uncertain);
+    // A plain "no" means nothing was charged, with one exception: several
+    // boxes at EasyPost are bought one after another on its side, so even a
+    // plain "no" is checked first (a bad key aside: that buys nothing).
+    if (refused && (sourceKey !== "easypost" || kind === "shipment" || !isSourceError(err))) {
       await release();
-      return { error: `${await explain(err, held.connectionId)} Nothing was bought.` };
+      return { error: `${await explain(err, held.connectionId, sourceKey)} Nothing was bought.` };
     }
-    // No clear answer. Ask EasyPost whether the label exists before saying anything.
-    const settled = await getPurchase(held.key, kind, claim.provider_shipment_id).catch(() => null);
+    if (!source.canLookUp) {
+      // No clear answer, and no way to ask. The order stays locked: a person
+      // looks in the account, then says here what they found.
+      done(slug);
+      return {
+        bought: true,
+        error: `${isSourceError(err) ? `${err.message} ` : ""}We can't tell whether this label was bought. Please don't buy another. Look in your ${name} account for a label for this order: this page lists it under "Labels to finish" after a reload, with what to do next.`,
+      };
+    }
+    // No clear answer. Ask the source whether the label exists before saying anything.
+    const settled = await withLabelSource(
+      ctx.tenant.id,
+      sourceKey,
+      (access) =>
+        source.lookUp(access as never, { kind, shipmentId: claim.provider_shipment_id }),
+      held,
+    ).catch(() => null);
     if (settled === null) {
       done(slug);
       return {
         bought: true,
-        error:
-          "EasyPost stopped answering part-way through, so we can't tell yet whether this label was bought. Please don't buy another. Reload this page in a minute and press Check this label; your EasyPost account will also show it if it went through.",
+        error: `${name} stopped answering part-way through, so we can't tell yet whether this label was bought. Please don't buy another. Reload this page in a minute and press Check this label; your ${name} account will also show it if it went through.`,
       };
     }
     if (!settled.label) {
       await release();
       return {
         error: refused
-          ? `${await explain(err, held.connectionId)} Nothing was bought.`
-          : "EasyPost didn't finish that purchase. Nothing was bought; try again.",
+          ? `${await explain(err, held.connectionId, sourceKey)} Nothing was bought.`
+          : `${name} didn't finish that purchase. Nothing was bought; try again.`,
       };
     }
     label = settled.label;
@@ -603,7 +845,9 @@ export async function buyLabel(
     done(slug);
     return {
       bought: true,
-      error: `Your label WAS bought${tracked(label)}, but we couldn't save it here just now. Please don't buy another. Reload this page in a minute and press Check this label to finish; the label is also in your EasyPost account.`,
+      error: source.canLookUp
+        ? `Your label WAS bought${tracked(label)}, but we couldn't save it here just now. Please don't buy another. Reload this page in a minute and press Check this label to finish; the label is also in your ${name} account.`
+        : `Your label WAS bought${tracked(label)}, but we couldn't save it here. Please don't buy another. Print it from your ${name} account, record the parcel by hand with that tracking number, then clear it under "Labels to finish" on this page.`,
     };
   }
 
@@ -624,9 +868,23 @@ export async function buyLabel(
   redirect(`/w/${slug}/shipping/orders/${orderId}?label=${number as number}`);
 }
 
+type OpenQuote = {
+  id: string;
+  shipping_order_id: string;
+  provider: string;
+  provider_shipment_id: string;
+  status: string;
+  label_kind: string;
+  buying_at: string | null;
+};
+const OPEN_QUOTE =
+  "id, shipping_order_id, provider, provider_shipment_id, status, label_kind, buying_at";
+
 /**
  * Finishes a label that was bought (or may have been) but isn't a parcel
- * yet: asks EasyPost what really happened if we never heard, then records it.
+ * yet: asks the source what really happened if we never heard, then records
+ * it. A source that can't be asked (UPS, Redo) leaves that to a person: see
+ * `clearUnsureLabel`.
  */
 export async function finishLabel(
   slug: string,
@@ -639,34 +897,40 @@ export async function finishLabel(
   if (!UUID.test(quoteId)) return { error: OOPS };
   const { data } = await ctx.supabase
     .from("shipping_label_quotes")
-    .select("id, shipping_order_id, provider_shipment_id, status, label_kind")
+    .select(OPEN_QUOTE)
     .eq("tenant_id", ctx.tenant.id)
     .eq("id", quoteId)
     .maybeSingle();
-  const quote = data as {
-    id: string;
-    shipping_order_id: string;
-    provider_shipment_id: string;
-    status: string;
-    label_kind: string;
-  } | null;
+  const quote = data as OpenQuote | null;
   if (!quote || !["buying", "bought"].includes(quote.status)) {
     done(slug);
     return { error: "That label is already sorted. Reload this page." };
   }
 
   if (quote.status === "buying") {
-    const held = await labelKey(ctx.tenant.id);
+    const sourceKey: LabelSourceKey = isLabelSource(quote.provider) ? quote.provider : "easypost";
+    const source = labelSource(sourceKey);
+    if (!source.canLookUp) {
+      return {
+        error: `We can't ask ${source.name} about a label from here. Look in your ${source.name} account for one bought for this order. If it's there, void it there or use it and record the parcel by hand; then an owner or admin can clear this.`,
+      };
+    }
+    const held = await labelAccess(ctx.tenant.id, sourceKey);
     if ("error" in held) return { error: held.error };
-    let settled: Awaited<ReturnType<typeof getPurchase>>;
+    let settled: { label: SourceLabel | null };
     try {
-      settled = await getPurchase(
-        held.key,
-        isLabelKind(quote.label_kind) ? quote.label_kind : "shipment",
-        quote.provider_shipment_id,
+      settled = await withLabelSource(
+        ctx.tenant.id,
+        sourceKey,
+        (access) =>
+          source.lookUp(access as never, {
+            kind: isLabelKind(quote.label_kind) ? quote.label_kind : "shipment",
+            shipmentId: quote.provider_shipment_id,
+          }),
+        held,
       );
     } catch (err) {
-      return { error: await explain(err, held.connectionId) };
+      return { error: await explain(err, held.connectionId, sourceKey) };
     }
     if (!settled.label) {
       const { error } = await getAdminClient().rpc("release_label_purchase", {
@@ -676,8 +940,7 @@ export async function finishLabel(
       if (error) return { error: OOPS };
       done(slug);
       return {
-        message:
-          "EasyPost says that label was never bought, so nothing was charged. You can get rates again.",
+        message: `${source.name} says that label was never bought, so nothing was charged. You can get rates again.`,
       };
     }
     if (!(await keepLabel(ctx.tenant.id, quote.id, settled.label))) {
@@ -704,4 +967,49 @@ export async function finishLabel(
     };
   }
   redirect(`/w/${slug}/shipping/orders/${quote.shipping_order_id}?label=${number as number}`);
+}
+
+/** How long a purchase is left alone before a person may say what became of it. */
+const UNSURE_WAIT_MS = 2 * 60_000;
+
+/**
+ * For a purchase at UPS or Redo that we never heard back about. Neither can
+ * be asked from here, so an owner or admin looks in that account and then
+ * presses this to free the order. It buys nothing and voids nothing: it only
+ * stops this page waiting. Never offered for EasyPost, which can be asked.
+ */
+export async function clearUnsureLabel(
+  slug: string,
+  quoteId: string,
+  _prev: ShippingState,
+  _formData: FormData,
+): Promise<ShippingState> {
+  const ctx = await context(slug, true);
+  if ("error" in ctx) return { error: ctx.error };
+  if (!UUID.test(quoteId)) return { error: OOPS };
+  const { data } = await ctx.supabase
+    .from("shipping_label_quotes")
+    .select(OPEN_QUOTE)
+    .eq("tenant_id", ctx.tenant.id)
+    .eq("id", quoteId)
+    .maybeSingle();
+  const quote = data as OpenQuote | null;
+  if (!quote || quote.status !== "buying") {
+    done(slug);
+    return { error: "That label is already sorted. Reload this page." };
+  }
+  const sourceKey: LabelSourceKey = isLabelSource(quote.provider) ? quote.provider : "easypost";
+  if (labelSource(sourceKey).canLookUp) {
+    return { error: "Press Check this label instead: it can be looked up." };
+  }
+  if (!quote.buying_at || Date.now() - new Date(quote.buying_at).getTime() < UNSURE_WAIT_MS) {
+    return { error: "This purchase may still be going through. Give it a couple of minutes." };
+  }
+  const { data: freed, error } = await getAdminClient().rpc("release_label_purchase", {
+    p_tenant_id: ctx.tenant.id,
+    p_quote_id: quote.id,
+  });
+  if (error || freed !== true) return { error: OOPS };
+  done(slug);
+  return { message: "Cleared. You can get rates for this order again." };
 }

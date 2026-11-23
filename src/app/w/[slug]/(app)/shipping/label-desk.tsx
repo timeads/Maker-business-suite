@@ -16,7 +16,7 @@ import {
   type AddressCheck,
   type Signature,
 } from "@/lib/shipping/easypost";
-import { deliveryDays, type RateChoice, type ShipToEdit } from "@/lib/shipping/labels";
+import { deliveryDays, type ShipToEdit } from "@/lib/shipping/labels";
 import {
   contentsTenthOz as boxContentsTenthOz,
   emptyAlloc,
@@ -29,7 +29,14 @@ import {
   withoutBox,
   type Alloc,
 } from "@/lib/shipping/packing";
-import { buyLabel, checkLabelAddress, getLabelRates } from "./label-actions";
+import type { SourceRateChoice } from "@/lib/shipping/sources/rates";
+import {
+  SOURCE_CHIPS,
+  SOURCE_NAMES,
+  SOURCE_PAID_FROM,
+  type LabelSourceKey,
+} from "@/lib/shipping/sources/types";
+import { buyLabel, checkLabelAddress, getLabelRates, type RatesInput } from "./label-actions";
 
 /** An item in the order, as the bench needs it for dividing between boxes. */
 export type DeskLine = {
@@ -87,7 +94,45 @@ type Checked =
   | { state: "checking" }
   | { state: "edited" }
   | { state: "done"; check: AddressCheck }
-  | { state: "failed"; message: string };
+  | { state: "failed"; message: string }
+  /** No connected account checks addresses. */
+  | { state: "skipped" };
+
+/**
+ * Address checks already made while this page has been open, so going back to
+ * an order doesn't ask the carriers again. Held in memory only: a reload
+ * starts afresh, and nothing is written anywhere.
+ */
+const addressChecks = new Map<string, AddressCheck>();
+const addressKey = (orderId: string, address: ShipToEdit) =>
+  `${orderId}|${JSON.stringify([
+    address.recipient,
+    address.company,
+    address.address1,
+    address.address2,
+    address.city,
+    address.region,
+    address.postal_code,
+  ])}`;
+
+/** The small tag saying where a label would be bought. */
+function SourceChip({ source }: { source: LabelSourceKey }) {
+  return (
+    <span className="border-border text-muted-foreground rounded-full border px-2 py-0.5 text-xs font-medium whitespace-nowrap">
+      {SOURCE_CHIPS[source]}
+    </span>
+  );
+}
+
+/** "Paid from your UPS account", or every connected account when no service is chosen yet. */
+function paidFrom(chosen: LabelSourceKey | null, connected: LabelSourceKey[]) {
+  const from = chosen ? [chosen] : connected;
+  if (from.length === 0) return "";
+  const words = from.map((key) => SOURCE_PAID_FROM[key]);
+  return chosen || words.length === 1
+    ? `Postage is paid from ${words[0]}.`
+    : `Postage is paid from the account you choose: ${words.map((word) => word.replace(/^your /, "")).join(", ")}.`;
+}
 
 const SIGNATURE_WORDS: Record<Signature, string> = {
   none: "No signature",
@@ -131,7 +176,8 @@ export function LabelDesk({
   paid,
   rule,
   shop,
-  testMode,
+  sources,
+  testSources,
   setup,
   lines,
   children,
@@ -151,7 +197,10 @@ export function LabelDesk({
   /** The workspace's signature rule, when this order is worth enough for it. */
   rule: string | null;
   shop: { offered: boolean; markSent: boolean; notify: boolean };
-  testMode: boolean;
+  /** The connected places to buy postage: every one is asked for its prices. */
+  sources: LabelSourceKey[];
+  /** Those of them whose labels are practice ones, not real postage. */
+  testSources: LabelSourceKey[];
   /** What's still missing before a carrier will quote, with where to fix it. */
   setup: { missing: string; href: string | null } | null;
   /** The items going in this purchase, for dividing between several boxes. */
@@ -200,7 +249,11 @@ export function LabelDesk({
         )
       : list;
   const nextKey = useRef(1);
-  const [rates, setRates] = useState<RateChoice[] | null>(null);
+  const [rates, setRates] = useState<SourceRateChoice[] | null>(null);
+  /** A word on each connected account that couldn't be asked this time. */
+  const [notes, setNotes] = useState<string[]>([]);
+  /** Exactly what the rates on screen were asked with: buying sends the same again. */
+  const asked = useRef<RatesInput | null>(null);
   const [chosen, setChosen] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [markSent, setMarkSent] = useState(shop.offered && shop.markSent);
@@ -215,6 +268,8 @@ export function LabelDesk({
   // A price belongs to one address and one set of boxes and weights: change any and it's gone.
   const stale = () => {
     setRates(null);
+    setNotes([]);
+    asked.current = null;
     setChosen("");
     setError(null);
   };
@@ -227,7 +282,7 @@ export function LabelDesk({
     (ask: Ask, parcels: Pick<Packed, "boxId" | "size" | "weight">[]) =>
       startQuote(async () => {
         setError(null);
-        const result = await getLabelRates(slug, orderId, {
+        const input: RatesInput = {
           boxes: parcels.map((parcel) => ({
             boxId: parcel.boxId,
             ...parcel.size,
@@ -238,12 +293,17 @@ export function LabelDesk({
           residential: ask.residential,
           signature: ask.signature,
           withIds: together,
-        });
+        };
+        const result = await getLabelRates(slug, orderId, input);
         if (result.error || !result.rates) {
           setRates(null);
+          setNotes([]);
+          asked.current = null;
           setError(result.error ?? "We couldn't get rates. Try again.");
           return;
         }
+        asked.current = input;
+        setNotes(result.notes ?? []);
         setRates(result.rates);
         setChosen(result.rates[0]?.id ?? "");
       }),
@@ -252,13 +312,25 @@ export function LabelDesk({
   const quoteNow = () => quote({ to, residential, signature }, packed);
 
   const check = useCallback(
-    async (address: ShipToEdit): Promise<AddressCheck | null> => {
+    async (address: ShipToEdit, again = false): Promise<AddressCheck | null> => {
+      const key = addressKey(orderId, address);
+      const known = again ? undefined : addressChecks.get(key);
+      if (known) {
+        setChecked({ state: "done", check: known });
+        if (known.residential !== null) setResidential(known.residential);
+        return known;
+      }
       setChecked({ state: "checking" });
       const result = await checkLabelAddress(slug, orderId, address);
+      if (result.skipped) {
+        setChecked({ state: "skipped" });
+        return null;
+      }
       if (!result.check) {
         setChecked({ state: "failed", message: result.error ?? "We couldn't check the address." });
         return null;
       }
+      addressChecks.set(key, result.check);
       setChecked({ state: "done", check: result.check });
       if (result.check.residential !== null) setResidential(result.check.residential);
       return result.check;
@@ -420,7 +492,14 @@ export function LabelDesk({
     sent.current = true;
     startBuy(async () => {
       setError(null);
-      const result = await buyLabel(slug, orderId, chosen, { markSent, notify }, together);
+      const result = await buyLabel(
+        slug,
+        orderId,
+        chosen,
+        { markSent, notify },
+        together,
+        asked.current ?? undefined,
+      );
       // On success the page moves on to the finished label; there is no result.
       if (!result) return;
       if (result.bought) {
@@ -450,6 +529,17 @@ export function LabelDesk({
   const picked = boxes.find((box) => box.id === first.boxId);
   const total = totalTenthOz(packed);
   const margin = rate ? leftOver(paid.cents, rate.price, rate.currency) : null;
+  // Said only where an account reports it, and only while it could be the one that's used.
+  const testNote =
+    rate && testSources.includes(rate.source)
+      ? sources.length > 1
+        ? `Test mode: ${SOURCE_NAMES[rate.source]} labels are not real`
+        : "Test mode: labels are not real"
+      : !rate && testSources.length > 0
+        ? testSources.length === sources.length && sources.length === 1
+          ? "Test mode: labels are not real"
+          : `Test mode: ${testSources.map((key) => SOURCE_NAMES[key]).join(" and ")} labels are not real`
+        : null;
   const stat = "flex flex-col gap-0.5";
   const statLabel = "text-muted-foreground text-xs font-semibold";
 
@@ -462,7 +552,10 @@ export function LabelDesk({
               <>
                 <div className={stat}>
                   <span className={statLabel}>Service</span>
-                  <span className="font-semibold">{rate.name}</span>
+                  <span className="flex flex-wrap items-center gap-2 font-semibold">
+                    {rate.name}
+                    <SourceChip source={rate.source} />
+                  </span>
                   {rate.days !== null && (
                     <span className="text-muted-foreground text-xs">
                       Est. {deliveryDays(rate.days)}
@@ -506,7 +599,7 @@ export function LabelDesk({
               </p>
             )}
             <div className="ml-auto flex flex-wrap items-center gap-2">
-              {testMode && <Badge tone="waiting">Test mode: labels are not real</Badge>}
+              {testNote && <Badge tone="waiting">{testNote}</Badge>}
               {!locked &&
                 (rates ? (
                   <Button type="button" size="lg" onClick={buy} disabled={!canBuy}>
@@ -552,7 +645,7 @@ export function LabelDesk({
             </label>
             <span className="text-muted-foreground ml-auto text-xs">
               {shop.offered
-                ? "Postage is paid from your EasyPost account."
+                ? paidFrom(rate?.source ?? null, sources)
                 : "Your shop hasn't given permission to mark orders as sent, so do that there yourself."}
             </span>
           </div>
@@ -591,7 +684,7 @@ export function LabelDesk({
           <AddressVerdict
             checked={checked}
             residential={residential}
-            onCheck={() => void check(to)}
+            onCheck={() => void check(to, true)}
             onUse={takeSuggestion}
           />
           <fieldset disabled={busy || locked} className="grid gap-3 sm:grid-cols-12">
@@ -893,12 +986,30 @@ export function LabelDesk({
                         />
                         <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
                           <span className="font-semibold">{item.name}</span>
+                          <SourceChip source={item.source} />
                           {item.days !== null && (
                             <span className="text-muted-foreground">
                               Est. {deliveryDays(item.days)}
                             </span>
                           )}
                           {index === 0 && <Badge tone="good">Cheapest</Badge>}
+                          {testSources.includes(item.source) && sources.length > 1 && (
+                            <Badge tone="waiting">Test label</Badge>
+                          )}
+                          {(item.others?.length || item.note) && (
+                            <span className="text-muted-foreground basis-full text-xs">
+                              {item.others?.length
+                                ? `Also ${item.others
+                                    .map(
+                                      (other) =>
+                                        `${SOURCE_NAMES[other.source]} ${formatPrice(other.price, item.currency)}`,
+                                    )
+                                    .join(" · ")}`
+                                : ""}
+                              {item.others?.length && item.note ? ". " : ""}
+                              {item.note ?? ""}
+                            </span>
+                          )}
                         </span>
                         <span className="text-right font-semibold tabular-nums">
                           {formatPrice(item.price, item.currency)}
@@ -915,6 +1026,13 @@ export function LabelDesk({
                   );
                 })}
               </ul>
+              {notes.length > 0 && (
+                <ul className="text-muted-foreground mt-3 flex flex-col gap-1 text-xs">
+                  {notes.map((note) => (
+                    <li key={note}>{note}</li>
+                  ))}
+                </ul>
+              )}
             </fieldset>
           ) : (
             <p className="text-muted-foreground text-sm">
@@ -945,6 +1063,14 @@ function AddressVerdict({
   onUse: (suggestion: NonNullable<AddressCheck["suggestion"]>) => void;
 }) {
   const row = "flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md px-3 py-2 text-sm";
+  if (checked.state === "skipped") {
+    return (
+      <p className={`${row} bg-sunken text-muted-foreground`}>
+        This address hasn&apos;t been checked: none of your connected postage accounts checks
+        addresses here. Look it over before you buy.
+      </p>
+    );
+  }
   if (checked.state === "idle" || checked.state === "checking") {
     return <p className={`${row} bg-sunken text-muted-foreground`}>Checking the address…</p>;
   }

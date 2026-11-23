@@ -9,6 +9,7 @@ import { daysFromNow } from "@/lib/bookings/slots";
 import { formatMoney } from "@/lib/dashboard/format";
 import { addressLines, hasAddress } from "@/lib/shipping/carriers";
 import { gramsToTenthOz } from "@/lib/shipping/easypost";
+import { SOURCE_NAMES, isLabelSource } from "@/lib/shipping/sources/types";
 import {
   boxSize,
   boxTenthOz,
@@ -40,7 +41,7 @@ import {
   loadGroup,
   loadGroups,
   loadKnownGroup,
-  loadLabelConnection,
+  loadLabelConnections,
   loadQueueSteps,
   loadShippingSetup,
   loadUnfinishedLabels,
@@ -50,7 +51,7 @@ import {
 } from "../../data";
 import { HoldForm, ParcelForm, PickupForm, SeenBackFromHold, VoidButton } from "../../forms";
 import { shippingAccess } from "../../gate";
-import { FinishLabelButton } from "../../label-card";
+import { ClearUnsureLabelButton, FinishLabelButton } from "../../label-card";
 import { LabelDesk } from "../../label-desk";
 import { OrderSteps } from "../../order-steps";
 import { TogetherNote } from "../../together-ui";
@@ -80,7 +81,7 @@ export default async function ShippingOrderPage({
   if (!/^[0-9a-f-]{36}$/i.test(id)) notFound();
 
   const supabase = await createClient();
-  const [{ data }, setup, { data: parcels }, boxes, easypost, unfinished, steps, { data: shop }] =
+  const [{ data }, setup, { data: parcels }, boxes, postage, unfinished, steps, { data: shop }] =
     await Promise.all([
       supabase
         .from("shipping_orders")
@@ -98,7 +99,7 @@ export default async function ShippingOrderPage({
         .eq("shipping_order_id", id)
         .order("number"),
       loadBoxes(supabase, tenant.id),
-      loadLabelConnection(supabase, tenant.id),
+      loadLabelConnections(supabase, tenant.id),
       loadUnfinishedLabels(supabase, tenant.id, id),
       loadQueueSteps(supabase, tenant.id),
       supabase
@@ -271,16 +272,17 @@ export default async function ShippingOrderPage({
   const freshLabels = freshBoxes.filter((box) => box.labelUrl);
   const linkClass = "text-ochre-text font-medium hover:underline";
 
-  // Buying a label here: EasyPost is connected and this is a parcel to post.
+  // Buying a label here: a postage account (EasyPost, UPS or Redo) is connected and this is a parcel to post.
+  const lapsed = postage.needsReconnect.map((key) => SOURCE_NAMES[key]);
   const posting = todo && entitlements.canWrite && !order.pickup;
   const abroad = isInternational(order.country_code, home);
   const fromGaps = missingShipFrom(setup.settings);
   const labelCard: "builder" | "reconnect" | "abroad" | "unfinished" | null =
-    !posting || easypost.status === "none" || easypost.status === "disconnected"
+    !posting || (postage.active.length === 0 && postage.needsReconnect.length === 0)
       ? null
       : unfinished.length > 0
         ? "unfinished"
-        : easypost.status === "needs_reconnect"
+        : postage.active.length === 0
           ? "reconnect"
           : abroad
             ? "abroad"
@@ -500,6 +502,9 @@ export default async function ShippingOrderPage({
                   {unfinished.map((label) => {
                     const boxes = shownBoxes({ ...label, boxes: label.parcels });
                     const printable = boxes.filter((box) => box.labelUrl);
+                    const via = isLabelSource(label.provider)
+                      ? SOURCE_NAMES[label.provider]
+                      : "EasyPost";
                     return (
                       <li key={label.id} className="flex flex-col gap-2">
                         {label.status === "bought" ? (
@@ -530,21 +535,43 @@ export default async function ShippingOrderPage({
                               </span>
                             ))}
                           </p>
-                        ) : (
+                        ) : via === "EasyPost" ? (
                           <p>
                             <span className="font-semibold">We never heard back from EasyPost</span>
                             {label.buying_at ? ` (${when.format(new Date(label.buying_at))})` : ""}
                             {label.box_count > 1 ? `, for ${label.box_count} boxes` : ""}. It may or
                             may not have been bought; checking will settle it.
                           </p>
+                        ) : (
+                          <p>
+                            <span className="font-semibold">We never heard back from {via}</span>
+                            {label.buying_at ? ` (${when.format(new Date(label.buying_at))})` : ""}
+                            {label.box_count > 1 ? `, for ${label.box_count} boxes` : ""}. It may or
+                            may not have been bought, and {via} can&apos;t be asked from here. Look
+                            in your {via} account for a label for this order. If there is one, void
+                            it there, or use it and record the parcel by hand below.{" "}
+                            {manager
+                              ? "Then clear this so the order is free again."
+                              : "Then ask an owner or admin to clear this."}
+                          </p>
                         )}
-                        {entitlements.canWrite && (
-                          <FinishLabelButton
-                            slug={tenant.slug}
-                            quoteId={label.id}
-                            unsure={label.status === "buying"}
-                          />
-                        )}
+                        {entitlements.canWrite &&
+                          (label.status === "buying" && via !== "EasyPost" ? (
+                            manager && (
+                              <ClearUnsureLabelButton
+                                slug={tenant.slug}
+                                quoteId={label.id}
+                                via={via}
+                              />
+                            )
+                          ) : (
+                            <FinishLabelButton
+                              slug={tenant.slug}
+                              quoteId={label.id}
+                              unsure={label.status === "buying"}
+                              via={via}
+                            />
+                          ))}
                       </li>
                     );
                   })}
@@ -628,7 +655,8 @@ export default async function ShippingOrderPage({
                     markSent: setup.settings.mark_sent_in_shop,
                     notify: setup.settings.notify_customer,
                   }}
-                  testMode={easypost.testMode}
+                  sources={postage.active}
+                  testSources={postage.testMode}
                   lines={left.map((item) => ({
                     id: item.line_id,
                     title: item.title,
@@ -656,24 +684,27 @@ export default async function ShippingOrderPage({
                   <CardHeader>
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <CardTitle>Buy a label</CardTitle>
-                      {easypost.testMode && (
+                      {postage.testMode.length > 0 && (
                         <Badge tone="waiting">Test mode: labels are not real</Badge>
                       )}
                     </div>
-                    <CardDescription>Postage is paid from your EasyPost account.</CardDescription>
+                    <CardDescription>
+                      Postage is paid from your own postage account.
+                    </CardDescription>
                   </CardHeader>
                   <CardContent>
                     {labelCard === "abroad" && <p className="text-sm">{INTERNATIONAL_NOTE}</p>}
                     {labelCard === "reconnect" && (
                       <p className="text-sm">
-                        EasyPost stopped accepting the saved key, so labels can&apos;t be bought
-                        right now.{" "}
+                        {lapsed.join(" and ")} stopped accepting the saved{" "}
+                        {lapsed.length > 1 ? "keys" : "key"}, so labels can&apos;t be bought right
+                        now.{" "}
                         {manager ? (
                           <Link
                             href={`/w/${tenant.slug}/connections`}
                             className="text-ochre-text font-medium hover:underline"
                           >
-                            Reconnect EasyPost
+                            Reconnect {lapsed.join(" and ")}
                           </Link>
                         ) : (
                           "Ask an owner or admin to reconnect it."
@@ -692,7 +723,7 @@ export default async function ShippingOrderPage({
                     <CardContent className="pt-5">
                       <p className="text-sm">
                         Sending orders together works by buying one label here
-                        {labelCard === null ? ", which needs EasyPost connected" : ""}. To record a
+                        {labelCard === null ? ", which needs a postage account connected" : ""}. To record a
                         parcel you bought elsewhere, open each order on its own and put the same
                         tracking number on each.
                       </p>
@@ -842,6 +873,7 @@ export default async function ShippingOrderPage({
                                 slug={tenant.slug}
                                 shipmentId={parcel.id as string}
                                 label
+                                source={parcel.label_provider as string}
                               />
                             )}
                           </span>
