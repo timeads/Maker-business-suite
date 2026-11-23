@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState, useTransition } from "react";
+import { useActionState, useOptimistic, useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { FormMessage } from "@/components/ui/form-message";
 import { Input, Label } from "@/components/ui/input";
@@ -211,6 +211,8 @@ export function PaidTick({
 }) {
   const [pending, start] = useTransition();
   const [error, setError] = useState<string>();
+  // Shows the tick straight away; it falls back to the saved value if the save fails.
+  const [shown, setShown] = useOptimistic(checked);
   return (
     <span className="flex flex-col gap-0.5">
       <label
@@ -219,12 +221,13 @@ export function PaidTick({
       >
         <input
           type="checkbox"
-          checked={checked}
+          checked={shown}
           disabled={disabled || pending}
           aria-label={label}
           onChange={(e) => {
             const next = e.target.checked;
             start(async () => {
+              setShown(next);
               const result = await markBillPaid(slug, entryId, next);
               setError(result.error);
             });
