@@ -1,7 +1,9 @@
 import { notFound } from "next/navigation";
 import { BillingBanner } from "@/components/shell/billing-banner";
 import { Sidebar } from "@/components/shell/sidebar";
+import { loadAttention } from "@/lib/attention";
 import { requireUser } from "@/lib/auth";
+import { daysFromNow } from "@/lib/bookings/slots";
 import {
   APPEARANCE_KEY,
   brandThemeVars,
@@ -36,6 +38,12 @@ export default async function WorkspaceLayout({
       .eq("module", BRAND_MODULE)
       .in("key", [KIT_KEY, APPEARANCE_KEY]),
   ]);
+  const attention = await loadAttention(
+    supabase,
+    ctx.tenant.id,
+    (key) => entitlements.can(`module.${key}`),
+    daysFromNow(0),
+  ).catch(() => ({}));
   const setting = (key: string) => (brandRows ?? []).find((row) => row.key === key)?.body;
   const look = parseAppearance(setting(APPEARANCE_KEY));
   const kit = look.brand_colors ? parseBrandKit(setting(KIT_KEY)) : null;
@@ -55,6 +63,7 @@ export default async function WorkspaceLayout({
         tenants={tenants}
         userEmail={user.email}
         entitlements={entitlements}
+        attention={attention}
       />
       <div className="flex min-w-0 flex-1 flex-col">
         <BillingBanner

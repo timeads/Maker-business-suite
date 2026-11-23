@@ -17,6 +17,7 @@ import type { Entitlements } from "@/lib/entitlements";
 import { MODULES, type ModuleKey } from "@/lib/modules";
 import type { Tenant } from "@/lib/tenants";
 import { NavLink, TabLink } from "./nav-link";
+import type { Attention } from "@/lib/attention";
 import { WorkspaceSwitcher } from "./workspace-switcher";
 
 const MODULE_ICONS: Record<ModuleKey, typeof Home> = {
@@ -28,6 +29,17 @@ const MODULE_ICONS: Record<ModuleKey, typeof Home> = {
   stock: Boxes,
   shipping: Truck,
 };
+
+/** The little number beside a tool that has something waiting. */
+function Count({ n }: { n: number | undefined }) {
+  if (!n) return null;
+  return (
+    <span className="bg-ochre text-primary-foreground ml-auto min-w-5 rounded-full px-1.5 text-center text-[11px] leading-5 font-bold tabular-nums">
+      {n > 99 ? "99+" : n}
+      <span className="sr-only"> waiting</span>
+    </span>
+  );
+}
 
 const GROUP =
   "text-on-teal-2 px-2.5 pt-5 pb-1.5 text-[10.5px] font-semibold tracking-[0.16em] uppercase";
@@ -41,7 +53,10 @@ export function Sidebar({
   tenants,
   userEmail,
   entitlements,
+  attention = {},
 }: {
+  /** How many things are waiting in each tool. */
+  attention?: Attention;
   tenant: Tenant;
   entitlements: Entitlements;
   tenants: Tenant[];
@@ -70,6 +85,7 @@ export function Sidebar({
             return (
               <NavLink key={m.key} href={`${base}/${m.key}`}>
                 <Icon aria-hidden /> {m.name}
+                <Count n={attention[m.key]} />
               </NavLink>
             );
           })}
@@ -134,7 +150,16 @@ export function Sidebar({
           const Icon = MODULE_ICONS[m.key];
           return (
             <TabLink key={m.key} href={`${base}/${m.key}`}>
-              <Icon aria-hidden /> <span className="max-w-full truncate">{m.name}</span>
+              <span className="relative">
+                <Icon aria-hidden />
+                {attention[m.key] ? (
+                  <span className="bg-ochre text-primary-foreground absolute -top-1.5 -right-2.5 min-w-4 rounded-full px-1 text-center text-[10px] leading-4 font-bold">
+                    {attention[m.key]! > 99 ? "99+" : attention[m.key]}
+                    <span className="sr-only"> waiting</span>
+                  </span>
+                ) : null}
+              </span>
+              <span className="max-w-full truncate">{m.name}</span>
             </TabLink>
           );
         })}

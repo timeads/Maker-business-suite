@@ -21,12 +21,12 @@ export function PageHeader({
         </Link>
       )}
       <div className="flex flex-wrap items-end justify-between gap-3">
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <h1 className="text-2xl leading-tight font-bold tracking-[-0.015em] text-balance">
             {title}
           </h1>
           {description && (
-            <p className="text-muted-foreground font-read mt-1 max-w-[70ch] text-sm">
+            <p className="text-muted-foreground font-read mt-1 text-sm lg:truncate">
               {description}
             </p>
           )}
