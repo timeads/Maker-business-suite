@@ -8,6 +8,7 @@ export function SocialTabs({ slug }: { slug: string }) {
       tabs={[
         { href: base, name: "Calendar", exact: true },
         { href: `${base}/library`, name: "Assets" },
+        { href: `${base}/emails`, name: "Emails" },
         { href: `${base}/projects`, name: "Projects" },
         { href: `${base}/plan`, name: "Plan" },
         { href: `${base}/links`, name: "Link page" },

@@ -438,3 +438,47 @@ describe("library, projects and posts with several photos", () => {
     expect(rows.map((row) => row.folder_id)).toEqual([null, null]);
   });
 });
+
+describe("emails", () => {
+  const as = <T>(user: User, sql: string, params: unknown[] = []) =>
+    asUser(db, user, async (tx) => (await tx.query<T>(sql, params)).rows);
+  const doc = (title: string, subject = "") =>
+    JSON.stringify({ v: 2, title, meta: { subject, previewText: "" }, sections: [] });
+
+  it("stay inside their workspace", async () => {
+    const id = (
+      await as<{ id: string }>(
+        alice,
+        "select public.save_email($1, null, $2::jsonb, 'Sale') as id",
+        [tenantA, doc("", "Autumn sale")],
+      )
+    )[0].id;
+    expect(
+      await as<{ title: string }>(alice, "select title from public.emails where id = $1", [id]),
+    ).toEqual([{ title: "Autumn sale" }]);
+    await as(alice, "select public.save_email($1, $2, $3::jsonb)", [tenantA, id, doc("Renamed")]);
+    expect(
+      await as<{ title: string }>(alice, "select title from public.emails where id = $1", [id]),
+    ).toEqual([{ title: "Renamed" }]);
+
+    expect(await as(bob, "select id from public.emails")).toEqual([]);
+    await expect(
+      as(bob, "select public.save_email($1, $2, $3::jsonb)", [tenantB, id, doc("Mine")]),
+    ).rejects.toThrow(/Email not found/);
+    await expect(
+      as(bob, "select public.save_email($1, null, $2::jsonb)", [tenantA, doc("Sneaky")]),
+    ).rejects.toThrow(/Workspace not found/);
+    await expect(as(bob, "select public.remove_email($1, $2)", [tenantB, id])).rejects.toThrow(
+      /Email not found/,
+    );
+    await expect(
+      as(bob, "insert into public.emails (tenant_id, doc) values ($1, '{}')", [tenantB]),
+    ).rejects.toThrow(/permission denied/);
+    await expect(
+      as(alice, "select public.save_email($1, null, '[]'::jsonb)", [tenantA]),
+    ).rejects.toThrow(/not valid/);
+
+    await as(alice, "select public.remove_email($1, $2)", [tenantA, id]);
+    expect(await as(alice, "select id from public.emails")).toEqual([]);
+  });
+});

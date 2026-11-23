@@ -1,0 +1,186 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
+import { requireUser } from "@/lib/auth";
+import { newWorkspaceEmail } from "@/lib/brand/email";
+import { BRAND_MODULE, KIT_KEY, parseBrandKit, type BrandKitConfig } from "@/lib/brand/kit";
+import {
+  normalizeDoc,
+  normalizeSavedSections,
+  normalizeTemplates,
+  type EmailDoc,
+  type EmailTemplate,
+  type SavedSection,
+} from "@/lib/design";
+import { getEntitlements } from "@/lib/entitlements";
+import { publicAssetUrl } from "@/lib/social/worker";
+import { createClient } from "@/lib/supabase/server";
+import { canManage, getTenantContext } from "@/lib/tenants";
+
+export type EmailState = { error?: string };
+
+const SOCIAL_MODULE = "social";
+const SHARED_KEYS = { sections: "email_sections", templates: "email_templates" } as const;
+const UUID = /^[0-9a-f-]{36}$/i;
+const NO_ACCESS = "Social isn't part of this workspace's plan right now.";
+const READ_ONLY =
+  "This workspace is read-only because its plan has ended. Pick a plan to make changes.";
+
+async function context(slug: string) {
+  const user = await requireUser(`/w/${slug}/social/emails`);
+  const ctx = await getTenantContext(slug, user.id);
+  if (!ctx) return { error: NO_ACCESS } as const;
+  const entitlements = await getEntitlements(ctx.tenant.id);
+  if (!entitlements.can("module.social")) return { error: NO_ACCESS } as const;
+  if (!entitlements.canWrite) return { error: READ_ONLY } as const;
+  return { tenant: ctx.tenant, role: ctx.role, supabase: await createClient() } as const;
+}
+type Ctx = Exclude<Awaited<ReturnType<typeof context>>, { error: string }>;
+
+async function loadKit(ctx: Ctx): Promise<BrandKitConfig | null> {
+  const { data } = await ctx.supabase
+    .from("configs")
+    .select("body")
+    .eq("tenant_id", ctx.tenant.id)
+    .eq("module", BRAND_MODULE)
+    .eq("key", KIT_KEY)
+    .maybeSingle();
+  return parseBrandKit(data?.body);
+}
+
+/** Starts a new email from one of the workspace's starters and opens it in the builder. */
+export async function createEmail(
+  slug: string,
+  _prev: EmailState,
+  formData: FormData,
+): Promise<EmailState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const kit = await loadKit(ctx);
+  if (!kit)
+    return { error: "Set up your brand kit first, so the email comes out in your colours." };
+  const doc = newWorkspaceEmail(kit, String(formData.get("template") ?? "") || null);
+  const { data, error } = await ctx.supabase.rpc("save_email", {
+    p_tenant_id: ctx.tenant.id,
+    p_email_id: null,
+    p_doc: doc,
+  });
+  if (error || !data) {
+    return {
+      error: error?.message.includes("too_many_emails")
+        ? "That's the most emails a workspace can keep. Delete some you no longer need."
+        : "We couldn't start that email. Please try again.",
+    };
+  }
+  revalidatePath(`/w/${slug}/social/emails`);
+  redirect(`/w/${slug}/emails/${data as string}`);
+}
+
+/** Saves the email being edited. The document is tidied and bounded first. */
+export async function saveEmailDoc(slug: string, id: string, doc: EmailDoc): Promise<void> {
+  const ctx = await context(slug);
+  if ("error" in ctx) throw new Error(String(ctx.error));
+  if (!UUID.test(id)) throw new Error("Email not found");
+  const { error } = await ctx.supabase.rpc("save_email", {
+    p_tenant_id: ctx.tenant.id,
+    p_email_id: id,
+    p_doc: normalizeDoc(doc),
+  });
+  if (error) throw new Error("The email could not be saved.");
+}
+
+export async function copyEmail(slug: string, id: string): Promise<void> {
+  const ctx = await context(slug);
+  if ("error" in ctx || !UUID.test(id)) return;
+  const { data: row } = await ctx.supabase
+    .from("emails")
+    .select("doc, title")
+    .eq("tenant_id", ctx.tenant.id)
+    .eq("id", id)
+    .maybeSingle();
+  if (!row) return;
+  const doc = normalizeDoc(row.doc);
+  await ctx.supabase.rpc("save_email", {
+    p_tenant_id: ctx.tenant.id,
+    p_email_id: null,
+    p_doc: { ...doc, title: `Copy of ${row.title as string}`.slice(0, 120) },
+  });
+  revalidatePath(`/w/${slug}/social/emails`);
+}
+
+export async function deleteEmail(slug: string, id: string): Promise<void> {
+  const ctx = await context(slug);
+  if ("error" in ctx || !UUID.test(id)) return;
+  await ctx.supabase.rpc("remove_email", { p_tenant_id: ctx.tenant.id, p_email_id: id });
+  revalidatePath(`/w/${slug}/social/emails`);
+}
+
+async function loadShared(ctx: Ctx, kind: keyof typeof SHARED_KEYS): Promise<unknown> {
+  const { data } = await ctx.supabase
+    .from("configs")
+    .select("body")
+    .eq("tenant_id", ctx.tenant.id)
+    .eq("module", SOCIAL_MODULE)
+    .eq("key", SHARED_KEYS[kind])
+    .maybeSingle();
+  return (data?.body as { items?: unknown } | null)?.items ?? [];
+}
+
+async function storeShared(ctx: Ctx, kind: keyof typeof SHARED_KEYS, items: unknown[]) {
+  if (!canManage(ctx.role)) throw new Error("Only owners and admins can change these.");
+  const { error } = await ctx.supabase.rpc("save_config", {
+    p_tenant_id: ctx.tenant.id,
+    p_module: SOCIAL_MODULE,
+    p_key: SHARED_KEYS[kind],
+    p_body: { version: 1, items },
+  });
+  if (error) throw new Error("That could not be saved.");
+}
+
+/** Sections the workspace has kept to use again. */
+export async function loadSavedSections(slug: string): Promise<SavedSection[]> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return [];
+  return normalizeSavedSections(await loadShared(ctx, "sections"));
+}
+
+export async function storeSavedSections(slug: string, list: SavedSection[]): Promise<void> {
+  const ctx = await context(slug);
+  if ("error" in ctx) throw new Error(String(ctx.error));
+  await storeShared(ctx, "sections", normalizeSavedSections(list));
+}
+
+/** Templates the workspace has saved. */
+export async function loadTemplates(slug: string): Promise<EmailTemplate[]> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return [];
+  return normalizeTemplates(await loadShared(ctx, "templates"));
+}
+
+export async function storeTemplates(slug: string, list: EmailTemplate[]): Promise<void> {
+  const ctx = await context(slug);
+  if ("error" in ctx) throw new Error(String(ctx.error));
+  await storeShared(ctx, "templates", normalizeTemplates(list));
+}
+
+/** The workspace's library photos, for the builder's photo picker. */
+export async function listPhotos(
+  slug: string,
+): Promise<{ id: string; url: string; title: string }[]> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return [];
+  const { data } = await ctx.supabase
+    .from("social_assets")
+    .select("id, storage_path, title")
+    .eq("tenant_id", ctx.tenant.id)
+    .eq("hidden", false)
+    .like("mime_type", "image/%")
+    .order("created_at", { ascending: false })
+    .limit(200);
+  return (data ?? []).map((row) => ({
+    id: row.id as string,
+    url: publicAssetUrl(row.storage_path as string),
+    title: (row.title as string) ?? "",
+  }));
+}
