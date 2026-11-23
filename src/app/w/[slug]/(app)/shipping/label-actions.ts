@@ -799,13 +799,23 @@ export async function buyLabel(
     // A plain "no" means nothing was charged, with one exception: several
     // boxes at EasyPost are bought one after another on its side, so even a
     // plain "no" is checked first (a bad key aside: that buys nothing).
-    if (refused && (sourceKey !== "easypost" || kind === "shipment" || !isSourceError(err))) {
+    //
+    // A source that can't be asked afterwards is held to a stricter rule:
+    // only its own clear "no" (or a key it turned away at the door) counts.
+    // Anything we don't recognise might have happened after the money moved.
+    const certainNo = source.canLookUp
+      ? refused && (kind === "shipment" || !isSourceError(err))
+      : (isSourceError(err) && !err.uncertain) || err instanceof ReconnectRequiredError;
+    if (certainNo) {
       await release();
       return { error: `${await explain(err, held.connectionId, sourceKey)} Nothing was bought.` };
     }
     if (!source.canLookUp) {
       // No clear answer, and no way to ask. The order stays locked: a person
       // looks in the account, then says here what they found.
+      if (!isSourceError(err)) {
+        console.error(`${sourceKey} purchase failed`, err instanceof Error ? err.message : err);
+      }
       done(slug);
       return {
         bought: true,

@@ -35,7 +35,9 @@ const request = (parcels: LabelParcel[] = [box]): LabelRequest => ({
 });
 
 type Call = { url: string; method: string; body: string };
-function scripted(answer: (call: Call) => { status?: number; body?: unknown; bytes?: Uint8Array }) {
+function scripted(
+  answer: (call: Call) => { status?: number; body?: unknown; bytes?: Uint8Array<ArrayBuffer> },
+) {
   const calls: Call[] = [];
   const impl = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const call = {
