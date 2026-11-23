@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { FormMessage } from "@/components/ui/form-message";
@@ -57,6 +58,7 @@ export function QueueTable({
   view?: string;
 }) {
   const base = `/w/${slug}/shipping`;
+  const router = useRouter();
   const [ticked, setTicked] = useState<ReadonlySet<string>>(new Set());
   const [holding, setHolding] = useState(false);
   const [note, setNote] = useState("");
@@ -211,7 +213,17 @@ export function QueueTable({
           </thead>
           <tbody className="divide-border divide-y">
             {rows.map((row) => (
-              <tr key={row.id} className={ticked.has(row.id) ? "bg-hover" : "hover:bg-hover/60"}>
+              <tr
+                key={row.id}
+                // Anywhere on the line opens the order; ticks, buttons and links keep their own job.
+                onClick={(event) => {
+                  const target = event.target as HTMLElement;
+                  if (target.closest("a, button, input, label, select, textarea")) return;
+                  if (window.getSelection()?.toString()) return;
+                  router.push(`${base}/orders/${row.id}${view ? `?view=${view}` : ""}`);
+                }}
+                className={`cursor-pointer ${ticked.has(row.id) ? "bg-hover" : "hover:bg-hover/60"}`}
+              >
                 <td className="py-2.5 pl-4 align-top">
                   <input
                     type="checkbox"
