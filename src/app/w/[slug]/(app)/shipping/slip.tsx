@@ -47,8 +47,14 @@ export function PackingSlip({
   workspaceName,
   timeZone,
   currency,
+  code: codeText,
+  from: cameFrom,
 }: {
   order: ShippingOrder;
+  /** What the barcode says, when it isn't the order's own number (orders sent together). */
+  code?: string;
+  /** For orders sent together: which order each line came from, by line id. */
+  from?: ReadonlyMap<string, string>;
   settings: ShippingSettings;
   layout: SlipLayout;
   workspaceName: string;
@@ -63,7 +69,7 @@ export function PackingSlip({
   const placed = new Intl.DateTimeFormat("en-US", { timeZone, dateStyle: "long" }).format(
     new Date(order.placed_at),
   );
-  const code = (order.name ?? "").replace(/^#/, "").trim();
+  const code = (codeText ?? order.name ?? "").replace(/^#/, "").trim();
   const to = addressLines(order, settings.ship_from_country);
   const priced = layout.show_price && items.some((item) => item.price != null);
 
@@ -108,6 +114,11 @@ export function PackingSlip({
               <td className="font-read py-2">
                 {item.title}
                 {item.variant && <span className="block text-[0.85em]">{item.variant}</span>}
+                {cameFrom?.has(item.line_id) && (
+                  <span className="block text-[0.85em] font-semibold tabular-nums">
+                    Order {cameFrom.get(item.line_id)}
+                  </span>
+                )}
                 {item.left < item.qty && (
                   <span className="block text-[0.85em]">
                     {item.qty - item.left} of {item.qty} already sent

@@ -246,10 +246,24 @@ export async function voidParcel(
   if (!UUID.test(shipmentId)) return { error: OOPS };
   const { data: parcel } = await ctx.supabase
     .from("shipments")
-    .select("label_provider, label_shipment_id, label_parcels, voided_at")
+    .select("label_provider, label_shipment_id, label_parcels, voided_at, merged_with")
     .eq("tenant_id", ctx.tenant.id)
     .eq("id", shipmentId)
     .maybeSingle();
+  // Orders sent together are undone together, from the parcel that carries the label.
+  if (parcel?.merged_with && !parcel.voided_at) {
+    return {
+      error:
+        "This order went out in another order's parcel. Undo that parcel instead and every order in it comes back.",
+    };
+  }
+  const { count: riders } = await ctx.supabase
+    .from("shipments")
+    .select("id", { count: "exact", head: true })
+    .eq("tenant_id", ctx.tenant.id)
+    .eq("merged_with", shipmentId)
+    .is("voided_at", null);
+  const together = (riders ?? 0) > 0;
   const label =
     parcel && !parcel.voided_at && parcel.label_provider === "easypost"
       ? (parcel.label_shipment_id as string | null)
@@ -300,8 +314,11 @@ export async function voidParcel(
     };
   }
   done(slug);
-  const shop =
-    data === "sent"
+  const shop = together
+    ? data === "sent"
+      ? " Every order that went in it is back on your to-send list. Your shop still shows at least one of them as sent, so cancel those fulfilments there too."
+      : " Every order that went in it is back on your to-send list."
+    : data === "sent"
       ? " Your shop still shows it as sent, so cancel the fulfilment there too."
       : " Its items are back on the to-send list.";
   return {

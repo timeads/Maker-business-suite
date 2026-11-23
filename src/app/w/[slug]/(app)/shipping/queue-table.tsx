@@ -9,6 +9,7 @@ import { FormMessage } from "@/components/ui/form-message";
 import { Input, Label } from "@/components/ui/input";
 import { holdOrders, markPickupReady, releaseOrders, type ShippingState } from "./actions";
 import { HoldPicker, type HoldChoice } from "./hold-picker";
+import { useShipTogether } from "./together-ui";
 
 export type QueueRow = {
   id: string;
@@ -73,6 +74,12 @@ export function QueueTable({
   const toHold = picked.some((row) => row.hold !== "held");
   const toRelease = picked.some((row) => row.hold !== "none");
   const allTicked = tickable.length > 0 && picked.length === tickable.length;
+  // One parcel for several orders: only ones that are posted, and not set aside.
+  const together = useShipTogether(slug);
+  const canGoTogether =
+    picked.length >= 2 &&
+    picked.length <= 10 &&
+    picked.every((row) => !row.pickup && row.hold !== "held");
 
   const toggle = (id: string) =>
     setTicked((before) => {
@@ -140,6 +147,17 @@ export function QueueTable({
                 Release
               </Button>
             )}
+            {canGoTogether && canWrite && (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={together.pending}
+                title="One parcel and one label for these orders (same name and address)"
+                onClick={() => together.open(ids)}
+              >
+                {together.pending ? "Opening…" : "Ship together"}
+              </Button>
+            )}
             <Button asChild size="sm">
               <Link href={`${base}/slips?ids=${ids.slice(0, 150).join(",")}`}>Packing slips</Link>
             </Button>
@@ -182,8 +200,9 @@ export function QueueTable({
           )}
         </div>
       )}
-      <FormMessage>{result.error}</FormMessage>
+      <FormMessage>{result.error ?? together.error}</FormMessage>
       <FormMessage kind="success">{result.message}</FormMessage>
+      {together.dialog}
 
       <div className="bg-card border-border overflow-x-auto rounded-lg border">
         <table className="w-full min-w-[980px] text-sm">

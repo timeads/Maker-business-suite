@@ -36,12 +36,13 @@ import {
   type ShipToEdit,
   type SavedBox,
 } from "@/lib/shipping/labels";
-import { isInternational } from "@/lib/shipping/queue";
+import { groupName, parseWith } from "@/lib/shipping/merge";
+import { isInternational, todayIn } from "@/lib/shipping/queue";
 import { getAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
 import type { ShippingState } from "./actions";
-import { BOX_FIELDS, ORDER_FIELDS, loadShippingSetup, type ShippingOrder } from "./data";
+import { BOX_FIELDS, ORDER_FIELDS, loadGroup, loadShippingSetup, type ShippingOrder } from "./data";
 
 export type RatesState = { error?: string; rates?: RateChoice[] };
 /** `bought`: money was spent. The screen must stop offering to buy. */
@@ -212,7 +213,12 @@ export type RatesInput = {
   residential?: boolean;
   /** "none", "signature" or "adult". */
   signature?: string;
+  /** Other orders going in the same parcel; this order must be the oldest of them. */
+  withIds?: string[];
 };
+
+const TOGETHER_CHANGED =
+  "These orders can't go together any more. Go back to Shipping and open them again.";
 
 /**
  * Asks EasyPost what this order would cost to send. Both addresses come from
@@ -243,6 +249,25 @@ export async function getLabelRates(
   if (stored.cancelled) return { error: "This order was cancelled, so there's nothing to send." };
   if (stored.units_left <= 0) return { error: "Everything on this order has already been sent." };
   const home = setup.settings.ship_from_country;
+  // Several orders in one parcel: checked again here, and again when buying.
+  const riders = parseWith((Array.isArray(input.withIds) ? input.withIds : []).join(","), orderId);
+  let reference = stored.name ?? undefined;
+  if (riders.length > 0) {
+    const group = await loadGroup(
+      ctx.supabase,
+      ctx.tenant.id,
+      [stored.id, ...riders],
+      todayIn(ctx.tenant.timezone, new Date()),
+    );
+    if (!group.check.ok) {
+      return {
+        error: group.check.reason === "mismatch" ? TOGETHER_CHANGED : group.check.message,
+      };
+    }
+    // The label goes on the oldest order, with its address.
+    if (group.orders[0].id !== stored.id) return { error: TOGETHER_CHANGED };
+    reference = groupName(group.orders);
+  }
   if (isInternational(stored.country_code, home)) return { error: INTERNATIONAL };
   // What a person changed on the screen goes on this label and nowhere else.
   const order = withShipToEdit(stored, input.shipTo);
@@ -304,7 +329,7 @@ export async function getLabelRates(
         ...(typeof input.residential === "boolean" ? { residential: input.residential } : {}),
       },
       parcels: parsed.parcels,
-      reference: stored.name ?? undefined,
+      reference,
       signature: isSignature(input.signature) ? input.signature : "none",
     });
     if (quote.rates.length === 0) {
@@ -316,7 +341,7 @@ export async function getLabelRates(
       };
     }
     // Only prices and EasyPost's own ids are kept: no address.
-    const { error } = await getAdminClient().rpc("save_label_quote", {
+    const { error } = await getAdminClient().rpc("save_group_label_quote", {
       p_tenant_id: ctx.tenant.id,
       p_shipping_order_id: stored.id,
       p_created_by: ctx.user.id,
@@ -324,6 +349,8 @@ export async function getLabelRates(
       p_rates: quote.rates,
       p_kind: quote.kind,
       p_boxes: quote.boxes,
+      // Which orders these prices are for; only this exact set can buy them.
+      p_rider_ids: riders,
     });
     if (error) {
       console.error("could not save label quote", error.message);
@@ -400,6 +427,27 @@ const CLAIM_ERRORS: [match: string, message: string][] = [
     "A label for this order was bought a moment ago. Reload this page to see it before buying another.",
   ],
   ["not quoted", "Those rates have run out. Press Get rates again, then choose one."],
+  // Several orders going together.
+  [
+    "is on hold",
+    "One of these orders has been put on hold, so they can't go together right now. Nothing was bought.",
+  ],
+  [
+    "in-store pickup",
+    "One of these orders is now an in-store pickup, so they can't go together. Nothing was bought.",
+  ],
+  [
+    "no shipping address",
+    "One of these orders has lost its shipping address. Check it in your shop. Nothing was bought.",
+  ],
+  [
+    "ADDRESS_MISMATCH",
+    "These orders no longer go to the same address. Go back to Shipping and open them together again to check. Nothing was bought.",
+  ],
+  [
+    "oldest of these orders",
+    "These orders have changed since you opened them. Go back to Shipping and open them together again. Nothing was bought.",
+  ],
 ];
 
 /** Keeps a paid-for label's details; tried twice, because losing them matters. */
@@ -455,6 +503,8 @@ export async function buyLabel(
   rateId: string,
   /** The two ticks beside the button; left out, the workspace's settings decide. */
   shop?: { markSent: boolean; notify: boolean },
+  /** Other orders going in the same parcel, exactly as they were when rates were asked for. */
+  withIds?: string[],
 ): Promise<BuyState> {
   const ctx = await context(slug);
   if ("error" in ctx) return { error: ctx.error };
@@ -463,13 +513,27 @@ export async function buyLabel(
   }
   const setup = await loadShippingSetup(ctx.supabase, ctx.tenant.id);
 
-  const { data: claimed, error: claimError } = await ctx.supabase.rpc("claim_label_purchase", {
-    p_shipping_order_id: orderId,
-    p_rate_id: rateId,
-  });
+  // With other orders riding along, every one of them is locked and checked
+  // in the database before anything is bought.
+  const riders = parseWith((Array.isArray(withIds) ? withIds : []).join(","), orderId);
+  const { data: claimed, error: claimError } =
+    riders.length > 0
+      ? await ctx.supabase.rpc("claim_group_label_purchase", {
+          p_shipping_order_id: orderId,
+          p_rider_ids: riders,
+          p_rate_id: rateId,
+        })
+      : await ctx.supabase.rpc("claim_label_purchase", {
+          p_shipping_order_id: orderId,
+          p_rate_id: rateId,
+        });
   if (claimError || !claimed) {
     const known = CLAIM_ERRORS.find(([match]) => claimError?.message.includes(match));
-    return { error: known ? known[1] : "We couldn't start that purchase. Nothing was bought." };
+    const message = known ? known[1] : "We couldn't start that purchase. Nothing was bought.";
+    return {
+      error:
+        riders.length > 0 ? message.replace(/\bthis order\b/g, "one of these orders") : message,
+    };
   }
   const claim = claimed as Claim;
   const kind: LabelKind = isLabelKind(claim.kind) ? claim.kind : "shipment";
@@ -547,7 +611,7 @@ export async function buyLabel(
     console.error("could not record label parcel", recordError.message);
     return {
       bought: true,
-      error: `Your label WAS bought${tracked(label)} and is saved on this order, but recording the parcel didn't go through. Please don't buy another. Reload this page: the label is under "Labels to finish", where you can print it and finish recording.`,
+      error: `Your label WAS bought${tracked(label)} and is saved on ${riders.length > 0 ? "the first of these orders" : "this order"}, but recording the parcel didn't go through. Please don't buy another. Reload this page: the label is under "Labels to finish", where you can print it and finish recording.`,
     };
   }
   redirect(`/w/${slug}/shipping/orders/${orderId}?label=${number as number}`);

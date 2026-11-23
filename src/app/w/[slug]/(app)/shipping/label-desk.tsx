@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { Check, Plus, Printer, RefreshCw, TriangleAlert } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -123,6 +123,7 @@ function leftOver(paidCents: number | null, price: string, currency: string) {
 export function LabelDesk({
   slug,
   orderId,
+  withIds,
   shipTo,
   country,
   boxes,
@@ -137,6 +138,8 @@ export function LabelDesk({
 }: {
   slug: string;
   orderId: string;
+  /** Other orders going in this parcel; one label covers them all. */
+  withIds?: string[];
   shipTo: ShipToEdit;
   country: string;
   /** The usual box first. */
@@ -216,6 +219,9 @@ export function LabelDesk({
     setError(null);
   };
 
+  // One steady list, so asking for rates doesn't start over on every render.
+  const withKey = (withIds ?? []).join(",");
+  const together = useMemo(() => (withKey ? withKey.split(",") : undefined), [withKey]);
   type Ask = { to: ShipToEdit; residential: boolean; signature: Signature };
   const quote = useCallback(
     (ask: Ask, parcels: Pick<Packed, "boxId" | "size" | "weight">[]) =>
@@ -231,6 +237,7 @@ export function LabelDesk({
           shipTo: ask.to,
           residential: ask.residential,
           signature: ask.signature,
+          withIds: together,
         });
         if (result.error || !result.rates) {
           setRates(null);
@@ -240,7 +247,7 @@ export function LabelDesk({
         setRates(result.rates);
         setChosen(result.rates[0]?.id ?? "");
       }),
-    [slug, orderId],
+    [slug, orderId, together],
   );
   const quoteNow = () => quote({ to, residential, signature }, packed);
 
@@ -413,7 +420,7 @@ export function LabelDesk({
     sent.current = true;
     startBuy(async () => {
       setError(null);
-      const result = await buyLabel(slug, orderId, chosen, { markSent, notify });
+      const result = await buyLabel(slug, orderId, chosen, { markSent, notify }, together);
       // On success the page moves on to the finished label; there is no result.
       if (!result) return;
       if (result.bought) {
@@ -424,7 +431,7 @@ export function LabelDesk({
       }
       setError(result.error ?? "Something went wrong. Reload this page before trying again.");
     });
-  }, [slug, orderId, chosen, locked, markSent, notify, packed, lines]);
+  }, [slug, orderId, together, chosen, locked, markSent, notify, packed, lines]);
 
   // Ctrl+P (or ⌘P) buys and prints, the way it does on the bench.
   useEffect(() => {
@@ -530,7 +537,9 @@ export function LabelDesk({
                 disabled={!shop.offered || busy || locked}
                 onChange={(event) => setMarkSent(event.target.checked)}
               />
-              Mark the order as sent in my shop
+              {together
+                ? "Mark every one of these orders as sent in my shop"
+                : "Mark the order as sent in my shop"}
             </label>
             <label className="flex items-center gap-2">
               <input

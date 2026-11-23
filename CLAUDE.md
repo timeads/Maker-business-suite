@@ -195,6 +195,16 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   layout is a config (`slip_layout`); its barcode (`code128.ts`) is what
   Scan & pack reads. Packing details are asked of the shop ten orders at a
   time, and without delivery methods if the shop won't share them.
+  Ship together: orders for the same person and address can go on one label
+  (`lib/shipping/merge.ts`; the database has the same address rule in
+  `private.shipping_address_key`, and a test keeps the two in step). The
+  label is bought on the oldest order (`/orders/[id]?with=`), its quote
+  remembers the others (`rider_ids`), `claim_group_label_purchase` locks and
+  checks every order, and `record_label_shipment` writes one `shipments` row
+  per order in one transaction (riders point at the label's parcel with
+  `merged_with`, carry no cost, and are undone only by voiding that parcel).
+  `shipping_groups` holds only what people decided before buying (saved,
+  "not now", approved as one place).
 - Code with no signed-in member (public pages, the worker) asks
   `moduleOpen()` in `lib/module-access.ts`, which uses the same resolver as
   `getEntitlements()`.

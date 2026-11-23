@@ -34,6 +34,8 @@ type Parcel = {
   label_url: string | null;
   label_mode: string | null;
   label_refund_status: string | null;
+  /** On an order that went in another order's parcel: that parcel. */
+  merged_with: string | null;
 };
 
 /** Worked out in the database (`shipping_report`), so the sums are exact. */
@@ -67,7 +69,7 @@ export default async function SentParcelsPage({
     supabase
       .from("shipments")
       .select(
-        "id, number, order_name, recipient, destination, carrier, service, tracking_number, tracking_url, cost, shipped_at, voided_at, shop_status, shop_error, label_provider, label_url, label_mode, label_refund_status",
+        "id, number, order_name, recipient, destination, carrier, service, tracking_number, tracking_url, cost, shipped_at, voided_at, shop_status, shop_error, label_provider, label_url, label_mode, label_refund_status, merged_with",
       )
       .eq("tenant_id", tenant.id)
       .order("number", { ascending: false })
@@ -76,6 +78,8 @@ export default async function SentParcelsPage({
     supabase.rpc("shipping_report", { p_tenant_id: tenant.id, p_days: range }),
   ]);
   const parcels = (data ?? []) as Parcel[];
+  // An order that went in another order's parcel points at it.
+  const numberOf = new Map(parcels.map((parcel) => [parcel.id, parcel.number]));
   const report = (reported ?? null) as Report | null;
   const money = (value: number) => formatMoney(Number(value), tenant.currency);
   const home = setup.settings.ship_from_country;
@@ -233,6 +237,15 @@ export default async function SentParcelsPage({
                             {parcel.order_name}
                           </span>
                         )}
+                        {parcel.merged_with && (
+                          <span className="text-muted-foreground block text-xs">
+                            went in parcel{" "}
+                            {numberOf.get(parcel.merged_with) ?? "with another order"}
+                          </span>
+                        )}
+                        {!parcel.merged_with && parcel.order_name?.includes(" + ") && (
+                          <span className="text-muted-foreground block text-xs">sent together</span>
+                        )}
                       </td>
                       <td className="py-2.5 pr-3">
                         <span className="font-read">{parcel.recipient ?? "–"}</span>
@@ -302,7 +315,8 @@ export default async function SentParcelsPage({
                       </td>
                       {manager && (
                         <td className="py-2.5 text-right">
-                          {!parcel.voided_at && (
+                          {/* An order that rode along is undone from the parcel it went in. */}
+                          {!parcel.voided_at && !parcel.merged_with && (
                             <VoidButton
                               slug={tenant.slug}
                               shipmentId={parcel.id}

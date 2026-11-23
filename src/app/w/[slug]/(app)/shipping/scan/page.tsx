@@ -6,7 +6,14 @@ import { countryName } from "@/lib/shipping/carriers";
 import { formatHoldDate, holdState, todayIn } from "@/lib/shipping/queue";
 import { orderCode } from "@/lib/shipping/scan";
 import { createClient } from "@/lib/supabase/server";
-import { ORDER_FIELDS, loadShippingSetup, placeOf, type ShippingOrder } from "../data";
+import { groupHref } from "@/lib/shipping/merge";
+import {
+  ORDER_FIELDS,
+  loadKnownGroup,
+  loadShippingSetup,
+  placeOf,
+  type ShippingOrder,
+} from "../data";
 import { shippingAccess } from "../gate";
 import { ShippingTabs } from "../tabs";
 import { PackStation, type PackOrder } from "./pack-station";
@@ -48,6 +55,11 @@ export default async function ScanPage({
   const today = todayIn(tenant.timezone, new Date(daysFromNow(0)));
   const home = setup.settings.ship_from_country;
   const held = row && !row.cancelled && !row.picked_up_at && holdState(row, today) === "held";
+  // Saved (or approved) to go out with other orders: the label is bought for them all at once.
+  const waitingWith =
+    row && !row.cancelled && row.units_left > 0
+      ? await loadKnownGroup(supabase, tenant.id, row.id, today)
+      : null;
   const order: PackOrder | null = row
     ? {
         id: row.id,
@@ -94,6 +106,22 @@ export default async function ScanPage({
           <Link href={`${base}/sent`} className="font-semibold underline underline-offset-2">
             See what&apos;s been sent
           </Link>
+        </p>
+      )}
+      {row && waitingWith && (
+        <p role="status" className="bg-note rounded-md px-4 py-2.5 text-sm">
+          {row.name ?? "This order"} is going out together with{" "}
+          <span className="font-semibold tabular-nums">
+            {waitingWith.names.filter((_, index) => waitingWith.ids[index] !== row.id).join(" + ")}
+          </span>
+          , on one label.{" "}
+          <Link
+            href={groupHref(base, waitingWith.ids)}
+            className="font-semibold underline underline-offset-2"
+          >
+            Open them together
+          </Link>{" "}
+          to pack and buy it. Recording a parcel here would send this order on its own.
         </p>
       )}
       <PackStation

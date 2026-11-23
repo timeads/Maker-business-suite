@@ -229,6 +229,32 @@ export const HELP_TOPICS: HelpTopic[] = [
     ],
   },
   {
+    slug: "ship-together",
+    group: "shipping",
+    title: "Send several orders together",
+    summary: "One box and one label for orders going to the same person and address.",
+    intro:
+      "When a customer orders twice before you've packed, the orders can share a parcel. You buy one label, and each order is still marked as sent on its own.",
+    steps: [
+      "Open Shipping. When two or more orders are waiting for the same person at the same address, a “Ship together?” line appears above the list. Press “Ship together”, or “Not now” to leave them apart.",
+      "Or pick them yourself: tick two to ten orders and press “Ship together”.",
+      "If the addresses don't read exactly the same, you're shown both. Say yes only if they really are one place: the label goes to the oldest order's address.",
+      "The orders open as one, named like “#1042 + #1055”, with every item marked with the order it came from. Pick boxes and get rates as usual.",
+      "Press “Buy & print label”. Every order is recorded as sent with the same carrier and tracking number.",
+    ],
+    notes: [
+      "Small spelling differences don't matter: “12 Oak Street, Apt 3” and “12 OAK ST #3” count as the same address. Email isn't compared.",
+      "Orders on hold, for pickup, still waiting on payment or already sent aren't suggested. A part-sent order joins in with what's left.",
+      "“Not now” hides a suggestion until another order comes in for that address.",
+      "Not buying yet? Press “Save for later” and the orders wait together at the top of the list for whoever buys the label. “Separate” sends them back to their own rows.",
+      "“One packing slip” prints a single slip listing everything, with each line's order number.",
+      "What your customer paid for shipping is added up across the orders, so the rates show what's really left over. A signature rule looks at the orders' combined total too.",
+      "If your shop is told when parcels go, each order is marked as sent there, so your customer gets one email per order with the same tracking.",
+      "Voiding the label (owners and admins) undoes every order in the parcel at once.",
+      "Sending part of an order and putting orders on hold aren't offered while orders are open together. Open one on its own for those.",
+    ],
+  },
+  {
     slug: "pickup",
     group: "shipping",
     title: "Orders the customer collects",

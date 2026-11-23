@@ -6,6 +6,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { daysFromNow } from "@/lib/bookings/slots";
 import { formatMoney } from "@/lib/dashboard/format";
 import { countryName, hasAddress } from "@/lib/shipping/carriers";
+import { dismissedKeys, liveSavedGroups, mergeSuggestions } from "@/lib/shipping/merge";
 import {
   QUEUE_VIEWS,
   cleanSearch,
@@ -27,6 +28,7 @@ import { cn } from "@/lib/utils";
 import {
   ORDER_FIELDS,
   itemsSummary,
+  loadGroups,
   loadOpenOrders,
   loadShippingSetup,
   placeOf,
@@ -35,8 +37,12 @@ import {
 import { shippingAccess } from "./gate";
 import { QueueTable, type QueueRow } from "./queue-table";
 import { ShippingTabs } from "./tabs";
+import { TogetherBanners, type TogetherGroup } from "./together-ui";
 
 export const metadata: Metadata = { title: "Shipping" };
+
+/** The queues where orders are posted, so where "Ship together?" is worth asking. */
+const TOGETHER_VIEWS: QueueView[] = ["ready", "priority", "international", "all"];
 
 /** More rows than this on one screen helps nobody; the chips and the search narrow it. */
 const MOST_SHOWN = 300;
@@ -69,9 +75,10 @@ export default async function ShippingPage({
   const q = cleanSearch(query.q);
 
   const supabase = await createClient();
-  const [open, setup, found] = await Promise.all([
+  const [open, setup, groups, found] = await Promise.all([
     loadOpenOrders(supabase, tenant.id),
     loadShippingSetup(supabase, tenant.id),
+    loadGroups(supabase, tenant.id),
     q
       ? supabase
           .from("shipping_orders")
@@ -98,6 +105,20 @@ export default async function ShippingPage({
     month: "short",
     day: "numeric",
   });
+  // Orders that could share a box, and groups someone saved to finish.
+  const offerTogether = !q && TOGETHER_VIEWS.includes(view);
+  const savedTogether: TogetherGroup[] = offerTogether
+    ? liveSavedGroups(groups, open, today).map(({ savedAt, ...group }) => ({
+        ...group,
+        saved: `saved ${day.format(new Date(savedAt))}`,
+      }))
+    : [];
+  const savedKeys = new Set(savedTogether.map((group) => group.key));
+  const suggested: TogetherGroup[] = offerTogether
+    ? mergeSuggestions(open, dismissedKeys(groups), today).filter(
+        (group) => !savedKeys.has(group.key),
+      )
+    : [];
   const rows: QueueRow[] = shown.map((order) => {
     const stillOpen = isOpen(order);
     const hold = stillOpen ? holdState(order, today) : "none";
@@ -138,7 +159,7 @@ export default async function ShippingPage({
     <>
       <PageHeader
         title="Shipping"
-        description="What's waiting to go out, oldest first. Tick orders to print their slips or set them aside; open one to pack it and record its tracking."
+        description="What's waiting to go out, oldest first. Tick orders to print their slips, set them aside or ship them together; open one to pack it and record its tracking."
       >
         {counts.ready > 0 && (
           <Button asChild variant="outline" size="sm">
@@ -203,6 +224,15 @@ export default async function ShippingPage({
             Clear the search
           </Link>
         </p>
+      )}
+
+      {(savedTogether.length > 0 || suggested.length > 0) && (
+        <TogetherBanners
+          slug={tenant.slug}
+          suggestions={suggested}
+          saved={savedTogether}
+          canWrite={entitlements.canWrite}
+        />
       )}
 
       {rows.length === 0 ? (

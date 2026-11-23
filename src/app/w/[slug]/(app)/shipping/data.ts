@@ -8,6 +8,13 @@ import {
   parseSlipLayout,
 } from "@/lib/shipping/config";
 import type { SavedBox } from "@/lib/shipping/labels";
+import {
+  checkGroup,
+  isApproved,
+  knownGroupOf,
+  type GroupCheck,
+  type StoredGroup,
+} from "@/lib/shipping/merge";
 import type { QueueFacts } from "@/lib/shipping/queue";
 
 export type ShippingOrder = {
@@ -145,10 +152,66 @@ export async function loadUnfinishedLabels(
       "id, status, carrier, service, tracking_number, label_url, label_mode, buying_at, box_count, parcels",
     )
     .eq("tenant_id", tenantId)
-    .eq("shipping_order_id", orderId)
+    // On the order the label was bought on, or on one that is riding along with it.
+    .or(`shipping_order_id.eq.${orderId},rider_ids.cs.{${orderId}}`)
     .in("status", ["buying", "bought"])
     .order("buying_at");
   return (data ?? []) as unknown as UnfinishedLabel[];
+}
+
+/** What people have decided about orders going together: saved, "not now", approved. */
+export async function loadGroups(
+  supabase: SupabaseClient,
+  tenantId: string,
+): Promise<StoredGroup[]> {
+  const { data } = await supabase
+    .from("shipping_groups")
+    .select("order_ids, saved_at, dismissed_at, approved_at")
+    .eq("tenant_id", tenantId)
+    .order("created_at", { ascending: false })
+    .limit(1000);
+  return (data ?? []) as unknown as StoredGroup[];
+}
+
+export type Sale = {
+  net_sales: number | string;
+  total_tax: number | string;
+  total_shipping: number | string;
+  total: number | string;
+};
+export type OrderWithSale = ShippingOrder & {
+  sale?: Sale | Sale[] | null;
+  external_id?: string;
+  provider?: string;
+};
+export const ORDER_WITH_SALE = `${ORDER_FIELDS}, external_id, provider, sale:orders(net_sales, total_tax, total_shipping, total)`;
+
+/**
+ * The orders someone wants to send together, checked: all there, all still
+ * waiting, and going to one place (or approved as one). Oldest first when ok.
+ */
+export async function loadGroup(
+  supabase: SupabaseClient,
+  tenantId: string,
+  ids: string[],
+  today: string,
+): Promise<{ check: GroupCheck; orders: OrderWithSale[] }> {
+  const wanted = [...new Set(ids)].slice(0, 20);
+  const [{ data }, groups] = await Promise.all([
+    supabase
+      .from("shipping_orders")
+      .select(ORDER_WITH_SALE)
+      .eq("tenant_id", tenantId)
+      .in("id", wanted),
+    loadGroups(supabase, tenantId),
+  ]);
+  const found = (data ?? []) as unknown as OrderWithSale[];
+  const check = checkGroup(ids, found, isApproved(groups, ids), today);
+  const byId = new Map(found.map((order) => [order.id, order]));
+  return {
+    check,
+    orders: check.ok ? check.orders.map((order) => byId.get(order.id)!) : [],
+  };
 }
 
 /** "2 × Wool rug (Large), 3 × Yarn bundle" for what's still to go. */
@@ -229,3 +292,32 @@ export const placeOf = (
   ]
     .filter(Boolean)
     .join(", ");
+
+/**
+ * The group an order is waiting in (saved, or approved as one place) if it
+ * can still go, oldest first. Null for an order on its own.
+ */
+export async function loadKnownGroup(
+  supabase: SupabaseClient,
+  tenantId: string,
+  orderId: string,
+  today: string,
+): Promise<{ ids: string[]; names: string[] } | null> {
+  const groups = (await loadGroups(supabase, tenantId)).filter(
+    (group) => (group.saved_at || group.approved_at) && group.order_ids.includes(orderId),
+  );
+  if (groups.length === 0) return null;
+  const ids = [...new Set(groups.flatMap((group) => group.order_ids))].slice(0, 200);
+  const { data } = await supabase
+    .from("shipping_orders")
+    .select(ORDER_FIELDS)
+    .eq("tenant_id", tenantId)
+    .in("id", ids);
+  const orders = (data ?? []) as unknown as ShippingOrder[];
+  const found = knownGroupOf(orderId, groups, orders, today);
+  if (!found) return null;
+  return {
+    ids: found,
+    names: found.map((id) => orders.find((order) => order.id === id)?.name ?? "Order"),
+  };
+}
