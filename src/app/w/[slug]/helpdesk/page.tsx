@@ -72,7 +72,7 @@ export default async function HelpdeskPage({
   if (!access.ok) {
     return (
       <main className="flex-1 px-4 pt-6 pb-24 md:px-8 md:pt-8">
-        <div className="mx-auto flex max-w-5xl flex-col gap-6">{access.upsell}</div>
+        <div className="flex w-full flex-col gap-6">{access.upsell}</div>
       </main>
     );
   }

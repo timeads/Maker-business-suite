@@ -102,6 +102,9 @@ export type StockItemRow = {
   unit_cost: number | null;
   tracked: boolean;
   product_status: string | null;
+  /** Who the shop says it comes from; becomes a supplier. */
+  vendor: string | null;
+  price: number | null;
 };
 
 /** What packing an order needs: who it's for and what is left to send. */

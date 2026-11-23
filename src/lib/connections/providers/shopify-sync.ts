@@ -309,7 +309,13 @@ type ShopifyVariant = {
   title: string;
   sku: string | null;
   inventoryQuantity: number | null;
-  product: { legacyResourceId: string; title: string; status: string | null } | null;
+  price?: string | null;
+  product: {
+    legacyResourceId: string;
+    title: string;
+    status: string | null;
+    vendor?: string | null;
+  } | null;
   inventoryItem: { id: string; tracked: boolean; unitCost: { amount: string } | null } | null;
 };
 
@@ -317,8 +323,8 @@ const VARIANTS_QUERY = `query Variants($first: Int!, $after: String) {
   productVariants(first: $first, after: $after) {
     pageInfo { hasNextPage endCursor }
     nodes {
-      legacyResourceId title sku inventoryQuantity
-      product { legacyResourceId title status }
+      legacyResourceId title sku inventoryQuantity price
+      product { legacyResourceId title status vendor }
       inventoryItem { id tracked unitCost { amount } }
     }
   }
@@ -340,6 +346,8 @@ export function mapShopifyVariants(variants: ShopifyVariant[]): StockItemRow[] {
       unit_cost: cost == null ? null : Number(cost),
       tracked: variant.inventoryItem?.tracked ?? false,
       product_status: variant.product?.status ?? null,
+      vendor: variant.product?.vendor?.trim() || null,
+      price: variant.price == null || variant.price === "" ? null : Number(variant.price),
     };
   });
 }

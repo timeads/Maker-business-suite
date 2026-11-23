@@ -315,6 +315,8 @@ describe("Shopify sync", () => {
         unit_cost: 60,
         tracked: true,
         product_status: "ACTIVE",
+        vendor: null,
+        price: null,
       },
       expect.objectContaining({ external_id: "v2", variant_title: null, sku: null }),
     ]);

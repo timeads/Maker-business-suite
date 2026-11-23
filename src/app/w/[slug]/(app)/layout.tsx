@@ -2,7 +2,7 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 
 /**
- * The padded, centred column most workspace pages sit in. Tools that need
+ * The padded column most workspace pages sit in, as wide as the window. Tools that need
  * the whole window (Messages) live beside this group instead of inside it.
  */
 export default async function PaddedLayout({ children }: { children: React.ReactNode }) {
@@ -12,7 +12,7 @@ export default async function PaddedLayout({ children }: { children: React.React
 
   return (
     <main className="min-w-0 flex-1 px-4 pt-6 pb-24 md:px-8 md:pt-8 md:pb-12">
-      <div className="mx-auto flex max-w-5xl flex-col gap-6">
+      <div className="flex w-full flex-col gap-6">
         {inviteCount > 0 && (
           <p role="status" className="border-border bg-muted rounded-md border px-3 py-2 text-sm">
             You&apos;ve been invited to{" "}

@@ -184,6 +184,59 @@ describe("syncing stock items", () => {
     });
   });
 
+  it("the shop's vendors come in as suppliers, without undoing a choice made by hand", async () => {
+    const batch = [
+      { external_id: "v-1", title: "Loop pile yarn", on_hand: 4, vendor: " Karida Mills " },
+      { external_id: "v-2", title: "Cut pile yarn", on_hand: 9, vendor: "Karida Mills" },
+      { external_id: "v-3", title: "Backing cloth", on_hand: 2, vendor: "Loom & Co", price: 18.5 },
+      { external_id: "v-4", title: "Gift card", on_hand: 0, vendor: "" },
+    ];
+    const sync = () =>
+      service("select public.upsert_stock_items($1, 'shopify', $2::jsonb)", [
+        tenantA,
+        JSON.stringify(batch),
+      ]);
+    await sync();
+    await sync();
+    const made = await as<{ name: string }>(
+      alice,
+      "select name from public.suppliers where name in ('Karida Mills', 'Loom & Co') order by name",
+    );
+    expect(made).toEqual([{ name: "Karida Mills" }, { name: "Loom & Co" }]);
+    const filed = await as<{ external_id: string; supplier: string | null; price: string | null }>(
+      alice,
+      `select si.external_id, s.name as supplier, si.price from public.stock_items si
+       left join public.suppliers s on s.id = si.supplier_id
+       where si.external_id like 'v-%' order by si.external_id`,
+    );
+    expect(filed.map((row) => row.supplier)).toEqual([
+      "Karida Mills",
+      "Karida Mills",
+      "Loom & Co",
+      null,
+    ]);
+    expect(Number(filed[2].price)).toBe(18.5);
+
+    // Someone moves an item to another supplier: the next sync leaves it there.
+    await db.query(
+      "update public.stock_items set supplier_id = $1 where tenant_id = $2 and external_id = 'v-1'",
+      [supplierA, tenantA],
+    );
+    await sync();
+    const { rows } = await db.query<{ supplier_id: string }>(
+      "select supplier_id from public.stock_items where tenant_id = $1 and external_id = 'v-1'",
+      [tenantA],
+    );
+    expect(rows[0].supplier_id).toBe(supplierA);
+    // None of it reaches the other workspace.
+    expect(
+      await as(
+        bob,
+        "select name from public.suppliers where name in ('Karida Mills', 'Loom & Co')",
+      ),
+    ).toEqual([]);
+  });
+
   it("counts sales per item per local day, by SKU or by product and option", async () => {
     const order = (id: string, at: string, lines: object[], extra: object = {}) => ({
       external_id: id,
