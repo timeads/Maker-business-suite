@@ -160,6 +160,12 @@ export default async function ConnectionsPage({
                     )}
                   </dl>
                 )}
+                {live && row?.metadata?.watch_only === true && (
+                  <p className="bg-teal-soft text-teal-soft-ink w-fit rounded-md px-3 py-2 text-sm font-medium">
+                    Watch only: nothing in your store can be changed from here. Connect again and
+                    choose the other option when you want orders marked sent or stock added.
+                  </p>
+                )}
                 {live && testKey && (
                   <p className="bg-ochre-soft text-ochre-text w-fit rounded-md px-3 py-2 text-sm font-medium">
                     Test mode: labels are not real. Connect again for real ones when you&apos;re

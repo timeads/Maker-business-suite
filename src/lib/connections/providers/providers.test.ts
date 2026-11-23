@@ -121,6 +121,37 @@ describe("Shopify adapter", () => {
     },
   };
 
+  it("watch only asks the store for nothing that could change it", () => {
+    const before = process.env.SHOPIFY_EXTRA_SCOPES;
+    process.env.SHOPIFY_EXTRA_SCOPES =
+      "read_all_orders, write_inventory, read_locations, write_merchant_managed_fulfillment_orders";
+    try {
+      const adapter = createShopifyAdapter(fakeFetch([]).impl);
+      const asked = (access: string) => {
+        const input: Record<string, string> = { shop: "wild-thread", access };
+        const url = new URL(adapter.beginConnect({ state: "s", redirectUri: "x", input }));
+        return { scopes: (url.searchParams.get("scope") ?? "").split(","), input };
+      };
+      const watch = asked("read");
+      expect(watch.scopes).toEqual(
+        expect.arrayContaining(["read_orders", "read_all_orders", "read_locations"]),
+      );
+      expect(watch.scopes.every((scope) => scope.startsWith("read_"))).toBe(true);
+      // Reading what a write permission would have shown is kept, once.
+      expect(watch.scopes).toContain("read_merchant_managed_fulfillment_orders");
+      expect(watch.scopes.filter((scope) => scope === "read_inventory")).toHaveLength(1);
+      expect(watch.input.access).toBe("read");
+
+      const full = asked("full");
+      expect(full.scopes).toContain("write_inventory");
+      // Anything but the two known answers is the ordinary connection, never a wider one.
+      expect(asked("everything").input.access).toBe("full");
+    } finally {
+      if (before === undefined) delete process.env.SHOPIFY_EXTRA_SCOPES;
+      else process.env.SHOPIFY_EXTRA_SCOPES = before;
+    }
+  });
+
   it("sends the person to their own store to approve", () => {
     const adapter = createShopifyAdapter(fakeFetch([]).impl);
     const input = { shop: "Wild-Thread" };
@@ -133,6 +164,7 @@ describe("Shopify adapter", () => {
     expect(url.searchParams.get("redirect_uri")).toBe("https://app.test/cb");
     expect(url.searchParams.get("scope")).toContain("read_orders");
     expect(input.shop).toBe("wild-thread.myshopify.com");
+    expect((input as Record<string, string>).access).toBe("full");
     expect(() =>
       adapter.beginConnect({ state: "s", redirectUri: "x", input: { shop: "evil.com" } }),
     ).toThrow(ConnectError);

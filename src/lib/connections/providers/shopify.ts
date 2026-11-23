@@ -15,13 +15,25 @@ const BASE_SCOPES = ["read_orders", "read_customers", "read_products", "read_inv
  * Extra scopes Shopify has approved for the app, comma separated. Without
  * `read_all_orders`, Shopify only returns the last 60 days of orders.
  */
-const scopes = () => [
-  ...BASE_SCOPES,
-  ...(process.env.SHOPIFY_EXTRA_SCOPES ?? "")
+const extraScopes = () =>
+  (process.env.SHOPIFY_EXTRA_SCOPES ?? "")
     .split(",")
     .map((scope) => scope.trim())
-    .filter(Boolean),
-];
+    .filter(Boolean);
+
+/**
+ * What the store is asked to allow. "Watch only" asks for nothing that could
+ * change the store: every scope starts with `read_`, so Shopify itself
+ * refuses any write, whatever the suite's own switches say.
+ */
+export const shopifyScopes = (watchOnly = false) => {
+  const all = [...BASE_SCOPES, ...extraScopes()];
+  if (!watchOnly) return all;
+  // A write permission also lets us read; watch only keeps the reading half.
+  return [...new Set(all.map((scope) => scope.replace(/^write_/, "read_")))].filter((scope) =>
+    scope.startsWith("read_"),
+  );
+};
 const WEBHOOK_TOPICS = [
   "ORDERS_CREATE",
   "ORDERS_UPDATED",
@@ -139,6 +151,16 @@ export function createShopifyAdapter(fetchImpl: Fetch = fetch): ProviderAdapter 
         placeholder: "your-store.myshopify.com",
         help: "The .myshopify.com address you see in your Shopify admin.",
       },
+      {
+        name: "access",
+        label: "What we may do in your store",
+        placeholder: "",
+        help: "Watch only is for trying things out beside the tools you use today: orders, products and stock come in, and nothing in your store can be changed from here. You can connect again later to allow more.",
+        options: [
+          { value: "full", label: "Read it, and mark orders sent or add stock when I ask" },
+          { value: "read", label: "Watch only: never change anything in my store" },
+        ],
+      },
     ],
     // The shop tells us about each order as it happens; this hourly look is
     // the safety net for a notification that never arrived.
@@ -155,7 +177,8 @@ export function createShopifyAdapter(fetchImpl: Fetch = fetch): ProviderAdapter 
       input.shop = shop;
       const url = new URL(`https://${shop}/admin/oauth/authorize`);
       url.searchParams.set("client_id", clientId());
-      url.searchParams.set("scope", scopes().join(","));
+      input.access = input.access === "read" ? "read" : "full";
+      url.searchParams.set("scope", shopifyScopes(input.access === "read").join(","));
       url.searchParams.set("redirect_uri", redirectUri);
       url.searchParams.set("state", state);
       return url.toString();
@@ -200,7 +223,10 @@ export function createShopifyAdapter(fetchImpl: Fetch = fetch): ProviderAdapter 
         displayName: info.shop.name,
         scopes: (response.scope ?? "").split(",").filter(Boolean),
         token,
-        metadata: { currency: info.shop.currencyCode },
+        metadata: {
+          currency: info.shop.currencyCode,
+          ...(input.access === "read" ? { watch_only: true } : {}),
+        },
       };
     },
 
