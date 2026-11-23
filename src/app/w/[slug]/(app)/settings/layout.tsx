@@ -1,4 +1,5 @@
-import { NavLink } from "@/components/shell/nav-link";
+import { PageHeader } from "@/components/ui/page-header";
+import { SectionTabs } from "@/components/ui/section-tabs";
 
 export default async function SettingsLayout({
   children,
@@ -11,17 +12,16 @@ export default async function SettingsLayout({
   const base = `/w/${slug}/settings`;
   return (
     <>
-      <header className="flex flex-col gap-4">
-        <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
-        <nav aria-label="Settings" className="bg-muted flex gap-1 rounded-lg p-1 sm:w-fit">
-          <NavLink href={base} exact>
-            Workspace
-          </NavLink>
-          <NavLink href={`${base}/brand`}>Brand kit</NavLink>
-          <NavLink href={`${base}/team`}>Team</NavLink>
-          <NavLink href={`${base}/billing`}>Billing</NavLink>
-        </nav>
-      </header>
+      <PageHeader title="Settings" />
+      <SectionTabs
+        label="Settings"
+        tabs={[
+          { href: base, name: "Workspace", exact: true },
+          { href: `${base}/brand`, name: "Brand kit" },
+          { href: `${base}/team`, name: "Team" },
+          { href: `${base}/billing`, name: "Billing" },
+        ]}
+      />
       {children}
     </>
   );
