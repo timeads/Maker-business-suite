@@ -8,6 +8,8 @@ import { PageHeader } from "@/components/ui/page-header";
 import { daysFromNow } from "@/lib/bookings/slots";
 import { formatMoney } from "@/lib/dashboard/format";
 import { addressLines, hasAddress } from "@/lib/shipping/carriers";
+import { gramsToTenthOz } from "@/lib/shipping/easypost";
+import { boxSize, boxTenthOz, missingShipFrom, missingShipTo } from "@/lib/shipping/labels";
 import {
   formatHoldDate,
   formatWeight,
@@ -19,25 +21,39 @@ import {
 } from "@/lib/shipping/queue";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
-import { ORDER_FIELDS, loadShippingSetup, type ShippingOrder } from "../../data";
-import { HoldForm, ParcelForm, PickupForm, SeenBackFromHold } from "../../forms";
+import {
+  ORDER_FIELDS,
+  loadBoxes,
+  loadLabelConnection,
+  loadShippingSetup,
+  loadUnfinishedLabels,
+  type ShippingOrder,
+} from "../../data";
+import { HoldForm, ParcelForm, PickupForm, SeenBackFromHold, VoidButton } from "../../forms";
 import { shippingAccess } from "../../gate";
+import { FinishLabelButton, LabelBuilder } from "../../label-card";
+
+const INTERNATIONAL_NOTE =
+  "International labels need a customs form, which isn't built yet. Buy this one elsewhere and record it below.";
 
 export const metadata: Metadata = { title: "Send an order" };
 
 export default async function ShippingOrderPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ slug: string; id: string }>;
+  searchParams: Promise<{ label?: string }>;
 }) {
   const { slug, id } = await params;
+  const justBought = Number.parseInt((await searchParams).label ?? "", 10);
   const access = await shippingAccess(slug, `/w/${slug}/shipping/orders/${id}`);
   if (!access.ok) return access.upsell;
   const { tenant, role, entitlements } = access;
   if (!/^[0-9a-f-]{36}$/i.test(id)) notFound();
 
   const supabase = await createClient();
-  const [{ data }, setup, { data: parcels }] = await Promise.all([
+  const [{ data }, setup, { data: parcels }, boxes, easypost, unfinished] = await Promise.all([
     supabase
       .from("shipping_orders")
       .select(ORDER_FIELDS)
@@ -48,11 +64,14 @@ export default async function ShippingOrderPage({
     supabase
       .from("shipments")
       .select(
-        "id, number, carrier, service, tracking_number, tracking_url, shipped_at, items, voided_at",
+        "id, number, carrier, service, tracking_number, tracking_url, shipped_at, items, voided_at, label_provider, label_url, label_mode",
       )
       .eq("tenant_id", tenant.id)
       .eq("shipping_order_id", id)
       .order("number"),
+    loadBoxes(supabase, tenant.id),
+    loadLabelConnection(supabase, tenant.id),
+    loadUnfinishedLabels(supabase, tenant.id, id),
   ]);
   const order = data as unknown as ShippingOrder | null;
   if (!order) notFound();
@@ -91,6 +110,34 @@ export default async function ShippingOrderPage({
     timeStyle: "short",
   });
   const sent = (parcels ?? []).filter((parcel) => !parcel.voided_at);
+  const manager = canManage(role) && entitlements.canWrite;
+  const fresh = sent.find((parcel) => parcel.number === justBought && parcel.label_url);
+
+  // Buying a label here: EasyPost is connected and this is a parcel to post.
+  const posting = todo && entitlements.canWrite && !order.pickup;
+  const abroad = isInternational(order.country_code, home);
+  const fromGaps = missingShipFrom(setup.settings);
+  const toGaps = missingShipTo(order);
+  const labelCard: "builder" | "reconnect" | "abroad" | "from" | "to" | "unfinished" | null =
+    !posting || easypost.status === "none" || easypost.status === "disconnected"
+      ? null
+      : unfinished.length > 0
+        ? "unfinished"
+        : easypost.status === "needs_reconnect"
+          ? "reconnect"
+          : abroad
+            ? "abroad"
+            : fromGaps.length > 0
+              ? "from"
+              : toGaps.length > 0
+                ? "to"
+                : "builder";
+  const push = setup.canSend && setup.settings.mark_sent_in_shop;
+  const shopNote = push
+    ? setup.settings.notify_customer
+      ? "Buying records the parcel, marks the order as sent in your shop and has your shop email the tracking number."
+      : "Buying records the parcel and marks the order as sent in your shop."
+    : "Buying records the parcel here. Mark the order as sent in your shop yourself.";
 
   return (
     <>
@@ -143,6 +190,83 @@ export default async function ShippingOrderPage({
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_24rem]">
         <div className="flex min-w-0 flex-col gap-6">
+          {fresh && (
+            <Card>
+              <CardHeader>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <CardTitle>Your label is ready</CardTitle>
+                  {fresh.label_mode === "test" && (
+                    <Badge tone="waiting">Test mode: this label is not real</Badge>
+                  )}
+                </div>
+                <CardDescription>
+                  Parcel {fresh.number} · {fresh.carrier}
+                  {fresh.service ? ` ${fresh.service}` : ""} · tracking number{" "}
+                  {fresh.tracking_number || "not given"}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Button asChild>
+                  <a href={fresh.label_url as string} target="_blank" rel="noopener noreferrer">
+                    Print label
+                  </a>
+                </Button>
+              </CardContent>
+            </Card>
+          )}
+          {unfinished.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Labels to finish</CardTitle>
+                <CardDescription>
+                  Something interrupted these after you pressed Buy. Finish them here rather than
+                  buying again.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ul className="flex flex-col gap-4 text-sm">
+                  {unfinished.map((label) => (
+                    <li key={label.id} className="flex flex-col gap-2">
+                      {label.status === "bought" ? (
+                        <p>
+                          <span className="font-semibold">Bought, not recorded yet</span> ·{" "}
+                          {[label.carrier, label.service].filter(Boolean).join(" ")} · tracking
+                          number {label.tracking_number || "not given"}
+                          {label.label_mode === "test" ? " · test label" : ""}
+                          {label.label_url && (
+                            <>
+                              {" · "}
+                              <a
+                                href={label.label_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-ochre-text font-medium hover:underline"
+                              >
+                                Print label
+                              </a>
+                            </>
+                          )}
+                        </p>
+                      ) : (
+                        <p>
+                          <span className="font-semibold">We never heard back from EasyPost</span>
+                          {label.buying_at ? ` (${when.format(new Date(label.buying_at))})` : ""}.
+                          It may or may not have been bought; checking will settle it.
+                        </p>
+                      )}
+                      {entitlements.canWrite && (
+                        <FinishLabelButton
+                          slug={tenant.slug}
+                          quoteId={label.id}
+                          unsure={label.status === "buying"}
+                        />
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </CardContent>
+            </Card>
+          )}
           {order.pickup && !order.cancelled && (left.length > 0 || pickedUp) ? (
             <Card>
               <CardHeader>
@@ -184,15 +308,95 @@ export default async function ShippingOrderPage({
               </CardContent>
             </Card>
           ) : todo && entitlements.canWrite ? (
-            <Card>
-              <CardHeader>
-                <CardTitle>Record the parcel</CardTitle>
-                <CardDescription>
-                  Buy the postage wherever you usually do, then put the tracking number here.
-                </CardDescription>
-              </CardHeader>
-              <CardContent>{parcelForm(false)}</CardContent>
-            </Card>
+            <>
+              {labelCard && labelCard !== "unfinished" && (
+                <Card>
+                  <CardHeader>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <CardTitle>Buy a label</CardTitle>
+                      {easypost.testMode && (
+                        <Badge tone="waiting">Test mode: labels are not real</Badge>
+                      )}
+                    </div>
+                    <CardDescription>
+                      {labelCard === "builder"
+                        ? "Pick the box, check the weight and see what each carrier would charge. Postage is paid from your EasyPost account."
+                        : "Postage is paid from your EasyPost account."}
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    {labelCard === "builder" && (
+                      <LabelBuilder
+                        slug={tenant.slug}
+                        orderId={order.id}
+                        boxes={boxes.map((box) => ({
+                          id: box.id,
+                          name: box.name,
+                          size: boxSize(box),
+                          emptyTenthOz: boxTenthOz(box),
+                        }))}
+                        contentsTenthOz={
+                          order.weight_grams ? gramsToTenthOz(Number(order.weight_grams)) : null
+                        }
+                        shopNote={shopNote}
+                      />
+                    )}
+                    {labelCard === "abroad" && <p className="text-sm">{INTERNATIONAL_NOTE}</p>}
+                    {labelCard === "reconnect" && (
+                      <p className="text-sm">
+                        EasyPost stopped accepting the saved key, so labels can&apos;t be bought
+                        right now.{" "}
+                        {manager ? (
+                          <Link
+                            href={`/w/${tenant.slug}/connections`}
+                            className="text-ochre-text font-medium hover:underline"
+                          >
+                            Reconnect EasyPost
+                          </Link>
+                        ) : (
+                          "Ask an owner or admin to reconnect it."
+                        )}
+                      </p>
+                    )}
+                    {labelCard === "from" && (
+                      <p className="text-sm">
+                        Before a carrier can quote, your ship-from address needs:{" "}
+                        <span className="font-semibold">{fromGaps.join(", ")}</span>.{" "}
+                        {manager ? (
+                          <Link
+                            href={`${base}/settings`}
+                            className="text-ochre-text font-medium hover:underline"
+                          >
+                            Add it in Shipping settings
+                          </Link>
+                        ) : (
+                          "Ask an owner or admin to add it in Shipping settings."
+                        )}
+                      </p>
+                    )}
+                    {labelCard === "to" && (
+                      <p className="text-sm">
+                        This order&apos;s address is missing {toGaps.join(", ")}, so a label
+                        can&apos;t be made for it. Fix it in your shop, then sync.
+                      </p>
+                    )}
+                  </CardContent>
+                </Card>
+              )}
+              <Card>
+                <CardHeader>
+                  <CardTitle>
+                    {labelCard === "builder" ? "Or record a parcel by hand" : "Record the parcel"}
+                  </CardTitle>
+                  <CardDescription>
+                    {labelCard === "builder"
+                      ? "Bought the postage somewhere else? Put the tracking number here."
+                      : "Buy the postage wherever you usually do, then put the tracking number here."}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>{parcelForm(labelCard === "builder")}</CardContent>
+              </Card>
+            </>
           ) : (
             <Card>
               <CardContent className="pt-5">
@@ -239,6 +443,24 @@ export default async function ShippingOrderPage({
                             .join(", ")}
                         </span>
                       </span>
+                      {parcel.label_provider && (
+                        <span className="mt-1 flex flex-wrap items-center gap-2">
+                          {parcel.label_mode === "test" && <Badge tone="waiting">Test label</Badge>}
+                          {parcel.label_url && (
+                            <a
+                              href={parcel.label_url as string}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-ochre-text font-medium hover:underline"
+                            >
+                              Print label
+                            </a>
+                          )}
+                          {manager && (
+                            <VoidButton slug={tenant.slug} shipmentId={parcel.id as string} label />
+                          )}
+                        </span>
+                      )}
                     </li>
                   ))}
                 </ul>

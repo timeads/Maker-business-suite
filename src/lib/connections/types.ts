@@ -1,4 +1,4 @@
-export type ProviderKey = "shopify" | "quickbooks" | "stripe" | "meta";
+export type ProviderKey = "shopify" | "quickbooks" | "stripe" | "meta" | "easypost";
 
 export type ConnectionStatus = "active" | "needs_reconnect" | "disconnected";
 
@@ -225,13 +225,27 @@ export interface ProviderAdapter {
   name: string;
   blurb: string;
   /** Extra fields the connect form asks for. */
-  connectFields: { name: string; label: string; placeholder: string; help?: string }[];
+  connectFields: {
+    name: string;
+    label: string;
+    placeholder: string;
+    help?: string;
+    /** Typed into a password box: an API key, never shown again. */
+    secret?: boolean;
+  }[];
   /** True when this environment has the provider's app credentials. */
   configured(): boolean;
   /** Where to send the person to approve the connection. */
   beginConnect(start: ConnectStart): string;
   /** Exchanges the callback for tokens and identifies the account. */
   completeConnect(finish: ConnectFinish): Promise<ConnectedAccount>;
+  /**
+   * For providers that connect with a pasted API key rather than by sending
+   * the person away to approve: checks the key and identifies the account in
+   * one step. The key comes back as the token, so it is stored in Vault like
+   * any other. When this is present, `beginConnect` is never used.
+   */
+  connectWithKey?(input: Record<string, string>): Promise<ConnectedAccount>;
   /** Runs once after a connection is saved (register webhooks, ...). */
   afterConnect?(account: ConnectedAccount, siteUrl: string): Promise<void>;
   /** Returns new tokens. Throws ReconnectRequiredError when they can't be renewed. */

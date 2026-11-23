@@ -6,7 +6,13 @@ import { Input, Label } from "@/components/ui/input";
 import { SubmitButton } from "@/components/ui/submit-button";
 import { disconnectConnection, startConnection, syncNow, type ConnectionState } from "./actions";
 
-type Field = { name: string; label: string; placeholder: string; help?: string };
+type Field = {
+  name: string;
+  label: string;
+  placeholder: string;
+  help?: string;
+  secret?: boolean;
+};
 
 export function ConnectForm({
   slug,
@@ -14,12 +20,15 @@ export function ConnectForm({
   providerName,
   fields,
   label,
+  withKey = false,
 }: {
   slug: string;
   provider: string;
   providerName: string;
   fields: Field[];
   label: string;
+  /** Connects by checking a pasted key, without leaving this page. */
+  withKey?: boolean;
 }) {
   const [state, action] = useActionState<ConnectionState, FormData>(
     startConnection.bind(null, slug, provider),
@@ -33,6 +42,7 @@ export function ConnectForm({
           <Input
             id={`${provider}-${field.name}`}
             name={field.name}
+            type={field.secret ? "password" : "text"}
             placeholder={field.placeholder}
             autoComplete="off"
             autoCapitalize="none"
@@ -43,7 +53,11 @@ export function ConnectForm({
         </div>
       ))}
       <FormMessage>{state.error}</FormMessage>
-      <SubmitButton pendingText={`Opening ${providerName}…`} className="sm:w-fit">
+      <FormMessage kind="success">{state.message}</FormMessage>
+      <SubmitButton
+        pendingText={withKey ? "Checking your key…" : `Opening ${providerName}…`}
+        className="sm:w-fit"
+      >
         {label}
       </SubmitButton>
     </form>
@@ -55,11 +69,14 @@ export function ConnectionActions({
   provider,
   providerName,
   canSync,
+  disconnectNote = "Its data will stop updating.",
 }: {
   slug: string;
   provider: string;
   providerName: string;
   canSync: boolean;
+  /** What disconnecting means, for the "are you sure?" question. */
+  disconnectNote?: string;
 }) {
   const [syncState, syncAction] = useActionState<ConnectionState, FormData>(
     syncNow.bind(null, slug, provider),
@@ -84,7 +101,7 @@ export function ConnectionActions({
         <form
           action={disconnectAction}
           onSubmit={(event) => {
-            if (!window.confirm(`Disconnect ${providerName}? Its data will stop updating.`)) {
+            if (!window.confirm(`Disconnect ${providerName}? ${disconnectNote}`)) {
               event.preventDefault();
             }
           }}

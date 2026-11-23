@@ -17,10 +17,26 @@ export const shippingSettingsSchema = z.object({
       name: line.default(""),
       address1: line.default(""),
       address2: line.default(""),
+      /** Older: town, state and postcode typed as one line. Used when the three below are empty. */
       city_line: line.default(""),
+      /** What a carrier needs to print a label: each part on its own. */
+      city: line.default(""),
+      region: z.string().trim().max(60).default(""),
+      postal_code: z.string().trim().max(20).default(""),
+      phone: z.string().trim().max(30).default(""),
       country: line.default(""),
     })
-    .default({ name: "", address1: "", address2: "", city_line: "", country: "" }),
+    .default({
+      name: "",
+      address1: "",
+      address2: "",
+      city_line: "",
+      city: "",
+      region: "",
+      postal_code: "",
+      phone: "",
+      country: "",
+    }),
   /** Where parcels leave from, as a two-letter country code. Anything going elsewhere is international. */
   ship_from_country: z
     .string()
@@ -46,6 +62,33 @@ export type ShippingSettings = z.infer<typeof shippingSettingsSchema>;
 export const DEFAULT_SHIPPING_SETTINGS: ShippingSettings = shippingSettingsSchema.parse({
   version: 1,
 });
+
+/** "Hudson, NY 12534" from the separate parts, or the older single line when they're empty. */
+export function shipFromCityLine(from: ShippingSettings["ship_from"]): string {
+  const parts = [from.city, [from.region, from.postal_code].filter(Boolean).join(" ")]
+    .filter(Boolean)
+    .join(", ");
+  return parts || from.city_line;
+}
+
+/**
+ * Town, state and postcode for the settings form. A workspace that only has
+ * the older single line gets it split when it reads plainly ("Hudson, NY
+ * 12534"); otherwise the boxes start empty and the line is kept as it was.
+ */
+export function shipFromParts(from: ShippingSettings["ship_from"]): {
+  city: string;
+  region: string;
+  postal_code: string;
+} {
+  if (from.city || from.region || from.postal_code) {
+    return { city: from.city, region: from.region, postal_code: from.postal_code };
+  }
+  const match = /^([^,]{1,80}),\s*([A-Za-z]{2})\s+(\d{5}(?:-\d{4})?)$/.exec(from.city_line.trim());
+  return match
+    ? { city: match[1].trim(), region: match[2].toUpperCase(), postal_code: match[3] }
+    : { city: "", region: "", postal_code: "" };
+}
 
 export function parseShippingSettings(body: unknown): ShippingSettings {
   const parsed = shippingSettingsSchema.safeParse(body);

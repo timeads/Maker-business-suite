@@ -121,7 +121,7 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
     feature: "stock",
     name: "Stock planning",
     description:
-      "The lead time and days of cover used when a supplier doesn't say, how often orders are reviewed, whether busy seasons are planned for, and whether checked-in deliveries are added to the shop's count.",
+      "The lead time and days of cover used when a supplier doesn't say, how often orders are reviewed, whether busy seasons are planned for, whether checked-in deliveries are added to the shop's count, and the words in an item's name that mean it is never reordered (gift cards and the like).",
     schema: stockSettingsSchema,
     defaultBody: () => DEFAULT_STOCK_SETTINGS,
   },
@@ -131,7 +131,7 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
     feature: "shipping",
     name: "Shipping and packing slips",
     description:
-      "The return address printed on packing slips, the country parcels leave from (anything going elsewhere counts as international), the usual carrier, and whether recording a parcel also marks the order as sent in the shop and emails the customer.",
+      "The address parcels are sent from (printed on packing slips and used as the return address on postage labels: name, street, town, state, postcode and phone), the country parcels leave from (anything going elsewhere counts as international), the usual carrier, and whether recording a parcel also marks the order as sent in the shop and emails the customer.",
     schema: shippingSettingsSchema,
     defaultBody: () => DEFAULT_SHIPPING_SETTINGS,
   },
@@ -332,7 +332,17 @@ export function describeConfig(entry: ConfigEntry, body: unknown): string[] {
   if (entry.module === SHIPPING_MODULE) {
     const from = (value.ship_from ?? {}) as Record<string, string>;
     return [
-      `Slips are from: ${[from.name, from.address1, from.city_line].filter(Boolean).join(", ") || "no address yet"}`,
+      `Slips and labels are from: ${
+        [
+          from.name,
+          from.address1,
+          [from.city, [from.region, from.postal_code].filter(Boolean).join(" ")]
+            .filter(Boolean)
+            .join(", ") || from.city_line,
+        ]
+          .filter(Boolean)
+          .join(", ") || "no address yet"
+      }`,
       `Parcels leave from: ${value.ship_from_country ?? "US"}`,
       `Usual carrier: ${value.default_carrier}`,
       value.mark_sent_in_shop

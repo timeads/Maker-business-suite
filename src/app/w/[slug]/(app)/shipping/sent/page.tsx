@@ -30,6 +30,10 @@ type Parcel = {
   voided_at: string | null;
   shop_status: string;
   shop_error: string | null;
+  label_provider: string | null;
+  label_url: string | null;
+  label_mode: string | null;
+  label_refund_status: string | null;
 };
 
 /** Worked out in the database (`shipping_report`), so the sums are exact. */
@@ -63,7 +67,7 @@ export default async function SentParcelsPage({
     supabase
       .from("shipments")
       .select(
-        "id, number, order_name, recipient, destination, carrier, service, tracking_number, tracking_url, cost, shipped_at, voided_at, shop_status, shop_error",
+        "id, number, order_name, recipient, destination, carrier, service, tracking_number, tracking_url, cost, shipped_at, voided_at, shop_status, shop_error, label_provider, label_url, label_mode, label_refund_status",
       )
       .eq("tenant_id", tenant.id)
       .order("number", { ascending: false })
@@ -256,7 +260,11 @@ export default async function SentParcelsPage({
                           parcel.tracking_number || "–"
                         )}
                         <span className="mt-0.5 flex flex-wrap gap-1">
-                          {parcel.voided_at && <Badge>Undone</Badge>}
+                          {parcel.voided_at && !parcel.label_refund_status && <Badge>Undone</Badge>}
+                          {parcel.voided_at && parcel.label_refund_status && (
+                            <Badge tone="waiting">Label voided · refund requested</Badge>
+                          )}
+                          {parcel.label_mode === "test" && <Badge tone="waiting">Test label</Badge>}
                           {!parcel.voided_at && parcel.shop_status === "sent" && (
                             <Badge tone="good">Marked in shop</Badge>
                           )}
@@ -273,6 +281,16 @@ export default async function SentParcelsPage({
                             {parcel.shop_error}
                           </span>
                         )}
+                        {!parcel.voided_at && parcel.label_url && (
+                          <a
+                            href={parcel.label_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-ochre-text block text-xs font-medium hover:underline"
+                          >
+                            Print label
+                          </a>
+                        )}
                       </td>
                       <td className="py-2.5 pr-3 text-right tabular-nums">
                         {parcel.cost === null
@@ -285,7 +303,11 @@ export default async function SentParcelsPage({
                       {manager && (
                         <td className="py-2.5 text-right">
                           {!parcel.voided_at && (
-                            <VoidButton slug={tenant.slug} shipmentId={parcel.id} />
+                            <VoidButton
+                              slug={tenant.slug}
+                              shipmentId={parcel.id}
+                              label={Boolean(parcel.label_provider)}
+                            />
                           )}
                         </td>
                       )}

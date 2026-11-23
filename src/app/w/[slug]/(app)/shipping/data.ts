@@ -7,6 +7,7 @@ import {
   parseShippingSettings,
   parseSlipLayout,
 } from "@/lib/shipping/config";
+import type { SavedBox } from "@/lib/shipping/labels";
 
 export type ShippingOrder = {
   id: string;
@@ -77,6 +78,68 @@ export async function loadShippingSetup(supabase: SupabaseClient, tenantId: stri
     connected,
     canSend: connected && canSendInShopify(shop.scopes),
   };
+}
+
+export const BOX_FIELDS =
+  "id, name, kind, length_in, width_in, height_in, empty_weight_oz, is_default";
+
+/** The boxes the workspace packs in, the usual one first. */
+export async function loadBoxes(supabase: SupabaseClient, tenantId: string): Promise<SavedBox[]> {
+  const { data } = await supabase
+    .from("shipping_boxes")
+    .select(BOX_FIELDS)
+    .eq("tenant_id", tenantId)
+    .is("archived_at", null)
+    .order("is_default", { ascending: false })
+    .order("created_at")
+    .limit(100);
+  return (data ?? []) as unknown as SavedBox[];
+}
+
+/**
+ * Whether the workspace can buy labels. Only what members may read is named
+ * here: the status and the details (test or production). The key itself is
+ * in Vault and never comes near this query.
+ */
+export async function loadLabelConnection(supabase: SupabaseClient, tenantId: string) {
+  const { data } = await supabase
+    .from("connections")
+    .select("status, metadata")
+    .eq("tenant_id", tenantId)
+    .eq("provider", "easypost")
+    .maybeSingle();
+  const metadata = (data?.metadata ?? {}) as Record<string, unknown>;
+  return {
+    status: (data?.status ?? "none") as "active" | "needs_reconnect" | "disconnected" | "none",
+    testMode: metadata.mode === "test",
+  };
+}
+
+/** A label that was paid for (or may have been) and isn't a parcel yet. */
+export type UnfinishedLabel = {
+  id: string;
+  status: "buying" | "bought";
+  carrier: string | null;
+  service: string | null;
+  tracking_number: string | null;
+  label_url: string | null;
+  label_mode: string | null;
+  buying_at: string | null;
+};
+
+export async function loadUnfinishedLabels(
+  supabase: SupabaseClient,
+  tenantId: string,
+  orderId: string,
+): Promise<UnfinishedLabel[]> {
+  const { data } = await supabase
+    .from("shipping_label_quotes")
+    .select("id, status, carrier, service, tracking_number, label_url, label_mode, buying_at")
+    .eq("tenant_id", tenantId)
+    .eq("shipping_order_id", orderId)
+    .in("status", ["buying", "bought"])
+    .order("buying_at");
+  return (data ?? []) as unknown as UnfinishedLabel[];
 }
 
 /** "2 × Wool rug (Large), 3 × Yarn bundle" for what's still to go. */

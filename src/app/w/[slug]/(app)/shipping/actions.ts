@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth";
+import { ReconnectRequiredError } from "@/lib/connections/types";
 import { getEntitlements } from "@/lib/entitlements";
 import { tidyTracking, trackingUrl } from "@/lib/shipping/carriers";
 import {
@@ -15,6 +16,8 @@ import {
   slipLayoutSchema,
   type SlipSection,
 } from "@/lib/shipping/config";
+import { EasyPostError, refundLabel } from "@/lib/shipping/easypost";
+import { flagLabelKey, getLabelKey } from "@/lib/shipping/label-key";
 import { formatHoldDate, isHoldDate, todayIn } from "@/lib/shipping/queue";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
@@ -239,12 +242,61 @@ export async function voidParcel(
 ): Promise<ShippingState> {
   const ctx = await context(slug, true);
   if ("error" in ctx) return { error: ctx.error };
-  const { data, error } = await ctx.supabase.rpc("void_shipment", { p_id: shipmentId });
-  if (error) return { error: OOPS };
+  if (!UUID.test(shipmentId)) return { error: OOPS };
+  const { data: parcel } = await ctx.supabase
+    .from("shipments")
+    .select("label_provider, label_shipment_id, voided_at")
+    .eq("tenant_id", ctx.tenant.id)
+    .eq("id", shipmentId)
+    .maybeSingle();
+  const label =
+    parcel && !parcel.voided_at && parcel.label_provider === "easypost"
+      ? (parcel.label_shipment_id as string | null)
+      : null;
+
+  if (label) {
+    // A label we bought: ask for the money back first. If EasyPost won't,
+    // the parcel stays exactly as it is.
+    const nothingChanged = "Nothing has changed here.";
+    let held: Awaited<ReturnType<typeof getLabelKey>>;
+    try {
+      held = await getLabelKey(ctx.tenant.id);
+    } catch {
+      return {
+        error: `We couldn't void this label because EasyPost needs connecting again (under Connections). ${nothingChanged}`,
+      };
+    }
+    try {
+      await refundLabel(held.key, label);
+    } catch (err) {
+      if (err instanceof ReconnectRequiredError) await flagLabelKey(held.connectionId);
+      const why =
+        err instanceof ReconnectRequiredError || err instanceof EasyPostError
+          ? err.message
+          : "EasyPost couldn't be reached.";
+      return { error: `We couldn't void this label. ${why} ${nothingChanged}` };
+    }
+  }
+
+  const { data, error } = await ctx.supabase.rpc(label ? "void_label_shipment" : "void_shipment", {
+    p_id: shipmentId,
+  });
+  if (error) {
+    return {
+      error: label
+        ? "EasyPost has the refund request, but we couldn't undo the parcel here. Press it again in a moment."
+        : OOPS,
+    };
+  }
   done(slug);
+  const shop =
+    data === "sent"
+      ? " Your shop still shows it as sent, so cancel the fulfilment there too."
+      : " Its items are back on the to-send list.";
   return {
-    message:
-      data === "sent"
+    message: label
+      ? `Refund requested. EasyPost pays it back once the carrier confirms the label wasn't used, which can take a few weeks.${shop}`
+      : data === "sent"
         ? "Undone here. Your shop still shows it as sent, so cancel the fulfilment there too."
         : "Undone. Its items are back on the to-send list.",
   };
@@ -271,6 +323,9 @@ export async function saveShippingSettings(
     .eq("key", SHIPPING_SETTINGS_KEY)
     .maybeSingle();
   const before = parseShippingSettings(saved?.body);
+  const city = text(formData, "from_city");
+  const region = text(formData, "from_region");
+  const postalCode = text(formData, "from_postal_code");
   const parsed = shippingSettingsSchema.safeParse({
     version: 1,
     ship_from_country: country,
@@ -278,7 +333,12 @@ export async function saveShippingSettings(
       name: text(formData, "from_name"),
       address1: text(formData, "from_address1"),
       address2: text(formData, "from_address2"),
-      city_line: text(formData, "from_city_line"),
+      city,
+      region,
+      postal_code: postalCode,
+      phone: text(formData, "from_phone"),
+      // The older single line is kept for a workspace that hasn't filled in the parts.
+      city_line: city || region || postalCode ? "" : before.ship_from.city_line,
       country: text(formData, "from_country"),
     },
     slip_note: before.slip_note,
@@ -288,7 +348,7 @@ export async function saveShippingSettings(
     notify_customer: formData.get("notify_customer") === "on",
   });
   if (!parsed.success) {
-    return { error: "Keep each address line under 120 characters." };
+    return { error: "Keep each address line under 120 characters, and the phone number under 30." };
   }
   const { error } = await ctx.supabase.rpc("save_config", {
     p_tenant_id: ctx.tenant.id,
