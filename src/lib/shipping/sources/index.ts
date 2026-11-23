@@ -9,7 +9,6 @@ import {
   type BoughtLabel,
 } from "../easypost";
 import {
-  REDO_TOGETHER_MAX,
   buyRedo,
   downloadRedoLabel,
   getRedoRates,
@@ -293,7 +292,7 @@ export function redoSource(fetchImpl: Fetch = fetch): LabelSource<RedoAccess> {
   };
 }
 
-export { REDO_TOGETHER_MAX };
+export { LABEL_SOURCES } from "./types";
 
 type Sources = { [K in LabelSourceKey]: LabelSource<SourceAccess[K]> };
 
