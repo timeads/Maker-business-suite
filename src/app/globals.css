@@ -141,8 +141,74 @@
   --chart-grid: var(--tuft-stone-3);
 }
 
+/*
+ * A workspace chooses its own look (Settings > Brand kit): light, dark, or
+ * whatever the device is set to, and optionally its brand colours. The choice
+ * sits on the workspace's wrapper, so the role names are declared again there
+ * and pick up whatever the wrapper changes. Pages outside a workspace (sign
+ * in, public booking pages) are always light.
+ */
+.tuft-scope {
+  --background: var(--tuft-panel);
+  --foreground: var(--tuft-text);
+  --card: var(--tuft-surface);
+  --card-foreground: var(--tuft-text);
+  --muted: var(--tuft-sunken);
+  --muted-foreground: var(--tuft-text-3);
+  --border: var(--tuft-border);
+  --input: var(--tuft-border-strong);
+  --primary: var(--tuft-ochre);
+  --primary-foreground: var(--tuft-on-ochre);
+  --secondary: var(--tuft-hover);
+  --secondary-foreground: var(--tuft-text);
+  --destructive: var(--tuft-brick);
+  --ring: var(--tuft-ochre);
+  --sidebar: var(--tuft-teal);
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.tuft-scope[data-theme="dark"] {
+  --tuft-teal: #142222;
+  --tuft-teal-2: #1d3030;
+  --tuft-teal-3: #284040;
+  --tuft-teal-soft: #1f3433;
+  --tuft-teal-soft-ink: #9fd0c8;
+  --tuft-on-teal: #ece6dd;
+  --tuft-on-teal-2: #9fb2ae;
+  --tuft-ochre: #d69a38;
+  --tuft-ochre-hover: #e3aa4b;
+  --tuft-ochre-text: #e4b062;
+  --tuft-ochre-soft: #3a2d16;
+  --tuft-on-ochre: #1a1206;
+  --tuft-brick: #e0705f;
+  --tuft-brick-soft: #3d201b;
+  --tuft-mint-soft: #1d3a26;
+  --tuft-mint-ink: #a8e3b0;
+  --tuft-bg: #1a1918;
+  --tuft-panel: #161514;
+  --tuft-surface: #211f1d;
+  --tuft-sunken: #2b2825;
+  --tuft-hover: #26231f;
+  --tuft-border: #34302b;
+  --tuft-border-strong: #4a443d;
+  --tuft-text: #efebe5;
+  --tuft-text-2: #c3bbb0;
+  --tuft-text-3: #978f84;
+  --tuft-out: #1c2a28;
+  --tuft-out-border: #2c403c;
+  --tuft-note: #2f2716;
+  --tuft-note-border: #54441f;
+  --tuft-select: #2a2416;
+  --tuft-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --tuft-shadow: 0 2px 4px rgba(0, 0, 0, 0.3), 0 12px 32px -8px rgba(0, 0, 0, 0.6);
+  color-scheme: dark;
+  --chart-1: #9fd0c8;
+  --chart-grid: #2b2825;
+}
+
 @media (prefers-color-scheme: dark) {
-  :root {
+  .tuft-scope[data-theme="device"] {
     --tuft-teal: #142222;
     --tuft-teal-2: #1d3030;
     --tuft-teal-3: #284040;

@@ -30,6 +30,7 @@ import {
   linkPageSchema,
   socialPlanSchema,
 } from "../social/plan";
+import { APPEARANCE_KEY, DEFAULT_APPEARANCE, appearanceSchema } from "../brand/appearance";
 import { BRAND_MODULE, KIT_KEY, brandKitSchema } from "../brand/kit";
 import {
   DEFAULT_SHIPPING_SETTINGS,
@@ -166,6 +167,16 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
         { name: "paper", hex: "#f7f3ea" },
       ],
     }),
+  },
+  {
+    module: BRAND_MODULE,
+    key: APPEARANCE_KEY,
+    feature: "social",
+    name: "Appearance",
+    description:
+      "How the workspace looks to its team: mode is light (dark menu, light page), dark, or device (follows each person's device); brand_colors puts the brand kit's colours on the menu and main buttons.",
+    schema: appearanceSchema,
+    defaultBody: () => DEFAULT_APPEARANCE,
   },
 ];
 

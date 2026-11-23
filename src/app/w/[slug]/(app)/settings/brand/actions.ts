@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/auth";
+import { APPEARANCE_KEY, appearanceSchema } from "@/lib/brand/appearance";
 import { draftBrandKit, type BrandGuide } from "@/lib/brand/draft";
 import {
   BRAND_MODULE,
@@ -218,6 +219,31 @@ export async function saveKit(
     p_tenant_id: ctx.tenant.id,
     p_module: BRAND_MODULE,
     p_key: KIT_KEY,
+    p_body: parsed.data,
+  });
+  if (error) return { error: "We couldn't save that. Please try again." };
+  revalidatePath(`/w/${slug}`, "layout");
+  return { saved: true };
+}
+
+/** Saves how the workspace looks to its team: light or dark, and brand colours or not. */
+export async function saveAppearance(
+  slug: string,
+  _prev: BrandState,
+  formData: FormData,
+): Promise<BrandState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const parsed = appearanceSchema.safeParse({
+    version: 1,
+    mode: text(formData, "mode", 10),
+    brand_colors: formData.get("brand_colors") === "on",
+  });
+  if (!parsed.success) return { error: "Pick light, dark or match my device." };
+  const { error } = await ctx.supabase.rpc("save_config", {
+    p_tenant_id: ctx.tenant.id,
+    p_module: BRAND_MODULE,
+    p_key: APPEARANCE_KEY,
     p_body: parsed.data,
   });
   if (error) return { error: "We couldn't save that. Please try again." };

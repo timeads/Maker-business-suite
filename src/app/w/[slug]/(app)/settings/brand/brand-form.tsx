@@ -7,7 +7,8 @@ import { Input, Label, Select } from "@/components/ui/input";
 import { SubmitButton } from "@/components/ui/submit-button";
 import { FEELS, FEEL_LABELS, tidyHex, toDesignKit, type BrandKitConfig } from "@/lib/brand/kit";
 import { cn } from "@/lib/utils";
-import { saveKit, suggestKit, type BrandState } from "./actions";
+import type { Appearance } from "@/lib/brand/appearance";
+import { saveAppearance, saveKit, suggestKit, type BrandState } from "./actions";
 
 const textarea =
   "border-input bg-card focus-visible:ring-ring w-full rounded-sm border px-3 py-2 text-sm outline-none focus-visible:ring-2";
@@ -431,6 +432,79 @@ function Editor({
           <p className="text-muted-foreground text-sm">Add two colours to see a preview.</p>
         )}
       </aside>
+    </form>
+  );
+}
+
+const MODES: { id: Appearance["mode"]; name: string; about: string }[] = [
+  { id: "light", name: "Light", about: "A dark menu beside a light page." },
+  { id: "dark", name: "Dark", about: "Dark all over. Easier on the eyes at night." },
+  { id: "device", name: "Match my device", about: "Follows each person's own computer or phone." },
+];
+
+/** Light or dark, and whether the menu and buttons wear the brand's colours. */
+export function AppearanceForm({
+  slug,
+  look,
+  hasKit,
+  canEdit,
+}: {
+  slug: string;
+  look: Appearance;
+  hasKit: boolean;
+  canEdit: boolean;
+}) {
+  const [state, action] = useActionState<BrandState, FormData>(saveAppearance.bind(null, slug), {});
+  return (
+    <form action={action} className="bg-card flex flex-col gap-4 rounded-lg border p-4">
+      <fieldset disabled={!canEdit} className="flex flex-col gap-4">
+        <legend className="sr-only">How this workspace looks</legend>
+        <div className="grid gap-2 sm:grid-cols-3">
+          {MODES.map((mode) => (
+            <label
+              key={mode.id}
+              className="hover:bg-hover has-checked:border-teal has-checked:ring-teal flex cursor-pointer flex-col gap-1 rounded-lg border p-3 has-checked:ring-1"
+            >
+              <span className="flex items-center gap-2 text-sm font-semibold">
+                <input
+                  type="radio"
+                  name="mode"
+                  value={mode.id}
+                  defaultChecked={look.mode === mode.id}
+                />
+                {mode.name}
+              </span>
+              <span className="text-muted-foreground text-xs">{mode.about}</span>
+            </label>
+          ))}
+        </div>
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            name="brand_colors"
+            defaultChecked={look.brand_colors}
+            disabled={!hasKit}
+            className="mt-0.5"
+          />
+          <span>
+            Use my brand colours for the menu and the main buttons
+            <span className="text-muted-foreground block text-xs">
+              {hasKit
+                ? "Taken from your brand kit below. We adjust shades where needed so words stay readable."
+                : "Save a brand kit first, then switch this on."}
+            </span>
+          </span>
+        </label>
+      </fieldset>
+      <FormMessage>{state.error}</FormMessage>
+      {state.saved && (
+        <FormMessage kind="success">Saved. Everyone in the workspace sees it.</FormMessage>
+      )}
+      {canEdit && (
+        <SubmitButton variant="outline" size="sm" pendingText="Saving…" className="w-fit">
+          Save appearance
+        </SubmitButton>
+      )}
     </form>
   );
 }

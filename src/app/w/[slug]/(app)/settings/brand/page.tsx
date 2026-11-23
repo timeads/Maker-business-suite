@@ -4,7 +4,8 @@ import { requireUser } from "@/lib/auth";
 import { BRAND_MODULE, KIT_KEY, brandKitSchema, parseBrandKit } from "@/lib/brand/kit";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
-import { BrandKit } from "./brand-form";
+import { APPEARANCE_KEY, parseAppearance } from "@/lib/brand/appearance";
+import { AppearanceForm, BrandKit } from "./brand-form";
 
 export const metadata: Metadata = { title: "Brand kit" };
 
@@ -21,14 +22,15 @@ export default async function BrandKitPage({
   const ctx = await getTenantContext(slug, user.id);
   if (!ctx) notFound();
   const supabase = await createClient();
-  const { data } = await supabase
+  const { data: rows } = await supabase
     .from("configs")
-    .select("body")
+    .select("key, body")
     .eq("tenant_id", ctx.tenant.id)
     .eq("module", BRAND_MODULE)
-    .eq("key", KIT_KEY)
-    .maybeSingle();
-  const kit = parseBrandKit(data?.body);
+    .in("key", [KIT_KEY, APPEARANCE_KEY]);
+  const body = (key: string) => (rows ?? []).find((row) => row.key === key)?.body;
+  const kit = parseBrandKit(body(KIT_KEY));
+  const look = parseAppearance(body(APPEARANCE_KEY));
   const starter = brandKitSchema.parse({
     version: 1,
     name: ctx.tenant.name,
@@ -51,6 +53,17 @@ export default async function BrandKitPage({
           {!kit && " It takes about two minutes, and you can change it any time."}
         </p>
       </div>
+      {!(welcome && !kit) && (
+        <section className="flex flex-col gap-2">
+          <h3 className="text-sm font-semibold">Appearance</h3>
+          <AppearanceForm
+            slug={slug}
+            look={look}
+            hasKit={Boolean(kit)}
+            canEdit={canManage(ctx.role)}
+          />
+        </section>
+      )}
       <BrandKit
         slug={slug}
         kit={kit}

@@ -199,6 +199,11 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   save. `brandBrief()` puts the kit into drafting prompts as data;
   `toDesignKit()` turns it into the kit the email and slide designs draw
   with, choosing text colours by contrast. We never fetch a brand's website.
+  How a workspace looks is a second config (`brand` / `appearance`): light,
+  dark or the device's choice, set as `data-theme` on the workspace wrapper
+  (`.tuft-scope` in `globals.css`), and optionally the kit's colours on the
+  menu and the filled button (`brandThemeVars`, which keeps them readable).
+  Pages outside a workspace are always light.
 - Emails: a marketing email is a document (`emails.doc`, the model in
   `lib/design`, ported from the Content Hub with its tests) edited in the
   drag-and-drop builder (`components/email-builder`, opened at
