@@ -9,6 +9,7 @@ import {
   Megaphone,
   MessagesSquare,
   Plug,
+  LifeBuoy,
   Settings,
   Sparkles,
   Truck,
@@ -120,6 +121,9 @@ export function Sidebar({
           <NavLink href={`${base}/settings`}>
             <Settings aria-hidden /> Settings
           </NavLink>
+          <NavLink href="/help">
+            <LifeBuoy aria-hidden /> Help
+          </NavLink>
         </nav>
 
         <form
@@ -174,6 +178,7 @@ export function Sidebar({
               { href: `${base}/assistant`, label: "Assistant" },
               { href: `${base}/connections`, label: "Connections" },
               { href: `${base}/settings`, label: "Settings" },
+              { href: "/help", label: "Help" },
               { href: "/app", label: "Switch workspace" },
             ].map((item) => (
               <a
