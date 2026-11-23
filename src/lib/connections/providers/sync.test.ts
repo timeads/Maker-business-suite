@@ -195,6 +195,9 @@ describe("Shopify sync", () => {
           })),
         };
       }
+      if (query.includes("ordersCount")) {
+        return { all: { count: 0 }, window: { count: 0 } };
+      }
       if (query.includes("productVariants")) {
         stockCalls.push((variables ?? {}) as Record<string, unknown>);
         const page = stockPages[Math.min(stockCalls.length - 1, stockPages.length - 1)] ?? {

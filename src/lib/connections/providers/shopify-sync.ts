@@ -412,6 +412,38 @@ async function pullOrders(
   let calls = 0;
   let addresses = true;
 
+  // A count of what the shop says it has, beside what it hands over, so an
+  // empty sync can be told apart from a shop that isn't sharing its orders.
+  if (after === null) {
+    try {
+      const seen = await graphql<{
+        all: { count: number } | null;
+        window: { count: number } | null;
+      }>(
+        ctx.externalAccountId,
+        ctx.token,
+        `
+          query ($q: String) {
+            all: ordersCount(query: "status:any") {
+              count
+            }
+            window: ordersCount(query: $q) {
+              count
+            }
+          }
+        `,
+        { q: ordersSince(since) },
+      );
+      console.log(
+        `Shopify sync: shop reports ${seen.all?.count ?? "?"} orders, ${seen.window?.count ?? "?"} changed since ${since}`,
+      );
+    } catch (err) {
+      console.error(
+        `Shopify sync: the shop would not count its orders (${err instanceof Error ? err.message : "unknown"})`,
+      );
+    }
+  }
+
   for (let page = 0; page < PAGES_PER_RUN; page++) {
     const data = await graphql<{
       orders: {
