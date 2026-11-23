@@ -439,6 +439,90 @@ describe("library, projects and posts with several photos", () => {
     );
     expect(rows.map((row) => row.folder_id)).toEqual([null, null]);
   });
+
+  it("a designed picture keeps its design, and only inside its own workspace", async () => {
+    const picture = await photo(tenantA, "designed-1");
+    const design = JSON.stringify({ v: 1, format: "4:5", slides: [{ id: "s1", bg: "#1f3d2b" }] });
+    await as(alice, "select public.set_social_asset_design($1, $2, $3::jsonb)", [
+      tenantA,
+      picture,
+      design,
+    ]);
+    const kept = await as<{ design: { format: string }; tags: string[] }>(
+      alice,
+      "select design, tags from public.social_assets where id = $1",
+      [picture],
+    );
+    expect(kept[0].design.format).toBe("4:5");
+    expect(kept[0].tags).toContain("designed");
+
+    // Bob can't read it, change it through his own workspace, or reach into Alice's.
+    expect(
+      await as(bob, "select design from public.social_assets where id = $1", [picture]),
+    ).toEqual([]);
+    await expect(
+      as(bob, "select public.set_social_asset_design($1, $2, $3::jsonb)", [
+        tenantB,
+        picture,
+        design,
+      ]),
+    ).rejects.toThrow(/Picture not found/);
+    await expect(
+      as(bob, "select public.set_social_asset_design($1, $2, $3::jsonb)", [
+        tenantA,
+        picture,
+        design,
+      ]),
+    ).rejects.toThrow(/Workspace not found/);
+    await expect(
+      asAnon(db, (tx) =>
+        tx.query("select public.set_social_asset_design($1, $2, $3::jsonb)", [
+          tenantA,
+          picture,
+          design,
+        ]),
+      ),
+    ).rejects.toThrow(/permission denied/);
+    await expect(
+      as(bob, "update public.social_assets set design = '{}' where id = $1", [picture]),
+    ).rejects.toThrow(/permission denied/);
+
+    // Only a design of a sensible size, and only on a picture.
+    await expect(
+      as(alice, "select public.set_social_asset_design($1, $2, '[1]'::jsonb)", [tenantA, picture]),
+    ).rejects.toThrow(/design_not_valid/);
+    await expect(
+      as(alice, "select public.set_social_asset_design($1, $2, $3::jsonb)", [
+        tenantA,
+        picture,
+        JSON.stringify({ v: 1, pad: "x".repeat(200_001) }),
+      ]),
+    ).rejects.toThrow(/design_not_valid/);
+    const clip = (
+      await service<{ id: string }>(
+        "select public.register_social_asset($1, $2, 'video/mp4', 4000, $3, null, 'Clip') as id",
+        [tenantA, `${tenantA}/designed-clip.mp4`, alice.id],
+      )
+    )[0].id;
+    await expect(
+      as(alice, "select public.set_social_asset_design($1, $2, $3::jsonb)", [
+        tenantA,
+        clip,
+        design,
+      ]),
+    ).rejects.toThrow(/Picture not found/);
+
+    // Clearing it leaves the picture as an ordinary photo.
+    await as(alice, "select public.set_social_asset_design($1, $2, null)", [tenantA, picture]);
+    expect(
+      await as(alice, "select design from public.social_assets where id = $1", [picture]),
+    ).toEqual([{ design: null }]);
+    const { rows: still } = await db.query<{ design: unknown }>(
+      "select design from public.social_assets where id = $1",
+      [picture],
+    );
+    expect(still).toEqual([{ design: null }]);
+  });
 });
 
 describe("emails", () => {

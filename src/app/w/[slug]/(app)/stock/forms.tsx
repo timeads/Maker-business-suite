@@ -1,18 +1,17 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect, useRef } from "react";
 import { Printer } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FormMessage } from "@/components/ui/form-message";
 import { Input, Label, Select } from "@/components/ui/input";
 import { SubmitButton } from "@/components/ui/submit-button";
 import {
-  assignSupplier,
   receiveDelivery,
   saveItemPlan,
-  saveOrder,
   saveStockSettings,
   saveSupplier,
+  setItemHidden,
   setOrderStatus,
   startEmptyOrder,
   type StockState,
@@ -21,12 +20,75 @@ import {
 const textarea =
   "border-input bg-card placeholder:text-muted-foreground focus-visible:border-ochre focus-visible:ring-ochre/25 w-full rounded-sm border px-[11px] py-2 text-sm outline-none focus-visible:ring-2";
 
-function Result({ state }: { state: StockState }) {
+export function Result({ state }: { state: StockState }) {
   return (
     <>
       <FormMessage>{state.error}</FormMessage>
       <FormMessage kind="success">{state.message}</FormMessage>
     </>
+  );
+}
+
+/**
+ * A hidden key sent with the form, so pressing the button twice can't make two
+ * orders: both presses carry the same key and the second finds the first's
+ * work. A fresh key is made whenever `resetOn` changes (a different selection)
+ * and after the form clears itself.
+ */
+export function RequestKey({ resetOn = "" }: { resetOn?: string }) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const input = ref.current;
+    if (!input) return;
+    input.value = crypto.randomUUID();
+    const form = input.form;
+    const again = () =>
+      window.setTimeout(() => {
+        input.value = crypto.randomUUID();
+      }, 0);
+    form?.addEventListener("reset", again);
+    return () => form?.removeEventListener("reset", again);
+  }, [resetOn]);
+  return <input ref={ref} type="hidden" name="request_key" defaultValue="" />;
+}
+
+/** The button on a suggested order; it greys out while the order is being drafted. */
+export function StartOrderButton() {
+  return (
+    <>
+      <RequestKey />
+      <SubmitButton variant="outline" size="sm" pendingText="Drafting…">
+        Start this order
+      </SubmitButton>
+    </>
+  );
+}
+
+/** The "Don't reorder" switch for one item: says where it stands, and flips it. */
+export function ReorderSwitch({
+  slug,
+  itemId,
+  hidden,
+}: {
+  slug: string;
+  itemId: string;
+  hidden: boolean;
+}) {
+  const [state, action] = useActionState(setItemHidden.bind(null, slug, itemId, !hidden), {});
+  return (
+    <form action={action} className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="font-read max-w-xl text-sm">
+          {hidden
+            ? "You've said don't reorder this one. It's left out of suggestions and never put on an order."
+            : "We plan for this item: it shows up in suggestions when it runs low. Switch it off for things you won't buy again, like gift cards or made-to-order pieces."}
+        </p>
+        <SubmitButton variant="outline" pendingText="Saving…">
+          {hidden ? "Reorder this again" : "Don't reorder this"}
+        </SubmitButton>
+      </div>
+      <Result state={state} />
+    </form>
   );
 }
 
@@ -153,32 +215,6 @@ export function SupplierForm({ slug, supplier }: { slug: string; supplier?: Supp
   );
 }
 
-/** Sits above the items table; the table's tick boxes belong to this form. */
-export function AssignBar({ slug, suppliers }: { slug: string; suppliers: Option[] }) {
-  const [state, action] = useActionState(assignSupplier.bind(null, slug), {});
-  return (
-    <form id="assign" action={action} className="flex flex-wrap items-end gap-2 print:hidden">
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor="assign-supplier">Give the ticked items to</Label>
-        <Select id="assign-supplier" name="supplier" defaultValue="" className="w-56">
-          <option value="">No supplier</option>
-          {suppliers.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.name}
-            </option>
-          ))}
-        </Select>
-      </div>
-      <SubmitButton variant="outline" pendingText="Saving…">
-        Apply
-      </SubmitButton>
-      <div className="basis-full">
-        <Result state={state} />
-      </div>
-    </form>
-  );
-}
-
 export function ItemPlanForm({
   slug,
   itemId,
@@ -195,23 +231,38 @@ export function ItemPlanForm({
     coverage_days: number | null;
     safety_stock: number;
     hidden: boolean;
+    case_pack?: number | null;
+    moq?: number | null;
+    supplier_sku?: string | null;
   };
   /** What's used when the boxes are left empty. */
-  fallback: { lead: number; cover: number };
+  fallback: { lead: number; cover: number; moq: number };
 }) {
   const [state, action] = useActionState(saveItemPlan.bind(null, slug, itemId), {});
   return (
     <form action={action} className="flex flex-col gap-3">
-      <div className="flex flex-col gap-1.5 sm:max-w-xs">
-        <Label htmlFor="plan-supplier">Supplier</Label>
-        <Select id="plan-supplier" name="supplier" defaultValue={values.supplier_id ?? ""}>
-          <option value="">No supplier</option>
-          {suppliers.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.name}
-            </option>
-          ))}
-        </Select>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="plan-supplier">Supplier</Label>
+          <Select id="plan-supplier" name="supplier" defaultValue={values.supplier_id ?? ""}>
+            <option value="">No supplier</option>
+            {suppliers.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="plan-ssku">What the supplier calls it</Label>
+          <Input
+            id="plan-ssku"
+            name="supplier_sku"
+            maxLength={120}
+            defaultValue={values.supplier_sku ?? ""}
+            placeholder="Their code, if they have one"
+          />
+        </div>
       </div>
       <div className="grid gap-3 sm:grid-cols-3">
         <div className="flex flex-col gap-1.5">
@@ -252,10 +303,37 @@ export function ItemPlanForm({
       <p className="text-muted-foreground text-xs">
         Leave the first two empty to use the supplier&apos;s own numbers.
       </p>
-      <label className="flex items-center gap-2 text-sm">
-        <input type="checkbox" name="hidden" defaultChecked={values.hidden} />
-        Don&apos;t plan for this one (made to order, discontinued, a gift card…)
-      </label>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="plan-case">How many in a case</Label>
+          <Input
+            id="plan-case"
+            name="case_pack"
+            type="number"
+            min={1}
+            max={100000}
+            defaultValue={values.case_pack ?? ""}
+            placeholder="Bought one at a time"
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="plan-moq">Smallest order of this item</Label>
+          <Input
+            id="plan-moq"
+            name="moq"
+            type="number"
+            min={1}
+            defaultValue={values.moq ?? ""}
+            placeholder={fallback.moq > 1 ? String(fallback.moq) : "No minimum"}
+          />
+        </div>
+      </div>
+      <p className="text-muted-foreground text-xs">
+        With a case size, we always suggest whole cases, rounded up. A smallest order here is used
+        for this item instead of the supplier&apos;s.
+      </p>
+      {/* The "Don't reorder" switch has its own card; saving here keeps it as it is. */}
+      {values.hidden && <input type="hidden" name="hidden" value="on" />}
       <Result state={state} />
       <SubmitButton variant="outline" pendingText="Saving…" className="sm:w-fit">
         Save
@@ -268,8 +346,9 @@ export function NewOrderForm({ slug, suppliers }: { slug: string; suppliers: Opt
   const [state, action] = useActionState(startEmptyOrder.bind(null, slug), {});
   return (
     <form action={action} className="flex flex-wrap items-end gap-2">
+      <RequestKey />
       <div className="flex flex-col gap-1.5">
-        <Label htmlFor="new-order-supplier">Start an order for</Label>
+        <Label htmlFor="new-order-supplier">Start an empty order for</Label>
         <Select id="new-order-supplier" name="supplier" defaultValue="" className="w-56" required>
           <option value="" disabled>
             Pick a supplier…
@@ -299,114 +378,11 @@ export type OrderLine = {
   qty_ordered: number;
   qty_received: number;
   unit_cost: number;
+  supplier_sku: string | null;
+  note: string;
+  /** Units to a case, when the item is bought by the case. */
+  case_pack: number | null;
 };
-
-/** A draft: every quantity and cost can still change, and items can be added. */
-export function DraftOrderForm({
-  slug,
-  orderId,
-  lines,
-  notes,
-  expected,
-  addable,
-  currency,
-}: {
-  slug: string;
-  orderId: string;
-  lines: OrderLine[];
-  notes: string;
-  expected: string | null;
-  addable: (Option & { cost: number })[];
-  currency: string;
-}) {
-  const [state, action] = useActionState(saveOrder.bind(null, slug, orderId), {});
-  return (
-    <form action={action} className="flex flex-col gap-4">
-      {lines.length > 0 && (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[520px] text-left text-sm">
-            <thead className="text-muted-foreground text-xs">
-              <tr>
-                <th className="py-2 pr-3 font-semibold">Item</th>
-                <th className="w-28 py-2 pr-3 font-semibold">How many</th>
-                <th className="w-32 py-2 font-semibold">Cost each ({currency})</th>
-              </tr>
-            </thead>
-            <tbody className="divide-border divide-y">
-              {lines.map((line) => (
-                <tr key={line.id}>
-                  <td className="py-2 pr-3">
-                    <span className="font-read">{line.name}</span>
-                    {line.sku && (
-                      <span className="text-muted-foreground block text-xs">{line.sku}</span>
-                    )}
-                  </td>
-                  <td className="py-2 pr-3">
-                    <Input
-                      name={`qty_${line.stock_item_id}`}
-                      type="number"
-                      min={0}
-                      defaultValue={line.qty_ordered}
-                      aria-label={`How many ${line.name}`}
-                    />
-                  </td>
-                  <td className="py-2">
-                    <Input
-                      name={`cost_${line.stock_item_id}`}
-                      type="number"
-                      min={0}
-                      step="0.01"
-                      defaultValue={line.unit_cost.toFixed(2)}
-                      aria-label={`Cost of each ${line.name}`}
-                    />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <p className="text-muted-foreground mt-1 text-xs">Set a line to 0 to take it off.</p>
-        </div>
-      )}
-      {addable.length > 0 && (
-        <div className="bg-panel grid gap-3 rounded-md p-3 sm:grid-cols-[1fr_7rem_8rem]">
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="add-item">Add an item</Label>
-            <Select id="add-item" name="add_item" defaultValue="">
-              <option value="">Nothing to add</option>
-              {addable.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name}
-                </option>
-              ))}
-            </Select>
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="add-qty">How many</Label>
-            <Input id="add-qty" name="add_qty" type="number" min={1} />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="add-cost">Cost each</Label>
-            <Input id="add-cost" name="add_cost" type="number" min={0} step="0.01" />
-          </div>
-        </div>
-      )}
-      <div className="grid gap-3 sm:grid-cols-[12rem_1fr]">
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="order-expected">Expected to arrive</Label>
-          <Input id="order-expected" name="expected" type="date" defaultValue={expected ?? ""} />
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="order-notes">Note to the supplier</Label>
-          <Input id="order-notes" name="notes" maxLength={2000} defaultValue={notes} />
-        </div>
-      </div>
-      <Result state={state} />
-      <SubmitButton variant="outline" pendingText="Saving…" className="sm:w-fit print:hidden">
-        Save changes
-      </SubmitButton>
-    </form>
-  );
-}
 
 export function StatusButton({
   slug,
@@ -503,6 +479,7 @@ export function StockSettingsForm({
     review_buffer_days: number;
     seasonality: boolean;
     push_to_shop: boolean;
+    skip_words: string[];
   };
   canPush: boolean;
 }) {
@@ -583,6 +560,21 @@ export function StockSettingsForm({
           </span>
         </span>
       </label>
+      <div className="flex flex-col gap-1.5 sm:max-w-md">
+        <Label htmlFor="set-skip">Never reorder anything with these words in its name</Label>
+        <textarea
+          id="set-skip"
+          name="skip_words"
+          rows={3}
+          defaultValue={settings.skip_words.join("\n")}
+          placeholder={"gift card\nsample"}
+          className={textarea}
+        />
+        <p className="text-muted-foreground text-xs">
+          One per line. Matching items are left out of suggestions and orders, and listed under
+          Everything → Not reordering. Take a word off and they come straight back.
+        </p>
+      </div>
       <Result state={state} />
       <SubmitButton pendingText="Saving…" className="sm:w-fit">
         Save settings

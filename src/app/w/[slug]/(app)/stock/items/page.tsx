@@ -1,44 +1,37 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Badge, type BadgeTone } from "@/components/ui/badge";
-import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
-import { HEALTH_LABELS, isPlanned, relativeDay } from "@/lib/stock/plan";
 import { createClient } from "@/lib/supabase/server";
+import {
+  DEFAULT_SORT,
+  VIEWS,
+  VIEW_NOTES,
+  isColumnKey,
+  isViewKey,
+  searchRows,
+  sortRows,
+  toGridRow,
+  viewRows,
+} from "@/lib/stock/views";
 import { cn } from "@/lib/utils";
 import { canManage } from "@/lib/tenants";
 import { loadStock } from "../data";
-import { AssignBar } from "../forms";
 import { stockAccess } from "../gate";
 import { StockTabs } from "../tabs";
+import { ItemsGrid } from "./grid";
 
 export const metadata: Metadata = { title: "Everything in stock" };
 
-const TONES: Record<keyof typeof HEALTH_LABELS, BadgeTone> = {
-  out: "bad",
-  under: "waiting",
-  healthy: "good",
-  over: "open",
-  nosales: "closed",
-};
-const FILTERS = [
-  ["all", "All"],
-  ["out", "Out of stock"],
-  ["under", "Running low"],
-  ["healthy", "Healthy"],
-  ["over", "Too much"],
-  ["nosales", "Not selling"],
-  ["nosupplier", "No supplier"],
-  ["hidden", "Not planned"],
-] as const;
+const PER_PAGE = 250;
 
 export default async function StockItemsPage({
   params,
   searchParams,
 }: {
   params: Promise<{ slug: string }>;
-  searchParams: Promise<{ show?: string; q?: string }>;
+  searchParams: Promise<{ show?: string; q?: string; sort?: string; dir?: string; page?: string }>;
 }) {
   const { slug } = await params;
   const access = await stockAccess(slug, `/w/${slug}/stock/items`);
@@ -46,52 +39,46 @@ export default async function StockItemsPage({
   const { tenant, role, entitlements } = access;
   const canEdit = canManage(role) && entitlements.canWrite;
   const query = await searchParams;
-  const show = FILTERS.some(([key]) => key === query.show) ? query.show! : "all";
-  const q = (query.q ?? "").trim().toLowerCase().slice(0, 80);
+  const show = isViewKey(query.show) ? query.show : "all";
+  const q = (query.q ?? "").trim().slice(0, 80);
+  const sort = isColumnKey(query.sort)
+    ? { key: query.sort, dir: query.dir === "desc" ? ("desc" as const) : ("asc" as const) }
+    : DEFAULT_SORT;
   const base = `/w/${tenant.slug}/stock`;
 
   const { rows, suppliers, today } = await loadStock(await createClient(), tenant);
-  const planned = rows.filter(isPlanned);
-  const pool = show === "hidden" ? rows.filter((row) => !isPlanned(row)) : planned;
-  const counts = Object.fromEntries(
-    FILTERS.map(([key]) => [
-      key,
-      key === "all"
-        ? planned.length
-        : key === "hidden"
-          ? rows.length - planned.length
-          : key === "nosupplier"
-            ? planned.filter((row) => !row.supplier).length
-            : planned.filter((row) => row.health.health === key).length,
-    ]),
-  );
-  const shown = pool
-    .filter(
-      (row) =>
-        show === "all" ||
-        show === "hidden" ||
-        (show === "nosupplier" ? !row.supplier : row.health.health === show),
-    )
-    .filter(
-      (row) =>
-        !q ||
-        row.name.toLowerCase().includes(q) ||
-        (row.item.sku ?? "").toLowerCase().includes(q) ||
-        (row.supplier?.name ?? "").toLowerCase().includes(q),
-    );
-  const LIMIT = 300;
+  const views = viewRows(rows, today);
+  const shown = sortRows(searchRows(views[show], q), sort.key, sort.dir);
+  const pages = Math.max(1, Math.ceil(shown.length / PER_PAGE));
+  const page = Math.min(pages, Math.max(1, Number.parseInt(query.page ?? "1", 10) || 1));
+  const onPage = shown.slice((page - 1) * PER_PAGE, page * PER_PAGE);
+
+  // The view and search, carried by the sort links, the page links and the download.
+  const keep = new URLSearchParams();
+  if (show !== "all") keep.set("show", show);
+  if (q) keep.set("q", q);
+  const pageHref = (n: number) => {
+    const search = new URLSearchParams(keep);
+    if (sort !== DEFAULT_SORT) {
+      search.set("sort", sort.key);
+      search.set("dir", sort.dir);
+    }
+    if (n > 1) search.set("page", String(n));
+    const text = search.toString();
+    return `${base}/items${text ? `?${text}` : ""}`;
+  };
 
   return (
     <>
       <PageHeader
         title="Stock"
-        description="Every item your shop keeps a count of, and how each one is doing."
+        description="Every item your shop keeps a count of. Tick the ones you want and draft an order for them."
       />
       <StockTabs slug={tenant.slug} manager={canManage(role)} />
 
       <div className="flex flex-col gap-3 print:hidden">
-        <nav aria-label="Filter" className="flex flex-wrap gap-1">
-          {FILTERS.map(([key, label]) => (
+        <nav aria-label="Views" className="flex flex-wrap gap-1">
+          {VIEWS.map(([key, label]) => (
             <Link
               key={key}
               href={`${base}/items${key === "all" ? "" : `?show=${key}`}`}
@@ -101,10 +88,13 @@ export default async function StockItemsPage({
                 show === key ? "bg-teal font-semibold text-white" : "text-text-2 hover:bg-hover",
               )}
             >
-              {label} <span className="tabular-nums opacity-80">{counts[key]}</span>
+              {label} <span className="tabular-nums opacity-80">{views[key].length}</span>
             </Link>
           ))}
         </nav>
+        {VIEW_NOTES[show] && (
+          <p className="text-muted-foreground font-read text-sm">{VIEW_NOTES[show]}</p>
+        )}
         <form role="search" className="max-w-sm">
           {show !== "all" && <input type="hidden" name="show" value={show} />}
           <Input
@@ -115,100 +105,53 @@ export default async function StockItemsPage({
             aria-label="Search items"
           />
         </form>
-        {canEdit && shown.length > 0 && (
-          <AssignBar
-            slug={tenant.slug}
-            suppliers={suppliers
-              .filter((s) => !s.archived_at)
-              .map((s) => ({ id: s.id, name: s.name }))}
-          />
-        )}
       </div>
 
-      <Card>
-        <CardContent className="pt-5">
-          {shown.length === 0 ? (
-            <p className="text-muted-foreground text-sm">
-              {rows.length === 0
-                ? "Your shop's items appear here after the next sync."
-                : "Nothing matches."}
-            </p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[820px] text-left text-sm">
-                <thead className="text-muted-foreground text-xs">
-                  <tr>
-                    {canEdit && <th className="w-8 py-2" aria-label="Pick" />}
-                    <th className="py-2 pr-3 font-semibold">Item</th>
-                    <th className="py-2 pr-3 text-right font-semibold">Have</th>
-                    <th className="py-2 pr-3 text-right font-semibold">Coming</th>
-                    <th className="py-2 pr-3 text-right font-semibold">Sells a month</th>
-                    <th className="py-2 pr-3 font-semibold">Runs out</th>
-                    <th className="py-2 pr-3 text-right font-semibold">Suggest</th>
-                    <th className="py-2 font-semibold">How it&apos;s doing</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-border divide-y">
-                  {shown.slice(0, LIMIT).map((row) => (
-                    <tr key={row.item.id} className="align-top">
-                      {canEdit && (
-                        <td className="py-2.5">
-                          <input
-                            type="checkbox"
-                            name="item"
-                            value={row.item.id}
-                            form="assign"
-                            aria-label={`Pick ${row.name}`}
-                          />
-                        </td>
-                      )}
-                      <td className="py-2.5 pr-3">
-                        <Link
-                          href={`${base}/items/${row.item.id}`}
-                          className="font-read font-semibold hover:underline"
-                        >
-                          {row.name}
-                        </Link>
-                        <span className="text-muted-foreground block text-xs">
-                          {[row.item.sku, row.supplier?.name ?? "No supplier"]
-                            .filter(Boolean)
-                            .join(" · ")}
-                        </span>
-                      </td>
-                      <td
-                        className={cn(
-                          "py-2.5 pr-3 text-right tabular-nums",
-                          row.item.on_hand <= 0 && "text-brick font-semibold",
-                        )}
-                      >
-                        {row.item.on_hand}
-                      </td>
-                      <td className="py-2.5 pr-3 text-right tabular-nums">{row.onOrder || "–"}</td>
-                      <td className="py-2.5 pr-3 text-right tabular-nums">
-                        {row.plan.isDeadStock ? "–" : row.plan.velocityPerMonth.toFixed(1)}
-                      </td>
-                      <td className="py-2.5 pr-3">{relativeDay(row.plan.stockOutDate, today)}</td>
-                      <td className="py-2.5 pr-3 text-right tabular-nums">
-                        {row.plan.suggestedQty || "–"}
-                      </td>
-                      <td className="py-2.5">
-                        <Badge tone={TONES[row.health.health]}>
-                          {HEALTH_LABELS[row.health.health]}
-                        </Badge>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {shown.length > LIMIT && (
-                <p className="text-muted-foreground mt-3 text-xs">
-                  Showing the first {LIMIT} of {shown.length}. Search or filter to narrow it down.
-                </p>
-              )}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      {onPage.length === 0 ? (
+        <p className="text-muted-foreground border-border bg-card rounded-xl border p-5 text-sm">
+          {rows.length === 0
+            ? "Your shop's items appear here after the next sync."
+            : show === "hidden" && !q
+              ? "Nothing is left out. To stop reordering something, tick it under All and press “Don't reorder”."
+              : "Nothing matches."}
+        </p>
+      ) : (
+        <ItemsGrid
+          slug={tenant.slug}
+          rows={onPage.map((row) => toGridRow(row, today))}
+          canEdit={canEdit}
+          suppliers={suppliers
+            .filter((s) => !s.archived_at)
+            .map((s) => ({ id: s.id, name: s.name }))}
+          view={show}
+          query={keep.toString()}
+          sort={sort}
+          currency={tenant.currency}
+        />
+      )}
+
+      {pages > 1 && (
+        <nav
+          aria-label="Pages"
+          className="flex items-center justify-between gap-3 text-sm print:hidden"
+        >
+          <span className="text-muted-foreground tabular-nums">
+            {(page - 1) * PER_PAGE + 1}–{Math.min(page * PER_PAGE, shown.length)} of {shown.length}
+          </span>
+          <span className="flex gap-2">
+            {page > 1 && (
+              <Button asChild variant="outline" size="sm">
+                <Link href={pageHref(page - 1)}>Earlier</Link>
+              </Button>
+            )}
+            {page < pages && (
+              <Button asChild variant="outline" size="sm">
+                <Link href={pageHref(page + 1)}>More</Link>
+              </Button>
+            )}
+          </span>
+        </nav>
+      )}
     </>
   );
 }

@@ -7,7 +7,10 @@ import { requireUser } from "@/lib/auth";
 import { parseClock, zonedTimeToUtc } from "@/lib/bookings/slots";
 import { getEntitlements } from "@/lib/entitlements";
 import { BRAND_MODULE, KIT_KEY, brandBrief, parseBrandKit } from "@/lib/brand/kit";
+import { BANNER_TAG, MAX_DESIGN_SLIDES, ownDesign } from "@/lib/brand/slides";
+import type { SlideDesign } from "@/lib/design/slide-design";
 import { draftCaption } from "@/lib/social/caption";
+import { LOGO_LIGHT_TAG, LOGO_TAG, pickPhoto, type TaggedAsset } from "@/lib/social/photo-match";
 import {
   LINKS_KEY,
   PLAN_KEY,
@@ -18,11 +21,19 @@ import {
   parsePlan,
   socialPlanSchema,
 } from "@/lib/social/plan";
+import { publicAssetUrl } from "@/lib/social/worker";
 import { getAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
 
-export type SocialState = { error?: string; message?: string; draft?: string };
+/** A photo from the workspace's assets that fits what a draft is about, and why it was picked. */
+export type SuggestedPhoto = { id: string; url: string; title: string; reason: string };
+export type SocialState = {
+  error?: string;
+  message?: string;
+  draft?: string;
+  photo?: SuggestedPhoto;
+};
 
 const NO_ACCESS = "Social isn't part of this workspace's plan right now.";
 const READ_ONLY =
@@ -212,6 +223,27 @@ export async function deletePost(
   redirect(`/w/${slug}/social?saved=deleted`);
 }
 
+type PhotoRow = TaggedAsset & { storagePath: string };
+
+/** The workspace's photos with their names and tags, newest first, for matching to a draft. */
+async function taggedPhotos(ctx: Ctx): Promise<PhotoRow[]> {
+  const { data } = await ctx.supabase
+    .from("social_assets")
+    .select("id, storage_path, title, tags, mime_type")
+    .eq("tenant_id", ctx.tenant.id)
+    .eq("hidden", false)
+    .like("mime_type", "image/%")
+    .order("created_at", { ascending: false })
+    .limit(500);
+  return (data ?? []).map((row) => ({
+    id: row.id as string,
+    storagePath: row.storage_path as string,
+    title: (row.title as string) ?? "",
+    tags: (row.tags as string[] | null) ?? [],
+    mimeType: row.mime_type as string,
+  }));
+}
+
 /** Asks Claude for a caption. It lands in the caption box; a person decides what gets posted. */
 export async function draftPostCaption(
   slug: string,
@@ -231,7 +263,7 @@ export async function draftPostCaption(
   const monthStart = new Date();
   monthStart.setUTCDate(1);
   monthStart.setUTCHours(0, 0, 0, 0);
-  const [{ data: usage }, { data: recent }, { data: planRow }] = await Promise.all([
+  const [{ data: usage }, { data: recent }, { data: planRow }, photos] = await Promise.all([
     ctx.supabase
       .from("usage_events")
       .select("quantity")
@@ -252,6 +284,7 @@ export async function draftPostCaption(
       .eq("module", SOCIAL_MODULE)
       .eq("key", PLAN_KEY)
       .maybeSingle(),
+    taggedPhotos(ctx),
   ]);
   const used = (usage ?? []).reduce((sum, row) => sum + Number(row.quantity), 0);
   if (used >= ctx.entitlements.limit("ai_credits")) {
@@ -260,6 +293,19 @@ export async function draftPostCaption(
         "You've used this month's AI allowance. It resets next month, or you can upgrade your plan for more.",
     };
   }
+  // A photo is suggested from the tags alone: the brief and the post's topic against the
+  // workspace's own tags and names. Claude isn't asked, and nothing is looked up anywhere.
+  const plan = parsePlan(planRow?.body);
+  const topic = plan.topics.find((t) => t.id === String(formData.get("topic") ?? ""));
+  const match = pickPhoto(photos, `${brief} ${topic ? `${topic.name} ${topic.about}` : ""}`);
+  const photo: SuggestedPhoto | undefined = match
+    ? {
+        id: match.asset.id,
+        url: publicAssetUrl(match.asset.storagePath),
+        title: match.asset.title,
+        reason: match.reason,
+      }
+    : undefined;
 
   try {
     const draft = await draftCaption({
@@ -269,7 +315,7 @@ export async function draftPostCaption(
         c === "facebook" ? "Facebook" : "Instagram",
       ),
       recent: (recent ?? []).map((row) => String(row.caption).slice(0, 600)).filter(Boolean),
-      styleNotes: parsePlan(planRow?.body).style_notes,
+      styleNotes: plan.style_notes,
       brand: await loadBrandBrief(ctx),
     });
     // Metered whether or not a draft came back: the tokens were spent.
@@ -280,7 +326,7 @@ export async function draftPostCaption(
     });
     if (usageError) console.error(`Could not record AI usage: ${usageError.message}`);
     if (!draft.ok) return { error: "Claude couldn't draft this one. You can write it yourself." };
-    return { draft: draft.text };
+    return { draft: draft.text, photo };
   } catch (err) {
     console.error("Caption draft failed", err instanceof Error ? err.message : err);
     return { error: "Drafting didn't work just now. Please try again." };
@@ -533,10 +579,16 @@ export async function draftTheMonth(
   const limit = ctx.entitlements.limit("ai_credits");
   const admin = getAdminClient();
   let made = 0;
+  let withPhoto = 0;
   const brand = await loadBrandBrief(ctx);
+  const photos = await taggedPhotos(ctx);
+  // Each photo is offered to one draft only, so a month of posts doesn't show the same one.
+  const taken = new Set<string>();
   for (const slot of open) {
     if (used >= limit) break;
     const topic = plan.topics.find((t) => t.id === slot.topic);
+    // One photo at most, matched by its tags to the topic. The draft's page says why it is there.
+    const match = topic ? pickPhoto(photos, `${topic.name} ${topic.about}`, taken) : null;
     try {
       const draft = await draftCaption({
         workspaceName: ctx.tenant.name,
@@ -559,7 +611,7 @@ export async function draftTheMonth(
         p_tenant_id: ctx.tenant.id,
         p_post_id: null,
         p_caption: draft.text,
-        p_asset_ids: [],
+        p_asset_ids: match ? [match.asset.id] : [],
         p_channels: [],
         p_scheduled_for: null,
         p_captions: {},
@@ -568,7 +620,13 @@ export async function draftTheMonth(
         p_ai_draft: draft.text,
         p_planned_for: slot.at,
       });
-      if (!error) made += 1;
+      if (!error) {
+        made += 1;
+        if (match) {
+          withPhoto += 1;
+          taken.add(match.asset.id);
+        }
+      }
     } catch (err) {
       console.error("Month draft failed", err instanceof Error ? err.message : err);
       break;
@@ -583,8 +641,12 @@ export async function draftTheMonth(
           : "Drafting didn't work just now. Please try again.",
     };
   }
+  const photoNote =
+    withPhoto === 0
+      ? ""
+      : ` ${withPhoto === made ? (made === 1 ? "It has" : "Each has") : `${withPhoto} have`} a photo picked by its tags; open the draft to see why, or take it off.`;
   return {
-    message: `${made} draft${made === 1 ? "" : "s"} written. Read each one, add a photo, then schedule it.`,
+    message: `${made} draft${made === 1 ? "" : "s"} written.${photoNote} Read each one, check the photo, then schedule it.`,
   };
 }
 
@@ -642,29 +704,34 @@ export async function startUpload(
   return { tickets };
 }
 
-/** Files what the browser uploaded, after checking each file really is what it should be. */
-export async function finishUpload(
-  slug: string,
+/**
+ * Checks each file the browser says it uploaded (it must be in this workspace's folder, and
+ * really be the type and size allowed) and registers the ones that pass. Nothing from the
+ * browser is trusted: the type and size are read back from storage.
+ */
+async function registerUploads(
+  ctx: Ctx,
   items: { path: string; title: string }[],
   folderId: string | null,
-  tagsText: string,
-): Promise<{ added: number } | { error: string }> {
-  const ctx = await context(slug);
-  if ("error" in ctx) return { error: String(ctx.error) };
-  if (!process.env.SUPABASE_SECRET_KEY) {
-    return { error: "Uploads aren't switched on for this environment yet." };
-  }
+  only: "any" | "pictures" = "any",
+): Promise<{ id: string; path: string }[]> {
   const admin = getAdminClient();
   const bucket = admin.storage.from("social");
   const mine = new RegExp(`^${ctx.tenant.id}/[0-9a-f-]{36}\\.(jpg|png|mp4|mov)$`);
-  const ids: string[] = [];
+  const filed: { id: string; path: string }[] = [];
   for (const item of items.slice(0, 30)) {
-    if (!mine.test(item.path)) continue;
+    if (typeof item?.path !== "string" || !mine.test(item.path)) continue;
     const { data: info } = await bucket.info(item.path);
     const type = info?.contentType ?? "";
     const size = info?.size ?? 0;
     const kind = ASSET_TYPES[type];
-    if (!kind || !(size > 0) || size > kind.max || !item.path.endsWith(`.${kind.ext}`)) {
+    if (
+      !kind ||
+      !(size > 0) ||
+      size > kind.max ||
+      !item.path.endsWith(`.${kind.ext}`) ||
+      (only === "pictures" && !type.startsWith("image/"))
+    ) {
       if (info) await bucket.remove([item.path]);
       continue;
     }
@@ -677,8 +744,24 @@ export async function finishUpload(
       p_folder_id: folderId && UUID.test(folderId) ? folderId : null,
       p_title: String(item.title ?? "").slice(0, 120),
     });
-    if (!error && data) ids.push(data as string);
+    if (!error && data) filed.push({ id: data as string, path: item.path });
   }
+  return filed;
+}
+
+/** Files what the browser uploaded, after checking each file really is what it should be. */
+export async function finishUpload(
+  slug: string,
+  items: { path: string; title: string }[],
+  folderId: string | null,
+  tagsText: string,
+): Promise<{ added: number } | { error: string }> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: String(ctx.error) };
+  if (!process.env.SUPABASE_SECRET_KEY) {
+    return { error: "Uploads aren't switched on for this environment yet." };
+  }
+  const ids = (await registerUploads(ctx, items, folderId)).map((file) => file.id);
   if (ids.length === 0) return { error: "Those files didn't arrive. Please try again." };
   const tags = tagsFrom(tagsText);
   if (tags.length > 0) {
@@ -693,6 +776,169 @@ export async function finishUpload(
   }
   done(slug);
   return { added: ids.length };
+}
+
+// ---------------------------------------------------------------------------
+// Designed pictures: made in the designer, kept as assets with their design
+// ---------------------------------------------------------------------------
+
+export type DesignPhoto = { id: string; url: string; title: string; tags: string[] };
+export type DesignedPicture = { id: string; url: string; title: string };
+
+/** The workspace's photos, for choosing one inside a design. Videos and put-away files are left out. */
+export async function listDesignPhotos(slug: string): Promise<DesignPhoto[]> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return [];
+  return (await taggedPhotos(ctx)).map((photo) => ({
+    id: photo.id,
+    url: publicAssetUrl(photo.storagePath),
+    title: photo.title,
+    tags: photo.tags,
+  }));
+}
+
+/** The design a picture was made from, to open it again. */
+export async function loadAssetDesign(
+  slug: string,
+  assetId: string,
+): Promise<{ design: SlideDesign; title: string } | { error: string }> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: String(ctx.error) };
+  const missing = { error: "This picture's design couldn't be found." };
+  if (!UUID.test(assetId)) return missing;
+  const { data } = await ctx.supabase
+    .from("social_assets")
+    .select("title, design")
+    .eq("tenant_id", ctx.tenant.id)
+    .eq("id", assetId)
+    .maybeSingle();
+  const design = ownDesign(data?.design, publicAssetUrl(`${ctx.tenant.id}/`), 1);
+  return design ? { design, title: (data?.title as string) ?? "" } : missing;
+}
+
+/**
+ * Keeps pictures drawn in the designer. The browser has already sent each one to storage with a
+ * link from `startUpload`; here each is checked like any upload, registered as an asset, and
+ * given its design (one picture each) so it can be opened and changed later. The design is
+ * tidied first, and may only picture this workspace's own photos.
+ *
+ * With `replaces`, the one picture is a new version of that asset: it takes the old one's name,
+ * tags, folder and project, and the old one is put away unless a post that has gone out used it.
+ */
+export async function saveDesignedPictures(
+  slug: string,
+  items: { path: string; title: string; design: unknown }[],
+  options: { banner?: boolean; replaces?: string | null } = {},
+): Promise<{ pictures: DesignedPicture[] } | { error: string }> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: String(ctx.error) };
+  if (!process.env.SUPABASE_SECRET_KEY) {
+    return { error: "Uploads aren't switched on for this environment yet." };
+  }
+  const wanted = Array.isArray(items) ? items.slice(0, MAX_DESIGN_SLIDES) : [];
+  const home = publicAssetUrl(`${ctx.tenant.id}/`);
+  const designs = wanted.map((item) => ownDesign(item?.design, home, 1));
+  if (wanted.length === 0 || designs.some((design) => !design)) {
+    return { error: "That design couldn't be read. Please try again." };
+  }
+
+  // The picture being replaced must be one of this workspace's own.
+  type Old = {
+    id: string;
+    title: string;
+    tags: string[] | null;
+    folder_id: string | null;
+    project_id: string | null;
+  };
+  let old: Old | null = null;
+  if (options.replaces) {
+    if (wanted.length !== 1 || !UUID.test(options.replaces)) {
+      return { error: "That picture couldn't be found." };
+    }
+    const { data } = await ctx.supabase
+      .from("social_assets")
+      .select("id, title, tags, folder_id, project_id")
+      .eq("tenant_id", ctx.tenant.id)
+      .eq("id", options.replaces)
+      .like("mime_type", "image/%")
+      .maybeSingle();
+    if (!data) return { error: "That picture couldn't be found." };
+    old = data as Old;
+  }
+
+  const named = wanted.map((item) => ({
+    path: item.path,
+    title: old?.title || String(item.title ?? "").slice(0, 120) || "Designed picture",
+  }));
+  const filed = await registerUploads(ctx, named, old?.folder_id ?? null, "pictures");
+  // All or nothing: a post's pictures stay in the order they were designed in.
+  const ids = filed.map((file) => file.id);
+  const putAway = (assetIds: string[]) =>
+    ctx.supabase.rpc("sort_social_assets", {
+      p_tenant_id: ctx.tenant.id,
+      p_asset_ids: assetIds,
+      p_move: false,
+      p_folder_id: null,
+      p_add_tags: [],
+      p_hidden: true,
+    });
+  const failed = async (error: string) => {
+    if (ids.length > 0) await putAway(ids);
+    return { error };
+  };
+  if (filed.length !== wanted.length) {
+    return failed("The picture didn't arrive. Check your connection and try again.");
+  }
+  for (const [index, file] of filed.entries()) {
+    const { error } = await ctx.supabase.rpc("set_social_asset_design", {
+      p_tenant_id: ctx.tenant.id,
+      p_asset_id: file.id,
+      p_design: designs[index],
+    });
+    if (error) {
+      console.error(`Design not kept: ${error.message}`);
+      return failed("The picture couldn't be saved. Please try again.");
+    }
+  }
+  const carried = (old?.tags ?? []).filter((tag) => tag !== LOGO_TAG && tag !== LOGO_LIGHT_TAG);
+  const tags = [...(options.banner ? [BANNER_TAG] : []), ...carried];
+  if (old?.project_id) {
+    await ctx.supabase.rpc("file_social_assets", {
+      p_tenant_id: ctx.tenant.id,
+      p_asset_ids: ids,
+      p_project_id: old.project_id,
+      p_add_tags: tags,
+    });
+  } else if (tags.length > 0) {
+    await ctx.supabase.rpc("sort_social_assets", {
+      p_tenant_id: ctx.tenant.id,
+      p_asset_ids: ids,
+      p_move: false,
+      p_folder_id: null,
+      p_add_tags: tags,
+      p_hidden: null,
+    });
+  }
+
+  if (old) {
+    // A post that has gone out, or is on its way, keeps the picture it was sent with in view.
+    const { data: sent } = await ctx.supabase
+      .from("social_posts")
+      .select("id")
+      .eq("tenant_id", ctx.tenant.id)
+      .in("status", ["published", "publishing"])
+      .or(`asset_id.eq.${old.id},asset_ids.cs.{${old.id}}`)
+      .limit(1);
+    if ((sent ?? []).length === 0) await putAway([old.id]);
+  }
+  done(slug);
+  return {
+    pictures: filed.map((file) => ({
+      id: file.id,
+      url: publicAssetUrl(file.path),
+      title: named.find((item) => item.path === file.path)?.title ?? "",
+    })),
+  };
 }
 
 export async function saveFolder(
