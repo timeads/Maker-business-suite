@@ -340,8 +340,9 @@ export async function getLabelRates(
             : "No carrier offered a rate for this box. Check the address, size and weight, and that a carrier is switched on in EasyPost.",
       };
     }
-    // Only prices and EasyPost's own ids are kept: no address.
-    const { error } = await getAdminClient().rpc("save_group_label_quote", {
+    // Only prices and EasyPost's own ids are kept: no address. An order on
+    // its own is stored exactly as it always was.
+    const kept = {
       p_tenant_id: ctx.tenant.id,
       p_shipping_order_id: stored.id,
       p_created_by: ctx.user.id,
@@ -349,9 +350,15 @@ export async function getLabelRates(
       p_rates: quote.rates,
       p_kind: quote.kind,
       p_boxes: quote.boxes,
-      // Which orders these prices are for; only this exact set can buy them.
-      p_rider_ids: riders,
-    });
+    };
+    const { error } =
+      riders.length > 0
+        ? await getAdminClient().rpc("save_group_label_quote", {
+            ...kept,
+            // Which orders these prices are for; only this exact set can buy them.
+            p_rider_ids: riders,
+          })
+        : await getAdminClient().rpc("save_label_quote", kept);
     if (error) {
       console.error("could not save label quote", error.message);
       return { error: "We got rates but couldn't keep them. Try again." };
