@@ -13,6 +13,7 @@ import {
   type ZebraDevice,
 } from "@/lib/shipping/zebra/client";
 import { labelsToZpl } from "@/lib/shipping/zebra/labels";
+import { PdfLabelError } from "@/lib/shipping/zebra/pdf";
 import { slipZpl, type SlipData } from "@/lib/shipping/zebra/slip";
 import { usePrintSettings } from "@/lib/shipping/zebra/use-print-settings";
 import { testLabelZpl } from "@/lib/shipping/zebra/zpl";
@@ -22,7 +23,7 @@ const linkClass = "text-ochre-text font-medium hover:underline";
 type Note = { kind: "error" | "success"; text: string } | null;
 
 const said = (err: unknown, fallback: string) =>
-  err instanceof ZebraError ? err.message : fallback;
+  err instanceof ZebraError || err instanceof PdfLabelError ? err.message : fallback;
 
 // ---------------------------------------------------------------------------
 // Shipping settings: "Printing on this computer"
@@ -307,7 +308,7 @@ export function LabelPrint({
         if (data.labels.length === 0) {
           setNote({
             kind: "error",
-            text: "This label isn't in a form we can send to the Zebra from here. Open it below and print it the ordinary way.",
+            text: "We don't hold this label's file here, so it can't go to the Zebra. Open it below and print it the ordinary way.",
           });
           return;
         }

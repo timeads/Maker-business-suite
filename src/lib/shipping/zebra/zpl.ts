@@ -242,7 +242,7 @@ const loadImage = (src: string) =>
   });
 
 /** The canvas cropped to what is printed on it, with a little white around. */
-function trimmed(canvas: HTMLCanvasElement, pad: number): HTMLCanvasElement {
+export function trimmed(canvas: HTMLCanvasElement, pad: number): HTMLCanvasElement {
   const { width, height } = canvas;
   const context = canvas.getContext("2d", { willReadFrequently: true });
   if (!context) return canvas;
@@ -275,8 +275,6 @@ export async function imageToZpl(
   dpi = 203,
   crop = false,
 ): Promise<string> {
-  const W = Math.round(4 * dpi);
-  const H = Math.round(6 * dpi);
   const img = await loadImage(`data:image/${kind};base64,${base64}`);
   let source: HTMLImageElement | HTMLCanvasElement = img;
   let sw = img.naturalWidth;
@@ -295,6 +293,21 @@ export async function imageToZpl(
       sh = source.height;
     }
   }
+  return drawnToZpl(source, sw, sh, dpi);
+}
+
+/**
+ * Anything already drawn (a picture, or a PDF page on a canvas) as one 4 × 6
+ * ZPL label: stood upright when it lies on its side, else fitted and centred.
+ */
+export async function drawnToZpl(
+  source: HTMLImageElement | HTMLCanvasElement,
+  sw: number,
+  sh: number,
+  dpi = 203,
+): Promise<string> {
+  const W = Math.round(4 * dpi);
+  const H = Math.round(6 * dpi);
   const canvas = document.createElement("canvas");
   canvas.width = W;
   canvas.height = H;

@@ -253,7 +253,7 @@ export const HELP_TOPICS: HelpTopic[] = [
       "Every label remembers when it was last printed, on any computer. Before a second copy comes out you're asked first, because only one copy of a label can be used.",
       "You can print any label again later from the order's “Already sent” list.",
       "Labels bought on a Zebra computer are in the printer's own format. On another computer they open as a file rather than a picture, so reprint those from the packing bench.",
-      "Labels bought as pictures (on another computer, or from Redo) are redrawn for the Zebra when you print them. A Redo label that arrives as a PDF can't be; open it and print it the ordinary way.",
+      "Labels bought as pictures (on another computer, or from Redo) are redrawn for the Zebra when you print them. So is a Redo label that arrives as a PDF: each page comes out as its own label. If one can't be drawn, the page says so, and you can open the label and print it the ordinary way.",
       "Packing slips can go to the Zebra too, on the same 4 × 6 labels: open Packing slips and press “Print on the Zebra”. A long order runs onto a second label.",
       "Nothing printing? Check that Browser Print is running (its icon is in the system tray or menu bar), that the printer is on, has labels and isn't paused, then press “Print test label” again.",
       "The setting is kept in that browser. A different browser, or clearing the browser's saved data, means choosing it again.",

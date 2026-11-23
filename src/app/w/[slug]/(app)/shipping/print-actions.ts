@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/auth";
 import { getEntitlements } from "@/lib/entitlements";
 import { downloadEasyPostLabel, isEasyPostFileLink } from "@/lib/shipping/sources/files";
-import type { PrintLabel } from "@/lib/shipping/zebra/labels";
+import { printKind, type PrintLabel } from "@/lib/shipping/zebra/labels";
 import { createClient } from "@/lib/supabase/server";
 import { getTenantContext } from "@/lib/tenants";
 
@@ -12,7 +12,7 @@ export type LabelPrintData = {
   error?: string;
   /** Every box's label this computer can send to its Zebra, in box order. */
   labels?: PrintLabel[];
-  /** Boxes whose label can't go to a Zebra from here (a PDF, or a file we no longer have). */
+  /** Boxes whose label can't go to a Zebra from here (a file we don't hold, or no longer have). */
   unprintable?: number;
   /** When it was last printed, on any computer. */
   printedAt?: string | null;
@@ -22,12 +22,6 @@ export type LabelPrintData = {
 const UUID = /^[0-9a-f-]{36}$/i;
 const NO_ACCESS = "Shipping isn't part of this workspace's plan right now.";
 const NOT_FOUND = "We couldn't find that label.";
-
-const KINDS: Record<string, PrintLabel["kind"]> = {
-  "text/plain": "zpl",
-  "image/png": "png",
-  "image/gif": "gif",
-};
 
 async function context(slug: string) {
   const user = await requireUser(`/w/${slug}/shipping`);
@@ -55,7 +49,7 @@ const PARCEL =
  * A parcel's label, for the computer that asked to send to its own Zebra.
  * Read as the signed-in member, so row-level security decides whether the
  * parcel and its label files are theirs to see. Labels kept as ZPL go as they
- * are; ones kept as a picture are drawn for the printer in the browser. An
+ * are; ones kept as a picture or a PDF are drawn for the printer in the browser. An
  * EasyPost label we hold only a link to is fetched from EasyPost's own file
  * store, and from nowhere else.
  */
@@ -108,7 +102,7 @@ export async function getLabelPrintData(slug: string, shipmentId: string): Promi
       const fetched = await downloadEasyPostLabel(box.link);
       file = fetched ? { content_type: fetched.contentType, data: fetched.data } : null;
     }
-    const kind = file ? KINDS[file.content_type] : undefined;
+    const kind = file ? printKind(file.content_type) : null;
     if (!file || !kind) {
       unprintable += 1;
       continue;
@@ -118,7 +112,9 @@ export async function getLabelPrintData(slug: string, shipmentId: string): Promi
       kind,
       data: file.data,
       // Redo's pictures can sit inside wide white margins.
-      ...(parcel.label_provider === "redo" && kind !== "zpl" ? { crop: true } : {}),
+      ...(parcel.label_provider === "redo" && (kind === "png" || kind === "gif")
+        ? { crop: true }
+        : {}),
     });
   }
   return {

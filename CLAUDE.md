@@ -193,7 +193,9 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   its browser and never in the database; such a computer asks for ZPL with
   the rate request (`labelFormat`, part of the fingerprint), the browser sends
   it to Zebra Browser Print on localhost, and `mark_label_printed` notes it so
-  a second copy is warned about. A print that fails never touches the
+  a second copy is warned about. A label kept as a picture or a PDF is drawn
+  for the printer in the browser (`pdfjs-dist`, loaded only when a PDF label
+  is printed). A print that fails never touches the
   purchase: the label is already kept. Telling the shop a
   parcel went (`shopify-fulfil.ts`) follows the same once-only queue as
   stock receipts. The to-ship queue's views (ready, pickup, priority,
