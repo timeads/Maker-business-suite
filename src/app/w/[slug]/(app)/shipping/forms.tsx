@@ -384,6 +384,7 @@ export function ShippingSettingsForm({
     default_carrier: string;
     mark_sent_in_shop: boolean;
     notify_customer: boolean;
+    signature_over: number | null;
   };
   canSend: boolean;
 }) {
@@ -535,6 +536,22 @@ export function ShippingSettingsForm({
           />
           …and have my shop email the customer their tracking number
         </label>
+      </fieldset>
+
+      <fieldset className="flex flex-col gap-1.5 sm:max-w-xs">
+        <legend className="mb-2 text-sm font-semibold">When you buy a label</legend>
+        <Label htmlFor="signature-over">Ask for a signature on orders of at least</Label>
+        <Input
+          id="signature-over"
+          name="signature_over"
+          inputMode="decimal"
+          placeholder="Never"
+          defaultValue={settings.signature_over ?? ""}
+        />
+        <span className="text-muted-foreground text-xs">
+          The order&apos;s total, in your currency. Leave empty to never ask by default. You can
+          still change it on any one label.
+        </span>
       </fieldset>
       <Result state={state} />
       <SubmitButton variant="outline" pendingText="Saving…" className="sm:w-fit">

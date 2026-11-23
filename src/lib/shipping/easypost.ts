@@ -323,6 +323,19 @@ export type LabelAddress = {
   zip: string;
   country: string;
   phone?: string;
+  /** A home, not a business: some carriers charge and deliver differently. */
+  residential?: boolean;
+};
+
+/** Who has to sign when the parcel arrives. */
+export const SIGNATURES = ["none", "signature", "adult"] as const;
+export type Signature = (typeof SIGNATURES)[number];
+export const isSignature = (value: unknown): value is Signature =>
+  SIGNATURES.includes(value as Signature);
+const CONFIRMATION: Record<Signature, string | null> = {
+  none: null,
+  signature: "SIGNATURE",
+  adult: "ADULT_SIGNATURE",
 };
 
 export type LabelParcel = {
@@ -438,6 +451,7 @@ const address = (a: LabelAddress) => ({
   zip: a.zip,
   country: a.country || "US",
   phone: normalizePhone(a.phone, a.country) || undefined,
+  ...(a.residential === undefined ? {} : { residential: a.residential }),
 });
 
 /**
@@ -446,10 +460,17 @@ const address = (a: LabelAddress) => ({
  */
 export async function getRates(
   key: string,
-  input: { from: LabelAddress; to: LabelAddress; parcel: LabelParcel; reference?: string },
+  input: {
+    from: LabelAddress;
+    to: LabelAddress;
+    parcel: LabelParcel;
+    reference?: string;
+    signature?: Signature;
+  },
   fetchImpl: Fetch = fetch,
 ): Promise<RateQuote> {
   const reference = input.reference?.trim().slice(0, 35) || undefined;
+  const confirmation = CONFIRMATION[input.signature ?? "none"];
   const shipment = await call<RawShipment>(fetchImpl, key, "POST", "/shipments", {
     shipment: {
       to_address: address(input.to),
@@ -465,6 +486,7 @@ export async function getRates(
         label_format: "PNG",
         label_size: "4x6",
         ...(reference ? { print_custom_1: reference } : {}),
+        ...(confirmation ? { delivery_confirmation: confirmation } : {}),
       },
       reference,
     },
@@ -474,6 +496,83 @@ export async function getRates(
     throw new EasyPostError("EasyPost didn't send any rates back. Try again.", null, false);
   }
   return { shipmentId, mode: modeOf(shipment.mode), rates: normalizeRates(shipment.rates) };
+}
+
+export type AddressCheck = {
+  /** The carriers' address book knows this address. */
+  found: boolean;
+  /** Why not, in EasyPost's words, when it wasn't found. */
+  problem: string;
+  /** A home rather than a business, when EasyPost can tell. */
+  residential: boolean | null;
+  /** The address as the carriers spell it, when it differs from what was sent. */
+  suggestion: Pick<LabelAddress, "street1" | "street2" | "city" | "state" | "zip"> | null;
+};
+
+type RawAddress = {
+  street1?: unknown;
+  street2?: unknown;
+  city?: unknown;
+  state?: unknown;
+  zip?: unknown;
+  residential?: unknown;
+  verifications?: {
+    delivery?: { success?: unknown; errors?: unknown } | null;
+  } | null;
+};
+
+const same = (a: string | undefined, b: string) =>
+  (a ?? "").trim().toLowerCase() === b.trim().toLowerCase();
+
+/** Reads EasyPost's answer to an address check. No network. */
+export function readAddressCheck(sent: LabelAddress, raw: unknown): AddressCheck {
+  const got = (raw ?? {}) as RawAddress;
+  const delivery = got.verifications?.delivery;
+  const found = delivery?.success === true;
+  const errors = Array.isArray(delivery?.errors)
+    ? (delivery.errors as { message?: unknown }[])
+        .map((item) => text(item?.message))
+        .filter(Boolean)
+        .join("; ")
+        .slice(0, 200)
+    : "";
+  const spelled = {
+    street1: text(got.street1),
+    street2: text(got.street2) || undefined,
+    city: text(got.city),
+    state: text(got.state) || undefined,
+    zip: text(got.zip),
+  };
+  const differs =
+    found &&
+    Boolean(spelled.street1 && spelled.city && spelled.zip) &&
+    !(
+      same(sent.street1, spelled.street1) &&
+      same(sent.street2, spelled.street2 ?? "") &&
+      same(sent.city, spelled.city) &&
+      same(sent.state, spelled.state ?? "") &&
+      same(sent.zip, spelled.zip)
+    );
+  return {
+    found,
+    problem: found ? "" : errors,
+    residential: typeof got.residential === "boolean" ? got.residential : null,
+    suggestion: differs ? spelled : null,
+  };
+}
+
+/** Asks whether the carriers know an address. Buys nothing and changes nothing. */
+export async function verifyAddress(
+  key: string,
+  to: LabelAddress,
+  fetchImpl: Fetch = fetch,
+): Promise<AddressCheck> {
+  const raw = await call<RawAddress>(fetchImpl, key, "POST", "/addresses", {
+    // `verify` sits beside the address, not inside it.
+    address: address(to),
+    verify: true,
+  });
+  return readAddressCheck(to, raw);
 }
 
 function boughtFrom(shipment: RawShipment): BoughtLabel | null {

@@ -56,6 +56,11 @@ export const shippingSettingsSchema = z.object({
   mark_sent_in_shop: z.boolean().default(false),
   /** ...and have the shop email the customer their tracking number. */
   notify_customer: z.boolean().default(true),
+  /**
+   * Labels for orders worth at least this much ask for a signature on
+   * delivery. Null: never ask unless the person choosing the label does.
+   */
+  signature_over: z.number().min(0).max(1_000_000).nullable().default(null),
 });
 export type ShippingSettings = z.infer<typeof shippingSettingsSchema>;
 

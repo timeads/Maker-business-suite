@@ -17,6 +17,9 @@ import {
   rateChoice,
   shipFromAddress,
   shipToAddress,
+  shipToEdit,
+  signatureByRule,
+  withShipToEdit,
 } from "./labels";
 
 const settings = parseShippingSettings({
@@ -189,5 +192,52 @@ describe("the box and its weight", () => {
     expect(deliveryDays(1)).toBe("1 day");
     expect(deliveryDays(3)).toBe("3 days");
     expect(deliveryDays(null)).toBe("");
+  });
+});
+
+describe("changing the address for one label", () => {
+  const order = {
+    recipient: "Sam Shopper",
+    company: null,
+    address1: "12 Mill Lane",
+    address2: null,
+    city: "Hudson",
+    region: "NY",
+    postal_code: "12534",
+    country_code: "US",
+    phone: "555-0100",
+  };
+
+  it("lays the typed boxes over the order and keeps the order's country", () => {
+    const edit = { ...shipToEdit(order), address1: "  14   Mill Lane ", address2: "Apt 2" };
+    const out = withShipToEdit(order, { ...edit, country_code: "CA" });
+    expect(out).toMatchObject({ address1: "14 Mill Lane", address2: "Apt 2", country_code: "US" });
+    expect(order.address1).toBe("12 Mill Lane");
+  });
+
+  it("uses the order as it is when nothing was changed", () => {
+    expect(withShipToEdit(order, undefined)).toBe(order);
+  });
+
+  it("refuses anything that isn't an address", () => {
+    expect(withShipToEdit(order, "12 Mill Lane")).toBeNull();
+    expect(withShipToEdit(order, { ...shipToEdit(order), city: 7 })).toBeNull();
+    expect(withShipToEdit(order, { ...shipToEdit(order), city: "x".repeat(121) })).toBeNull();
+    expect(withShipToEdit(order, { recipient: "Sam" })).toBeNull();
+  });
+
+  it("an emptied box is a gap the label will be refused for", () => {
+    const out = withShipToEdit(order, { ...shipToEdit(order), city: " " });
+    expect(missingShipTo(out!)).toEqual(["a town or city"]);
+  });
+});
+
+describe("the signature rule", () => {
+  it("asks at or over the amount, and never without a rule or a total", () => {
+    expect(signatureByRule(318.6, 250)).toBe(true);
+    expect(signatureByRule(250, 250)).toBe(true);
+    expect(signatureByRule(249.99, 250)).toBe(false);
+    expect(signatureByRule(900, null)).toBe(false);
+    expect(signatureByRule(null, 250)).toBe(false);
   });
 });

@@ -167,6 +167,72 @@ export function shipToAddress(order: LabelOrder, homeCountry: string): LabelAddr
   };
 }
 
+/** The address boxes a person can change for one label, as typed. */
+export type ShipToEdit = {
+  recipient: string;
+  company: string;
+  phone: string;
+  address1: string;
+  address2: string;
+  city: string;
+  region: string;
+  postal_code: string;
+};
+
+const SHIP_TO_LIMITS: Record<keyof ShipToEdit, number> = {
+  recipient: 120,
+  company: 120,
+  phone: 30,
+  address1: 120,
+  address2: 120,
+  city: 120,
+  region: 60,
+  postal_code: 20,
+};
+
+export const shipToEdit = (order: LabelOrder): ShipToEdit => ({
+  recipient: order.recipient ?? "",
+  company: order.company ?? "",
+  phone: order.phone ?? "",
+  address1: order.address1 ?? "",
+  address2: order.address2 ?? "",
+  city: order.city ?? "",
+  region: order.region ?? "",
+  postal_code: order.postal_code ?? "",
+});
+
+/**
+ * The order's address with one label's changes laid over it. The country is
+ * always the order's own: a label to somewhere else is a different job.
+ * Null when what was typed isn't an address (too long, or not text).
+ */
+export function withShipToEdit(order: LabelOrder, edit: unknown): LabelOrder | null {
+  if (edit === undefined || edit === null) return order;
+  if (typeof edit !== "object") return null;
+  const typed = edit as Record<string, unknown>;
+  const out = { ...order };
+  for (const field of Object.keys(SHIP_TO_LIMITS) as (keyof ShipToEdit)[]) {
+    const value = typed[field];
+    if (typeof value !== "string") return null;
+    const clean = value.replace(/\s+/g, " ").trim();
+    if (clean.length > SHIP_TO_LIMITS[field]) return null;
+    out[field] = clean || null;
+  }
+  return out;
+}
+
+/** Whether an order's value alone calls for a signature, by the workspace's rule. */
+export const signatureByRule = (
+  orderTotal: number | null | undefined,
+  over: number | null | undefined,
+): boolean =>
+  over !== null &&
+  over !== undefined &&
+  orderTotal !== null &&
+  orderTotal !== undefined &&
+  Number.isFinite(Number(orderTotal)) &&
+  Number(orderTotal) >= over;
+
 /** What the browser is shown of a rate. */
 export type RateChoice = Pick<LabelRate, "id" | "carrier" | "name" | "price" | "currency" | "days">;
 

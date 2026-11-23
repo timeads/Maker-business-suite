@@ -212,10 +212,14 @@ export const HELP_TOPICS: HelpTopic[] = [
     steps: [
       "Open Connections, find EasyPost and paste in your API key from your EasyPost account. A test key buys pretend labels, which is a good way to try it.",
       "In Shipping → Settings, fill in where you ship from (street, city, state, postcode and phone) and add the boxes you pack in.",
-      "Open an order. Pick a box, check the weight and press “Get rates”.",
-      "Choose a rate and press “Buy & print label”. The label opens to print, and the parcel and tracking number are recorded for you.",
+      "Open an order. The address is checked for you, and if your usual box and the weight are known, the rates are already waiting.",
+      "Fix the address if it needs it (the change is for this label only), pick the box, and choose whether a signature is needed. Then press “Get rates” if they aren't showing.",
+      "Choose a service and press “Buy & print label”, or Ctrl+P. The label opens to print, and the parcel and tracking number are recorded for you.",
     ],
     notes: [
+      "Each rate shows what's left of the shipping your customer paid, so you can see when a label costs more than they were charged.",
+      "In Shipping → Settings you can ask for a signature on every order over an amount.",
+      "Use the arrows at the top (or J and K) to go to the next order without going back to the list.",
       "A label covers everything left on the order. For a part shipment, record the parcel by hand instead.",
       "International labels need a customs form, which isn't built yet. Buy those elsewhere and record the parcel by hand.",
       "Owners and admins can void a label. That asks EasyPost for a refund and puts the items back in the queue.",

@@ -9,6 +9,8 @@ import {
   formatPrice,
   formatTenthOz,
   getRates,
+  readAddressCheck,
+  verifyAddress,
   getShipment,
   gramsToTenthOz,
   lbOzToTenthOz,
@@ -441,5 +443,100 @@ describe("checking a key", () => {
       ["GET", "/shipments?page_size=1", 401, { error: { message: "no" } }],
     ]);
     await expect(checkKey(KEY, impl)).rejects.toThrow(ReconnectRequiredError);
+  });
+});
+
+describe("checking an address", () => {
+  const sent = {
+    name: "Sam",
+    street1: "12 mill ln",
+    city: "hudson",
+    state: "ny",
+    zip: "12534",
+    country: "US",
+  };
+
+  it("asks EasyPost to verify, and reads a found address with its tidier spelling", async () => {
+    const { impl, calls } = fakeFetch([
+      [
+        "POST",
+        "/v2/addresses",
+        201,
+        {
+          street1: "12 MILL LN",
+          street2: null,
+          city: "HUDSON",
+          state: "NY",
+          zip: "12534-1234",
+          residential: true,
+          verifications: { delivery: { success: true, errors: [] } },
+        },
+      ],
+    ]);
+    const check = await verifyAddress(KEY, sent, impl);
+    const asked = JSON.parse(calls[0].body);
+    expect(asked.verify).toBe(true);
+    expect(asked.address).toMatchObject({ street1: "12 mill ln" });
+    expect("verify" in asked.address).toBe(false);
+    expect(check.found).toBe(true);
+    expect(check.residential).toBe(true);
+    // Only the postcode really differs; case alone would not be a suggestion.
+    expect(check.suggestion).toEqual({
+      street1: "12 MILL LN",
+      street2: undefined,
+      city: "HUDSON",
+      state: "NY",
+      zip: "12534-1234",
+    });
+  });
+
+  it("offers no suggestion when the spelling only differs by case", () => {
+    const check = readAddressCheck(sent, {
+      street1: "12 MILL LN",
+      city: "HUDSON",
+      state: "NY",
+      zip: "12534",
+      verifications: { delivery: { success: true } },
+    });
+    expect(check).toMatchObject({ found: true, suggestion: null, residential: null });
+  });
+
+  it("says why an address wasn't found, and never suggests one", () => {
+    const check = readAddressCheck(sent, {
+      street1: "12 mill ln",
+      verifications: { delivery: { success: false, errors: [{ message: "Address not found" }] } },
+    });
+    expect(check).toEqual({
+      found: false,
+      problem: "Address not found",
+      residential: null,
+      suggestion: null,
+    });
+  });
+
+  it("treats an answer with no verdict as not found", () => {
+    expect(readAddressCheck(sent, {}).found).toBe(false);
+    expect(readAddressCheck(sent, null).found).toBe(false);
+  });
+});
+
+describe("asking for a signature", () => {
+  it("adds the delivery confirmation and the residential flag only when asked", async () => {
+    const { impl, calls } = fakeFetch([
+      ["POST", "/v2/shipments", 201, { id: "shp_1", mode: "test", rates: [] }],
+    ]);
+    await getRates(
+      KEY,
+      { from, to: { ...to, residential: true }, parcel, signature: "adult" },
+      impl,
+    );
+    const shipment = JSON.parse(calls[0].body).shipment;
+    expect(shipment.options.delivery_confirmation).toBe("ADULT_SIGNATURE");
+    expect(shipment.to_address.residential).toBe(true);
+
+    await getRates(KEY, { from, to, parcel, signature: "none" }, impl);
+    const plain = JSON.parse(calls[1].body).shipment;
+    expect("delivery_confirmation" in plain.options).toBe(false);
+    expect("residential" in plain.to_address).toBe(false);
   });
 });

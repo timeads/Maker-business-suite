@@ -9,7 +9,13 @@ import { daysFromNow } from "@/lib/bookings/slots";
 import { formatMoney } from "@/lib/dashboard/format";
 import { addressLines, hasAddress } from "@/lib/shipping/carriers";
 import { gramsToTenthOz } from "@/lib/shipping/easypost";
-import { boxSize, boxTenthOz, missingShipFrom, missingShipTo } from "@/lib/shipping/labels";
+import {
+  boxSize,
+  boxTenthOz,
+  missingShipFrom,
+  shipToEdit,
+  signatureByRule,
+} from "@/lib/shipping/labels";
 import {
   formatHoldDate,
   formatWeight,
@@ -37,8 +43,16 @@ import {
 } from "../../data";
 import { HoldForm, ParcelForm, PickupForm, SeenBackFromHold, VoidButton } from "../../forms";
 import { shippingAccess } from "../../gate";
-import { FinishLabelButton, LabelBuilder } from "../../label-card";
+import { FinishLabelButton } from "../../label-card";
+import { LabelDesk } from "../../label-desk";
 import { OrderSteps } from "../../order-steps";
+
+type Sale = {
+  net_sales: number | string;
+  total_tax: number | string;
+  total_shipping: number | string;
+  total: number | string;
+};
 
 const INTERNATIONAL_NOTE =
   "International labels need a customs form, which isn't built yet. Buy this one elsewhere and record it below.";
@@ -66,7 +80,7 @@ export default async function ShippingOrderPage({
     await Promise.all([
       supabase
         .from("shipping_orders")
-        .select(ORDER_FIELDS)
+        .select(`${ORDER_FIELDS}, sale:orders(net_sales, total_tax, total_shipping, total)`)
         .eq("tenant_id", tenant.id)
         .eq("id", id)
         .maybeSingle(),
@@ -84,8 +98,25 @@ export default async function ShippingOrderPage({
       loadUnfinishedLabels(supabase, tenant.id, id),
       loadQueueSteps(supabase, tenant.id),
     ]);
-  const order = data as unknown as ShippingOrder | null;
+  const order = data as unknown as (ShippingOrder & { sale?: Sale | Sale[] | null }) | null;
   if (!order) notFound();
+  const sale = (Array.isArray(order.sale) ? order.sale[0] : order.sale) ?? null;
+  // Each item's photo, where the shop sync has noted one, matched by item code.
+  const skus = [...new Set(order.items.map((item) => item.sku).filter(Boolean))] as string[];
+  const { data: pictured } = skus.length
+    ? await supabase
+        .from("stock_items")
+        .select("sku, image_url")
+        .eq("tenant_id", tenant.id)
+        .in("sku", skus.slice(0, 200))
+        .not("image_url", "is", null)
+    : { data: [] };
+  const photos = new Map(
+    ((pictured ?? []) as { sku: string; image_url: string }[]).map((row) => [
+      row.sku,
+      row.image_url,
+    ]),
+  );
   const today = todayIn(tenant.timezone, new Date(daysFromNow(0)));
   const left = order.items.filter((item) => item.left > 0);
   const pickedUp = Boolean(order.picked_up_at);
@@ -136,8 +167,7 @@ export default async function ShippingOrderPage({
   const posting = todo && entitlements.canWrite && !order.pickup;
   const abroad = isInternational(order.country_code, home);
   const fromGaps = missingShipFrom(setup.settings);
-  const toGaps = missingShipTo(order);
-  const labelCard: "builder" | "reconnect" | "abroad" | "from" | "to" | "unfinished" | null =
+  const labelCard: "builder" | "reconnect" | "abroad" | "from" | "unfinished" | null =
     !posting || easypost.status === "none" || easypost.status === "disconnected"
       ? null
       : unfinished.length > 0
@@ -148,15 +178,60 @@ export default async function ShippingOrderPage({
             ? "abroad"
             : fromGaps.length > 0
               ? "from"
-              : toGaps.length > 0
-                ? "to"
-                : "builder";
-  const push = setup.canSend && setup.settings.mark_sent_in_shop;
-  const shopNote = push
-    ? setup.settings.notify_customer
-      ? "Buying records the parcel, marks the order as sent in your shop and has your shop email the tracking number."
-      : "Buying records the parcel and marks the order as sent in your shop."
-    : "Buying records the parcel here. Mark the order as sent in your shop yourself.";
+              : "builder";
+  const desk = labelCard === "builder";
+  const money = (value: number | string) => formatMoney(Number(value), tenant.currency);
+  const paidWords =
+    order.shipping_paid === null
+      ? "Not known"
+      : Number(order.shipping_paid) === 0
+        ? "Free shipping"
+        : money(order.shipping_paid);
+  const over = setup.settings.signature_over;
+  const rule =
+    over !== null && signatureByRule(sale ? Number(sale.total) : null, over)
+      ? `a signature is asked for on orders of ${money(over)} or more.`
+      : null;
+  const itemsList = (
+    <ul className="grid gap-x-6 gap-y-3 sm:grid-cols-2 xl:grid-cols-3">
+      {order.items.map((item) => {
+        const photo = item.sku ? photos.get(item.sku) : undefined;
+        return (
+          <li key={item.line_id} className="flex items-center gap-3 text-sm">
+            {photo ? (
+              // eslint-disable-next-line @next/next/no-img-element -- the shop's own picture of the product, on the shop's image servers
+              <img
+                src={photo}
+                alt=""
+                loading="lazy"
+                className="border-border size-11 shrink-0 rounded-md border object-cover"
+              />
+            ) : (
+              <span className="bg-sunken size-11 shrink-0 rounded-md" aria-hidden />
+            )}
+            <span className="min-w-0 flex-1">
+              <span className="block truncate font-semibold">{item.title}</span>
+              <span className="text-muted-foreground block truncate text-xs">
+                {[item.variant, item.sku].filter(Boolean).join(" · ") || "No item code"}
+              </span>
+            </span>
+            <span className="text-right tabular-nums">
+              <span className="text-ochre-text block text-xs font-semibold">
+                {item.left < item.qty ? `${item.left} of ${item.qty} left` : `× ${item.qty}`}
+              </span>
+              {item.price !== null && item.price !== undefined && (
+                <span className="text-muted-foreground block text-xs">
+                  {money(Number(item.price) * item.qty)}
+                </span>
+              )}
+            </span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+  const summaryRow =
+    "border-border flex items-baseline justify-between gap-4 border-b py-2 last:border-b-0";
 
   return (
     <>
@@ -175,7 +250,11 @@ export default async function ShippingOrderPage({
       </div>
       <PageHeader
         title={`${order.name ?? "Order"} · ${order.recipient ?? "no name"}`}
-        description={[`Ordered ${when.format(new Date(order.placed_at))}`, ...chose].join(" · ")}
+        description={[
+          `Ordered ${when.format(new Date(order.placed_at))}`,
+          `${order.items.reduce((sum, item) => sum + item.qty, 0)} items`,
+          ...chose,
+        ].join(" · ")}
       >
         {order.cancelled && <Badge tone="bad">Cancelled</Badge>}
         {pickedUp && !order.cancelled && <Badge tone="good">Picked up</Badge>}
@@ -197,22 +276,6 @@ export default async function ShippingOrderPage({
         )}
         {todo && !order.pickup && isInternational(order.country_code, home) && (
           <Badge>International</Badge>
-        )}
-        {todo && (
-          <Button asChild variant="outline" size="sm">
-            <Link href={`${base}/slips?order=${order.id}`}>
-              Packing slip{order.slip_printed_at ? " (printed)" : ""}
-            </Link>
-          </Button>
-        )}
-        {todo && (
-          <Button asChild variant="outline" size="sm">
-            <Link
-              href={`${base}/scan?code=${encodeURIComponent((order.name ?? "").replace(/^#/, ""))}`}
-            >
-              Scan &amp; pack
-            </Link>
-          </Button>
         )}
       </PageHeader>
       {hold === "back" && entitlements.canWrite && (
@@ -340,7 +403,42 @@ export default async function ShippingOrderPage({
             </Card>
           ) : todo && entitlements.canWrite ? (
             <>
-              {labelCard && labelCard !== "unfinished" && (
+              {desk && (
+                <LabelDesk
+                  key={order.id}
+                  slug={tenant.slug}
+                  orderId={order.id}
+                  shipTo={shipToEdit(order)}
+                  country={(order.country_code || home).toUpperCase()}
+                  boxes={boxes.map((box) => ({
+                    id: box.id,
+                    name: box.name,
+                    size: boxSize(box),
+                    emptyTenthOz: boxTenthOz(box),
+                  }))}
+                  contentsTenthOz={
+                    order.weight_grams ? gramsToTenthOz(Number(order.weight_grams)) : null
+                  }
+                  paid={{
+                    cents:
+                      order.shipping_paid === null
+                        ? null
+                        : Math.round(Number(order.shipping_paid) * 100),
+                    words: paidWords,
+                    method: order.shipping_method,
+                  }}
+                  rule={rule}
+                  shop={{
+                    offered: setup.canSend,
+                    markSent: setup.settings.mark_sent_in_shop,
+                    notify: setup.settings.notify_customer,
+                  }}
+                  testMode={easypost.testMode}
+                >
+                  {itemsList}
+                </LabelDesk>
+              )}
+              {labelCard && labelCard !== "unfinished" && !desk && (
                 <Card>
                   <CardHeader>
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -349,34 +447,9 @@ export default async function ShippingOrderPage({
                         <Badge tone="waiting">Test mode: labels are not real</Badge>
                       )}
                     </div>
-                    <CardDescription>
-                      {labelCard === "builder"
-                        ? "Pick the box, check the weight and see what each carrier would charge. Postage is paid from your EasyPost account."
-                        : "Postage is paid from your EasyPost account."}
-                    </CardDescription>
+                    <CardDescription>Postage is paid from your EasyPost account.</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    {labelCard === "builder" && (
-                      <LabelBuilder
-                        slug={tenant.slug}
-                        orderId={order.id}
-                        boxes={boxes.map((box) => ({
-                          id: box.id,
-                          name: box.name,
-                          size: boxSize(box),
-                          emptyTenthOz: boxTenthOz(box),
-                        }))}
-                        contentsTenthOz={
-                          order.weight_grams ? gramsToTenthOz(Number(order.weight_grams)) : null
-                        }
-                        shopNote={shopNote}
-                        paidCents={
-                          order.shipping_paid === null
-                            ? null
-                            : Math.round(Number(order.shipping_paid) * 100)
-                        }
-                      />
-                    )}
                     {labelCard === "abroad" && <p className="text-sm">{INTERNATIONAL_NOTE}</p>}
                     {labelCard === "reconnect" && (
                       <p className="text-sm">
@@ -410,28 +483,31 @@ export default async function ShippingOrderPage({
                         )}
                       </p>
                     )}
-                    {labelCard === "to" && (
-                      <p className="text-sm">
-                        This order&apos;s address is missing {toGaps.join(", ")}, so a label
-                        can&apos;t be made for it. Fix it in your shop, then sync.
-                      </p>
-                    )}
                   </CardContent>
                 </Card>
               )}
-              <Card>
-                <CardHeader>
-                  <CardTitle>
-                    {labelCard === "builder" ? "Or record a parcel by hand" : "Record the parcel"}
-                  </CardTitle>
-                  <CardDescription>
-                    {labelCard === "builder"
-                      ? "Bought the postage somewhere else? Put the tracking number here."
-                      : "Buy the postage wherever you usually do, then put the tracking number here."}
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>{parcelForm(labelCard === "builder")}</CardContent>
-              </Card>
+              {desk ? (
+                <details className="bg-card border-border rounded-xl border px-5 py-4 text-sm">
+                  <summary className="cursor-pointer font-semibold">
+                    Bought the postage somewhere else, or sending part of this order?
+                  </summary>
+                  <p className="text-muted-foreground pt-2">
+                    Record the parcel by hand: put the tracking number here, and lower a number to
+                    send part now.
+                  </p>
+                  <div className="pt-4">{parcelForm(true)}</div>
+                </details>
+              ) : (
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Record the parcel</CardTitle>
+                    <CardDescription>
+                      Buy the postage wherever you usually do, then put the tracking number here.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>{parcelForm(false)}</CardContent>
+                </Card>
+              )}
             </>
           ) : (
             <Card>
@@ -444,6 +520,15 @@ export default async function ShippingOrderPage({
                       : "This workspace is read-only right now, so parcels can't be recorded."}
                 </p>
               </CardContent>
+            </Card>
+          )}
+
+          {!desk && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Items</CardTitle>
+              </CardHeader>
+              <CardContent>{itemsList}</CardContent>
             </Card>
           )}
 
@@ -508,37 +593,122 @@ export default async function ShippingOrderPage({
         <aside className="flex flex-col gap-6">
           <Card>
             <CardHeader>
-              <CardTitle>{order.pickup ? "Collecting" : "Send to"}</CardTitle>
+              <CardTitle>Order summary</CardTitle>
             </CardHeader>
-            <CardContent className="flex flex-col gap-2 text-sm">
-              {order.pickup && !hasAddress(order) ? (
-                <p className="font-read">{order.recipient ?? "No name on this order"}</p>
-              ) : hasAddress(order) ? (
-                <address className="font-read not-italic">
-                  {addressLines(order, home).map((line, index) => (
-                    <span key={index} className="block">
-                      {line}
-                    </span>
-                  ))}
-                </address>
-              ) : (
-                <p className="text-brick">
-                  There&apos;s no full address on this order. Check it in your shop before you pack.
+            <CardContent className="flex flex-col text-sm">
+              {(
+                [
+                  ["Order", order.name ?? "–"],
+                  ["Placed", when.format(new Date(order.placed_at))],
+                  ["Customer", order.recipient ?? "No name"],
+                  ["Email", order.email ?? "–"],
+                  ["Phone", order.phone ?? "–"],
+                  ["Payment", order.paid ? "Paid" : "Pending"],
+                  ["Customer chose", order.shipping_method ?? "–"],
+                  ["Weight", formatWeight(order.weight_grams, home === "US") || "–"],
+                ] as const
+              ).map(([label, value]) => (
+                <p key={label} className={summaryRow}>
+                  <span className="text-muted-foreground">{label}</span>
+                  <span className="font-read min-w-0 truncate text-right font-medium">{value}</span>
                 </p>
-              )}
-              {order.phone && <p className="text-muted-foreground">{order.phone}</p>}
-              {order.email && (
-                <a href={`mailto:${order.email}`} className="text-muted-foreground hover:underline">
-                  {order.email}
-                </a>
-              )}
+              ))}
               {order.note && (
-                <p className="bg-note font-read mt-1 rounded-md px-3 py-2 whitespace-pre-wrap">
+                <p className="bg-note font-read mt-3 rounded-md px-3 py-2 whitespace-pre-wrap">
                   {order.note}
                 </p>
               )}
+              <div className="flex flex-wrap gap-2 pt-4">
+                {order.email && (
+                  <Button asChild variant="outline" size="sm">
+                    <a href={`mailto:${order.email}`}>Email customer</a>
+                  </Button>
+                )}
+                {todo && (
+                  <Button asChild variant="outline" size="sm">
+                    <Link href={`${base}/slips?order=${order.id}`}>
+                      Packing slip{order.slip_printed_at ? " (printed)" : ""}
+                    </Link>
+                  </Button>
+                )}
+                {todo && (
+                  <Button asChild variant="outline" size="sm">
+                    <Link
+                      href={`${base}/scan?code=${encodeURIComponent((order.name ?? "").replace(/^#/, ""))}`}
+                    >
+                      Scan &amp; pack
+                    </Link>
+                  </Button>
+                )}
+              </div>
             </CardContent>
           </Card>
+
+          {sale && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Payment summary</CardTitle>
+              </CardHeader>
+              <CardContent className="flex flex-col text-sm">
+                {(
+                  [
+                    ["Items, after discounts", sale.net_sales],
+                    ["Shipping paid", sale.total_shipping],
+                    ["Tax", sale.total_tax],
+                  ] as const
+                ).map(([label, value]) => (
+                  <p key={label} className={summaryRow}>
+                    <span className="text-muted-foreground">{label}</span>
+                    <span className="font-medium tabular-nums">{money(value)}</span>
+                  </p>
+                ))}
+                <p className={summaryRow}>
+                  <span className="font-semibold">Total</span>
+                  <span className="font-semibold tabular-nums">{money(sale.total)}</span>
+                </p>
+              </CardContent>
+            </Card>
+          )}
+
+          {!desk && (
+            <Card>
+              <CardHeader>
+                <CardTitle>{order.pickup ? "Collecting" : "Send to"}</CardTitle>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-2 text-sm">
+                {order.pickup && !hasAddress(order) ? (
+                  <p className="font-read">{order.recipient ?? "No name on this order"}</p>
+                ) : hasAddress(order) ? (
+                  <address className="font-read not-italic">
+                    {addressLines(order, home).map((line, index) => (
+                      <span key={index} className="block">
+                        {line}
+                      </span>
+                    ))}
+                  </address>
+                ) : (
+                  <p className="text-brick">
+                    There&apos;s no full address on this order. Check it in your shop before you
+                    pack.
+                  </p>
+                )}
+                {order.phone && <p className="text-muted-foreground">{order.phone}</p>}
+                {order.email && (
+                  <a
+                    href={`mailto:${order.email}`}
+                    className="text-muted-foreground hover:underline"
+                  >
+                    {order.email}
+                  </a>
+                )}
+                {order.note && (
+                  <p className="bg-note font-read mt-1 rounded-md px-3 py-2 whitespace-pre-wrap">
+                    {order.note}
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          )}
 
           {todo && entitlements.canWrite && (
             <Card>

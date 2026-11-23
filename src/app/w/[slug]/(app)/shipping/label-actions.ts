@@ -11,7 +11,10 @@ import {
   buyLabel as buyFromEasyPost,
   getRates,
   getShipment,
+  isSignature,
   serviceWithoutCarrier,
+  verifyAddress,
+  type AddressCheck,
   type BoughtLabel,
 } from "@/lib/shipping/easypost";
 import { flagLabelKey, getLabelKey } from "@/lib/shipping/label-key";
@@ -24,7 +27,9 @@ import {
   rateChoice,
   shipFromAddress,
   shipToAddress,
+  withShipToEdit,
   type RateChoice,
+  type ShipToEdit,
   type SavedBox,
 } from "@/lib/shipping/labels";
 import { isInternational } from "@/lib/shipping/queue";
@@ -192,6 +197,11 @@ export type RatesInput = {
   height: string;
   weightLb: string;
   weightOz: string;
+  /** The address boxes as they stand on the screen, for this label only. */
+  shipTo?: ShipToEdit;
+  residential?: boolean;
+  /** "none", "signature" or "adult". */
+  signature?: string;
 };
 
 /**
@@ -218,12 +228,15 @@ export async function getLabelRates(
       .maybeSingle(),
     loadShippingSetup(ctx.supabase, ctx.tenant.id),
   ]);
-  const order = data as unknown as ShippingOrder | null;
-  if (!order) return { error: "We couldn't find that order." };
-  if (order.cancelled) return { error: "This order was cancelled, so there's nothing to send." };
-  if (order.units_left <= 0) return { error: "Everything on this order has already been sent." };
+  const stored = data as unknown as ShippingOrder | null;
+  if (!stored) return { error: "We couldn't find that order." };
+  if (stored.cancelled) return { error: "This order was cancelled, so there's nothing to send." };
+  if (stored.units_left <= 0) return { error: "Everything on this order has already been sent." };
   const home = setup.settings.ship_from_country;
-  if (isInternational(order.country_code, home)) return { error: INTERNATIONAL };
+  if (isInternational(stored.country_code, home)) return { error: INTERNATIONAL };
+  // What a person changed on the screen goes on this label and nowhere else.
+  const order = withShipToEdit(stored, input.shipTo);
+  if (!order) return { error: "That address doesn't look right. Check each box and try again." };
   const fromGaps = missingShipFrom(setup.settings);
   if (fromGaps.length > 0) {
     return {
@@ -233,7 +246,7 @@ export async function getLabelRates(
   const toGaps = missingShipTo(order);
   if (toGaps.length > 0) {
     return {
-      error: `This order's address is missing ${toGaps.join(", ")}. Fix it in your shop, then sync.`,
+      error: `The address is missing ${toGaps.join(", ")}. Fill it in under Ship to.`,
     };
   }
 
@@ -265,9 +278,13 @@ export async function getLabelRates(
   try {
     const quote = await getRates(held.key, {
       from: shipFromAddress(setup.settings),
-      to: shipToAddress(order, home),
+      to: {
+        ...shipToAddress(order, home),
+        ...(typeof input.residential === "boolean" ? { residential: input.residential } : {}),
+      },
       parcel: parsed.parcel,
-      reference: order.name ?? undefined,
+      reference: stored.name ?? undefined,
+      signature: isSignature(input.signature) ? input.signature : "none",
     });
     if (quote.rates.length === 0) {
       return {
@@ -278,7 +295,7 @@ export async function getLabelRates(
     // Only prices and EasyPost's own ids are kept: no address.
     const { error } = await getAdminClient().rpc("save_label_quote", {
       p_tenant_id: ctx.tenant.id,
-      p_shipping_order_id: order.id,
+      p_shipping_order_id: stored.id,
       p_created_by: ctx.user.id,
       p_provider_shipment_id: quote.shipmentId,
       p_rates: quote.rates,
@@ -288,6 +305,46 @@ export async function getLabelRates(
       return { error: "We got rates but couldn't keep them. Try again." };
     }
     return { rates: quote.rates.map(rateChoice) };
+  } catch (err) {
+    return { error: await explain(err, held.connectionId) };
+  }
+}
+
+export type AddressState = { error?: string; check?: AddressCheck };
+
+/**
+ * Asks the carriers' address book about the address on the screen. Nothing
+ * is saved: the answer only tells the person whether to look again.
+ */
+export async function checkLabelAddress(
+  slug: string,
+  orderId: string,
+  shipTo: ShipToEdit,
+): Promise<AddressState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  if (!UUID.test(orderId)) return { error: OOPS };
+  const [{ data }, setup] = await Promise.all([
+    ctx.supabase
+      .from("shipping_orders")
+      .select(ORDER_FIELDS)
+      .eq("tenant_id", ctx.tenant.id)
+      .eq("id", orderId)
+      .maybeSingle(),
+    loadShippingSetup(ctx.supabase, ctx.tenant.id),
+  ]);
+  const stored = data as unknown as ShippingOrder | null;
+  if (!stored) return { error: "We couldn't find that order." };
+  const order = withShipToEdit(stored, shipTo);
+  if (!order) return { error: "That address doesn't look right. Check each box and try again." };
+  const gaps = missingShipTo(order);
+  if (gaps.length > 0) return { error: `The address is missing ${gaps.join(", ")}.` };
+  const held = await labelKey(ctx.tenant.id);
+  if ("error" in held) return { error: held.error };
+  try {
+    return {
+      check: await verifyAddress(held.key, shipToAddress(order, setup.settings.ship_from_country)),
+    };
   } catch (err) {
     return { error: await explain(err, held.connectionId) };
   }
@@ -347,7 +404,13 @@ const tracked = (label: BoughtLabel) =>
  *  - once EasyPost has taken the money the label is written down before the
  *    parcel is recorded, and every message from then on says it WAS bought.
  */
-export async function buyLabel(slug: string, orderId: string, rateId: string): Promise<BuyState> {
+export async function buyLabel(
+  slug: string,
+  orderId: string,
+  rateId: string,
+  /** The two ticks beside the button; left out, the workspace's settings decide. */
+  shop?: { markSent: boolean; notify: boolean },
+): Promise<BuyState> {
   const ctx = await context(slug);
   if ("error" in ctx) return { error: ctx.error };
   if (!UUID.test(orderId) || !/^[A-Za-z0-9_]{4,120}$/.test(String(rateId))) {
@@ -413,11 +476,11 @@ export async function buyLabel(slug: string, orderId: string, rateId: string): P
     };
   }
 
-  const push = setup.canSend && setup.settings.mark_sent_in_shop;
+  const push = setup.canSend && (shop ? shop.markSent === true : setup.settings.mark_sent_in_shop);
   const { data: number, error: recordError } = await ctx.supabase.rpc("record_label_shipment", {
     p_quote_id: claim.quote_id,
     p_push: push,
-    p_notify: push && setup.settings.notify_customer,
+    p_notify: push && (shop ? shop.notify === true : setup.settings.notify_customer),
   });
   done(slug);
   if (recordError) {

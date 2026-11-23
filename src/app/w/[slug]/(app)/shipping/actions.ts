@@ -326,6 +326,11 @@ export async function saveShippingSettings(
   const city = text(formData, "from_city");
   const region = text(formData, "from_region");
   const postalCode = text(formData, "from_postal_code");
+  const overText = text(formData, "signature_over").replace(/^\$/, "");
+  if (overText && !/^\d{1,7}(\.\d{1,2})?$/.test(overText)) {
+    return { error: "The signature amount should be a number, like 250." };
+  }
+  const signatureOver = overText ? Number(overText) : null;
   const parsed = shippingSettingsSchema.safeParse({
     version: 1,
     ship_from_country: country,
@@ -346,6 +351,7 @@ export async function saveShippingSettings(
     default_carrier: text(formData, "default_carrier") || "USPS",
     mark_sent_in_shop: formData.get("mark_sent_in_shop") === "on",
     notify_customer: formData.get("notify_customer") === "on",
+    signature_over: signatureOver,
   });
   if (!parsed.success) {
     return { error: "Keep each address line under 120 characters, and the phone number under 30." };
