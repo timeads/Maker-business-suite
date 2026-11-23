@@ -8,20 +8,24 @@ import { getEntitlements } from "@/lib/entitlements";
 import { trackingUrl } from "@/lib/shipping/carriers";
 import {
   EasyPostError,
+  MAX_BOXES,
   buyLabel as buyFromEasyPost,
+  buyOrder,
+  getPurchase,
   getRates,
-  getShipment,
+  isLabelKind,
   isSignature,
   serviceWithoutCarrier,
   verifyAddress,
   type AddressCheck,
   type BoughtLabel,
+  type LabelKind,
 } from "@/lib/shipping/easypost";
 import { flagLabelKey, getLabelKey } from "@/lib/shipping/label-key";
 import {
   missingShipFrom,
   missingShipTo,
-  parcelFrom,
+  parcelsFrom,
   parseInches,
   parseOunces,
   rateChoice,
@@ -189,7 +193,8 @@ export async function archiveBox(
 // Rates
 // ---------------------------------------------------------------------------
 
-export type RatesInput = {
+/** One box as it stands on the screen. */
+export type BoxInput = {
   /** A saved box's id, or empty for a size typed in. */
   boxId: string;
   length: string;
@@ -197,6 +202,11 @@ export type RatesInput = {
   height: string;
   weightLb: string;
   weightOz: string;
+};
+
+export type RatesInput = {
+  /** One to six boxes; several are bought together as one purchase. */
+  boxes: BoxInput[];
   /** The address boxes as they stand on the screen, for this label only. */
   shipTo?: ShipToEdit;
   residential?: boolean;
@@ -206,8 +216,8 @@ export type RatesInput = {
 
 /**
  * Asks EasyPost what this order would cost to send. Both addresses come from
- * what is stored (the order, the settings): the browser only says which box
- * and what it weighs. The answer is kept server-side as a quote, which is
+ * what is stored (the order, the settings): the browser only says which boxes
+ * and what each weighs. The answer is kept server-side as a quote, which is
  * what a purchase is later checked against.
  */
 export async function getLabelRates(
@@ -250,27 +260,38 @@ export async function getLabelRates(
     };
   }
 
-  let box: SavedBox | null = null;
-  if (input.boxId) {
-    if (!UUID.test(input.boxId)) return { error: "Pick a box." };
-    const { data: saved } = await ctx.supabase
+  const asked = Array.isArray(input.boxes) ? input.boxes : [];
+  if (asked.length < 1 || asked.some((box) => !box || typeof box !== "object")) {
+    return { error: "Add a box first." };
+  }
+  if (asked.length > MAX_BOXES) {
+    return { error: `One label purchase covers up to ${MAX_BOXES} boxes.` };
+  }
+  const boxIds = [...new Set(asked.map((box) => String(box.boxId ?? "")).filter(Boolean))];
+  if (boxIds.some((id) => !UUID.test(id))) return { error: "Pick a box." };
+  const saved = new Map<string, SavedBox>();
+  if (boxIds.length > 0) {
+    const { data: rows } = await ctx.supabase
       .from("shipping_boxes")
       .select(BOX_FIELDS)
       .eq("tenant_id", ctx.tenant.id)
-      .eq("id", input.boxId)
-      .is("archived_at", null)
-      .maybeSingle();
-    box = saved as unknown as SavedBox | null;
-    if (!box) return { error: "That box isn't on your list any more. Pick another." };
+      .in("id", boxIds)
+      .is("archived_at", null);
+    for (const row of (rows ?? []) as unknown as SavedBox[]) saved.set(row.id, row);
+    if (boxIds.some((id) => !saved.has(id))) {
+      return { error: "That box isn't on your list any more. Pick another." };
+    }
   }
-  const parsed = parcelFrom({
-    box,
-    length: String(input.length ?? ""),
-    width: String(input.width ?? ""),
-    height: String(input.height ?? ""),
-    weightLb: String(input.weightLb ?? ""),
-    weightOz: String(input.weightOz ?? ""),
-  });
+  const parsed = parcelsFrom(
+    asked.map((box) => ({
+      box: box.boxId ? (saved.get(String(box.boxId)) ?? null) : null,
+      length: String(box.length ?? ""),
+      width: String(box.width ?? ""),
+      height: String(box.height ?? ""),
+      weightLb: String(box.weightLb ?? ""),
+      weightOz: String(box.weightOz ?? ""),
+    })),
+  );
   if ("error" in parsed) return { error: parsed.error };
 
   const held = await labelKey(ctx.tenant.id);
@@ -282,14 +303,16 @@ export async function getLabelRates(
         ...shipToAddress(order, home),
         ...(typeof input.residential === "boolean" ? { residential: input.residential } : {}),
       },
-      parcel: parsed.parcel,
+      parcels: parsed.parcels,
       reference: stored.name ?? undefined,
       signature: isSignature(input.signature) ? input.signature : "none",
     });
     if (quote.rates.length === 0) {
       return {
         error:
-          "No carrier offered a rate for this box. Check the address, size and weight, and that a carrier is switched on in EasyPost.",
+          quote.kind === "order"
+            ? "No carrier offered a rate for these boxes together. Check the address, sizes and weights, or send them as separate parcels."
+            : "No carrier offered a rate for this box. Check the address, size and weight, and that a carrier is switched on in EasyPost.",
       };
     }
     // Only prices and EasyPost's own ids are kept: no address.
@@ -299,6 +322,8 @@ export async function getLabelRates(
       p_created_by: ctx.user.id,
       p_provider_shipment_id: quote.shipmentId,
       p_rates: quote.rates,
+      p_kind: quote.kind,
+      p_boxes: quote.boxes,
     });
     if (error) {
       console.error("could not save label quote", error.message);
@@ -354,7 +379,14 @@ export async function checkLabelAddress(
 // Buying
 // ---------------------------------------------------------------------------
 
-type Claim = { quote_id: string; provider_shipment_id: string };
+type Claim = {
+  quote_id: string;
+  provider_shipment_id: string;
+  /** A shipment (one box) or an order (several). */
+  kind?: unknown;
+  /** The rate as the server stored it when it was quoted. */
+  rate?: { carrierCode?: unknown; service?: unknown } | null;
+};
 
 const CLAIM_ERRORS: [match: string, message: string][] = [
   ["cancelled", "This order was cancelled, so there's nothing to send."],
@@ -384,6 +416,13 @@ async function keepLabel(tenantId: string, quoteId: string, label: BoughtLabel):
       p_label_mode: label.mode,
       // Text, so the price reaches the database exactly as EasyPost gave it.
       p_price: label.price,
+      // Every box: what a refund is asked for by, its tracking and its label.
+      p_parcels: label.boxes.map((box) => ({
+        shipment_id: box.shipmentId,
+        tracking_number: box.trackingCode,
+        tracking_url: box.trackingCode ? trackingUrl(label.carrier, box.trackingCode) : null,
+        label_url: box.labelUrl,
+      })),
     });
   for (let attempt = 0; attempt < 2; attempt++) {
     const { error } = await save();
@@ -393,14 +432,20 @@ async function keepLabel(tenantId: string, quoteId: string, label: BoughtLabel):
   return false;
 }
 
-const tracked = (label: BoughtLabel) =>
-  label.trackingCode ? ` (tracking number ${label.trackingCode})` : "";
+const tracked = (label: BoughtLabel) => {
+  const codes = label.boxes.map((box) => box.trackingCode).filter(Boolean);
+  if (codes.length === 0) return "";
+  return codes.length === 1
+    ? ` (tracking number ${codes[0]})`
+    : ` (tracking numbers ${codes.join(", ")})`;
+};
 
 /**
  * Buys the chosen rate and records the parcel. This spends real money, so:
  *  - the purchase is claimed in the database first, under a lock on the
  *    order; a second press, another tab or another person is refused;
  *  - only a rate the server itself quoted for this order can be bought;
+ *  - several boxes are bought in one call, so it is all of them or none;
  *  - once EasyPost has taken the money the label is written down before the
  *    parcel is recorded, and every message from then on says it WAS bought.
  */
@@ -427,6 +472,7 @@ export async function buyLabel(
     return { error: known ? known[1] : "We couldn't start that purchase. Nothing was bought." };
   }
   const claim = claimed as Claim;
+  const kind: LabelKind = isLabelKind(claim.kind) ? claim.kind : "shipment";
   const release = async () => {
     const { error } = await getAdminClient().rpc("release_label_purchase", {
       p_tenant_id: ctx.tenant.id,
@@ -443,15 +489,27 @@ export async function buyLabel(
 
   let label: BoughtLabel;
   try {
-    label = await buyFromEasyPost(held.key, claim.provider_shipment_id, rateId);
+    label =
+      kind === "order"
+        ? await buyOrder(held.key, claim.provider_shipment_id, {
+            // EasyPost's own codes, from the quote the server kept; nothing from the browser.
+            carrierCode: String(claim.rate?.carrierCode ?? ""),
+            service: String(claim.rate?.service ?? ""),
+          })
+        : await buyFromEasyPost(held.key, claim.provider_shipment_id, rateId);
   } catch (err) {
-    if (!(err instanceof EasyPostError && err.uncertain)) {
-      // EasyPost plainly said no: nothing was charged.
+    const refused = !(err instanceof EasyPostError && err.uncertain);
+    // One box: a plain "no" means nothing was charged. Several boxes are
+    // bought one after another on EasyPost's side, so even a plain "no" is
+    // checked before we say nothing was bought (a bad key aside: that buys nothing).
+    if (refused && (kind === "shipment" || !(err instanceof EasyPostError))) {
       await release();
       return { error: `${await explain(err, held.connectionId)} Nothing was bought.` };
     }
     // No clear answer. Ask EasyPost whether the label exists before saying anything.
-    const settled = await getShipment(held.key, claim.provider_shipment_id).catch(() => null);
+    const settled = await getPurchase(held.key, kind, claim.provider_shipment_id).catch(
+      () => null,
+    );
     if (settled === null) {
       done(slug);
       return {
@@ -462,7 +520,11 @@ export async function buyLabel(
     }
     if (!settled.label) {
       await release();
-      return { error: "EasyPost didn't finish that purchase. Nothing was bought; try again." };
+      return {
+        error: refused
+          ? `${await explain(err, held.connectionId)} Nothing was bought.`
+          : "EasyPost didn't finish that purchase. Nothing was bought; try again.",
+      };
     }
     label = settled.label;
   }
@@ -508,7 +570,7 @@ export async function finishLabel(
   if (!UUID.test(quoteId)) return { error: OOPS };
   const { data } = await ctx.supabase
     .from("shipping_label_quotes")
-    .select("id, shipping_order_id, provider_shipment_id, status")
+    .select("id, shipping_order_id, provider_shipment_id, status, label_kind")
     .eq("tenant_id", ctx.tenant.id)
     .eq("id", quoteId)
     .maybeSingle();
@@ -517,6 +579,7 @@ export async function finishLabel(
     shipping_order_id: string;
     provider_shipment_id: string;
     status: string;
+    label_kind: string;
   } | null;
   if (!quote || !["buying", "bought"].includes(quote.status)) {
     done(slug);
@@ -526,9 +589,13 @@ export async function finishLabel(
   if (quote.status === "buying") {
     const held = await labelKey(ctx.tenant.id);
     if ("error" in held) return { error: held.error };
-    let settled: Awaited<ReturnType<typeof getShipment>>;
+    let settled: Awaited<ReturnType<typeof getPurchase>>;
     try {
-      settled = await getShipment(held.key, quote.provider_shipment_id);
+      settled = await getPurchase(
+        held.key,
+        isLabelKind(quote.label_kind) ? quote.label_kind : "shipment",
+        quote.provider_shipment_id,
+      );
     } catch (err) {
       return { error: await explain(err, held.connectionId) };
     }
