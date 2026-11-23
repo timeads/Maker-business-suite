@@ -379,6 +379,15 @@ const monthsAgo = (months: number, from: Date) => {
   return date.toISOString();
 };
 
+/**
+ * The search that finds every order changed since a moment. Written the way
+ * the shop's search reads it for certain: whole seconds, no quotes, and
+ * `status:any` so closed (sent and archived) orders are included, not just
+ * open ones.
+ */
+export const ordersSince = (since: string) =>
+  `updated_at:>=${since.replace(/\.\d+Z$/, "Z")} status:any`;
+
 /** Pulls orders (with their customers, products and costs) changed since the cursor. */
 async function pullOrders(
   ctx: SyncContext,
@@ -412,7 +421,7 @@ async function pullOrders(
     }>(ctx.externalAccountId, ctx.token, ORDERS_QUERY, {
       first: PAGE_SIZE,
       after,
-      query: `updated_at:>='${since}'`,
+      query: ordersSince(since),
     });
     calls += 1;
     if (data.orders.nodes.length > 0) {

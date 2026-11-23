@@ -347,7 +347,7 @@ describe("Shopify sync", () => {
     expect(state.orders.map((o) => o.external_id)).toEqual(["1", "2"]);
     expect(net.calls[0].variables).toMatchObject({
       after: null,
-      query: "updated_at:>='2024-11-21T12:00:00.000Z'",
+      query: "updated_at:>=2024-11-21T12:00:00Z status:any",
     });
     expect(net.calls[1].variables).toMatchObject({ after: "c1" });
     expect(result).toEqual({ cursor: { synced_through: NOW.toISOString() } });
@@ -361,7 +361,7 @@ describe("Shopify sync", () => {
       cursor: { synced_through: "2026-11-20T00:00:00.000Z" },
     });
     await syncShopify(ctx, net.graphql, NOW);
-    expect(net.calls[0].variables.query).toBe("updated_at:>='2026-11-20T00:00:00.000Z'");
+    expect(net.calls[0].variables.query).toBe("updated_at:>=2026-11-20T00:00:00Z status:any");
   });
 
   it("a very long sync stops after a batch of pages and asks to be continued", async () => {
@@ -382,7 +382,7 @@ describe("Shopify sync", () => {
     const finished = await syncShopify(next.ctx, done.graphql, later);
     expect(done.calls[0].variables).toMatchObject({
       after: "more",
-      query: "updated_at:>='2024-11-21T12:00:00.000Z'",
+      query: "updated_at:>=2024-11-21T12:00:00Z status:any",
     });
     expect(finished).toEqual({ cursor: { synced_through: NOW.toISOString() } });
   });
