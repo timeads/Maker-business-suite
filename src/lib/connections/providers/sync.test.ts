@@ -205,7 +205,10 @@ describe("Shopify sync", () => {
                   unfulfilledQuantity: 1,
                   requiresShipping: true,
                   discountedUnitPriceAfterAllDiscountsSet: money("100.00"),
-                  variant: { barcode: " 0123456789012 " },
+                  variant: {
+                    barcode: " 0123456789012 ",
+                    inventoryItem: { measurement: { weight: { unit: "POUNDS", value: 2 } } },
+                  },
                 },
                 {
                   id: "gid://shopify/LineItem/502",
@@ -332,6 +335,8 @@ describe("Shopify sync", () => {
             variant: "Large",
             sku: "RUG-L",
             barcode: "0123456789012",
+            // Two pounds, kept in grams.
+            grams: 907,
             price: 100,
             qty: 2,
             left: 1,
