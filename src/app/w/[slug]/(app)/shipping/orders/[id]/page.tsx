@@ -101,22 +101,32 @@ export default async function ShippingOrderPage({
   const order = data as unknown as (ShippingOrder & { sale?: Sale | Sale[] | null }) | null;
   if (!order) notFound();
   const sale = (Array.isArray(order.sale) ? order.sale[0] : order.sale) ?? null;
-  // Each item's photo, where the shop sync has noted one, matched by item code.
-  const skus = [...new Set(order.items.map((item) => item.sku).filter(Boolean))] as string[];
-  const { data: pictured } = skus.length
+  // Each item's photo, where the shop sync has noted one: by item code, else by name.
+  const titles = [...new Set(order.items.map((item) => item.title).filter(Boolean))];
+  const { data: pictured } = titles.length
     ? await supabase
         .from("stock_items")
-        .select("sku, image_url")
+        .select("title, variant_title, sku, image_url")
         .eq("tenant_id", tenant.id)
-        .in("sku", skus.slice(0, 200))
+        .in("title", titles.slice(0, 200))
         .not("image_url", "is", null)
+        .limit(1000)
     : { data: [] };
-  const photos = new Map(
-    ((pictured ?? []) as { sku: string; image_url: string }[]).map((row) => [
-      row.sku,
-      row.image_url,
-    ]),
-  );
+  const photos = new Map<string, string>();
+  for (const row of (pictured ?? []) as {
+    title: string;
+    variant_title: string | null;
+    sku: string | null;
+    image_url: string;
+  }[]) {
+    if (row.sku) photos.set(`sku:${row.sku}`, row.image_url);
+    photos.set(`name:${row.title}|${row.variant_title ?? ""}`, row.image_url);
+    if (!photos.has(`name:${row.title}`)) photos.set(`name:${row.title}`, row.image_url);
+  }
+  const photoOf = (item: ShippingOrder["items"][number]) =>
+    (item.sku ? photos.get(`sku:${item.sku}`) : undefined) ??
+    photos.get(`name:${item.title}|${item.variant ?? ""}`) ??
+    photos.get(`name:${item.title}`);
   const today = todayIn(tenant.timezone, new Date(daysFromNow(0)));
   const left = order.items.filter((item) => item.left > 0);
   const pickedUp = Boolean(order.picked_up_at);
@@ -195,7 +205,7 @@ export default async function ShippingOrderPage({
   const itemsList = (
     <ul className="grid gap-x-6 gap-y-3 sm:grid-cols-2 xl:grid-cols-3">
       {order.items.map((item) => {
-        const photo = item.sku ? photos.get(item.sku) : undefined;
+        const photo = photoOf(item);
         return (
           <li key={item.line_id} className="flex items-center gap-3 text-sm">
             {photo ? (
