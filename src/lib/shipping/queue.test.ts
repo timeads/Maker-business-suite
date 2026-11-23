@@ -12,6 +12,7 @@ import {
   isPriority,
   nextWeekday,
   queueCounts,
+  queuePlace,
   shipStatus,
   todayIn,
   type QueueFacts,
@@ -163,5 +164,35 @@ describe("the to-ship queue", () => {
     expect(formatWeight(1250, false)).toBe("1.3 kg");
     expect(formatWeight(250, false)).toBe("250 g");
     expect(formatWeight(0, true)).toBe("");
+  });
+});
+
+describe("stepping from one order to the next", () => {
+  const rows = [
+    { id: "a", placed_at: "2026-11-01T10:00:00Z" },
+    { id: "b", placed_at: "2026-11-02T10:00:00Z" },
+    { id: "c", placed_at: "2026-11-03T10:00:00Z" },
+  ];
+
+  it("finds the neighbours of an order in the list", () => {
+    expect(queuePlace(rows, rows[1])).toEqual({ position: 2, total: 3, prev: "a", next: "c" });
+    expect(queuePlace(rows, rows[0])).toEqual({ position: 1, total: 3, prev: null, next: "b" });
+    expect(queuePlace(rows, rows[2])).toEqual({ position: 3, total: 3, prev: "b", next: null });
+  });
+
+  it("still knows what comes next once the order has left the list", () => {
+    const sent = { id: "x", placed_at: "2026-11-02T12:00:00Z" };
+    expect(queuePlace(rows, sent)).toEqual({ position: null, total: 3, prev: "b", next: "c" });
+    const newest = { id: "z", placed_at: "2026-11-09T12:00:00Z" };
+    expect(queuePlace(rows, newest)).toEqual({ position: null, total: 3, prev: "c", next: null });
+  });
+
+  it("breaks a tie on the time by id, the way the list is sorted", () => {
+    const twin = { id: "bb", placed_at: "2026-11-02T10:00:00Z" };
+    expect(queuePlace(rows, twin)).toMatchObject({ prev: "b", next: "c" });
+  });
+
+  it("copes with an empty list", () => {
+    expect(queuePlace([], rows[0])).toEqual({ position: null, total: 0, prev: null, next: null });
   });
 });

@@ -220,6 +220,7 @@ export default async function ShippingPage({
           canWrite={entitlements.canWrite}
           today={today}
           choices={holdChoices(today)}
+          view={found ? "all" : view}
         />
       )}
       {matching.length > shown.length && (

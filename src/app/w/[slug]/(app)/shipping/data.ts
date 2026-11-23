@@ -8,6 +8,7 @@ import {
   parseSlipLayout,
 } from "@/lib/shipping/config";
 import type { SavedBox } from "@/lib/shipping/labels";
+import type { QueueFacts } from "@/lib/shipping/queue";
 
 export type ShippingOrder = {
   id: string;
@@ -175,6 +176,34 @@ export async function loadOpenOrders(
     if (page.length < PAGE) break;
   }
   return orders;
+}
+
+export type QueueStep = QueueFacts & { id: string; placed_at: string };
+
+/** The open orders with only what's needed to say which view each is in, oldest first. */
+export async function loadQueueSteps(
+  supabase: SupabaseClient,
+  tenantId: string,
+): Promise<QueueStep[]> {
+  const steps: QueueStep[] = [];
+  for (let from = 0; from < MOST; from += PAGE) {
+    const { data } = await supabase
+      .from("shipping_orders")
+      .select(
+        "id, placed_at, units_left, cancelled, paid, on_hold, hold_until, pickup, pickup_ready_at, picked_up_at, shipping_method, country_code",
+      )
+      .eq("tenant_id", tenantId)
+      .gt("units_left", 0)
+      .eq("cancelled", false)
+      .is("picked_up_at", null)
+      .order("placed_at")
+      .order("id")
+      .range(from, from + PAGE - 1);
+    const page = (data ?? []) as unknown as QueueStep[];
+    steps.push(...page);
+    if (page.length < PAGE) break;
+  }
+  return steps;
 }
 
 /** "Hudson, NY" at home, "Toronto, ON, Canada" abroad. */

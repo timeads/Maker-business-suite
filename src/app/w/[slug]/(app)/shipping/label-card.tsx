@@ -9,6 +9,27 @@ import { formatPrice, tenthOzToLbOz } from "@/lib/shipping/easypost";
 import { deliveryDays, type RateChoice } from "@/lib/shipping/labels";
 import { buyLabel, finishLabel, getLabelRates } from "./label-actions";
 
+/** What's left of the shipping the shopper paid once this label is bought. */
+function Margin({
+  paidCents,
+  price,
+  currency,
+}: {
+  paidCents: number | null;
+  price: string;
+  currency: string;
+}) {
+  const cost = Math.round(Number(price) * 100);
+  if (paidCents === null || !Number.isFinite(cost)) return null;
+  const left = paidCents - cost;
+  const amount = formatPrice((Math.abs(left) / 100).toFixed(2), currency);
+  return (
+    <span className={`block text-xs font-medium ${left < 0 ? "text-brick" : "text-mint-ink"}`}>
+      {left < 0 ? `${amount} more than they paid` : `${amount} left over`}
+    </span>
+  );
+}
+
 export type BoxChoice = {
   id: string;
   name: string;
@@ -31,6 +52,7 @@ export function LabelBuilder({
   boxes,
   contentsTenthOz,
   shopNote,
+  paidCents = null,
 }: {
   slug: string;
   orderId: string;
@@ -40,6 +62,8 @@ export function LabelBuilder({
   contentsTenthOz: number | null;
   /** One line on what happens in the shop once the label is bought. */
   shopNote: string;
+  /** What the shopper paid for shipping, in cents, to show what's left over. */
+  paidCents?: number | null;
 }) {
   const startWeight = (box: BoxChoice | undefined) =>
     contentsTenthOz === null
@@ -208,8 +232,9 @@ export function LabelBuilder({
                       <span className="text-muted-foreground"> · {deliveryDays(rate.days)}</span>
                     )}
                   </span>
-                  <span className="font-semibold tabular-nums">
+                  <span className="text-right font-semibold tabular-nums">
                     {formatPrice(rate.price, rate.currency)}
+                    <Margin paidCents={paidCents} price={rate.price} currency={rate.currency} />
                   </span>
                 </label>
               </li>

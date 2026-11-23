@@ -15,9 +15,14 @@ import {
   formatWeight,
   holdChoices,
   holdState,
+  inQueueView,
   isInternational,
   isPriority,
+  isQueueView,
+  QUEUE_VIEWS,
+  queuePlace,
   todayIn,
+  type QueueView,
 } from "@/lib/shipping/queue";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
@@ -25,6 +30,7 @@ import {
   ORDER_FIELDS,
   loadBoxes,
   loadLabelConnection,
+  loadQueueSteps,
   loadShippingSetup,
   loadUnfinishedLabels,
   type ShippingOrder,
@@ -32,6 +38,7 @@ import {
 import { HoldForm, ParcelForm, PickupForm, SeenBackFromHold, VoidButton } from "../../forms";
 import { shippingAccess } from "../../gate";
 import { FinishLabelButton, LabelBuilder } from "../../label-card";
+import { OrderSteps } from "../../order-steps";
 
 const INTERNATIONAL_NOTE =
   "International labels need a customs form, which isn't built yet. Buy this one elsewhere and record it below.";
@@ -43,36 +50,40 @@ export default async function ShippingOrderPage({
   searchParams,
 }: {
   params: Promise<{ slug: string; id: string }>;
-  searchParams: Promise<{ label?: string }>;
+  searchParams: Promise<{ label?: string; view?: string }>;
 }) {
   const { slug, id } = await params;
-  const justBought = Number.parseInt((await searchParams).label ?? "", 10);
+  const query = await searchParams;
+  const justBought = Number.parseInt(query.label ?? "", 10);
+  const view: QueueView = isQueueView(query.view) ? query.view : "ready";
   const access = await shippingAccess(slug, `/w/${slug}/shipping/orders/${id}`);
   if (!access.ok) return access.upsell;
   const { tenant, role, entitlements } = access;
   if (!/^[0-9a-f-]{36}$/i.test(id)) notFound();
 
   const supabase = await createClient();
-  const [{ data }, setup, { data: parcels }, boxes, easypost, unfinished] = await Promise.all([
-    supabase
-      .from("shipping_orders")
-      .select(ORDER_FIELDS)
-      .eq("tenant_id", tenant.id)
-      .eq("id", id)
-      .maybeSingle(),
-    loadShippingSetup(supabase, tenant.id),
-    supabase
-      .from("shipments")
-      .select(
-        "id, number, carrier, service, tracking_number, tracking_url, shipped_at, items, voided_at, label_provider, label_url, label_mode",
-      )
-      .eq("tenant_id", tenant.id)
-      .eq("shipping_order_id", id)
-      .order("number"),
-    loadBoxes(supabase, tenant.id),
-    loadLabelConnection(supabase, tenant.id),
-    loadUnfinishedLabels(supabase, tenant.id, id),
-  ]);
+  const [{ data }, setup, { data: parcels }, boxes, easypost, unfinished, steps] =
+    await Promise.all([
+      supabase
+        .from("shipping_orders")
+        .select(ORDER_FIELDS)
+        .eq("tenant_id", tenant.id)
+        .eq("id", id)
+        .maybeSingle(),
+      loadShippingSetup(supabase, tenant.id),
+      supabase
+        .from("shipments")
+        .select(
+          "id, number, carrier, service, tracking_number, tracking_url, shipped_at, items, voided_at, label_provider, label_url, label_mode",
+        )
+        .eq("tenant_id", tenant.id)
+        .eq("shipping_order_id", id)
+        .order("number"),
+      loadBoxes(supabase, tenant.id),
+      loadLabelConnection(supabase, tenant.id),
+      loadUnfinishedLabels(supabase, tenant.id, id),
+      loadQueueSteps(supabase, tenant.id),
+    ]);
   const order = data as unknown as ShippingOrder | null;
   if (!order) notFound();
   const today = todayIn(tenant.timezone, new Date(daysFromNow(0)));
@@ -104,6 +115,14 @@ export default async function ShippingOrderPage({
     formatWeight(order.weight_grams, home === "US") || null,
   ].filter(Boolean);
   const base = `/w/${tenant.slug}/shipping`;
+  // Up and down walk the list the person came from, oldest first, like the queue itself.
+  const place = queuePlace(
+    steps.filter((step) => inQueueView(step, view, today, home)),
+    order,
+  );
+  const carry = view === "ready" ? "" : `?view=${view}`;
+  const stepTo = (orderId: string | null) => (orderId ? `${base}/orders/${orderId}${carry}` : null);
+  const listName = QUEUE_VIEWS.find((item) => item.key === view)?.label ?? "the list";
   const when = new Intl.DateTimeFormat("en-US", {
     timeZone: tenant.timezone,
     dateStyle: "medium",
@@ -141,8 +160,20 @@ export default async function ShippingOrderPage({
 
   return (
     <>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Link href={`${base}${carry}`} className="text-muted-foreground text-sm hover:underline">
+          ← {listName}
+        </Link>
+        <OrderSteps
+          position={place.position}
+          total={place.total}
+          prev={stepTo(place.prev)}
+          next={stepTo(place.next)}
+          close={`${base}${carry}`}
+          listName={listName}
+        />
+      </div>
       <PageHeader
-        back={{ href: base, label: "To ship" }}
         title={`${order.name ?? "Order"} · ${order.recipient ?? "no name"}`}
         description={[`Ordered ${when.format(new Date(order.placed_at))}`, ...chose].join(" · ")}
       >
@@ -339,6 +370,11 @@ export default async function ShippingOrderPage({
                           order.weight_grams ? gramsToTenthOz(Number(order.weight_grams)) : null
                         }
                         shopNote={shopNote}
+                        paidCents={
+                          order.shipping_paid === null
+                            ? null
+                            : Math.round(Number(order.shipping_paid) * 100)
+                        }
                       />
                     )}
                     {labelCard === "abroad" && <p className="text-sm">{INTERNATIONAL_NOTE}</p>}

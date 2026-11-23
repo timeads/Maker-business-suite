@@ -205,3 +205,43 @@ export function formatWeight(grams: number | null | undefined, imperial: boolean
   }
   return grams >= 1000 ? `${Math.round(grams / 100) / 10} kg` : `${grams} g`;
 }
+
+export type QueuePlace = {
+  /** Where the order sits in the list, counting from 1; null when it isn't in it. */
+  position: number | null;
+  total: number;
+  prev: string | null;
+  next: string | null;
+};
+
+/**
+ * The orders either side of one in a list sorted oldest first. An order that
+ * has left the list (just sent, or put on hold) still gets its neighbours,
+ * found by where it would have sat, so "next" keeps working after each parcel.
+ */
+export function queuePlace(
+  rows: { id: string; placed_at: string }[],
+  current: { id: string; placed_at: string },
+): QueuePlace {
+  const at = rows.findIndex((row) => row.id === current.id);
+  if (at >= 0) {
+    return {
+      position: at + 1,
+      total: rows.length,
+      prev: rows[at - 1]?.id ?? null,
+      next: rows[at + 1]?.id ?? null,
+    };
+  }
+  const when = Date.parse(current.placed_at);
+  const after = rows.findIndex((row) => {
+    const other = Date.parse(row.placed_at);
+    return other > when || (other === when && row.id > current.id);
+  });
+  const gap = after < 0 ? rows.length : after;
+  return {
+    position: null,
+    total: rows.length,
+    prev: rows[gap - 1]?.id ?? null,
+    next: rows[gap]?.id ?? null,
+  };
+}

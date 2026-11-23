@@ -46,12 +46,15 @@ export function QueueTable({
   canWrite,
   today,
   choices,
+  view,
 }: {
   slug: string;
   rows: QueueRow[];
   canWrite: boolean;
   today: string;
   choices: HoldChoice[];
+  /** The chip these rows came from, so stepping order to order stays inside it. */
+  view?: string;
 }) {
   const base = `/w/${slug}/shipping`;
   const [ticked, setTicked] = useState<ReadonlySet<string>>(new Set());
@@ -220,7 +223,7 @@ export function QueueTable({
                 </td>
                 <td className={`${td} whitespace-nowrap`}>
                   <Link
-                    href={`${base}/orders/${row.id}`}
+                    href={`${base}/orders/${row.id}${view ? `?view=${view}` : ""}`}
                     className="text-ochre-text font-semibold tabular-nums hover:underline"
                   >
                     {row.name}
