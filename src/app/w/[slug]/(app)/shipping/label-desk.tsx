@@ -23,6 +23,10 @@ export type DeskBox = {
   size: string;
   /** The box's own weight, in tenths of an ounce. */
   emptyTenthOz: number;
+  /** Inches, as text for the size boxes. */
+  length: string;
+  width: string;
+  height: string;
 };
 
 const CUSTOM = "";
@@ -41,14 +45,14 @@ const SIGNATURE_WORDS: Record<Signature, string> = {
 };
 
 const FIELDS: { key: keyof ShipToEdit; label: string; span: string; max: number }[] = [
-  { key: "recipient", label: "Name", span: "sm:col-span-2", max: 120 },
-  { key: "company", label: "Company", span: "sm:col-span-2", max: 120 },
-  { key: "phone", label: "Phone", span: "sm:col-span-2", max: 30 },
-  { key: "address1", label: "Address", span: "sm:col-span-4", max: 120 },
-  { key: "address2", label: "Apt / suite", span: "sm:col-span-2", max: 120 },
-  { key: "city", label: "City", span: "sm:col-span-3", max: 120 },
-  { key: "region", label: "State", span: "sm:col-span-1", max: 60 },
-  { key: "postal_code", label: "ZIP", span: "sm:col-span-2", max: 20 },
+  { key: "recipient", label: "Name", span: "sm:col-span-4", max: 120 },
+  { key: "company", label: "Company", span: "sm:col-span-4", max: 120 },
+  { key: "phone", label: "Phone", span: "sm:col-span-4", max: 30 },
+  { key: "address1", label: "Address", span: "sm:col-span-8", max: 120 },
+  { key: "address2", label: "Apt / suite", span: "sm:col-span-4", max: 120 },
+  { key: "city", label: "City", span: "sm:col-span-5", max: 120 },
+  { key: "region", label: "State", span: "sm:col-span-2", max: 60 },
+  { key: "postal_code", label: "ZIP", span: "sm:col-span-3", max: 20 },
 ];
 
 /** "$9.42" and whether the label costs more than the shopper paid. */
@@ -76,6 +80,7 @@ export function LabelDesk({
   rule,
   shop,
   testMode,
+  setup,
   children,
 }: {
   slug: string;
@@ -92,6 +97,8 @@ export function LabelDesk({
   rule: string | null;
   shop: { offered: boolean; markSent: boolean; notify: boolean };
   testMode: boolean;
+  /** What's still missing before a carrier will quote, with where to fix it. */
+  setup: { missing: string; href: string | null } | null;
   /** The items in the order, shown under the box. */
   children: React.ReactNode;
 }) {
@@ -104,7 +111,12 @@ export function LabelDesk({
   const [residential, setResidential] = useState(true);
   const [signature, setSignature] = useState<Signature>(rule ? "signature" : "none");
   const [boxId, setBoxId] = useState(boxes[0]?.id ?? CUSTOM);
-  const [size, setSize] = useState({ length: "", width: "", height: "" });
+  const sizeOf = (box: DeskBox | undefined) => ({
+    length: box?.length ?? "",
+    width: box?.width ?? "",
+    height: box?.height ?? "",
+  });
+  const [size, setSize] = useState(() => sizeOf(boxes[0]));
   const [weight, setWeight] = useState(() => startWeight(boxes[0]));
   const [weightTyped, setWeightTyped] = useState(false);
   const [rates, setRates] = useState<RateChoice[] | null>(null);
@@ -176,14 +188,14 @@ export function LabelDesk({
       const found = await check(shipTo);
       const first = boxes[0];
       const starting = startWeight(first);
-      if (!first || (!starting.lb && !starting.oz)) return;
+      if (setup || !first || (!starting.lb && !starting.oz)) return;
       quote(
         {
           to: shipTo,
           residential: found?.residential ?? true,
           signature: rule ? "signature" : "none",
         },
-        { boxId: first.id, size: { length: "", width: "", height: "" }, weight: starting },
+        { boxId: first.id, size: sizeOf(first), weight: starting },
       );
     })();
     // Runs once for the order on screen; the page remounts this for the next one.
@@ -214,6 +226,7 @@ export function LabelDesk({
   };
   const pickBox = (id: string) => {
     setBoxId(id);
+    if (id !== CUSTOM) setSize(sizeOf(boxes.find((box) => box.id === id)));
     if (!weightTyped) setWeight(startWeight(boxes.find((box) => box.id === id)));
     stale();
   };
@@ -360,6 +373,20 @@ export function LabelDesk({
         </CardContent>
       </Card>
 
+      {setup && (
+        <p className="bg-note border-note-border rounded-lg border px-4 py-2.5 text-sm">
+          <span className="font-semibold">One thing before the carriers can quote:</span>{" "}
+          {setup.missing}{" "}
+          {setup.href ? (
+            <a href={setup.href} className="text-ochre-text font-semibold hover:underline">
+              Open Shipping settings
+            </a>
+          ) : (
+            "Ask an owner or admin to add it in Shipping settings."
+          )}
+        </p>
+      )}
+
       {rule && signature !== "none" && (
         <p className="bg-note border-note-border rounded-lg border px-4 py-2.5 text-sm">
           <span className="font-semibold">Rule applied:</span> {rule}
@@ -380,7 +407,7 @@ export function LabelDesk({
             onCheck={() => void check(to)}
             onUse={takeSuggestion}
           />
-          <fieldset disabled={busy || locked} className="grid gap-3 sm:grid-cols-6">
+          <fieldset disabled={busy || locked} className="grid gap-3 sm:grid-cols-12">
             {FIELDS.map((field) => (
               <div key={field.key} className={`flex flex-col gap-1.5 ${field.span}`}>
                 <Label htmlFor={`to-${field.key}`}>{field.label}</Label>
@@ -392,7 +419,7 @@ export function LabelDesk({
                 />
               </div>
             ))}
-            <div className="flex flex-col gap-1.5 sm:col-span-6 sm:max-w-[8rem]">
+            <div className="flex flex-col gap-1.5 sm:col-span-2">
               <Label htmlFor="to-country">Country</Label>
               <Input id="to-country" value={country} readOnly disabled />
             </div>
@@ -453,21 +480,22 @@ export function LabelDesk({
                 <option value={CUSTOM}>Another size…</option>
               </Select>
             </div>
-            {boxId === CUSTOM &&
-              (["length", "width", "height"] as const).map((side) => (
-                <div key={side} className="flex w-20 flex-col gap-1.5">
-                  <Label htmlFor={`box-${side}`}>{side[0].toUpperCase()} in</Label>
-                  <Input
-                    id={`box-${side}`}
-                    inputMode="decimal"
-                    value={size[side]}
-                    onChange={(event) => {
-                      setSize((before) => ({ ...before, [side]: event.target.value }));
-                      stale();
-                    }}
-                  />
-                </div>
-              ))}
+            {(["length", "width", "height"] as const).map((side) => (
+              <div key={side} className="flex w-20 flex-col gap-1.5">
+                <Label htmlFor={`box-${side}`}>{side[0].toUpperCase()} in</Label>
+                <Input
+                  id={`box-${side}`}
+                  inputMode="decimal"
+                  value={size[side]}
+                  onChange={(event) => {
+                    // A size typed by hand is its own box, not the saved one.
+                    setBoxId(CUSTOM);
+                    setSize((before) => ({ ...before, [side]: event.target.value }));
+                    stale();
+                  }}
+                />
+              </div>
+            ))}
             <div className="flex w-20 flex-col gap-1.5">
               <Label htmlFor="box-lb">Weight lb</Label>
               <Input

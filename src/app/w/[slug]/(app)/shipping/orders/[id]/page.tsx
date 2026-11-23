@@ -76,11 +76,13 @@ export default async function ShippingOrderPage({
   if (!/^[0-9a-f-]{36}$/i.test(id)) notFound();
 
   const supabase = await createClient();
-  const [{ data }, setup, { data: parcels }, boxes, easypost, unfinished, steps] =
+  const [{ data }, setup, { data: parcels }, boxes, easypost, unfinished, steps, { data: shop }] =
     await Promise.all([
       supabase
         .from("shipping_orders")
-        .select(`${ORDER_FIELDS}, sale:orders(net_sales, total_tax, total_shipping, total)`)
+        .select(
+          `${ORDER_FIELDS}, external_id, provider, sale:orders(net_sales, total_tax, total_shipping, total)`,
+        )
         .eq("tenant_id", tenant.id)
         .eq("id", id)
         .maybeSingle(),
@@ -97,8 +99,16 @@ export default async function ShippingOrderPage({
       loadLabelConnection(supabase, tenant.id),
       loadUnfinishedLabels(supabase, tenant.id, id),
       loadQueueSteps(supabase, tenant.id),
+      supabase
+        .from("connections")
+        .select("external_account_id")
+        .eq("tenant_id", tenant.id)
+        .eq("provider", "shopify")
+        .maybeSingle(),
     ]);
-  const order = data as unknown as (ShippingOrder & { sale?: Sale | Sale[] | null }) | null;
+  const order = data as unknown as
+    | (ShippingOrder & { sale?: Sale | Sale[] | null; external_id?: string; provider?: string })
+    | null;
   if (!order) notFound();
   const sale = (Array.isArray(order.sale) ? order.sale[0] : order.sale) ?? null;
   // Each item's photo, where the shop sync has noted one: by item code, else by name.
@@ -177,7 +187,7 @@ export default async function ShippingOrderPage({
   const posting = todo && entitlements.canWrite && !order.pickup;
   const abroad = isInternational(order.country_code, home);
   const fromGaps = missingShipFrom(setup.settings);
-  const labelCard: "builder" | "reconnect" | "abroad" | "from" | "unfinished" | null =
+  const labelCard: "builder" | "reconnect" | "abroad" | "unfinished" | null =
     !posting || easypost.status === "none" || easypost.status === "disconnected"
       ? null
       : unfinished.length > 0
@@ -186,10 +196,17 @@ export default async function ShippingOrderPage({
           ? "reconnect"
           : abroad
             ? "abroad"
-            : fromGaps.length > 0
-              ? "from"
-              : "builder";
+            : "builder";
   const desk = labelCard === "builder";
+  // The order's own page in the shop's admin, when both halves of its address are plain.
+  const shopHandle = /^([a-z0-9][a-z0-9-]*)\.myshopify\.com$/.exec(
+    String((shop as { external_account_id?: string } | null)?.external_account_id ?? ""),
+  )?.[1];
+  const shopOrderId = /(\d+)$/.exec(order.external_id ?? "")?.[1];
+  const shopLink =
+    order.provider === "shopify" && shopHandle && shopOrderId
+      ? `https://admin.shopify.com/store/${shopHandle}/orders/${shopOrderId}`
+      : null;
   const money = (value: number | string) => formatMoney(Number(value), tenant.currency);
   const paidWords =
     order.shipping_paid === null
@@ -425,6 +442,9 @@ export default async function ShippingOrderPage({
                     name: box.name,
                     size: boxSize(box),
                     emptyTenthOz: boxTenthOz(box),
+                    length: String(Number(box.length_in)),
+                    width: String(Number(box.width_in)),
+                    height: String(Number(box.height_in)),
                   }))}
                   contentsTenthOz={
                     order.weight_grams ? gramsToTenthOz(Number(order.weight_grams)) : null
@@ -444,6 +464,14 @@ export default async function ShippingOrderPage({
                     notify: setup.settings.notify_customer,
                   }}
                   testMode={easypost.testMode}
+                  setup={
+                    fromGaps.length > 0
+                      ? {
+                          missing: `your ship-from address needs ${fromGaps.join(", ")}.`,
+                          href: manager ? `${base}/settings` : null,
+                        }
+                      : null
+                  }
                 >
                   {itemsList}
                 </LabelDesk>
@@ -474,22 +502,6 @@ export default async function ShippingOrderPage({
                           </Link>
                         ) : (
                           "Ask an owner or admin to reconnect it."
-                        )}
-                      </p>
-                    )}
-                    {labelCard === "from" && (
-                      <p className="text-sm">
-                        Before a carrier can quote, your ship-from address needs:{" "}
-                        <span className="font-semibold">{fromGaps.join(", ")}</span>.{" "}
-                        {manager ? (
-                          <Link
-                            href={`${base}/settings`}
-                            className="text-ochre-text font-medium hover:underline"
-                          >
-                            Add it in Shipping settings
-                          </Link>
-                        ) : (
-                          "Ask an owner or admin to add it in Shipping settings."
                         )}
                       </p>
                     )}
@@ -639,6 +651,13 @@ export default async function ShippingOrderPage({
                     <Link href={`${base}/slips?order=${order.id}`}>
                       Packing slip{order.slip_printed_at ? " (printed)" : ""}
                     </Link>
+                  </Button>
+                )}
+                {shopLink && (
+                  <Button asChild variant="ghost" size="sm">
+                    <a href={shopLink} target="_blank" rel="noopener noreferrer">
+                      Open in Shopify ↗
+                    </a>
                   </Button>
                 )}
                 {todo && (
