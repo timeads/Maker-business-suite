@@ -12,8 +12,23 @@ const REDO = { token: "fake-redo-token", storeId: "store0000fake0000" };
 
 const box: LabelParcel = { length: 12, width: 10, height: 6, weightTenthOz: 480 };
 const request = (parcels: LabelParcel[] = [box]): LabelRequest => ({
-  from: { name: "Tuft Studio", street1: "1 Mill Lane", city: "Hudson", state: "NY", zip: "12534", country: "US", phone: "5185550100" },
-  to: { name: "Jane Doe", street1: "1 Elm St", city: "Austin", state: "TX", zip: "78701", country: "US" },
+  from: {
+    name: "Tuft Studio",
+    street1: "1 Mill Lane",
+    city: "Hudson",
+    state: "NY",
+    zip: "12534",
+    country: "US",
+    phone: "5185550100",
+  },
+  to: {
+    name: "Jane Doe",
+    street1: "1 Elm St",
+    city: "Austin",
+    state: "TX",
+    zip: "78701",
+    country: "US",
+  },
   parcels,
   reference: "#1042",
   signature: "none",
@@ -23,10 +38,16 @@ type Call = { url: string; method: string; body: string };
 function scripted(answer: (call: Call) => { status?: number; body?: unknown; bytes?: Uint8Array }) {
   const calls: Call[] = [];
   const impl = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
-    const call = { url: String(input), method: init.method ?? "GET", body: String(init.body ?? "") };
+    const call = {
+      url: String(input),
+      method: init.method ?? "GET",
+      body: String(init.body ?? ""),
+    };
     calls.push(call);
     const reply = answer(call);
-    return new Response(reply.bytes ?? JSON.stringify(reply.body ?? {}), { status: reply.status ?? 200 });
+    return new Response(reply.bytes ?? JSON.stringify(reply.body ?? {}), {
+      status: reply.status ?? 200,
+    });
   }) as Fetch;
   return { impl, calls };
 }
@@ -55,14 +76,27 @@ describe("label sources", () => {
               mode: "test",
               tracking_code: "9400111",
               postage_label: { label_url: "https://easypost-files.example/l.png" },
-              selected_rate: { carrier: "USPS", service: "GroundAdvantage", rate: "8.40", currency: "USD" },
+              selected_rate: {
+                carrier: "USPS",
+                service: "GroundAdvantage",
+                rate: "8.40",
+                currency: "USD",
+              },
             },
           }
         : {
             body: {
               id: "shp_1",
               mode: "test",
-              rates: [{ id: "rate_1", carrier: "USPS", service: "GroundAdvantage", rate: "8.4", currency: "USD" }],
+              rates: [
+                {
+                  id: "rate_1",
+                  carrier: "USPS",
+                  service: "GroundAdvantage",
+                  rate: "8.4",
+                  currency: "USD",
+                },
+              ],
             },
           },
     );
@@ -112,7 +146,9 @@ describe("label sources", () => {
               ShipmentResponse: {
                 ShipmentResults: {
                   ShipmentIdentificationNumber: "1ZSHIP0001",
-                  NegotiatedRateCharges: { TotalCharge: { MonetaryValue: "19.60", CurrencyCode: "USD" } },
+                  NegotiatedRateCharges: {
+                    TotalCharge: { MonetaryValue: "19.60", CurrencyCode: "USD" },
+                  },
                   PackageResults: [
                     { TrackingNumber: "1Z001", ShippingLabel: { GraphicImage: "R0lGODlh" } },
                     { TrackingNumber: "1Z002", ShippingLabel: { GraphicImage: "R0lGODli" } },
@@ -124,7 +160,12 @@ describe("label sources", () => {
         : {
             body: {
               RateResponse: {
-                RatedShipment: [{ Service: { Code: "03" }, TotalCharges: { MonetaryValue: "19.60", CurrencyCode: "USD" } }],
+                RatedShipment: [
+                  {
+                    Service: { Code: "03" },
+                    TotalCharges: { MonetaryValue: "19.60", CurrencyCode: "USD" },
+                  },
+                ],
               },
             },
           },
@@ -184,7 +225,12 @@ describe("label sources", () => {
       const source = labelSource(key, impl);
       await expect(
         source.buy(access as never, {
-          rate: { id: "x_rate", ref: { service_code: "03", mode: "1", account: "ca_1" }, carrierCode: "UPS", service: "Ground" },
+          rate: {
+            id: "x_rate",
+            ref: { service_code: "03", mode: "1", account: "ca_1" },
+            carrierCode: "UPS",
+            service: "Ground",
+          },
           shipmentId: "quote_a",
           kind: "shipment",
           quoteId: "q-1",
@@ -224,7 +270,9 @@ describe("label sources", () => {
                 carrier: "USPS",
                 service: "GroundAdvantage",
                 rate: { amount: n === "1" ? "7.50" : "12.00", currency: "USD" },
-                shipmentPackages: [{ trackingNumber: `9400${n}`, labelUrl: `https://files.redo.example/l${n}.pdf` }],
+                shipmentPackages: [
+                  { trackingNumber: `9400${n}`, labelUrl: `https://files.redo.example/l${n}.pdf` },
+                ],
               },
             },
           },
@@ -238,7 +286,15 @@ describe("label sources", () => {
         body: {
           data: {
             getShippingLabelQuotes: {
-              rates: [{ carrier: "USPS", service: "GroundAdvantage", carrierAccountId: "ca_1", rate: { amount: "9.75", currency: "USD" }, deliveryDays: 3 }],
+              rates: [
+                {
+                  carrier: "USPS",
+                  service: "GroundAdvantage",
+                  carrierAccountId: "ca_1",
+                  rate: { amount: "9.75", currency: "USD" },
+                  deliveryDays: 3,
+                },
+              ],
             },
           },
         },
@@ -275,19 +331,37 @@ describe("label sources", () => {
       price: "19.50",
       mode: "live",
       boxes: [
-        { shipmentId: "sh_0001", trackingCode: "94001", labelUrl: "https://files.redo.example/l1.pdf" },
-        { shipmentId: "sh_0002", trackingCode: "94002", labelUrl: "https://files.redo.example/l2.pdf" },
+        {
+          shipmentId: "sh_0001",
+          trackingCode: "94001",
+          labelUrl: "https://files.redo.example/l1.pdf",
+        },
+        {
+          shipmentId: "sh_0002",
+          trackingCode: "94002",
+          labelUrl: "https://files.redo.example/l2.pdf",
+        },
       ],
       // The second file couldn't be fetched: the label is still bought, and its link is kept.
       files: [{ box: 1, contentType: "application/pdf", data: btoa("%PDF") }],
     });
-    expect(calls.every((call) => !call.url.includes("fake-redo-token") && !call.body.includes("fake-redo-token"))).toBe(true);
+    expect(
+      calls.every(
+        (call) => !call.url.includes("fake-redo-token") && !call.body.includes("fake-redo-token"),
+      ),
+    ).toBe(true);
   });
 
   it("Redo: says why it has no prices when a signature is needed and it can't add one", async () => {
     resetRedoLearned();
-    const { impl } = scripted(() => ({ body: { data: { __schema: { mutationType: { fields: [] } } } } }));
-    const quote = await labelSource("redo", impl).quote(REDO, { ...request(), signature: "signature" }, "quote_a");
+    const { impl } = scripted(() => ({
+      body: { data: { __schema: { mutationType: { fields: [] } } } },
+    }));
+    const quote = await labelSource("redo", impl).quote(
+      REDO,
+      { ...request(), signature: "signature" },
+      "quote_a",
+    );
     expect(quote.rates).toEqual([]);
     expect(quote.note).toMatch(/can't add a signature/);
   });

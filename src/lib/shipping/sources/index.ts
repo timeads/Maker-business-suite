@@ -87,7 +87,12 @@ export function easypostSource(fetchImpl: Fetch = fetch): LabelSource<SourceAcce
       );
     },
     async lookUp(access, what) {
-      const { label } = await getEasyPostPurchase(access.key, what.kind, what.shipmentId, fetchImpl);
+      const { label } = await getEasyPostPurchase(
+        access.key,
+        what.kind,
+        what.shipmentId,
+        fetchImpl,
+      );
       return { label: label ? fromEasyPost(label) : null };
     },
     refund: (access, shipmentIds) => refundEasyPostLabels(access.key, shipmentIds, fetchImpl),
@@ -113,20 +118,18 @@ export function upsSource(fetchImpl: Fetch = fetch): LabelSource<UpsAccess> {
       return {
         shipmentId: null,
         mode: access.test ? "test" : null,
-        rates: rates.map(
-          (rate): SourceRate => ({
-            id: rateId("ups", quoteRef, rate.serviceCode),
-            carrier: "UPS",
-            carrierCode: "UPS",
-            service: rate.serviceCode,
-            name: rate.name,
-            price: rate.price,
-            currency: rate.currency,
-            days: rate.days,
-            source: "ups",
-            ref: { service_code: rate.serviceCode },
-          }),
-        ),
+        rates: rates.map((rate): SourceRate => ({
+          id: rateId("ups", quoteRef, rate.serviceCode),
+          carrier: "UPS",
+          carrierCode: "UPS",
+          service: rate.serviceCode,
+          name: rate.name,
+          price: rate.price,
+          currency: rate.currency,
+          days: rate.days,
+          source: "ups",
+          ref: { service_code: rate.serviceCode },
+        })),
       };
     },
     async buy(access, purchase) {
@@ -204,32 +207,30 @@ export function redoSource(fetchImpl: Fetch = fetch): LabelSource<RedoAccess> {
       return {
         shipmentId: null,
         mode: null,
-        rates: rates.map(
-          (rate): SourceRate => ({
-            id: rateId(
-              "redo",
-              quoteRef,
-              rate.mode,
-              rate.carrierAccountId,
-              rate.carrierCode,
-              rate.service,
-            ),
-            carrier: rate.carrier,
-            carrierCode: rate.carrierCode,
-            service: rate.service,
-            name: rate.name,
-            price: rate.price,
-            currency: rate.currency,
-            days: rate.days,
-            source: "redo",
-            ref: {
-              mode: rate.mode,
-              account: rate.carrierAccountId,
-              ...(rate.signature ? { signature: JSON.stringify(rate.signature) } : {}),
-            },
-            ...(rate.note ? { note: rate.note } : {}),
-          }),
-        ),
+        rates: rates.map((rate): SourceRate => ({
+          id: rateId(
+            "redo",
+            quoteRef,
+            rate.mode,
+            rate.carrierAccountId,
+            rate.carrierCode,
+            rate.service,
+          ),
+          carrier: rate.carrier,
+          carrierCode: rate.carrierCode,
+          service: rate.service,
+          name: rate.name,
+          price: rate.price,
+          currency: rate.currency,
+          days: rate.days,
+          source: "redo",
+          ref: {
+            mode: rate.mode,
+            account: rate.carrierAccountId,
+            ...(rate.signature ? { signature: JSON.stringify(rate.signature) } : {}),
+          },
+          ...(rate.note ? { note: rate.note } : {}),
+        })),
       };
     },
     async buy(access, purchase) {

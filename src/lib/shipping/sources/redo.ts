@@ -95,11 +95,7 @@ function redoError(status: number, errors: GqlError[]): Error {
     );
   }
   if (code === "RATE_NOT_FOUND") {
-    return new SourceError(
-      "That Redo rate is no longer on offer. Get rates again.",
-      status,
-      false,
-    );
+    return new SourceError("That Redo rate is no longer on offer. Get rates again.", status, false);
   }
   if (status === 429) {
     return new SourceError("Redo is busy right now. Wait a moment and try again.", status, false);
@@ -502,7 +498,8 @@ export function sniffLabel(bytes: Uint8Array): LabelFile["contentType"] | null {
 }
 
 /** Redo's own hosts: the only places the token is ever sent. */
-const redoHost = (url: URL) => url.hostname === "getredo.com" || url.hostname.endsWith(".getredo.com");
+const redoHost = (url: URL) =>
+  url.hostname === "getredo.com" || url.hostname.endsWith(".getredo.com");
 
 /**
  * Fetches a bought label's file from the link Redo gave. The token is only
@@ -645,7 +642,10 @@ const SIG = /signat/i;
  * levels deep): a field named for signatures, or a delivery-confirmation
  * enum with a signature value. Pure.
  */
-export function findSignatureOption(root: string, types: Map<string, SchemaType>): SigOption | null {
+export function findSignatureOption(
+  root: string,
+  types: Map<string, SchemaType>,
+): SigOption | null {
   const queue: { type: string; path: SigStep[] }[] = [{ type: root, path: [] }];
   const seen = new Set<string>();
   while (queue.length) {
@@ -726,7 +726,8 @@ export function applySignature(req: Record<string, unknown>, option: SigOption, 
     go(req, 0);
   };
   put(option.path, value);
-  if (option.kind === "boolean" && level === "adult" && option.adultPath) put(option.adultPath, true);
+  if (option.kind === "boolean" && level === "adult" && option.adultPath)
+    put(option.adultPath, true);
 }
 
 /** A stored option read back defensively (it travels through the quote as JSON). */

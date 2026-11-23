@@ -358,7 +358,10 @@ describe("UPS labels", () => {
       request,
       "03",
       scripted([
-        { status: 400, body: { response: { errors: [{ code: "120100", message: "Bad address" }] } } },
+        {
+          status: 400,
+          body: { response: { errors: [{ code: "120100", message: "Bad address" }] } },
+        },
       ]).impl,
     ).catch((e) => e);
     expect(refused).toMatchObject({ uncertain: false, message: "UPS says: Bad address" });
@@ -422,8 +425,22 @@ describe("UPS address check", () => {
   });
 
   it("knows when two addresses only differ in how they're written", () => {
-    const a = { street1: "1 Main Street", street2: "Apartment 2", city: "Austin", state: "TX", zip: "78701" };
-    expect(sameAddress(a, { street1: "1 MAIN ST", street2: "APT 2", city: "AUSTIN", state: "TX", zip: "78701-1234" })).toBe(true);
+    const a = {
+      street1: "1 Main Street",
+      street2: "Apartment 2",
+      city: "Austin",
+      state: "TX",
+      zip: "78701",
+    };
+    expect(
+      sameAddress(a, {
+        street1: "1 MAIN ST",
+        street2: "APT 2",
+        city: "AUSTIN",
+        state: "TX",
+        zip: "78701-1234",
+      }),
+    ).toBe(true);
     expect(sameAddress(a, { ...a, street1: "2 Main Street" })).toBe(false);
   });
 
@@ -453,7 +470,11 @@ describe("UPS address check", () => {
 
   it("asks UPS with the address and nothing else", async () => {
     const { impl, calls } = scripted([
-      { body: { XAVResponse: { ValidAddressIndicator: "", Candidate: candidate(["1 MAIN ST", "APT 2"]) } } },
+      {
+        body: {
+          XAVResponse: { ValidAddressIndicator: "", Candidate: candidate(["1 MAIN ST", "APT 2"]) },
+        },
+      },
     ]);
     expect((await validateUpsAddress(ACCESS, request.to, impl)).found).toBe(true);
     expect(calls[0].url).toBe("https://onlinetools.ups.com/api/addressvalidation/v2/3");

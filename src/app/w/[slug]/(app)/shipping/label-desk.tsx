@@ -253,7 +253,7 @@ export function LabelDesk({
   /** A word on each connected account that couldn't be asked this time. */
   const [notes, setNotes] = useState<string[]>([]);
   /** Exactly what the rates on screen were asked with: buying sends the same again. */
-  const asked = useRef<RatesInput | null>(null);
+  const [asked, setAsked] = useState<RatesInput | null>(null);
   const [chosen, setChosen] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [markSent, setMarkSent] = useState(shop.offered && shop.markSent);
@@ -269,7 +269,7 @@ export function LabelDesk({
   const stale = () => {
     setRates(null);
     setNotes([]);
-    asked.current = null;
+    setAsked(null);
     setChosen("");
     setError(null);
   };
@@ -298,11 +298,11 @@ export function LabelDesk({
         if (result.error || !result.rates) {
           setRates(null);
           setNotes([]);
-          asked.current = null;
+          setAsked(null);
           setError(result.error ?? "We couldn't get rates. Try again.");
           return;
         }
-        asked.current = input;
+        setAsked(input);
         setNotes(result.notes ?? []);
         setRates(result.rates);
         setChosen(result.rates[0]?.id ?? "");
@@ -498,7 +498,7 @@ export function LabelDesk({
         chosen,
         { markSent, notify },
         together,
-        asked.current ?? undefined,
+        asked ?? undefined,
       );
       // On success the page moves on to the finished label; there is no result.
       if (!result) return;
@@ -510,7 +510,7 @@ export function LabelDesk({
       }
       setError(result.error ?? "Something went wrong. Reload this page before trying again.");
     });
-  }, [slug, orderId, together, chosen, locked, markSent, notify, packed, lines]);
+  }, [slug, orderId, together, chosen, locked, markSent, notify, packed, lines, asked]);
 
   // Ctrl+P (or ⌘P) buys and prints, the way it does on the bench.
   useEffect(() => {

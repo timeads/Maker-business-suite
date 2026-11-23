@@ -23,7 +23,8 @@ export function createRedoAdapter(fetchImpl: Fetch = fetch): ProviderAdapter {
   return {
     key: "redo",
     name: "Redo",
-    blurb: "Buy postage in Shipping through the carriers in your Redo account, paid from your Redo labels balance",
+    blurb:
+      "Buy postage in Shipping through the carriers in your Redo account, paid from your Redo labels balance",
     connectFields: [
       {
         name: "api_token",
@@ -54,7 +55,8 @@ export function createRedoAdapter(fetchImpl: Fetch = fetch): ProviderAdapter {
     async connectWithKey(input): Promise<ConnectedAccount> {
       const token = (input.api_token ?? "").trim();
       const storeId = (input.store_id ?? "").trim();
-      if (!token || !storeId) throw new ConnectError("Paste your Redo API token and store ID first.");
+      if (!token || !storeId)
+        throw new ConnectError("Paste your Redo API token and store ID first.");
       if (token.length > 400 || !/^[\x21-\x7e]+$/.test(token)) {
         throw new ConnectError(
           "That doesn't look like a Redo API token. Copy it again from Redo and paste the whole thing.",
@@ -76,7 +78,9 @@ export function createRedoAdapter(fetchImpl: Fetch = fetch): ProviderAdapter {
         if (err instanceof SourceError && err.status !== null && err.status < 500) {
           throw new ConnectError(err.message);
         }
-        throw new ConnectError("We couldn't reach Redo to check that token. Try again in a moment.");
+        throw new ConnectError(
+          "We couldn't reach Redo to check that token. Try again in a moment.",
+        );
       }
       return {
         // Each connection gets its own id; the store ID stays in Vault with the token.

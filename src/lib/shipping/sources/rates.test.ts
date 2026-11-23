@@ -99,9 +99,7 @@ describe("one price list from every source", () => {
       rate("easypost", "USPS", "USPS Priority Mail", "10.40"),
       rate("easypost", "FedEx", "FedEx Ground", "12.00"),
     ];
-    expect(
-      rows([...easypostUsps, rate("redo", "USPS", "USPS Ground Advantage", "8.15")]),
-    ).toEqual([
+    expect(rows([...easypostUsps, rate("redo", "USPS", "USPS Ground Advantage", "8.15")])).toEqual([
       // No "also EasyPost" either: its USPS rows are gone, Priority Mail included.
       ["redo", "USPS Ground Advantage", "8.15", null],
       ["easypost", "FedEx Ground", "12.00", null],

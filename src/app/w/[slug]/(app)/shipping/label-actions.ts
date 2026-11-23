@@ -40,11 +40,7 @@ import {
 import { groupName, parseWith } from "@/lib/shipping/merge";
 import { isInternational, todayIn } from "@/lib/shipping/queue";
 import { labelSource } from "@/lib/shipping/sources";
-import {
-  mergeRates,
-  sourceRateChoice,
-  type SourceRateChoice,
-} from "@/lib/shipping/sources/rates";
+import { mergeRates, sourceRateChoice, type SourceRateChoice } from "@/lib/shipping/sources/rates";
 import {
   SOURCE_NAMES,
   SourceError,
@@ -647,7 +643,9 @@ async function keepLabel(tenantId: string, quoteId: string, label: SourceLabel):
           p_carrier: label.carrier,
           p_service: service,
           p_tracking_number: label.trackingCode,
-          p_tracking_url: label.trackingCode ? trackingUrl(label.carrier, label.trackingCode) : null,
+          p_tracking_url: label.trackingCode
+            ? trackingUrl(label.carrier, label.trackingCode)
+            : null,
           p_label_url: label.labelUrl,
           p_label_mode: label.mode,
           // Text, so the price reaches the database exactly as EasyPost gave it.
@@ -818,8 +816,7 @@ export async function buyLabel(
     const settled = await withLabelSource(
       ctx.tenant.id,
       sourceKey,
-      (access) =>
-        source.lookUp(access as never, { kind, shipmentId: claim.provider_shipment_id }),
+      (access) => source.lookUp(access as never, { kind, shipmentId: claim.provider_shipment_id }),
       held,
     ).catch(() => null);
     if (settled === null) {

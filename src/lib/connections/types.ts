@@ -1,11 +1,5 @@
 export type ProviderKey =
-  | "shopify"
-  | "quickbooks"
-  | "stripe"
-  | "meta"
-  | "easypost"
-  | "ups"
-  | "redo";
+  "shopify" | "quickbooks" | "stripe" | "meta" | "easypost" | "ups" | "redo";
 
 export type ConnectionStatus = "active" | "needs_reconnect" | "disconnected";
 

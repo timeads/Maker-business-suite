@@ -259,7 +259,9 @@ export function buildRateRequest(account: string, request: LabelRequest) {
         Shipper: { ...party(request.from), ShipperNumber: account },
         ShipFrom: party(request.from),
         ShipTo: toParty(request.to),
-        PaymentDetails: { ShipmentCharge: [{ Type: "01", BillShipper: { AccountNumber: account } }] },
+        PaymentDetails: {
+          ShipmentCharge: [{ Type: "01", BillShipper: { AccountNumber: account } }],
+        },
         // The account's own agreed prices, not the list price.
         ShipmentRatingOptions: { NegotiatedRatesIndicator: "" },
         NumOfPieces: String(request.parcels.length),
@@ -304,7 +306,9 @@ export function parseRates(json: unknown): UpsRate[] {
       name: UPS_SERVICES[code] ?? `UPS service ${code}`,
       price: centsToPrice(cents),
       currency:
-        typeof item.TotalCharges?.CurrencyCode === "string" ? item.TotalCharges.CurrencyCode : "USD",
+        typeof item.TotalCharges?.CurrencyCode === "string"
+          ? item.TotalCharges.CurrencyCode
+          : "USD",
       days: Number.isInteger(days) && days > 0 ? days : null,
       cents,
     });
@@ -504,11 +508,7 @@ export async function checkUpsKeys(
 // ---------------------------------------------------------------------------
 
 const norm = (value: string | undefined) =>
-  (value ?? "")
-    .toUpperCase()
-    .replace(/[.,#]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  (value ?? "").toUpperCase().replace(/[.,#]/g, " ").replace(/\s+/g, " ").trim();
 const zip5 = (zip: string | undefined) => (zip ?? "").replace(/\D/g, "").slice(0, 5);
 
 type Spelled = Pick<LabelAddress, "street1" | "street2" | "city" | "state" | "zip">;

@@ -45,7 +45,9 @@ describe("UPS and Redo adapters", () => {
       expect(adapter.configured()).toBe(true);
       expect(adapter.pollEveryHours).toBeNull();
       expect(adapter.connectWithKey).toBeTypeOf("function");
-      expect(() => adapter.beginConnect({ state: "s", redirectUri: "r", input: {} })).toThrow(ConnectError);
+      expect(() => adapter.beginConnect({ state: "s", redirectUri: "r", input: {} })).toThrow(
+        ConnectError,
+      );
       // Everything typed in is typed into a password box, or picked from a list.
       for (const field of adapter.connectFields) {
         expect(Boolean(field.secret) || Boolean(field.options), `${key}.${field.name}`).toBe(true);
@@ -91,7 +93,9 @@ describe("UPS and Redo adapters", () => {
     const { token: _token, ...rest } = account;
     expect(JSON.stringify(rest)).not.toMatch(/fake-|A1B2C3/);
     // Nor does any URL or request body.
-    expect(calls.map((call) => call.url + call.body).join(" ")).not.toMatch(/fake-client|fake-ups-token/);
+    expect(calls.map((call) => call.url + call.body).join(" ")).not.toMatch(
+      /fake-client|fake-ups-token/,
+    );
   });
 
   it("UPS: practice labels use UPS's test system and say so", async () => {
@@ -106,19 +110,35 @@ describe("UPS and Redo adapters", () => {
   it("UPS: explains what's wrong without calling out, or without repeating a key", async () => {
     const none = scripted([]);
     const adapter = createUpsAdapter(none.impl);
-    await expect(adapter.connectWithKey!({ ...UPS_INPUT, client_secret: " " })).rejects.toThrow(/Fill in/);
-    await expect(adapter.connectWithKey!({ ...UPS_INPUT, account_number: "12345" })).rejects.toThrow(/six letters and numbers/);
-    await expect(adapter.connectWithKey!({ ...UPS_INPUT, client_id: "has space" })).rejects.toThrow(/don't look like UPS keys/);
+    await expect(adapter.connectWithKey!({ ...UPS_INPUT, client_secret: " " })).rejects.toThrow(
+      /Fill in/,
+    );
+    await expect(
+      adapter.connectWithKey!({ ...UPS_INPUT, account_number: "12345" }),
+    ).rejects.toThrow(/six letters and numbers/);
+    await expect(adapter.connectWithKey!({ ...UPS_INPUT, client_id: "has space" })).rejects.toThrow(
+      /don't look like UPS keys/,
+    );
     expect(none.calls).toHaveLength(0);
 
     for (const replies of [
       [{ status: 401 }],
-      [upsOk[0], { status: 403, body: { response: { errors: [{ code: "250002", message: "Invalid Authentication Information." }] } } }],
+      [
+        upsOk[0],
+        {
+          status: 403,
+          body: {
+            response: {
+              errors: [{ code: "250002", message: "Invalid Authentication Information." }],
+            },
+          },
+        },
+      ],
       [],
     ]) {
-      const err = await createUpsAdapter(scripted(replies).impl)
-        .connectWithKey!(UPS_INPUT)
-        .catch((e: unknown) => e);
+      const err = await createUpsAdapter(scripted(replies).impl).connectWithKey!(UPS_INPUT).catch(
+        (e: unknown) => e,
+      );
       expect(err).toBeInstanceOf(ConnectError);
       expect((err as Error).message).not.toMatch(/fake-/);
     }
@@ -128,18 +148,33 @@ describe("UPS and Redo adapters", () => {
     const saved = {
       access_token: "old-token",
       expires_at: 1,
-      secrets: { client_id: "fake-client-id", client_secret: "fake-client-secret", account: "A1B2C3", env: "test" },
+      secrets: {
+        client_id: "fake-client-id",
+        client_secret: "fake-client-secret",
+        account: "A1B2C3",
+        env: "test",
+      },
     };
     const { impl, calls } = scripted([{ body: { access_token: "new-token", expires_in: 3600 } }]);
     const renewed = await createUpsAdapter(impl, () => 5_000).refresh(saved, "ups-x");
     expect(calls[0].url).toBe("https://wwwcie.ups.com/security/v1/oauth/token");
-    expect(renewed).toEqual({ access_token: "new-token", expires_at: 5_000 + 3_600_000, secrets: saved.secrets });
-    await expect(createUpsAdapter(scripted([{ status: 401 }]).impl).refresh(saved, "ups-x")).rejects.toBeInstanceOf(ReconnectRequiredError);
-    await expect(createUpsAdapter(impl).refresh({ access_token: "old-token" }, "ups-x")).rejects.toBeInstanceOf(ReconnectRequiredError);
+    expect(renewed).toEqual({
+      access_token: "new-token",
+      expires_at: 5_000 + 3_600_000,
+      secrets: saved.secrets,
+    });
+    await expect(
+      createUpsAdapter(scripted([{ status: 401 }]).impl).refresh(saved, "ups-x"),
+    ).rejects.toBeInstanceOf(ReconnectRequiredError);
+    await expect(
+      createUpsAdapter(impl).refresh({ access_token: "old-token" }, "ups-x"),
+    ).rejects.toBeInstanceOf(ReconnectRequiredError);
   });
 
   it("Redo: checks the token with one sample quote and keeps it, with the store id, only in the token", async () => {
-    const { impl, calls } = scripted([{ body: { data: { getShippingLabelQuotes: { rates: [] } } } }]);
+    const { impl, calls } = scripted([
+      { body: { data: { getShippingLabelQuotes: { rates: [] } } } },
+    ]);
     const account = await createRedoAdapter(impl).connectWithKey!(REDO_INPUT);
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toBe("https://api.getredo.com/v3/account/store0000fake0000/graphql");
@@ -158,21 +193,27 @@ describe("UPS and Redo adapters", () => {
 
   it("Redo: explains a refused token, missing permissions and a bad store id", async () => {
     const none = scripted([]);
-    await expect(createRedoAdapter(none.impl).connectWithKey!({ ...REDO_INPUT, store_id: "has space" })).rejects.toThrow(/store ID/);
-    await expect(createRedoAdapter(none.impl).connectWithKey!({ api_token: "", store_id: "" })).rejects.toThrow(/Paste your Redo/);
+    await expect(
+      createRedoAdapter(none.impl).connectWithKey!({ ...REDO_INPUT, store_id: "has space" }),
+    ).rejects.toThrow(/store ID/);
+    await expect(
+      createRedoAdapter(none.impl).connectWithKey!({ api_token: "", store_id: "" }),
+    ).rejects.toThrow(/Paste your Redo/);
     expect(none.calls).toHaveLength(0);
-    const refused = await createRedoAdapter(scripted([{ status: 401, body: { errors: [{ message: "no" }] } }]).impl)
-      .connectWithKey!(REDO_INPUT)
-      .catch((e: unknown) => e);
+    const refused = await createRedoAdapter(
+      scripted([{ status: 401, body: { errors: [{ message: "no" }] } }]).impl,
+    ).connectWithKey!(REDO_INPUT).catch((e: unknown) => e);
     expect(refused).toBeInstanceOf(ConnectError);
     expect((refused as Error).message).toMatch(/didn't accept that token/);
     const scope = await createRedoAdapter(
-      scripted([{ body: { errors: [{ message: "x", extensions: { code: "INSUFFICIENT_SCOPE" } }] } }]).impl,
-    )
-      .connectWithKey!(REDO_INPUT)
-      .catch((e: unknown) => e);
+      scripted([
+        { body: { errors: [{ message: "x", extensions: { code: "INSUFFICIENT_SCOPE" } }] } },
+      ]).impl,
+    ).connectWithKey!(REDO_INPUT).catch((e: unknown) => e);
     expect((scope as Error).message).toMatch(/Shipping read and Shipping write/);
-    const down = await createRedoAdapter(none.impl).connectWithKey!(REDO_INPUT).catch((e: unknown) => e);
+    const down = await createRedoAdapter(none.impl).connectWithKey!(REDO_INPUT).catch(
+      (e: unknown) => e,
+    );
     expect((down as Error).message).toMatch(/couldn't reach Redo/);
   });
 });

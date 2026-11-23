@@ -25,7 +25,10 @@ const ACCESS: RedoAccess = { token: "fake-redo-token", storeId: "store0000fake00
 const GRAPHQL = "https://api.getredo.com/v3/account/store0000fake0000/graphql";
 
 const box = (pounds: number) => ({ length: 12, width: 10, height: 6, weightTenthOz: pounds * 160 });
-const request = (parcels = [box(3)], signature: LabelRequest["signature"] = "none"): LabelRequest => ({
+const request = (
+  parcels = [box(3)],
+  signature: LabelRequest["signature"] = "none",
+): LabelRequest => ({
   from: {
     name: "Tuft Studio",
     street1: "1 Mill Lane",
@@ -56,7 +59,9 @@ const rate = (carrier: string, service: string, amount: string, acct = "ca_1") =
   rate: { amount, currency: "USD" },
   deliveryDays: 3,
 });
-const quotes = (...rates: unknown[]) => ({ data: { getShippingLabelQuotes: { rates, messages: [] } } });
+const quotes = (...rates: unknown[]) => ({
+  data: { getShippingLabelQuotes: { rates, messages: [] } },
+});
 const PDF = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31]);
 
 /** A whole reply (`status`, `json`), or just the JSON of a 200. */
@@ -102,18 +107,21 @@ describe("Redo requests", () => {
 
   it("quotes one box from every carrier Redo returns", async () => {
     const redo = fake(() =>
-      quotes(
-        rate("USPS", "GroundAdvantage", "8.15"),
-        rate("UPS", "Ground", "11.2", "ca_ups"),
-        { carrier: "USPS", service: "Priority", carrierAccountId: "ca_1", rate: { amount: "soon" } },
-      ),
+      quotes(rate("USPS", "GroundAdvantage", "8.15"), rate("UPS", "Ground", "11.2", "ca_ups"), {
+        carrier: "USPS",
+        service: "Priority",
+        carrierAccountId: "ca_1",
+        rate: { amount: "soon" },
+      }),
     );
     const rates = await getRedoRates(ACCESS, request(), redo.impl);
     expect(redo.queries[0]).toContain("getShippingLabelQuotes(input:");
     expect(redo.queries[0]).toContain(
       'toAddress: {name: "Jane Doe" street1: "1 Elm St" street2: "Apt 2" city: "Austin" state: "TX" zip: "78701" country: "US"}',
     );
-    expect(redo.queries[0]).toContain("weight: {unit: POUND value: 3} length: {unit: INCH value: 12}");
+    expect(redo.queries[0]).toContain(
+      "weight: {unit: POUND value: 3} length: {unit: INCH value: 12}",
+    );
     expect(redo.queries[0]).toContain('phone: "5185550100"');
     expect(rates).toEqual([
       {
@@ -144,7 +152,11 @@ describe("Redo requests", () => {
   it("keeps a business's name on the label, since Redo has no company field", async () => {
     const redo = fake(() => quotes());
     const asked = request();
-    await getRedoRates(ACCESS, { ...asked, to: { ...asked.to, company: "Acme Studio" } }, redo.impl);
+    await getRedoRates(
+      ACCESS,
+      { ...asked, to: { ...asked.to, company: "Acme Studio" } },
+      redo.impl,
+    );
     expect(redo.queries[0]).toContain('toAddress: {name: "Jane Doe, Acme Studio" street1:');
     expect(redo.queries[0]).not.toContain("company:");
   });
@@ -173,7 +185,10 @@ describe("Redo requests", () => {
     const redo = fake((query) => {
       asked += 1;
       return query.includes("phone:")
-        ? { status: 400, json: { errors: [{ message: 'Field "phone" is not defined by type "AddressInput".' }] } }
+        ? {
+            status: 400,
+            json: { errors: [{ message: 'Field "phone" is not defined by type "AddressInput".' }] },
+          }
         : quotes(rate("USPS", "GroundAdvantage", "8.15"));
     });
     expect(await getRedoRates(ACCESS, request(), redo.impl)).toHaveLength(1);
@@ -182,7 +197,9 @@ describe("Redo requests", () => {
   });
 
   it("checks a token with one sample quote and buys nothing", async () => {
-    const redo = fake(() => quotes(rate("USPS", "GroundAdvantage", "8.15"), rate("UPS", "Ground", "11")));
+    const redo = fake(() =>
+      quotes(rate("USPS", "GroundAdvantage", "8.15"), rate("UPS", "Ground", "11")),
+    );
     expect(await checkRedo(ACCESS, redo.impl)).toEqual({ rates: 2, carriers: ["USPS", "UPS"] });
     expect(redo.queries).toHaveLength(1);
     expect(redo.queries[0]).not.toContain("purchaseCarrierShipment");
@@ -191,15 +208,22 @@ describe("Redo requests", () => {
   it("turns Redo's answers into plain errors", async () => {
     const fail = (reply: Answer) =>
       getRedoRates(ACCESS, request(), fake(() => reply).impl).catch((e: unknown) => e);
-    const bad = await fail({ status: 401, json: { errors: [{ message: "bad token fake-redo-token" }] } });
+    const bad = await fail({
+      status: 401,
+      json: { errors: [{ message: "bad token fake-redo-token" }] },
+    });
     expect(bad).toBeInstanceOf(ReconnectRequiredError);
     expect((bad as Error).message).not.toContain("fake-redo-token");
     expect(await fail({ status: 403, json: {} })).toMatchObject({ uncertain: false });
     expect(
-      await fail({ json: { errors: [{ message: "x", extensions: { code: "INSUFFICIENT_SCOPE" } }] } }),
+      await fail({
+        json: { errors: [{ message: "x", extensions: { code: "INSUFFICIENT_SCOPE" } }] },
+      }),
     ).toMatchObject({ message: expect.stringContaining("Shipping read and Shipping write") });
     expect(
-      await fail({ json: { errors: [{ message: "x", extensions: { code: "INSUFFICIENT_FUNDS" } }] } }),
+      await fail({
+        json: { errors: [{ message: "x", extensions: { code: "INSUFFICIENT_FUNDS" } }] },
+      }),
     ).toMatchObject({ status: 402, uncertain: false });
     expect(
       await fail({ json: { errors: [{ message: "x", extensions: { code: "RATE_NOT_FOUND" } }] } }),
@@ -207,7 +231,9 @@ describe("Redo requests", () => {
     expect(await fail({ status: 500, json: {} })).toMatchObject({ uncertain: true });
     // An answer we don't recognise: not safe to call a refusal.
     expect(
-      await fail({ json: { errors: [{ message: "Carrier hiccup", extensions: { code: "INTERNAL" } }] } }),
+      await fail({
+        json: { errors: [{ message: "Carrier hiccup", extensions: { code: "INTERNAL" } }] },
+      }),
     ).toMatchObject({ message: "Redo says: Carrier hiccup", uncertain: true });
     expect(
       await fail({ status: 400, json: { errors: [{ message: "Zip is wrong" }] } }),
@@ -225,7 +251,12 @@ describe("Redo requests", () => {
 });
 
 describe("Redo labels", () => {
-  const choice = { mode: "n" as const, carrierAccountId: "ca_1", carrierCode: "USPS", service: "GroundAdvantage" };
+  const choice = {
+    mode: "n" as const,
+    carrierAccountId: "ca_1",
+    carrierCode: "USPS",
+    service: "GroundAdvantage",
+  };
   const purchased = (n: number, amount: string) => ({
     data: {
       purchaseCarrierShipment: {
@@ -233,7 +264,9 @@ describe("Redo labels", () => {
         carrier: "USPS",
         service: "GroundAdvantage",
         rate: { amount, currency: "USD" },
-        shipmentPackages: [{ trackingNumber: `9400${n}`, labelUrl: `https://files.redo.example/l${n}.pdf` }],
+        shipmentPackages: [
+          { trackingNumber: `9400${n}`, labelUrl: `https://files.redo.example/l${n}.pdf` },
+        ],
       },
     },
   });
@@ -242,7 +275,14 @@ describe("Redo labels", () => {
   it("buys box by box with one key of ours per box, and adds up what was paid", async () => {
     let buys = 0;
     const redo = fake(() => purchased(++buys, buys === 1 ? "7.50" : "12.00"));
-    const made = await buyRedo(ACCESS, request([box(2), box(5)]), choice, "quote-abc", null, redo.impl);
+    const made = await buyRedo(
+      ACCESS,
+      request([box(2), box(5)]),
+      choice,
+      "quote-abc",
+      null,
+      redo.impl,
+    );
     expect(redo.queries).toHaveLength(2);
     expect(redo.queries[0]).toContain(
       'carrier: "USPS" service: "GroundAdvantage" carrierAccountId: "ca_1" idempotencyKey: "quote-abc-1"',
@@ -254,8 +294,16 @@ describe("Redo labels", () => {
       carrierCode: "USPS",
       service: "GroundAdvantage",
       boxes: [
-        { shipmentId: "sh_0001", trackingNumber: "94001", labelUrl: "https://files.redo.example/l1.pdf" },
-        { shipmentId: "sh_0002", trackingNumber: "94002", labelUrl: "https://files.redo.example/l2.pdf" },
+        {
+          shipmentId: "sh_0001",
+          trackingNumber: "94001",
+          labelUrl: "https://files.redo.example/l1.pdf",
+        },
+        {
+          shipmentId: "sh_0002",
+          trackingNumber: "94002",
+          labelUrl: "https://files.redo.example/l2.pdf",
+        },
       ],
       price: "19.50",
       currency: "USD",
@@ -288,11 +336,22 @@ describe("Redo labels", () => {
     expect(redo.queries).toHaveLength(1);
     expect((redo.queries[0].match(/weight: \{/g) ?? []).length).toBe(2);
     expect(made.boxes).toEqual([
-      { shipmentId: "sh_ups1", trackingNumber: "1Z001", labelUrl: "https://files.redo.example/a.pdf" },
+      {
+        shipmentId: "sh_ups1",
+        trackingNumber: "1Z001",
+        labelUrl: "https://files.redo.example/a.pdf",
+      },
       { shipmentId: "sh_ups1", trackingNumber: "1Z002", labelUrl: null },
     ]);
     await expect(
-      buyRedo(ACCESS, request(Array.from({ length: 6 }, () => box(1))), { ...choice, mode: "1" }, "q", null, redo.impl),
+      buyRedo(
+        ACCESS,
+        request(Array.from({ length: 6 }, () => box(1))),
+        { ...choice, mode: "1" },
+        "q",
+        null,
+        redo.impl,
+      ),
     ).rejects.toThrow(/at most 5 boxes/);
   });
 
@@ -302,13 +361,26 @@ describe("Redo labels", () => {
       if (query.includes("voidCarrierShipment")) return voided;
       buys += 1;
       return buys === 2
-        ? { json: { errors: [{ message: "Balance too low", extensions: { code: "INSUFFICIENT_FUNDS" } }] } }
+        ? {
+            json: {
+              errors: [{ message: "Balance too low", extensions: { code: "INSUFFICIENT_FUNDS" } }],
+            },
+          }
         : purchased(buys, "7.50");
     });
-    const err = await buyRedo(ACCESS, request([box(2), box(5)]), choice, "q", null, redo.impl).catch((e) => e);
+    const err = await buyRedo(
+      ACCESS,
+      request([box(2), box(5)]),
+      choice,
+      "q",
+      null,
+      redo.impl,
+    ).catch((e) => e);
     expect(err).toMatchObject({ status: 402, uncertain: false });
     expect(
-      redo.queries.filter((q) => q.includes("voidCarrierShipment")).map((q) => /shipmentId: "(\w+)"/.exec(q)?.[1]),
+      redo.queries
+        .filter((q) => q.includes("voidCarrierShipment"))
+        .map((q) => /shipmentId: "(\w+)"/.exec(q)?.[1]),
     ).toEqual(["sh_0001"]);
   });
 
@@ -319,9 +391,18 @@ describe("Redo labels", () => {
         return { data: { voidCarrierShipment: { shipmentId: "x", refundStatus: "REJECTED" } } };
       }
       buys += 1;
-      return buys === 2 ? { status: 400, json: { errors: [{ message: "No" }] } } : purchased(buys, "7.50");
+      return buys === 2
+        ? { status: 400, json: { errors: [{ message: "No" }] } }
+        : purchased(buys, "7.50");
     });
-    const err = await buyRedo(ACCESS, request([box(2), box(5)]), choice, "q", null, redo.impl).catch((e) => e);
+    const err = await buyRedo(
+      ACCESS,
+      request([box(2), box(5)]),
+      choice,
+      "q",
+      null,
+      redo.impl,
+    ).catch((e) => e);
     expect(err).toMatchObject({ uncertain: true });
     expect((err as Error).message).toMatch(/couldn't cancel it/);
   });
@@ -336,7 +417,14 @@ describe("Redo labels", () => {
   it("won't buy without a signature when one was asked for", async () => {
     const redo = fake(() => purchased(1, "7.50"));
     await expect(
-      buyRedo(ACCESS, request([box(2)], "signature"), { ...choice, mode: "1" }, "q", null, redo.impl),
+      buyRedo(
+        ACCESS,
+        request([box(2)], "signature"),
+        { ...choice, mode: "1" },
+        "q",
+        null,
+        redo.impl,
+      ),
     ).rejects.toThrow(/can't add a signature/);
     expect(redo.queries).toHaveLength(0);
   });
@@ -355,7 +443,11 @@ describe("Redo labels", () => {
     expect(result).toMatchObject({ asked: 2, failed: 1 });
     expect((result.error as Error).message).toMatch(/wouldn't cancel/);
     // An id that isn't one is never put in a query.
-    const odd = await voidRedo(ACCESS, ['x") { id } evil: voidCarrierShipment(shipmentId: "y'], redo.impl);
+    const odd = await voidRedo(
+      ACCESS,
+      ['x") { id } evil: voidCarrierShipment(shipmentId: "y'],
+      redo.impl,
+    );
     expect(odd).toMatchObject({ asked: 0, failed: 1 });
     expect(redo.queries).toHaveLength(3);
   });
@@ -379,7 +471,9 @@ describe("Redo labels", () => {
     expect(await downloadRedoLabel(ACCESS, "https://files.example/l.pdf", impl)).toBeNull();
     expect(seen).toEqual([{ url: "https://files.example/l.pdf", authorization: null }]);
     // A look-alike host is somewhere else too.
-    expect(await downloadRedoLabel(ACCESS, "https://getredo.com.evil.example/l.pdf", impl)).toBeNull();
+    expect(
+      await downloadRedoLabel(ACCESS, "https://getredo.com.evil.example/l.pdf", impl),
+    ).toBeNull();
     expect(seen.every((call) => call.authorization === null)).toBe(true);
     // Redo's own host, and it asked for the token.
     expect(await downloadRedoLabel(ACCESS, "https://labels.getredo.com/l.pdf", impl)).toEqual({
@@ -408,7 +502,15 @@ describe("Redo signature confirmation", () => {
       } as SchemaType,
     ] as const;
   const en = (name: string, values: string[]) =>
-    [name, { name, kind: "ENUM", inputFields: null, enumValues: values.map((v) => ({ name: v })) } as SchemaType] as const;
+    [
+      name,
+      {
+        name,
+        kind: "ENUM",
+        inputFields: null,
+        enumValues: values.map((v) => ({ name: v })),
+      } as SchemaType,
+    ] as const;
 
   it("finds the setting wherever Redo put it: an enum on each parcel, a yes/no flag, or text", () => {
     const parcelEnum = new Map<string, SchemaType>([
@@ -417,9 +519,17 @@ describe("Redo signature confirmation", () => {
         ["parcels", T("NON_NULL", null, T("LIST", null, T("INPUT_OBJECT", "ParcelIn")))],
       ]),
       obj("Addr", [["zip", T("SCALAR", "String")]]),
-      obj("ParcelIn", [["weight", T("SCALAR", "Float")], ["options", T("INPUT_OBJECT", "ParcelOpts")]]),
+      obj("ParcelIn", [
+        ["weight", T("SCALAR", "Float")],
+        ["options", T("INPUT_OBJECT", "ParcelOpts")],
+      ]),
       obj("ParcelOpts", [["signatureConfirmation", T("ENUM", "SigConf")]]),
-      en("SigConf", ["NONE", "INDIRECT_SIGNATURE", "SIGNATURE_REQUIRED", "ADULT_SIGNATURE_REQUIRED"]),
+      en("SigConf", [
+        "NONE",
+        "INDIRECT_SIGNATURE",
+        "SIGNATURE_REQUIRED",
+        "ADULT_SIGNATURE_REQUIRED",
+      ]),
     ]);
     expect(findSignatureOption("Req", parcelEnum)).toEqual({
       path: [
@@ -443,9 +553,14 @@ describe("Redo signature confirmation", () => {
       adultPath: [{ name: "requireAdultSignature", list: false }],
     });
     expect(
-      findSignatureOption("Req", new Map([obj("Req", [["signatureConfirmation", T("SCALAR", "String")]])])),
+      findSignatureOption(
+        "Req",
+        new Map([obj("Req", [["signatureConfirmation", T("SCALAR", "String")]])]),
+      ),
     ).toMatchObject({ kind: "string", standard: "SIGNATURE" });
-    expect(findSignatureOption("Req", new Map([obj("Req", [["service", T("SCALAR", "String")]])]))).toBeNull();
+    expect(
+      findSignatureOption("Req", new Map([obj("Req", [["service", T("SCALAR", "String")]])])),
+    ).toBeNull();
   });
 
   it("reads the option the reference found at Redo: signatureConfirmation = STANDARD | ADULT", () => {
@@ -501,7 +616,9 @@ describe("Redo signature confirmation", () => {
       where: "request",
     };
     expect(readSigOption(JSON.parse(JSON.stringify(option)))).toEqual(option);
-    expect(readSigOption({ ...option, standard: 'X} evil: {y: "' })).toMatchObject({ standard: null });
+    expect(readSigOption({ ...option, standard: 'X} evil: {y: "' })).toMatchObject({
+      standard: null,
+    });
     expect(readSigOption({ ...option, path: [{ name: "a b", list: false }] })).toBeNull();
     expect(readSigOption({ ...option, kind: "other" })).toBeNull();
     expect(readSigOption(null)).toBeNull();
@@ -509,7 +626,11 @@ describe("Redo signature confirmation", () => {
 
   /** A Redo whose schema has the signature on the request, or only on the purchase. */
   function schema(where: "request" | "purchase" | "nowhere") {
-    const sig = { name: "signatureConfirmation", description: null, type: T("ENUM", "SignatureConfirmation") };
+    const sig = {
+      name: "signatureConfirmation",
+      description: null,
+      type: T("ENUM", "SignatureConfirmation"),
+    };
     return (query: string): Answer => {
       if (query.includes("__schema")) {
         return {
@@ -518,8 +639,16 @@ describe("Redo signature confirmation", () => {
               __schema: {
                 mutationType: {
                   fields: [
-                    { name: "getShippingLabelQuotes", args: [{ name: "input", type: T("NON_NULL", null, T("INPUT_OBJECT", "QuoteIn")) }] },
-                    { name: "purchaseCarrierShipment", args: [{ name: "input", type: T("INPUT_OBJECT", "BuyIn") }] },
+                    {
+                      name: "getShippingLabelQuotes",
+                      args: [
+                        { name: "input", type: T("NON_NULL", null, T("INPUT_OBJECT", "QuoteIn")) },
+                      ],
+                    },
+                    {
+                      name: "purchaseCarrierShipment",
+                      args: [{ name: "input", type: T("INPUT_OBJECT", "BuyIn") }],
+                    },
                   ],
                 },
               },
@@ -529,7 +658,12 @@ describe("Redo signature confirmation", () => {
       }
       if (query.includes("__type")) {
         const types: Record<string, unknown> = {
-          QuoteIn: { name: "QuoteIn", kind: "INPUT_OBJECT", enumValues: null, inputFields: where === "request" ? [sig] : [] },
+          QuoteIn: {
+            name: "QuoteIn",
+            kind: "INPUT_OBJECT",
+            enumValues: null,
+            inputFields: where === "request" ? [sig] : [],
+          },
           BuyIn: {
             name: "BuyIn",
             kind: "INPUT_OBJECT",
@@ -547,7 +681,8 @@ describe("Redo signature confirmation", () => {
           },
         };
         const data: Record<string, unknown> = {};
-        for (const match of query.matchAll(/(t\d+): __type\(name: "(\w+)"\)/g)) data[match[1]] = types[match[2]] ?? null;
+        for (const match of query.matchAll(/(t\d+): __type\(name: "(\w+)"\)/g))
+          data[match[1]] = types[match[2]] ?? null;
         return { json: { data } };
       }
       return quotes(rate("USPS", "GroundAdvantage", "8.00"));

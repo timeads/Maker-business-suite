@@ -169,4 +169,5 @@ export function shortHash(value: string): string {
 }
 
 /** Pounds, as carriers that don't count ounces want them. */
-export const poundsOf = (parcel: LabelParcel) => Math.max(1, Math.round(parcel.weightTenthOz)) / 160;
+export const poundsOf = (parcel: LabelParcel) =>
+  Math.max(1, Math.round(parcel.weightTenthOz)) / 160;

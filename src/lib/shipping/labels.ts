@@ -290,7 +290,9 @@ const httpsLink = (value: unknown) =>
 /** Where a label we keep the file of is opened from. */
 export const LABEL_FILE_PATH = "/api/shipping/label-file";
 const fileLink = (value: unknown) =>
-  typeof value === "string" && /^[0-9a-f-]{36}$/i.test(value) ? `${LABEL_FILE_PATH}/${value}` : null;
+  typeof value === "string" && /^[0-9a-f-]{36}$/i.test(value)
+    ? `${LABEL_FILE_PATH}/${value}`
+    : null;
 
 /**
  * The boxes kept with a bought label (`label_parcels` on a parcel, `parcels`

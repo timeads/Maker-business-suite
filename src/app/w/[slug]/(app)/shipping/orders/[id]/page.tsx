@@ -723,9 +723,9 @@ export default async function ShippingOrderPage({
                     <CardContent className="pt-5">
                       <p className="text-sm">
                         Sending orders together works by buying one label here
-                        {labelCard === null ? ", which needs a postage account connected" : ""}. To record a
-                        parcel you bought elsewhere, open each order on its own and put the same
-                        tracking number on each.
+                        {labelCard === null ? ", which needs a postage account connected" : ""}. To
+                        record a parcel you bought elsewhere, open each order on its own and put the
+                        same tracking number on each.
                       </p>
                     </CardContent>
                   </Card>

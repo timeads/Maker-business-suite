@@ -3,8 +3,23 @@ import { matchesFingerprint, requestFingerprint } from "./label-access";
 import type { LabelRequest } from "./sources/types";
 
 const request: LabelRequest = {
-  from: { name: "Tuft Studio", street1: "1 Mill Lane", city: "Hudson", state: "NY", zip: "12534", country: "US" },
-  to: { name: "Jane Doe", street1: "1 Elm St", city: "Austin", state: "TX", zip: "78701", country: "US", residential: true },
+  from: {
+    name: "Tuft Studio",
+    street1: "1 Mill Lane",
+    city: "Hudson",
+    state: "NY",
+    zip: "12534",
+    country: "US",
+  },
+  to: {
+    name: "Jane Doe",
+    street1: "1 Elm St",
+    city: "Austin",
+    state: "TX",
+    zip: "78701",
+    country: "US",
+    residential: true,
+  },
   parcels: [{ length: 12, width: 10, height: 6, weightTenthOz: 480 }],
   reference: "#1042",
   signature: "none",

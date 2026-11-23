@@ -40,8 +40,7 @@ export function createUpsAdapter(
   return {
     key: "ups",
     name: "UPS (your own account)",
-    blurb:
-      "Buy UPS labels in Shipping at your own account's prices, billed by UPS to your account",
+    blurb: "Buy UPS labels in Shipping at your own account's prices, billed by UPS to your account",
     connectFields: [
       {
         name: "client_id",
