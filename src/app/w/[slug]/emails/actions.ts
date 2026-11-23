@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { newWorkspaceEmail } from "@/lib/brand/email";
+import { emailFromWriting, writeEmail } from "@/lib/brand/write-email";
 import { BRAND_MODULE, KIT_KEY, parseBrandKit, type BrandKitConfig } from "@/lib/brand/kit";
 import {
   normalizeDoc,
@@ -15,6 +16,7 @@ import {
 } from "@/lib/design";
 import { getEntitlements } from "@/lib/entitlements";
 import { publicAssetUrl } from "@/lib/social/worker";
+import { getAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
 
@@ -34,7 +36,12 @@ async function context(slug: string) {
   const entitlements = await getEntitlements(ctx.tenant.id);
   if (!entitlements.can("module.social")) return { error: NO_ACCESS } as const;
   if (!entitlements.canWrite) return { error: READ_ONLY } as const;
-  return { tenant: ctx.tenant, role: ctx.role, supabase: await createClient() } as const;
+  return {
+    tenant: ctx.tenant,
+    role: ctx.role,
+    entitlements,
+    supabase: await createClient(),
+  } as const;
 }
 type Ctx = Exclude<Awaited<ReturnType<typeof context>>, { error: string }>;
 
@@ -75,6 +82,88 @@ export async function createEmail(
   }
   revalidatePath(`/w/${slug}/social/emails`);
   redirect(`/w/${slug}/emails/${data as string}`);
+}
+
+/**
+ * Asks Claude to write an email from a sentence, lays it out in the
+ * workspace's starter and opens it in the builder as a draft. Nothing is sent.
+ */
+export async function writeEmailWithClaude(
+  slug: string,
+  _prev: EmailState,
+  formData: FormData,
+): Promise<EmailState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  if (!process.env.ANTHROPIC_API_KEY || !process.env.SUPABASE_SECRET_KEY) {
+    return { error: "Writing with Claude isn't switched on for this environment yet." };
+  }
+  const ask = String(formData.get("ask") ?? "")
+    .trim()
+    .slice(0, 2000);
+  if (ask.length < 8) return { error: "Say what the email is about, in a sentence or two." };
+  const kit = await loadKit(ctx);
+  if (!kit)
+    return { error: "Set up your brand kit first, so the email sounds and looks like you." };
+
+  const monthStart = new Date();
+  monthStart.setUTCDate(1);
+  monthStart.setUTCHours(0, 0, 0, 0);
+  const { data: usage } = await ctx.supabase
+    .from("usage_events")
+    .select("quantity")
+    .eq("tenant_id", ctx.tenant.id)
+    .eq("type", "ai_tokens")
+    .gte("occurred_at", monthStart.toISOString());
+  const used = (usage ?? []).reduce((sum, row) => sum + Number(row.quantity), 0);
+  if (used >= ctx.entitlements.limit("ai_credits")) {
+    return {
+      error:
+        "You've used this month's AI allowance. It resets next month, or you can start from a template.",
+    };
+  }
+
+  let id: string;
+  try {
+    const draft = await writeEmail({
+      kit,
+      ask,
+      today: new Intl.DateTimeFormat("en-US", {
+        timeZone: ctx.tenant.timezone,
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      }).format(new Date()),
+    });
+    // Metered whether or not a draft came back: the tokens were spent.
+    const { error: usageError } = await getAdminClient().rpc("record_usage", {
+      p_tenant_id: ctx.tenant.id,
+      p_type: "ai_tokens",
+      p_quantity: draft.tokens,
+    });
+    if (usageError) console.error(`Could not record AI usage: ${usageError.message}`);
+    if (!draft.ok) {
+      return {
+        error:
+          "Claude couldn't write this one. Try saying it another way, or start from a template.",
+      };
+    }
+    const { data, error } = await ctx.supabase.rpc("save_email", {
+      p_tenant_id: ctx.tenant.id,
+      p_email_id: null,
+      p_doc: emailFromWriting(kit, draft.written),
+      p_prompt: ask,
+    });
+    if (error || !data)
+      return { error: "The email was written but couldn't be saved. Please try again." };
+    id = data as string;
+  } catch (err) {
+    console.error(`Email draft failed: ${err instanceof Error ? err.message : "unknown"}`);
+    return { error: "Claude isn't answering right now. Try again in a minute." };
+  }
+  revalidatePath(`/w/${slug}/social/emails`);
+  redirect(`/w/${slug}/emails/${id}`);
 }
 
 /** Saves the email being edited. The document is tidied and bounded first. */

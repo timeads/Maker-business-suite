@@ -9,7 +9,7 @@ import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
 import { socialAccess } from "../gate";
 import { SocialTabs } from "../tabs";
-import { NewEmail } from "./new-email";
+import { NewEmail, WriteWithClaude } from "./new-email";
 import { RowActions } from "./row-actions";
 
 export const metadata: Metadata = { title: "Emails" };
@@ -55,24 +55,38 @@ export default async function EmailsPage({ params }: { params: Promise<{ slug: s
 
       {entitlements.canWrite &&
         (kit ? (
-          <Card>
-            <CardHeader>
-              <CardTitle>New email</CardTitle>
-              <CardDescription>
-                Each starter comes in your colours. Drag blocks around once it opens.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <NewEmail
-                slug={tenant.slug}
-                starters={workspaceTemplates(kit).map(({ id, name, about }) => ({
-                  id,
-                  name,
-                  about,
-                }))}
-              />
-            </CardContent>
-          </Card>
+          <>
+            <Card>
+              <CardHeader>
+                <CardTitle>Write it with Claude</CardTitle>
+                <CardDescription>
+                  A first draft in your voice and colours. It opens in the builder for you to edit;
+                  nothing is sent.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <WriteWithClaude slug={tenant.slug} />
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader>
+                <CardTitle>Or start from a template</CardTitle>
+                <CardDescription>
+                  Each starter comes in your colours. Drag blocks around once it opens.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <NewEmail
+                  slug={tenant.slug}
+                  starters={workspaceTemplates(kit).map(({ id, name, about }) => ({
+                    id,
+                    name,
+                    about,
+                  }))}
+                />
+              </CardContent>
+            </Card>
+          </>
         ) : (
           <Card>
             <CardHeader>
