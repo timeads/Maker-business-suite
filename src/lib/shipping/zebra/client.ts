@@ -93,7 +93,9 @@ export function createZebraClient(deps: ZebraDeps = {}) {
   let pieceSize = FIRST_PIECE;
 
   async function agent(path: string, init?: RequestInit): Promise<Response> {
-    const order = good ? [good, ...ZEBRA_AGENTS.filter((base) => base !== good)] : [...ZEBRA_AGENTS];
+    const order = good
+      ? [good, ...ZEBRA_AGENTS.filter((base) => base !== good)]
+      : [...ZEBRA_AGENTS];
     let answered: number | null = null;
     for (const base of order) {
       try {
@@ -140,9 +142,7 @@ export function createZebraClient(deps: ZebraDeps = {}) {
       const response = await agent("/available");
       const body = (await response.json()) as { printer?: unknown } | null;
       const list = (Array.isArray(body?.printer) ? body.printer : []).filter(usable);
-      return list.sort(
-        (a, b) => Number(b.connection === "usb") - Number(a.connection === "usb"),
-      );
+      return list.sort((a, b) => Number(b.connection === "usb") - Number(a.connection === "usb"));
     } catch {
       return [];
     }
@@ -182,7 +182,10 @@ export function createZebraClient(deps: ZebraDeps = {}) {
    * joins up. A refused piece is tried again in smaller pieces before giving
    * up; a label left half-sent is closed so the next one prints cleanly.
    */
-  async function send(zpl: string, savedName = ""): Promise<{ device: ZebraDevice; labels: number }> {
+  async function send(
+    zpl: string,
+    savedName = "",
+  ): Promise<{ device: ZebraDevice; labels: number }> {
     let device = await pickPrinter(savedName);
     // If the chosen printer won't take anything, use another one Browser Print can see.
     try {
@@ -194,7 +197,7 @@ export function createZebraClient(deps: ZebraDeps = {}) {
     const jobs = splitLabels(zpl);
     for (const [index, job] of jobs.entries()) {
       let size = pieceSize;
-      for (let position = 0; position < job.length; ) {
+      for (let position = 0; position < job.length;) {
         const piece = job.slice(position, position + size);
         try {
           await write(device, piece);
@@ -215,8 +218,7 @@ export function createZebraClient(deps: ZebraDeps = {}) {
           }
           if (position > 0) await write(device, "^XZ").catch(() => undefined);
           const which = jobs.length > 1 ? `label ${index + 1} of ${jobs.length}` : "the label";
-          const before =
-            index > 0 ? ` The first ${index === 1 ? "one" : index} printed.` : "";
+          const before = index > 0 ? ` The first ${index === 1 ? "one" : index} printed.` : "";
           throw new ZebraError(
             "send-failed",
             `We found ${device.name} but couldn't send ${which}.${before} Check the printer is on, has labels and isn't paused, then print again.`,

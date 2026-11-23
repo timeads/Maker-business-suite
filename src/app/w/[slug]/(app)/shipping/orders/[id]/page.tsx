@@ -54,6 +54,7 @@ import { shippingAccess } from "../../gate";
 import { ClearUnsureLabelButton, FinishLabelButton } from "../../label-card";
 import { LabelDesk } from "../../label-desk";
 import { OrderSteps } from "../../order-steps";
+import { LabelPrint } from "../../print-ui";
 import { TogetherNote } from "../../together-ui";
 
 const saleOf = (order: OrderWithSale): Sale | null =>
@@ -93,7 +94,7 @@ export default async function ShippingOrderPage({
       supabase
         .from("shipments")
         .select(
-          "id, number, order_name, carrier, service, tracking_number, tracking_url, shipped_at, items, voided_at, label_provider, label_url, label_mode, label_parcels, merged_with",
+          "id, number, order_name, carrier, service, tracking_number, tracking_url, shipped_at, items, voided_at, label_provider, label_url, label_mode, label_parcels, merged_with, label_printed_at",
         )
         .eq("tenant_id", tenant.id)
         .eq("shipping_order_id", id)
@@ -174,7 +175,7 @@ export default async function ShippingOrderPage({
   const { data: leadRows } = leadIds.length
     ? await supabase
         .from("shipments")
-        .select("id, number, order_name, shipping_order_id, label_parcels")
+        .select("id, number, order_name, shipping_order_id, label_parcels, label_printed_at")
         .eq("tenant_id", tenant.id)
         .in("id", leadIds)
     : { data: [] };
@@ -186,6 +187,7 @@ export default async function ShippingOrderPage({
         order_name: string | null;
         shipping_order_id: string | null;
         label_parcels: unknown;
+        label_printed_at: string | null;
       }[]
     ).map((lead) => [lead.id, lead]),
   );
@@ -258,7 +260,8 @@ export default async function ShippingOrderPage({
   });
   const sent = (parcels ?? []).filter((parcel) => !parcel.voided_at);
   const manager = canManage(role) && entitlements.canWrite;
-  const fresh = sent.find((parcel) => parcel.number === justBought && parcel.label_url);
+  // A label from UPS or Redo is a file we keep rather than a link, so the label's source is what counts.
+  const fresh = sent.find((parcel) => parcel.number === justBought && parcel.label_provider);
   // Every box of a parcel: one for most, several when the order went in more than one.
   const boxesOf = (parcel: (typeof sent)[number]) =>
     shownBoxes({
@@ -269,7 +272,46 @@ export default async function ShippingOrderPage({
       boxes: parcel.label_parcels ?? leads.get(parcel.merged_with as string)?.label_parcels ?? null,
     });
   const freshBoxes = fresh ? boxesOf(fresh) : [];
-  const freshLabels = freshBoxes.filter((box) => box.labelUrl);
+  // Which kept label files are in a Zebra's own format: opened in a browser they are text, not a picture.
+  const fileIdOf = (href: string | null) =>
+    /\/label-file\/([0-9a-f-]{36})$/i.exec(href ?? "")?.[1] ?? null;
+  const keptIds = [
+    ...new Set(
+      sent
+        .flatMap((parcel) => boxesOf(parcel))
+        .map((box) => fileIdOf(box.labelUrl))
+        .filter((each): each is string => Boolean(each)),
+    ),
+  ];
+  const { data: keptFiles } = keptIds.length
+    ? await supabase
+        .from("shipping_label_files")
+        .select("id, content_type")
+        .eq("tenant_id", tenant.id)
+        .in("id", keptIds)
+    : { data: [] };
+  const zplFiles = new Set(
+    ((keptFiles ?? []) as { id: string; content_type: string }[])
+      .filter((file) => file.content_type === "text/plain")
+      .map((file) => file.id),
+  );
+  const isZpl = (href: string) => zplFiles.has(fileIdOf(href) ?? "") || /\.zpl(\?|$)/i.test(href);
+  /** Each box's label to open in the browser, said as what it is. */
+  const labelLinks = (parcel: (typeof sent)[number]) => {
+    const printable = boxesOf(parcel).filter((box) => box.labelUrl);
+    return printable.map((box, index) => {
+      const href = box.labelUrl as string;
+      const n = printable.length > 1 ? ` ${index + 1}` : "";
+      return {
+        href,
+        text: isZpl(href) ? `Label${n} file for a Zebra` : `Print label${n}`,
+      };
+    });
+  };
+  const printedOf = (parcel: (typeof sent)[number]) =>
+    ((parcel.label_printed_at as string | null) ??
+      leads.get(parcel.merged_with as string)?.label_printed_at ??
+      null) as string | null;
   const linkClass = "text-ochre-text font-medium hover:underline";
 
   // Buying a label here: a postage account (EasyPost, UPS or Redo) is connected and this is a parcel to post.
@@ -460,27 +502,16 @@ export default async function ShippingOrderPage({
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-wrap items-center gap-x-4 gap-y-2">
-                <Button asChild>
-                  <a
-                    href={(freshLabels[0]?.labelUrl ?? fresh.label_url) as string}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    {freshLabels.length > 1 ? "Print label 1" : "Print label"}
-                  </a>
-                </Button>
-                {freshLabels.slice(1).map((box, index) => (
-                  <a
-                    key={box.labelUrl}
-                    href={box.labelUrl as string}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className={`${linkClass} text-sm`}
-                  >
-                    Print label {index + 2}
-                  </a>
-                ))}
-                {freshLabels.length > 1 && (
+                <LabelPrint
+                  slug={tenant.slug}
+                  shipmentId={fresh.id as string}
+                  links={labelLinks(fresh)}
+                  printedAt={printedOf(fresh)}
+                  printedText={printedOf(fresh) ? when.format(new Date(printedOf(fresh)!)) : null}
+                  auto
+                  primary
+                />
+                {freshBoxes.length > 1 && (
                   <p className="text-muted-foreground w-full text-xs">
                     One label for each box. Print them all before you move on.
                   </p>
@@ -786,7 +817,6 @@ export default async function ShippingOrderPage({
                   {sent.map((parcel) => {
                     const boxes = boxesOf(parcel);
                     const tracked = boxes.filter((box) => box.trackingNumber);
-                    const printable = boxes.filter((box) => box.labelUrl);
                     return (
                       <li key={parcel.id}>
                         <span className="font-semibold">Parcel {parcel.number}</span> ·{" "}
@@ -857,17 +887,15 @@ export default async function ShippingOrderPage({
                             {parcel.label_mode === "test" && (
                               <Badge tone="waiting">Test label</Badge>
                             )}
-                            {printable.map((box, index) => (
-                              <a
-                                key={box.labelUrl}
-                                href={box.labelUrl as string}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className={linkClass}
-                              >
-                                {printable.length > 1 ? `Print label ${index + 1}` : "Print label"}
-                              </a>
-                            ))}
+                            <LabelPrint
+                              slug={tenant.slug}
+                              shipmentId={parcel.id as string}
+                              links={labelLinks(parcel)}
+                              printedAt={printedOf(parcel)}
+                              printedText={
+                                printedOf(parcel) ? when.format(new Date(printedOf(parcel)!)) : null
+                              }
+                            />
                             {manager && (
                               <VoidButton
                                 slug={tenant.slug}

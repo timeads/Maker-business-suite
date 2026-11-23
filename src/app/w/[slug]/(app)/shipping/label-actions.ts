@@ -39,7 +39,7 @@ import {
 } from "@/lib/shipping/labels";
 import { groupName, parseWith } from "@/lib/shipping/merge";
 import { isInternational, todayIn } from "@/lib/shipping/queue";
-import { labelSource } from "@/lib/shipping/sources";
+import { boughtForZebra, easyPostZplFiles, labelSource } from "@/lib/shipping/sources";
 import { mergeRates, sourceRateChoice, type SourceRateChoice } from "@/lib/shipping/sources/rates";
 import {
   SOURCE_NAMES,
@@ -635,7 +635,13 @@ const CLAIM_ERRORS: [match: string, message: string][] = [
  * won't save, the last try leaves the file out so the tracking number and
  * the id a void needs are kept whatever happens.
  */
-async function keepLabel(tenantId: string, quoteId: string, label: SourceLabel): Promise<boolean> {
+async function keepLabel(
+  tenantId: string,
+  quoteId: string,
+  label: SourceLabel,
+  /** Bought for a computer that prints to a Zebra: EasyPost's ZPL is fetched and kept too. */
+  forZebra = false,
+): Promise<boolean> {
   const parcels = label.boxes.map((box) => ({
     shipment_id: box.shipmentId,
     tracking_number: box.trackingCode,
@@ -676,7 +682,7 @@ async function keepLabel(tenantId: string, quoteId: string, label: SourceLabel):
   for (let attempt = 0; attempt < tries; attempt++) {
     const { data, error } = await save(attempt);
     if (!error && (label.source === "easypost" || data === true)) {
-      if (label.source === "easypost") await keepEasyPostFiles(tenantId, quoteId, label);
+      if (label.source === "easypost" && forZebra) await keepEasyPostZpl(tenantId, quoteId, label);
       return true;
     }
     console.error("could not keep bought label", error?.message ?? "the quote was not waiting");
@@ -685,17 +691,19 @@ async function keepLabel(tenantId: string, quoteId: string, label: SourceLabel):
 }
 
 /**
- * An EasyPost label bought for a Zebra brings its ZPL: kept beside the label
- * so it can be printed again. The label is already safe by now, with its
- * link, so this is tried once and never stands in the way.
+ * An EasyPost label bought for a Zebra: its ZPL is fetched and kept beside
+ * the label, so it can be printed now and again later. The label is already
+ * written down by now, with its link, so this is tried once and never stands
+ * in the way: a file that won't come is fetched when someone prints.
  */
-async function keepEasyPostFiles(tenantId: string, quoteId: string, label: SourceLabel) {
-  if (label.files.length === 0) return;
+async function keepEasyPostZpl(tenantId: string, quoteId: string, label: SourceLabel) {
   try {
+    const files = await easyPostZplFiles(label);
+    if (files.length === 0) return;
     const { error } = await getAdminClient().rpc("keep_label_files", {
       p_tenant_id: tenantId,
       p_quote_id: quoteId,
-      p_files: label.files,
+      p_files: files,
     });
     if (error) console.error("could not keep label file", error.message);
   } catch (err) {
@@ -878,7 +886,7 @@ export async function buyLabel(
   }
 
   // From here on the money is spent.
-  if (!(await keepLabel(ctx.tenant.id, claim.quote_id, label))) {
+  if (!(await keepLabel(ctx.tenant.id, claim.quote_id, label, boughtForZebra(claim.rate)))) {
     done(slug);
     return {
       bought: true,

@@ -7,6 +7,7 @@ import { BoxesForm } from "../box-forms";
 import { loadBoxes, loadShippingSetup, type ShippingOrder } from "../data";
 import { ShippingSettingsForm, SlipLayoutForm } from "../forms";
 import { shippingAccess } from "../gate";
+import { PrintingOnThisComputer } from "../print-ui";
 import { PackingSlip } from "../slip";
 import { ShippingTabs } from "../tabs";
 
@@ -85,6 +86,18 @@ export default async function ShippingSettingsPage({
         description="What your packing slips say, the boxes you pack in, and what happens when you record a parcel."
       />
       <ShippingTabs slug={tenant.slug} />
+      <Card>
+        <CardHeader>
+          <CardTitle>Printing on this computer</CardTitle>
+          <CardDescription>
+            Saved in this browser only, so the packing bench and the office desk can each print
+            their own way. Everyone on the team can set up the computer they pack at.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <PrintingOnThisComputer workspaceName={tenant.name} />
+        </CardContent>
+      </Card>
       {canManage(role) && entitlements.canWrite ? (
         <>
           <Card>

@@ -78,7 +78,7 @@ export function easypostSource(fetchImpl: Fetch = fetch): LabelSource<SourceAcce
       };
     },
     async buy(access, purchase) {
-      const label = fromEasyPost(
+      return fromEasyPost(
         purchase.kind === "order"
           ? await buyEasyPostOrder(
               access.key,
@@ -92,17 +92,6 @@ export function easypostSource(fetchImpl: Fetch = fetch): LabelSource<SourceAcce
             )
           : await buyEasyPostLabel(access.key, purchase.shipmentId, purchase.rate.id, fetchImpl),
       );
-      if (purchase.rate.ref?.label_format !== "zpl") return label;
-      // The money is spent. The ZPL is fetched so it can be printed and kept; a
-      // file that won't come is still at EasyPost, and its link is kept as always.
-      const files: LabelFile[] = [];
-      for (const [index, box] of label.boxes.entries()) {
-        const link = box.zplUrl ?? box.labelUrl;
-        if (!link) continue;
-        const file = await downloadEasyPostLabel(link, fetchImpl);
-        if (file) files.push({ box: index + 1, ...file });
-      }
-      return { ...label, files };
     },
     async lookUp(access, what) {
       const { label } = await getEasyPostPurchase(
@@ -115,6 +104,30 @@ export function easypostSource(fetchImpl: Fetch = fetch): LabelSource<SourceAcce
     },
     refund: (access, shipmentIds) => refundEasyPostLabels(access.key, shipmentIds, fetchImpl),
   };
+}
+
+/** A rate the server stored for a computer that prints to a Zebra. */
+export const boughtForZebra = (rate: { ref?: Record<string, string> } | null | undefined) =>
+  rate?.ref?.label_format === "zpl";
+
+/**
+ * The ZPL of an EasyPost label that was bought for a Zebra, a file per box.
+ * Called only after the label itself is written down, so a slow or missing
+ * file can never cost a paid label: whatever won't come is left out, and is
+ * still at EasyPost behind the link the label keeps.
+ */
+export async function easyPostZplFiles(
+  label: Pick<BoughtLabel, "boxes">,
+  fetchImpl: Fetch = fetch,
+): Promise<LabelFile[]> {
+  const files = await Promise.all(
+    label.boxes.map(async (box, index): Promise<LabelFile | null> => {
+      const link = box.zplUrl ?? box.labelUrl;
+      const file = link ? await downloadEasyPostLabel(link, fetchImpl, 10_000) : null;
+      return file ? { box: index + 1, ...file } : null;
+    }),
+  );
+  return files.filter((file): file is LabelFile => file !== null);
 }
 
 const NEEDS_REQUEST = "Those rates have run out. Press Get rates again, then choose one.";
@@ -178,8 +191,7 @@ export function upsSource(fetchImpl: Fetch = fetch): LabelSource<UpsAccess> {
           // UPS sends a picture, or ZPL when that was asked for: kept as what it really is.
           const sniffed = labelKind(box.label);
           const asked = purchase.request?.labelFormat === "zpl" ? "text/plain" : "image/gif";
-          const contentType =
-            sniffed === "text/plain" || sniffed === "image/gif" ? sniffed : asked;
+          const contentType = sniffed === "text/plain" || sniffed === "image/gif" ? sniffed : asked;
           return [{ box: index + 1, contentType, data: box.label }];
         }),
       };

@@ -52,6 +52,17 @@ describe("a quote's fingerprint", () => {
     }
   });
 
+  it("covers the label's format: a label priced as a picture can't be bought as ZPL, or the other way", () => {
+    const picture = requestFingerprint(request);
+    const zebra = requestFingerprint({ ...request, labelFormat: "zpl" });
+    expect(matchesFingerprint(picture, request)).toBe(true);
+    expect(matchesFingerprint(picture, { ...request, labelFormat: "zpl" })).toBe(false);
+    expect(matchesFingerprint(zebra, { ...request, labelFormat: "zpl" })).toBe(true);
+    expect(matchesFingerprint(zebra, request)).toBe(false);
+    // Left out is left out: a request for a picture is fingerprinted as it always was.
+    expect(matchesFingerprint(picture, { ...request, labelFormat: undefined })).toBe(true);
+  });
+
   it("is salted, holds no part of the address, and a missing one never matches", () => {
     const print = requestFingerprint(request);
     expect(requestFingerprint(request)).not.toBe(print);

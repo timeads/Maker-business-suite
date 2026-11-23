@@ -488,3 +488,21 @@ describe("UPS address check", () => {
     });
   });
 });
+
+describe("a label for a Zebra", () => {
+  it("asks UPS for ZPL on 4 × 6 stock only when that was asked for", () => {
+    const picture = buildShipRequest("A1B2C3", request, "03").ShipmentRequest.LabelSpecification;
+    expect(picture).toEqual({ LabelImageFormat: { Code: "GIF" }, HTTPUserAgent: "Mozilla/4.5" });
+    const zebra = buildShipRequest("A1B2C3", { ...request, labelFormat: "zpl" }, "03")
+      .ShipmentRequest.LabelSpecification;
+    expect(zebra).toEqual({
+      LabelImageFormat: { Code: "ZPL" },
+      HTTPUserAgent: "Mozilla/4.5",
+      LabelStockSize: { Height: "6", Width: "4" },
+    });
+    // Asking for a price doesn't depend on how the label will print.
+    expect(buildRateRequest("A1B2C3", { ...request, labelFormat: "zpl" })).toEqual(
+      buildRateRequest("A1B2C3", request),
+    );
+  });
+});

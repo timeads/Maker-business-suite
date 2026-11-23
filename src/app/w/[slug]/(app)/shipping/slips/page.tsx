@@ -4,6 +4,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { daysFromNow } from "@/lib/bookings/slots";
 import { combineOrders, groupKey } from "@/lib/shipping/merge";
 import { inQueueView, todayIn } from "@/lib/shipping/queue";
+import { buildSlipData } from "@/lib/shipping/zebra/slip";
 import { createClient } from "@/lib/supabase/server";
 import { markPrinted } from "../actions";
 import {
@@ -15,6 +16,7 @@ import {
 } from "../data";
 import { PrintButton } from "../forms";
 import { shippingAccess } from "../gate";
+import { ZebraSlipsButton } from "../print-ui";
 import { PackingSlip } from "../slip";
 
 export const metadata: Metadata = { title: "Packing slips" };
@@ -94,6 +96,31 @@ export default async function PackingSlipsPage({
   // By default only what hasn't been printed yet, so a second run doesn't repeat the first.
   const shown = chosen || query.all === "1" || fresh.length === 0 ? ready : fresh;
   const base = `/w/${tenant.slug}/shipping`;
+  // The same slips as plain words, for a computer that sends them to its Zebra.
+  const slipSetup = {
+    settings: setup.settings,
+    layout: setup.slip,
+    workspaceName: tenant.name,
+    timeZone: tenant.timezone,
+    currency: tenant.currency,
+  };
+  const zebraSlips =
+    shown.length === 0
+      ? []
+      : combined && together
+        ? [
+            buildSlipData({
+              ...slipSetup,
+              order: {
+                ...together[0],
+                name: combined.name,
+                items: combined.items,
+              },
+              code: together[0].name ?? "",
+              from: new Map(combined.items.map((item) => [item.line_id, item.order_name])),
+            }),
+          ]
+        : shown.map((order) => buildSlipData({ ...slipSetup, order }));
 
   return (
     <>
@@ -123,6 +150,7 @@ export default async function PackingSlipsPage({
             </Button>
           )}
           {shown.length > 0 && <PrintButton label="Print these" />}
+          <ZebraSlipsButton slips={zebraSlips} />
           {shown.length > 0 && entitlements.canWrite && (
             <form
               action={markPrinted.bind(

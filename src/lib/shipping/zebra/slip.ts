@@ -78,8 +78,7 @@ export function buildSlipData(input: {
       parts.push({
         kind: "shipto",
         heading: order.pickup ? "Pickup for" : "Send to",
-        lines:
-          to.length === 0 ? ["No address on this order"] : order.pickup ? to.slice(0, 2) : to,
+        lines: to.length === 0 ? ["No address on this order"] : order.pickup ? to.slice(0, 2) : to,
         phone: order.phone ?? "",
       });
     } else if (section.id === "method") {
@@ -114,7 +113,8 @@ export function buildSlipData(input: {
         })),
       });
     } else if (section.id === "note") {
-      if (order.note) parts.push({ kind: "note", heading: "Note from the customer", text: order.note });
+      if (order.note)
+        parts.push({ kind: "note", heading: "Note from the customer", text: order.note });
     } else if (section.id === "message") {
       if (layout.message) parts.push({ kind: "message", text: layout.message });
     } else if (section.id === "barcode") {
@@ -247,9 +247,7 @@ export function slipZpl(slip: SlipData, dpi: number = 203): string {
       rule(dots(2));
       for (const row of part.rows) {
         const titleLines = wrapText(row.title, fits(titleW, base));
-        const detailLines = row.details.flatMap((detail) =>
-          wrapText(detail, fits(titleW, small)),
-        );
+        const detailLines = row.details.flatMap((detail) => wrapText(detail, fits(titleW, small)));
         const height =
           Math.max(lineOf(big), titleLines.length * lineOf(base)) +
           detailLines.length * lineOf(small);
@@ -282,14 +280,14 @@ export function slipZpl(slip: SlipData, dpi: number = 203): string {
       }
     } else if (part.kind === "barcode") {
       const tall = dots(90);
-      const module = [dots(2), Math.max(1, dots(2) - 1), 1].find(
+      const bar = [dots(2), Math.max(1, dots(2) - 1), 1].find(
         (width) => ((part.code.length + 2) * 11 + 13) * width <= inner,
       );
-      if (module && barcodeSafe(part.code)) {
-        const wide = ((part.code.length + 2) * 11 + 13) * module;
+      if (bar && barcodeSafe(part.code)) {
+        const wide = ((part.code.length + 2) * 11 + 13) * bar;
         room(tall + lineOf(small) + dots(8));
         put(
-          `^FO${M + Math.floor((inner - wide) / 2)},${y}^BY${module},3,${tall}^BCN,${tall},N,N,N^FD${part.code}^FS`,
+          `^FO${M + Math.floor((inner - wide) / 2)},${y}^BY${bar},3,${tall}^BCN,${tall},N,N,N^FD${part.code}^FS`,
         );
         y += tall + dots(8);
       }

@@ -181,12 +181,20 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   there and on `shipments`; keep both tests in `tests/db/shipping.test.ts`
   passing. A parcel is recorded with `record_shipment` (whole team; part
   shipments leave the rest in the queue); undoing one is manager-only. Postage
-  can be bought through EasyPost with the workspace's own key (a connection
-  like any other, kept in Vault, read only through `getLabelKey()`): a label
+  can be bought from EasyPost, the business's own UPS account or Redo, each a
+  connection like any other with its keys in Vault (read only through
+  `getLabelAccess()`), all behind one `LabelSource` interface in
+  `src/lib/shipping/sources/` and shown as one price list: a label
   is only ever bought against a quote the server stored for that order
   (`shipping_label_quotes`), and a paid label is written there before the
   parcel is recorded, so it cannot be bought twice or lost. No customs or
-  international labels yet. Telling the shop a
+  international labels yet. Labels can print straight to a Zebra
+  (`lib/shipping/zebra`): which printer is that computer's own choice, kept in
+  its browser and never in the database; such a computer asks for ZPL with
+  the rate request (`labelFormat`, part of the fingerprint), the browser sends
+  it to Zebra Browser Print on localhost, and `mark_label_printed` notes it so
+  a second copy is warned about. A print that fails never touches the
+  purchase: the label is already kept. Telling the shop a
   parcel went (`shopify-fulfil.ts`) follows the same once-only queue as
   stock receipts. The to-ship queue's views (ready, pickup, priority,
   on hold, international) and "back from hold" are worked out on read by

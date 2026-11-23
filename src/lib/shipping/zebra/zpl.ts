@@ -9,7 +9,9 @@ export function zplText(value: string): string {
   let out = "";
   for (const byte of new TextEncoder().encode(value.replace(/\s+/g, " ").trim())) {
     const plain = byte >= 0x20 && byte <= 0x7e && byte !== 0x5e && byte !== 0x7e && byte !== 0x5f;
-    out += plain ? String.fromCharCode(byte) : `_${byte.toString(16).toUpperCase().padStart(2, "0")}`;
+    out += plain
+      ? String.fromCharCode(byte)
+      : `_${byte.toString(16).toUpperCase().padStart(2, "0")}`;
   }
   return out;
 }
@@ -85,7 +87,7 @@ export function compressRow(hex: string, previous: string | null): string {
   if (previous !== null && hex === previous) return ":";
   const kept = hex.replace(/0+$/, "");
   let out = "";
-  for (let i = 0; i < kept.length; ) {
+  for (let i = 0; i < kept.length;) {
     const ch = kept[i];
     let n = 1;
     while (kept[i + n] === ch) n++;

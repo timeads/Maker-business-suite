@@ -82,7 +82,8 @@ export async function getLabelPrintData(slug: string, shipmentId: string): Promi
   const boxes = (raw.length > 0 ? raw : [{ label_url: parcel.label_url }]).map((box) => {
     const item = box && typeof box === "object" ? (box as Record<string, unknown>) : {};
     return {
-      file: typeof item.label_file === "string" && UUID.test(item.label_file) ? item.label_file : "",
+      file:
+        typeof item.label_file === "string" && UUID.test(item.label_file) ? item.label_file : "",
       link: typeof item.label_url === "string" ? item.label_url : "",
     };
   });

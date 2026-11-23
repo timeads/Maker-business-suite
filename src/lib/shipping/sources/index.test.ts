@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { Fetch } from "../../connections/types";
 import type { LabelParcel } from "../easypost";
-import { LABEL_SOURCES, labelSource, labelSources } from "./index";
+import {
+  LABEL_SOURCES,
+  boughtForZebra,
+  easyPostZplFiles,
+  labelSource,
+  labelSources,
+} from "./index";
 import { resetRedoLearned } from "./redo";
 import { CannotLookUpError, type LabelRequest } from "./types";
 
@@ -216,6 +222,152 @@ describe("label sources", () => {
         { box: 2, contentType: "image/gif", data: "R0lGODli" },
       ],
     });
+  });
+
+  it("EasyPost for a Zebra: the quote remembers ZPL was asked for, and buying fetches and keeps it", async () => {
+    const ZPL = "^XA^FO50,50^FDSam Shopper^FS^XZ";
+    const { impl, calls } = scripted((call) => {
+      if (call.url.endsWith(".zpl")) return { bytes: new TextEncoder().encode(ZPL) };
+      if (call.url.endsWith("/buy")) {
+        return {
+          body: {
+            id: "shp_1",
+            tracking_code: "9400111",
+            postage_label: { label_url: "https://easypost-files.example/l.zpl" },
+            selected_rate: { carrier: "USPS", service: "GroundAdvantage", rate: "8.40" },
+          },
+        };
+      }
+      return {
+        body: {
+          id: "shp_1",
+          rates: [{ id: "rate_1", carrier: "USPS", service: "GroundAdvantage", rate: "8.4" }],
+        },
+      };
+    });
+    const source = labelSource("easypost", impl);
+    const quote = await source.quote(EASYPOST, { ...request(), labelFormat: "zpl" }, "quote_x");
+    expect(JSON.parse(calls[0].body).shipment.options.label_format).toBe("ZPL");
+    // Kept on the quote, server-side: what buying goes by.
+    expect(quote.rates[0].ref).toEqual({
+      shipment_id: "shp_1",
+      kind: "shipment",
+      label_format: "zpl",
+    });
+
+    expect(boughtForZebra(quote.rates[0])).toBe(true);
+
+    // Buying is the one call it always was: the file is fetched afterwards,
+    // once the label is safely written down.
+    const label = await source.buy(EASYPOST, {
+      rate: quote.rates[0],
+      shipmentId: "shp_1",
+      kind: "shipment",
+      quoteId: "q-1",
+      request: null,
+    });
+    expect(label.labelUrl).toBe("https://easypost-files.example/l.zpl");
+    expect(label.files).toEqual([]);
+    expect(calls.map((call) => call.url.split("/").pop())).toEqual(["shipments", "buy"]);
+
+    expect(await easyPostZplFiles(label, impl)).toEqual([
+      { box: 1, contentType: "text/plain", data: Buffer.from(ZPL).toString("base64") },
+    ]);
+    expect(calls.at(-1)).toMatchObject({
+      url: "https://easypost-files.example/l.zpl",
+      method: "GET",
+    });
+  });
+
+  it("EasyPost for a Zebra: each box's ZPL is fetched, from its own ZPL link where there is one, and a file that won't come is left out", async () => {
+    const { impl, calls } = scripted((call) =>
+      call.url.endsWith("box2.zpl")
+        ? { status: 500 }
+        : { bytes: new TextEncoder().encode(`^XA^FD${call.url.split("/").pop()}^FS^XZ`) },
+    );
+    const files = await easyPostZplFiles(
+      {
+        boxes: [
+          {
+            shipmentId: "shp_1",
+            trackingCode: "1",
+            labelUrl: "https://files.example/box1.png",
+            zplUrl: "https://files.example/box1.zpl",
+          },
+          { shipmentId: "shp_2", trackingCode: "2", labelUrl: "https://files.example/box2.zpl" },
+          { shipmentId: "shp_3", trackingCode: "3", labelUrl: "https://files.example/box3.zpl" },
+          { shipmentId: "shp_4", trackingCode: "4", labelUrl: null },
+        ],
+      },
+      impl,
+    );
+    expect(files.map((file) => [file.box, file.contentType])).toEqual([
+      [1, "text/plain"],
+      [3, "text/plain"],
+    ]);
+    expect(Buffer.from(files[0].data, "base64").toString()).toBe("^XA^FDbox1.zpl^FS^XZ");
+    expect(calls.map((call) => call.url.split("/").pop()).sort()).toEqual([
+      "box1.zpl",
+      "box2.zpl",
+      "box3.zpl",
+    ]);
+  });
+
+  it("EasyPost without a Zebra buys exactly as before: no extra request, no file", async () => {
+    const { impl, calls } = scripted(() => ({
+      body: {
+        id: "shp_1",
+        tracking_code: "9400111",
+        postage_label: { label_url: "https://easypost-files.example/l.png" },
+        selected_rate: { carrier: "USPS", service: "GroundAdvantage", rate: "8.40" },
+      },
+    }));
+    const rate = { id: "rate_1", ref: { shipment_id: "shp_1", kind: "shipment" } };
+    expect(boughtForZebra(rate)).toBe(false);
+    expect(boughtForZebra(null)).toBe(false);
+    const label = await labelSource("easypost", impl).buy(EASYPOST, {
+      rate,
+      shipmentId: "shp_1",
+      kind: "shipment",
+      quoteId: "q-1",
+      request: null,
+    });
+    expect(calls).toHaveLength(1);
+    expect(label.files).toEqual([]);
+  });
+
+  it("UPS for a Zebra: the rebuilt request asks for ZPL, and each box's ZPL is kept as text", async () => {
+    const zpl = (n: number) => Buffer.from(`^XA^FDBox ${n}^FS^XZ`).toString("base64");
+    const { impl, calls } = scripted(() => ({
+      body: {
+        ShipmentResponse: {
+          ShipmentResults: {
+            ShipmentIdentificationNumber: "1ZSHIP0001",
+            NegotiatedRateCharges: { TotalCharge: { MonetaryValue: "19.60", CurrencyCode: "USD" } },
+            PackageResults: [
+              { TrackingNumber: "1Z001", ShippingLabel: { GraphicImage: zpl(1) } },
+              { TrackingNumber: "1Z002", ShippingLabel: { GraphicImage: zpl(2) } },
+            ],
+          },
+        },
+      },
+    }));
+    const label = await labelSource("ups", impl).buy(UPS, {
+      rate: { id: "upsrate_0123456789abcdef", name: "UPS Ground", ref: { service_code: "03" } },
+      shipmentId: "quote_a",
+      kind: "order",
+      quoteId: "q-1",
+      request: { ...request([box, box]), labelFormat: "zpl" },
+    });
+    expect(JSON.parse(calls[0].body).ShipmentRequest.LabelSpecification).toEqual({
+      LabelImageFormat: { Code: "ZPL" },
+      HTTPUserAgent: "Mozilla/4.5",
+      LabelStockSize: { Height: "6", Width: "4" },
+    });
+    expect(label.files).toEqual([
+      { box: 1, contentType: "text/plain", data: zpl(1) },
+      { box: 2, contentType: "text/plain", data: zpl(2) },
+    ]);
   });
 
   it("UPS and Redo won't buy without the request the server rebuilt, and can't be looked up", async () => {

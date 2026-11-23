@@ -135,14 +135,24 @@ export function PrintingOnThisComputer({ workspaceName }: { workspaceName: strin
           <ol className="text-muted-foreground flex list-decimal flex-col gap-1 pl-5 text-xs">
             <li>
               Install{" "}
-              <a href={ZEBRA_DOWNLOAD_LINK} target="_blank" rel="noopener noreferrer" className={linkClass}>
+              <a
+                href={ZEBRA_DOWNLOAD_LINK}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={linkClass}
+              >
                 Zebra Browser Print
               </a>{" "}
               on this computer and set your label printer as its default.
             </li>
             <li>
               Open{" "}
-              <a href={ZEBRA_TRUST_LINK} target="_blank" rel="noopener noreferrer" className={linkClass}>
+              <a
+                href={ZEBRA_TRUST_LINK}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={linkClass}
+              >
                 localhost:9101/ssl_support
               </a>{" "}
               once in this browser and accept it, so this page may talk to it.
@@ -150,10 +160,22 @@ export function PrintingOnThisComputer({ workspaceName }: { workspaceName: strin
             <li>Press Find printers, then print a test label.</li>
           </ol>
           <div className="flex flex-wrap items-center gap-2">
-            <Button type="button" variant="outline" size="sm" onClick={find} disabled={busy !== null}>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={find}
+              disabled={busy !== null}
+            >
               {busy === "find" ? "Looking…" : "Find printers"}
             </Button>
-            <Button type="button" variant="outline" size="sm" onClick={test} disabled={busy !== null}>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={test}
+              disabled={busy !== null}
+            >
               <Printer aria-hidden /> {busy === "test" ? "Sending…" : "Print test label"}
             </Button>
           </div>
@@ -308,9 +330,9 @@ export function LabelPrint({
         const partly = err instanceof ZebraError && err.printed > 0;
         setNote({
           kind: "error",
-          text: `${said(err, "The label didn't reach the printer.")} ${
-            partly ? "" : "Nothing printed. "
-          }Your label is bought and safe here: press Print again when the printer is ready, or open it below.`,
+          text: `${said(err, "The label didn't reach the printer.")} Your label is bought and safe here${
+            partly ? ", and nothing was bought twice" : ""
+          }: press the print button again when the printer is ready, or open it below.`,
         });
       } finally {
         running.current = false;
@@ -332,8 +354,8 @@ export function LabelPrint({
     } catch {
       // No session storage: the note in the database still stops a second copy after a reload.
     }
-    const timer = window.setTimeout(() => void print(true), 0);
-    return () => window.clearTimeout(timer);
+    // Not cancelled if this renders again: the two guards above already make it once only.
+    window.setTimeout(() => void print(true), 0);
   }, [zebra, auto, printedAt, shipmentId, print]);
 
   const openLinks = (from: number) =>
@@ -376,6 +398,11 @@ export function LabelPrint({
           ) : null}
           {openLinks(primary ? 1 : 0)}
         </>
+      )}
+      {!zebra && links.length === 0 && (
+        <span className="text-muted-foreground text-xs">
+          This label&apos;s file isn&apos;t kept here. Print it from the account it was bought on.
+        </span>
       )}
       {printedText && !printedHere && (
         <span className="text-muted-foreground text-xs">Printed {printedText}</span>

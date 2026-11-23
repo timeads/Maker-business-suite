@@ -229,6 +229,34 @@ export const HELP_TOPICS: HelpTopic[] = [
       "International labels need a customs form, which isn't built yet. Buy those elsewhere and record the parcel by hand.",
       "Owners and admins can void a label. That asks whoever sold it (EasyPost, UPS or Redo) to cancel it and puts the items back in the queue.",
       "The suite won't buy the same label twice, even on a double press.",
+      "Got a Zebra thermal printer at the packing bench? Labels can go straight to it with no print window. See “Print labels straight to a Zebra printer”.",
+    ],
+  },
+  {
+    slug: "zebra-printing",
+    group: "shipping",
+    title: "Print labels straight to a Zebra printer",
+    summary:
+      "Set up the packing computer once, and labels come out of the Zebra the moment you buy them.",
+    intro:
+      "A Zebra thermal printer can take labels directly, with no print window and no new tab. The choice belongs to the computer, not the workspace: the packing bench prints to its Zebra while the office desk carries on printing through the browser.",
+    steps: [
+      "On the packing computer, install Zebra Browser Print (free, from zebra.com) and leave it running. In its own settings, make your label printer the default.",
+      "In the same browser you use for the suite, open localhost:9101/ssl_support once and accept it. That lets this site talk to Browser Print. If the browser asks whether this site may reach apps or devices on this computer, say yes.",
+      "Open Shipping → Settings on that computer. Under “Printing on this computer”, choose “Zebra thermal printer”.",
+      "Press “Find printers” and pick yours if there's more than one. Most Zebras are 203 dpi; change that only if yours is a 300 dpi model.",
+      "Press “Print test label”. A small label with a barcode should come out.",
+      "From then on, “Buy & print label” sends the label straight to the Zebra. With several boxes, the labels come out in box order.",
+    ],
+    notes: [
+      "If the printer can't be reached when you buy, the label is still bought and saved on the order. Nothing is bought twice. Fix the printer and press “Print again”, or open the label and print it the ordinary way.",
+      "Every label remembers when it was last printed, on any computer. Before a second copy comes out you're asked first, because only one copy of a label can be used.",
+      "You can print any label again later from the order's “Already sent” list.",
+      "Labels bought on a Zebra computer are in the printer's own format. On another computer they open as a file rather than a picture, so reprint those from the packing bench.",
+      "Labels bought as pictures (on another computer, or from Redo) are redrawn for the Zebra when you print them. A Redo label that arrives as a PDF can't be; open it and print it the ordinary way.",
+      "Packing slips can go to the Zebra too, on the same 4 × 6 labels: open Packing slips and press “Print on the Zebra”. A long order runs onto a second label.",
+      "Nothing printing? Check that Browser Print is running (its icon is in the system tray or menu bar), that the printer is on, has labels and isn't paused, then press “Print test label” again.",
+      "The setting is kept in that browser. A different browser, or clearing the browser's saved data, means choosing it again.",
     ],
   },
   {

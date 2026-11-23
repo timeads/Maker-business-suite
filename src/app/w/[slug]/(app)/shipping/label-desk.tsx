@@ -36,7 +36,9 @@ import {
   SOURCE_PAID_FROM,
   type LabelSourceKey,
 } from "@/lib/shipping/sources/types";
+import { printSettings, wantedLabelFormat } from "@/lib/shipping/zebra/settings";
 import { buyLabel, checkLabelAddress, getLabelRates, type RatesInput } from "./label-actions";
+import { PrintsToZebraNote } from "./print-ui";
 
 /** An item in the order, as the bench needs it for dividing between boxes. */
 export type DeskLine = {
@@ -293,6 +295,8 @@ export function LabelDesk({
           residential: ask.residential,
           signature: ask.signature,
           withIds: together,
+          // This computer's own choice: a Zebra is sent its own format, not a picture.
+          labelFormat: wantedLabelFormat(printSettings()),
         };
         const result = await getLabelRates(slug, orderId, input);
         if (result.error || !result.rates) {
@@ -643,6 +647,7 @@ export function LabelDesk({
               />
               Email the customer their tracking
             </label>
+            <PrintsToZebraNote />
             <span className="text-muted-foreground ml-auto text-xs">
               {shop.offered
                 ? paidFrom(rate?.source ?? null, sources)

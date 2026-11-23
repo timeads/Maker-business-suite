@@ -758,3 +758,68 @@ describe("asking for a signature", () => {
     expect("residential" in plain.to_address).toBe(false);
   });
 });
+
+describe("a label for a Zebra", () => {
+  it("asks EasyPost for ZPL when the shipment is made, on every box", async () => {
+    const one = fakeFetch([["POST", "/v2/shipments", 201, { id: "shp_z", rates: RATES }]]);
+    await getRates(KEY, { from, to, parcels: [parcel], labelFormat: "zpl" }, one.impl);
+    expect(JSON.parse(one.calls[0].body).shipment.options).toEqual({
+      label_format: "ZPL",
+      label_size: "4x6",
+    });
+
+    const two = fakeFetch([["POST", "/v2/orders", 201, { id: "order_z", rates: [] }]]);
+    await getRates(KEY, { from, to, parcels: [parcel, parcel], labelFormat: "zpl" }, two.impl);
+    const sent = JSON.parse(two.calls[0].body).order;
+    expect(sent.options.label_format).toBe("ZPL");
+    expect(sent.shipments.map((s: { options: { label_format: string } }) => s.options)).toEqual([
+      { label_format: "ZPL", label_size: "4x6" },
+      { label_format: "ZPL", label_size: "4x6" },
+    ]);
+  });
+
+  it("notes where the ZPL is when EasyPost says so apart from the label's link", async () => {
+    const bought = (postage_label: object) =>
+      fakeFetch([
+        [
+          "POST",
+          "/v2/shipments/shp_z/buy",
+          200,
+          {
+            id: "shp_z",
+            tracking_code: "9400111",
+            postage_label,
+            selected_rate: { carrier: "USPS", service: "GroundAdvantage", rate: "6.40" },
+          },
+        ],
+      ]);
+    const both = await buyLabel(
+      KEY,
+      "shp_z",
+      "rate_ground",
+      bought({
+        label_url: "https://files.example/l.png",
+        label_zpl_url: "https://files.example/l.zpl",
+      }).impl,
+    );
+    expect(both.boxes).toEqual([
+      {
+        shipmentId: "shp_z",
+        trackingCode: "9400111",
+        labelUrl: "https://files.example/l.png",
+        zplUrl: "https://files.example/l.zpl",
+      },
+    ]);
+    // Bought as ZPL, the label's own link is the ZPL: nothing extra to note.
+    const only = await buyLabel(
+      KEY,
+      "shp_z",
+      "rate_ground",
+      bought({ label_url: "https://files.example/l.zpl", label_zpl_url: "http://not-https/l" })
+        .impl,
+    );
+    expect(only.boxes).toEqual([
+      { shipmentId: "shp_z", trackingCode: "9400111", labelUrl: "https://files.example/l.zpl" },
+    ]);
+  });
+});

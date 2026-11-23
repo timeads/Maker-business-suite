@@ -54,12 +54,13 @@ export function isEasyPostFileLink(link: string): boolean {
 export async function downloadEasyPostLabel(
   link: string,
   fetchImpl: Fetch = fetch,
+  timeoutMs = TIMEOUT_MS,
 ): Promise<Kept | null> {
   try {
     const url = new URL(link);
     if (url.protocol !== "https:") return null;
     const response = await fetchImpl(url.toString(), {
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!response.ok) return null;
     const bytes = new Uint8Array(await response.arrayBuffer());
