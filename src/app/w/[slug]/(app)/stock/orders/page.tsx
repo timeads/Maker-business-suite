@@ -90,7 +90,7 @@ export default async function StockOrdersPage({ params }: { params: Promise<{ sl
   return (
     <>
       <PageHeader title="Stock" description="What you've ordered, and what has arrived." />
-      <StockTabs slug={tenant.slug} />
+      <StockTabs slug={tenant.slug} manager={canManage(role)} />
       <Card>
         <CardHeader>
           <CardTitle>Open orders</CardTitle>

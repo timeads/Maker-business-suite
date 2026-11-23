@@ -87,7 +87,7 @@ export default async function StockItemsPage({
         title="Stock"
         description="Every item your shop keeps a count of, and how each one is doing."
       />
-      <StockTabs slug={tenant.slug} />
+      <StockTabs slug={tenant.slug} manager={canManage(role)} />
 
       <div className="flex flex-col gap-3 print:hidden">
         <nav aria-label="Filter" className="flex flex-wrap gap-1">

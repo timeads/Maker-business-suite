@@ -48,7 +48,7 @@ export default async function StockPage({ params }: { params: Promise<{ slug: st
         title="Stock"
         description="What to reorder and when, worked out from what you sell and how long things take to arrive."
       />
-      <StockTabs slug={tenant.slug} />
+      <StockTabs slug={tenant.slug} manager={canManage(role)} />
 
       {rows.length === 0 ? (
         <Card>

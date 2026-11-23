@@ -1,6 +1,7 @@
 import { SectionTabs } from "@/components/ui/section-tabs";
 
-export function StockTabs({ slug }: { slug: string }) {
+/** `manager` adds the tabs only owners and admins can use. */
+export function StockTabs({ slug, manager = false }: { slug: string; manager?: boolean }) {
   const base = `/w/${slug}/stock`;
   return (
     <SectionTabs
@@ -10,6 +11,7 @@ export function StockTabs({ slug }: { slug: string }) {
         { href: `${base}/items`, name: "Everything" },
         { href: `${base}/orders`, name: "Orders" },
         { href: `${base}/suppliers`, name: "Suppliers" },
+        ...(manager ? [{ href: `${base}/balances`, name: "Balances" }] : []),
         { href: `${base}/settings`, name: "Settings" },
       ]}
     />
