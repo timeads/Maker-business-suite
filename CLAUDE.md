@@ -165,7 +165,14 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   payments, the supplier's own statements, credits). The balance, ageing
   and "marked paid" states are worked out on read by `lib/stock/balance`
   (ported from TuftStock with its tests, on whole-cents `Money`); a
-  statement re-anchors the account, and nothing derived is stored.
+  statement re-anchors the account, and nothing derived is stored. Items are
+  ordered by the case and can have their own smallest order
+  (`engine/case-pack.ts`); "don't reorder" is the one `hidden` flag, plus
+  name words in settings. Drafting orders from ticked items goes through
+  `draft_purchase_orders` with a request key, so a second press finds the
+  first one's orders. Order totals (shipping, tax, adjustments) come from
+  `lib/stock/po/totals.ts`; tracking on incoming orders is what a person
+  records (`purchase_order_shipments`), never asked of a carrier.
 - Shipping: `shipping_orders` holds what packing needs (address, what's left
   to send), kept apart from `orders` so the sales figures never carry an
   address. It is read from the shop in a separate query that is allowed to
@@ -173,8 +180,13 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   shopper is forgotten or a shop disconnected, triggers blank the address
   there and on `shipments`; keep both tests in `tests/db/shipping.test.ts`
   passing. A parcel is recorded with `record_shipment` (whole team; part
-  shipments leave the rest in the queue); undoing one is manager-only. We do
-  not buy postage: no label provider has been chosen. Telling the shop a
+  shipments leave the rest in the queue); undoing one is manager-only. Postage
+  can be bought through EasyPost with the workspace's own key (a connection
+  like any other, kept in Vault, read only through `getLabelKey()`): a label
+  is only ever bought against a quote the server stored for that order
+  (`shipping_label_quotes`), and a paid label is written there before the
+  parcel is recorded, so it cannot be bought twice or lost. No customs or
+  international labels yet. Telling the shop a
   parcel went (`shopify-fulfil.ts`) follows the same once-only queue as
   stock receipts. The to-ship queue's views (ready, pickup, priority,
   on hold, international) and "back from hold" are worked out on read by
@@ -226,8 +238,14 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   built-in templates recoloured to the workspace's brand kit
   (`lib/brand/email.ts`). We don't send email: the person copies the HTML
   into their own email tool. Saved sections and templates are `configs`
-  (module `social`), so only owners and admins can change them. Not built
-  yet: banner pictures, live link checking, writing an email with Claude.
+  (module `social`), so only owners and admins can change them. Pictures
+  with words on them (email banners, slides for posts) are made in the
+  designer (`components/slides`, drawn in the browser with the workspace's
+  kit and the app's own fonts) and uploaded as ordinary assets with their
+  design kept beside them (`social_assets.design`) so they can be reopened.
+  Photos are matched to drafts by asset tags (`lib/social/photo-match.ts`);
+  `logo` and `logo-light` tags are the email logo. Nothing is ever fetched
+  from a web address. Not built yet: live link checking.
 - Schema changes are new files in `supabase/migrations`; never edit an
   applied migration.
 - Look: the "Tuft Life" house style (see the tuft-ui repo's DESIGN.md). Teal

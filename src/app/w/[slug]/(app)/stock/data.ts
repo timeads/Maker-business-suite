@@ -187,7 +187,7 @@ export async function loadIncoming(
         qtyOrdered: line.qty_ordered,
         qtyReceived: line.qty_received,
       })),
-      shipments: order.purchase_order_shipments
+      shipments: (order.purchase_order_shipments ?? [])
         .filter((s) => !s.removed_at)
         .map((s) => ({
           id: s.id,
@@ -207,7 +207,7 @@ export async function loadIncoming(
       ...order.purchase_order_lines.flatMap((line) =>
         line.stock_receipts.map((receipt) => new Date(receipt.created_at).getTime()),
       ),
-      ...order.purchase_order_shipments
+      ...(order.purchase_order_shipments ?? [])
         .filter((s) => !s.removed_at && s.arrived_on)
         // A day with no time: count it as that day's noon in UTC.
         .map((s) => new Date(`${s.arrived_on}T12:00:00Z`).getTime()),
