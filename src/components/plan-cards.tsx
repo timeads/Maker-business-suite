@@ -9,7 +9,7 @@ export function planFeatures(plan: Plan): string[] {
   const allModules = plan.includedModules.length === MODULES.length;
   return [
     allModules
-      ? "Every tool: Money, Help desk, Bookings and Social"
+      ? "Every tool, from Shipping and Stock to Social and Bookings"
       : `${plan.includedModules.map(moduleName).join(", ")} plus ${plan.moduleChoices} more tool of your choice`,
     `${plan.seats} people on your team`,
     "An AI assistant allowance each month",
