@@ -1,7 +1,6 @@
 "use client";
 
-import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { ChevronDown, Trash2 } from "lucide-react";
 import { toast } from "./ui";
 import { Button } from "@/components/ui/button";
@@ -15,38 +14,50 @@ import {
 } from "./ui";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui";
 import { Input } from "@/components/ui/input";
-import { listTemplates, storeTemplates } from "@/lib/emails";
 import { MAX_TEMPLATES, templateFrom, type EmailTemplate } from "@/lib/design";
-import { useAuth } from "@/hooks/useAuth";
 import { useBuilder } from "./context";
 import { TemplateChooser } from "./TemplateChooser";
-import { TEMPLATES_KEY, findTemplate } from "./shared";
+import { findTemplate } from "./shared";
+import { useHost } from "./host";
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 /** The menu beside "Save and exit": keep this email's layout as a template, or change it for another. */
 export function TemplateMenu() {
   const { doc, dispatch, select } = useBuilder();
-  const { user } = useAuth();
-  const queryClient = useQueryClient();
-  const { data: saved = [] } = useQuery({
-    queryKey: TEMPLATES_KEY,
-    queryFn: listTemplates,
-    retry: false,
-    staleTime: 5 * 60 * 1000,
-  });
+  const host = useHost();
+  const [saved, setSaved] = useState<EmailTemplate[]>([]);
+  useEffect(() => {
+    let wanted = true;
+    host
+      .loadTemplates()
+      .then((list) => {
+        if (wanted) setSaved(list);
+      })
+      // Without them the starter templates are still offered.
+      .catch(() => undefined);
+    return () => {
+      wanted = false;
+    };
+    // Read once, when the builder opens; after that the list here is kept in step with what is stored.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [open, setOpen] = useState<"save" | "change" | null>(null);
   const [name, setName] = useState("");
   const [chosen, setChosen] = useState("");
   const [busy, setBusy] = useState(false);
 
   const store = async (next: EmailTemplate[], done: string) => {
-    if (!user) return false;
     setBusy(true);
     try {
-      await storeTemplates(user.id, next);
-      queryClient.setQueryData(TEMPLATES_KEY, next);
+      await host.storeTemplates(next);
+      setSaved(next);
       toast.success(done);
+      // Read back, so the list is what was really kept.
+      host
+        .loadTemplates()
+        .then(setSaved)
+        .catch(() => undefined);
       return true;
     } catch (err) {
       toast.error(`Your templates could not be updated: ${message(err)}`);
@@ -69,7 +80,7 @@ export function TemplateMenu() {
       setOpen(null);
   };
   const change = () => {
-    const template = findTemplate(chosen, doc.brand, saved);
+    const template = findTemplate(chosen, host.starters, saved);
     if (!template) return;
     dispatch({
       type: "applyTemplate",
@@ -98,14 +109,16 @@ export function TemplateMenu() {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-52">
-          <DropdownMenuItem
-            onSelect={() => {
-              setName(doc.title);
-              setOpen("save");
-            }}
-          >
-            Save as a template
-          </DropdownMenuItem>
+          {host.canKeepShared && (
+            <DropdownMenuItem
+              onSelect={() => {
+                setName(doc.title);
+                setOpen("save");
+              }}
+            >
+              Save as a template
+            </DropdownMenuItem>
+          )}
           <DropdownMenuItem
             onSelect={() => {
               setChosen("");
@@ -122,8 +135,8 @@ export function TemplateMenu() {
           <DialogHeader>
             <DialogTitle>Save as a template</DialogTitle>
             <DialogDescription>
-              Keeps this email's layout, styles and content to start other emails from. The subject
-              and preview text are not kept.
+              Keeps this email&apos;s layout, styles and content to start other emails from. The
+              subject and preview text are not kept.
             </DialogDescription>
           </DialogHeader>
           <label className="block space-y-1">
@@ -161,10 +174,10 @@ export function TemplateMenu() {
             role="note"
           >
             This replaces everything in the email (its sections, content and styles) with the
-            template's. Your subject and preview text stay. Undo brings back what was there.
+            template&apos;s. Your subject and preview text stay. Undo brings back what was there.
           </p>
           <DialogFooter className="sm:justify-between">
-            {mine ? (
+            {mine && host.canKeepShared ? (
               <Button
                 variant="ghost"
                 className="text-brick"
@@ -182,7 +195,7 @@ export function TemplateMenu() {
                     setChosen("");
                 }}
               >
-                <Trash2 className="mr-1.5 h-4 w-4" /> Delete this template
+                <Trash2 className="h-4 w-4" /> Delete this template
               </Button>
             ) : (
               <span />

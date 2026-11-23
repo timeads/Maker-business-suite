@@ -22,6 +22,10 @@ export type BuilderHost = {
   checkLinks(urls: string[]): Promise<{ results: LinkResult[] } | { unavailable: string }>;
   /** False when the person may not keep shared sections/templates; hide those save actions then. */
   canKeepShared: boolean;
+  /** The workspace's brand: its name, its colours for the swatches, and its starter templates. */
+  brandName: string;
+  swatches: { name: string; hex: string }[];
+  starters: EmailTemplate[];
 };
 
 export const HostContext = createContext<BuilderHost | null>(null);

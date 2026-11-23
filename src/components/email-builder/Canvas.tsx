@@ -24,6 +24,7 @@ import {
 } from "@/lib/design";
 import { cn } from "@/lib/utils";
 import { useBuilder } from "./context";
+import { useHost } from "./host";
 import { CanvasBlock } from "./CanvasBlock";
 import type { DragSource, DropTarget } from "./dnd";
 import { FOCUS_NAME } from "./shared";
@@ -69,7 +70,7 @@ function Gap({
       <div
         ref={setNodeRef}
         className={cn(
-          "m-3 flex h-20 items-center justify-center rounded border-2 border-dashed text-xs",
+          "border-border m-3 flex h-20 items-center justify-center rounded border-2 border-dashed text-xs",
           active
             ? "border-ochre bg-ochre/10 text-ochre-text"
             : "border-neutral-300 text-neutral-500",
@@ -122,7 +123,7 @@ function ColumnView({
       <div
         ref={setNodeRef}
         className={cn(
-          "m-2 flex min-h-[72px] items-center justify-center rounded border-2 border-dashed px-2 text-center text-xs",
+          "border-border m-2 flex min-h-[72px] items-center justify-center rounded border-2 border-dashed px-2 text-center text-xs",
           at === 0
             ? "border-ochre bg-ochre/10 text-ochre-text"
             : "border-neutral-300 text-neutral-500",
@@ -188,7 +189,7 @@ function RowView({ row, section }: { row: Row; section: Section }) {
           select({ kind: "row", id: row.id });
         }}
         className={cn(
-          "bg-card text-foreground absolute top-0 right-full z-20 flex h-6 w-6 cursor-grab touch-none items-center justify-center rounded-l border border-r-0 shadow-sm",
+          "bg-card text-foreground border-border absolute top-0 right-full z-20 flex h-6 w-6 cursor-grab touch-none items-center justify-center rounded-l border border-r-0 shadow-sm",
           selected
             ? "border-ochre text-ochre-text"
             : hidden("group-hover/row:pointer-events-auto group-hover/row:opacity-100"),
@@ -228,7 +229,8 @@ function SectionView({
   const selected = selection?.kind === "section" && selection.id === section.id;
   const s = section.styles;
   const tool =
-    "flex h-6 w-6 items-center justify-center rounded border bg-card text-foreground hover:bg-sunken disabled:opacity-40";
+    "flex h-6 w-6 items-center justify-center rounded border bg-card text-foreground hover:bg-sunken disabled:opacity-40 border-border";
+  const { canKeepShared } = useHost();
   const pick = () => select({ kind: "section", id: section.id });
   // Set by Rename in the menu. A closing menu hands the cursor back to its button; for Rename it goes to the name box in the side panel instead.
   const renaming = useRef(false);
@@ -333,7 +335,9 @@ function SectionView({
               <DropdownMenuItem onSelect={() => duplicateSection(section.id)}>
                 Duplicate
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => saveSection(section.id)}>Save</DropdownMenuItem>
+              {canKeepShared && (
+                <DropdownMenuItem onSelect={() => saveSection(section.id)}>Save</DropdownMenuItem>
+              )}
               <DropdownMenuItem
                 className="text-brick"
                 disabled={count < 2}

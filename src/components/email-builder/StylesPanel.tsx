@@ -402,14 +402,14 @@ function LogoStyles({ g, set }: Part) {
       />
       {!placed && l.src && (
         <Button type="button" variant="outline" size="sm" className="w-full" onClick={place}>
-          <Plus className="mr-1.5 h-3.5 w-3.5" /> Add the logo to the top of the email
+          <Plus className="h-3.5 w-3.5" /> Add the logo to the top of the email
         </Button>
       )}
     </>
   );
 }
 
-const PARTS: [string, string, (props: Part) => JSX.Element][] = [
+const PARTS: [string, string, (props: Part) => React.ReactElement][] = [
   ["background", "Background", BackgroundStyles],
   ["text", "Text", TextStyles],
   ["link", "Link", LinkStyles],

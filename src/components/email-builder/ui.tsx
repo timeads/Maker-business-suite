@@ -160,9 +160,12 @@ export function DialogFooter({ className, ...props }: React.ComponentProps<"div"
 type FloatCtx = {
   open: boolean;
   setOpen: (open: boolean) => void;
-  root: React.RefObject<HTMLSpanElement | null>;
-  trigger: React.RefObject<HTMLElement | null>;
+  /** The id of the wrapper round the button and its panel, of the button, and of the panel. */
+  rootId: string;
+  triggerId: string;
   panelId: string;
+  /** Put the cursor back on the button. */
+  focusTrigger: () => void;
 };
 
 function useFloat(
@@ -178,20 +181,22 @@ function useFloat(
     },
     [onOpenChange],
   );
-  const root = useRef<HTMLSpanElement | null>(null);
-  const trigger = useRef<HTMLElement | null>(null);
-  const panelId = useId();
+  const id = useId();
+  const rootId = `${id}root`;
+  const triggerId = `${id}trigger`;
+  const panelId = `${id}panel`;
+  const focusTrigger = useCallback(() => document.getElementById(triggerId)?.focus(), [triggerId]);
   // A press anywhere else closes it.
   useEffect(() => {
     if (!open) return;
     const away = (e: PointerEvent) => {
-      if (e.target instanceof Node && root.current?.contains(e.target)) return;
+      if (e.target instanceof Node && document.getElementById(rootId)?.contains(e.target)) return;
       setOpen(false);
     };
     document.addEventListener("pointerdown", away, true);
     return () => document.removeEventListener("pointerdown", away, true);
-  }, [open, setOpen]);
-  return { open, setOpen, root, trigger, panelId };
+  }, [open, setOpen, rootId]);
+  return { open, setOpen, rootId, triggerId, panelId, focusTrigger };
 }
 
 const panelClass =
@@ -206,20 +211,20 @@ const MenuContentContext = createContext<((e: CloseEvent) => void) | undefined>(
 
 export function DropdownMenu({ children }: { children: React.ReactNode }) {
   const float = useFloat(undefined);
-  const { setOpen, trigger } = float;
+  const { setOpen, focusTrigger } = float;
   // Closing by choice (an item, Escape) hands the cursor back to the button, unless the menu's owner says otherwise.
   const close = useCallback(
     (onCloseAutoFocus?: (e: CloseEvent) => void) => {
       setOpen(false);
       let stay = false;
       onCloseAutoFocus?.({ preventDefault: () => (stay = true) });
-      if (!stay) trigger.current?.focus();
+      if (!stay) focusTrigger();
     },
-    [setOpen, trigger],
+    [setOpen, focusTrigger],
   );
   return (
     <MenuContext.Provider value={{ ...float, close }}>
-      <span ref={float.root} className="relative inline-flex">
+      <span id={float.rootId} className="relative inline-flex">
         {children}
       </span>
     </MenuContext.Provider>
@@ -232,10 +237,10 @@ export function DropdownMenuTrigger({
   asChild?: boolean;
   children: React.ReactElement;
 }) {
-  const { open, setOpen, trigger, panelId } = useCtx(MenuContext, "DropdownMenuTrigger");
+  const { open, setOpen, triggerId, panelId } = useCtx(MenuContext, "DropdownMenuTrigger");
   return (
     <Slot
-      ref={trigger}
+      id={triggerId}
       aria-haspopup="menu"
       aria-expanded={open}
       aria-controls={open ? panelId : undefined}
@@ -367,7 +372,7 @@ export function Popover({
   const float = useFloat(open, onOpenChange);
   return (
     <PopoverContext.Provider value={float}>
-      <span ref={float.root} className="relative inline-flex">
+      <span id={float.rootId} className="relative inline-flex">
         {children}
       </span>
     </PopoverContext.Provider>
@@ -375,10 +380,10 @@ export function Popover({
 }
 
 export function PopoverTrigger({ children }: { asChild?: boolean; children: React.ReactElement }) {
-  const { open, setOpen, trigger, panelId } = useCtx(PopoverContext, "PopoverTrigger");
+  const { open, setOpen, triggerId, panelId } = useCtx(PopoverContext, "PopoverTrigger");
   return (
     <Slot
-      ref={trigger}
+      id={triggerId}
       aria-haspopup="dialog"
       aria-expanded={open}
       aria-controls={open ? panelId : undefined}
@@ -400,7 +405,7 @@ export function PopoverContent({
   children: React.ReactNode;
   "aria-label"?: string;
 }) {
-  const { open, setOpen, trigger, panelId } = useCtx(PopoverContext, "PopoverContent");
+  const { open, setOpen, focusTrigger, panelId } = useCtx(PopoverContext, "PopoverContent");
   if (!open) return null;
   return (
     <div
@@ -412,7 +417,7 @@ export function PopoverContent({
         if (e.key !== "Escape") return;
         e.preventDefault();
         setOpen(false);
-        trigger.current?.focus();
+        focusTrigger();
       }}
       {...props}
     >

@@ -136,14 +136,14 @@ function BlockCodeTab({ id }: { id: string }) {
           html
         </span>
         <Button type="button" variant="outline" size="sm" onClick={copy}>
-          <Copy className="mr-1.5 h-3.5 w-3.5" /> Copy
+          <Copy className="h-3.5 w-3.5" /> Copy
         </Button>
       </div>
       <textarea
         readOnly
         aria-label="This block's HTML"
         data-block-code
-        className="bg-sunken/40 h-64 w-full resize-y rounded-md border p-2 font-mono text-[11px] leading-relaxed"
+        className="bg-sunken/40 border-border h-64 w-full resize-y rounded-md border p-2 font-mono text-[11px] leading-relaxed"
         value={html}
         spellCheck={false}
       />
@@ -153,7 +153,7 @@ function BlockCodeTab({ id }: { id: string }) {
           <textarea
             readOnly
             aria-label="This block's rules for phones"
-            className="bg-sunken/40 h-20 w-full resize-y rounded-md border p-2 font-mono text-[11px] leading-relaxed"
+            className="bg-sunken/40 border-border h-20 w-full resize-y rounded-md border p-2 font-mono text-[11px] leading-relaxed"
             value={phoneCss}
             spellCheck={false}
           />
@@ -209,7 +209,7 @@ export function BlockSettings({ id }: { id: string }) {
           {tab === "code" && <BlockCodeTab id={block.id} />}
         </TabsContent>
       </Tabs>
-      <div className="border-t p-3">
+      <div className="border-border border-t p-3">
         <Button
           type="button"
           variant="outline"
@@ -219,7 +219,7 @@ export function BlockSettings({ id }: { id: string }) {
           onClick={() => dispatch({ type: "clearBlockStyles", id })}
           title="Go back to the email's own styles for this block"
         >
-          <RotateCcw className="mr-1.5 h-3.5 w-3.5" /> Clear styles
+          <RotateCcw className="h-3.5 w-3.5" /> Clear styles
         </Button>
       </div>
     </div>

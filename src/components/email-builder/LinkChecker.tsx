@@ -80,12 +80,9 @@ export function LinkChecker({ onPick }: { onPick: (blockId: string) => void }) {
     if (toFetch.length === 0) return;
     setChecking(true);
     setNote("");
-    const answer = await host
-      .checkLinks(toFetch.slice(0, MAX_URLS))
-      .catch(() => ({
-        unavailable:
-          "The links could not be checked just now. Check your connection and try again.",
-      }));
+    const answer = await host.checkLinks(toFetch.slice(0, MAX_URLS)).catch(() => ({
+      unavailable: "The links could not be checked just now. Check your connection and try again.",
+    }));
     if ("unavailable" in answer) setNote(answer.unavailable);
     else {
       setLive(Object.fromEntries(answer.results.map((r) => [r.url, r])));
@@ -133,9 +130,9 @@ export function LinkChecker({ onPick }: { onPick: (blockId: string) => void }) {
           disabled={checking || toFetch.length === 0}
         >
           {checking ? (
-            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
           ) : (
-            <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+            <RefreshCw className="h-3.5 w-3.5" />
           )}{" "}
           Check links
         </Button>
@@ -149,11 +146,11 @@ export function LinkChecker({ onPick }: { onPick: (blockId: string) => void }) {
         </p>
       )}
       {links.length === 0 ? (
-        <p className="text-muted-foreground rounded-md border border-dashed p-6 text-center text-sm">
+        <p className="text-muted-foreground border-border rounded-md border border-dashed p-6 text-center text-sm">
           There are no links in this email yet.
         </p>
       ) : (
-        <ul className="bg-card divide-y rounded-md border">
+        <ul className="bg-card divide-border border-border divide-y rounded-md border">
           {rows.map(({ link, result, status }, i) => (
             <li key={`${link.blockId}:${i}`}>
               <button

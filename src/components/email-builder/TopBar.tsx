@@ -72,7 +72,7 @@ function EmailDetails() {
     <Popover>
       <PopoverTrigger asChild>
         <Button type="button" variant="outline" size="sm">
-          <Settings2 className="mr-1.5 h-4 w-4" /> Email details
+          <Settings2 className="h-4 w-4" /> Email details
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-80 space-y-3">
@@ -125,7 +125,7 @@ function EmailDetails() {
 }
 
 /**
- * "Send test". The hub cannot send email, and does not pretend to: this says so, and gives the
+ * "Send test". The app cannot send email, and does not pretend to: this says so, and gives the
  * steps for sending a test from the platform the email will really go out from.
  */
 function SendTest({ onCopy }: { onCopy: () => void }) {
@@ -138,14 +138,14 @@ function SendTest({ onCopy }: { onCopy: () => void }) {
   return (
     <>
       <Button type="button" variant="outline" size="sm" onClick={() => setOpen(true)}>
-        <Send className="mr-1.5 h-4 w-4" /> Send test
+        <Send className="h-4 w-4" /> Send test
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>Send yourself a test</DialogTitle>
             <DialogDescription>
-              The hub does not send email, so a test goes out from{" "}
+              This app does not send email, so a test goes out from{" "}
               {doc.platform === "shopify" ? "Shopify Messaging" : "your email platform"}, the same
               place the real email will. That also makes it a truer test.
             </DialogDescription>
@@ -166,7 +166,8 @@ function SendTest({ onCopy }: { onCopy: () => void }) {
               </li>
               <li>Paste the subject and preview text into their boxes.</li>
               <li>
-                Use Shopify's Send test, and open the test on your phone as well as your computer.
+                Use Shopify&apos;s Send test, and open the test on your phone as well as your
+                computer.
               </li>
             </ol>
           ) : (
@@ -181,18 +182,18 @@ function SendTest({ onCopy }: { onCopy: () => void }) {
               </li>
               <li>
                 Paste it in. Find PASTE-YOUR-UNSUBSCRIBE-LINK-HERE and replace it with your
-                platform's own unsubscribe tag.
+                platform&apos;s own unsubscribe tag.
               </li>
               <li>Paste the subject and preview text into their boxes.</li>
               <li>
-                Use your platform's test send, and open the test on your phone as well as your
+                Use your platform&apos;s test send, and open the test on your phone as well as your
                 computer.
               </li>
             </ol>
           )}
           <DialogFooter className="gap-2 sm:justify-start">
             <Button type="button" onClick={onCopy}>
-              <Copy className="mr-1.5 h-4 w-4" /> Copy HTML
+              <Copy className="h-4 w-4" /> Copy HTML
             </Button>
             <Button
               type="button"
@@ -221,7 +222,7 @@ function Status({ status, onRetry }: { status: SaveStatus; onRetry: () => void }
   if (status === "error") {
     return (
       <span className="text-brick flex items-center gap-1 text-xs font-medium" role="alert">
-        Couldn't save —{" "}
+        Couldn&apos;t save —{" "}
         <button type="button" className="underline" onClick={onRetry}>
           Retry
         </button>
@@ -261,13 +262,13 @@ export function TopBar({
   exiting: boolean;
 }) {
   return (
-    <header className="bg-card flex h-12 shrink-0 items-center gap-2 border-b px-2">
+    <header className="bg-card border-border flex h-12 shrink-0 items-center gap-2 border-b px-2">
       <button
         type="button"
         onClick={onBack}
         className="text-muted-foreground hover:bg-sunken hover:text-foreground flex h-8 items-center gap-1 rounded px-2 text-sm"
       >
-        <ArrowLeft className="h-4 w-4" aria-hidden /> Emails
+        <ArrowLeft className="h-4 w-4" aria-hidden /> Back
       </button>
       <span className="bg-border h-5 w-px" aria-hidden />
       <Title />
@@ -276,7 +277,7 @@ export function TopBar({
         <EmailDetails />
         <SendTest onCopy={onCopy} />
         <Button type="button" variant="outline" size="sm" onClick={onDownload}>
-          <Download className="mr-1.5 h-4 w-4" /> Download
+          <Download className="h-4 w-4" /> Download
         </Button>
         <span className="flex">
           <Button
@@ -287,12 +288,12 @@ export function TopBar({
             onClick={onExit}
             disabled={exiting}
           >
-            {exiting && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />} Save and exit
+            {exiting && <Loader2 className="h-4 w-4 animate-spin" />} Save and exit
           </Button>
           <TemplateMenu />
         </span>
         <Button type="button" size="sm" onClick={onCopy}>
-          <Copy className="mr-1.5 h-4 w-4" /> Copy HTML
+          <Copy className="h-4 w-4" /> Copy HTML
         </Button>
       </div>
     </header>

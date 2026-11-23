@@ -48,7 +48,7 @@ export function RowSettings({ id }: { id: string }) {
               aria-checked={found.row.layout === layout}
               onClick={() => dispatch({ type: "setRowLayout", id, layout })}
               className={cn(
-                "flex h-9 items-center gap-2 rounded-md border px-2.5 text-xs",
+                "border-border flex h-9 items-center gap-2 rounded-md border px-2.5 text-xs",
                 found.row.layout === layout
                   ? "border-ochre ring-ochre ring-1"
                   : "hover:border-foreground/50",
@@ -84,7 +84,7 @@ export function RowSettings({ id }: { id: string }) {
           className="flex-1"
           onClick={() => dispatch({ type: "moveRow", id, by: -1 })}
         >
-          <ArrowUp className="mr-1 h-3.5 w-3.5" /> Move up
+          <ArrowUp className="h-3.5 w-3.5" /> Move up
         </Button>
         <Button
           type="button"
@@ -93,7 +93,7 @@ export function RowSettings({ id }: { id: string }) {
           className="flex-1"
           onClick={() => dispatch({ type: "moveRow", id, by: 1 })}
         >
-          <ArrowDown className="mr-1 h-3.5 w-3.5" /> Move down
+          <ArrowDown className="h-3.5 w-3.5" /> Move down
         </Button>
       </div>
       <Button
@@ -106,7 +106,7 @@ export function RowSettings({ id }: { id: string }) {
           select(null);
         }}
       >
-        <Trash2 className="mr-1.5 h-3.5 w-3.5" /> Delete this row and what is in it
+        <Trash2 className="h-3.5 w-3.5" /> Delete this row and what is in it
       </Button>
     </div>
   );
@@ -177,7 +177,7 @@ export function SectionSettings({ id }: { id: string }) {
             <AccordionTrigger className="py-3 text-sm">Content background</AccordionTrigger>
             <AccordionContent className="space-y-4">
               <p className="text-muted-foreground text-[11px]">
-                The column in the middle that holds this section's content.
+                The column in the middle that holds this section&apos;s content.
               </p>
               <ColorField
                 label="Content colour"
@@ -240,7 +240,7 @@ export function SectionSettings({ id }: { id: string }) {
           </AccordionItem>
         </Accordion>
       </div>
-      <div className="border-t p-3">
+      <div className="border-border border-t p-3">
         <Button
           type="button"
           variant="outline"
@@ -250,7 +250,7 @@ export function SectionSettings({ id }: { id: string }) {
           onClick={() => dispatch({ type: "clearSectionStyles", id })}
           title="Go back to the email's own styles for this section"
         >
-          <RotateCcw className="mr-1.5 h-3.5 w-3.5" /> Clear styles
+          <RotateCcw className="h-3.5 w-3.5" /> Clear styles
         </Button>
       </div>
     </div>

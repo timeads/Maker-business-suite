@@ -11,7 +11,9 @@ export function useAutosave<T>(value: T, save: (value: T) => Promise<void>, dela
   const saved = useRef(value);
   const latest = useRef(value);
   const saveRef = useRef(save);
-  saveRef.current = save;
+  useEffect(() => {
+    saveRef.current = save;
+  });
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Saves run one after another, so an older save can never land after a newer one.
   const queue = useRef<Promise<boolean>>(Promise.resolve(true));

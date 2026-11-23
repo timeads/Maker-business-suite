@@ -1,8 +1,9 @@
 "use client";
 
+import { useHost } from "./host";
 import { useMemo } from "react";
 import { FileText } from "lucide-react";
-import { builtInTemplates, docFromTemplate, renderDocHtml, type EmailTemplate } from "@/lib/design";
+import { docFromTemplate, renderDocHtml, type EmailTemplate } from "@/lib/design";
 import type { BrandId } from "@/lib/design/brands";
 import { cn } from "@/lib/utils";
 
@@ -10,7 +11,7 @@ import { cn } from "@/lib/utils";
 function Thumb({ template }: { template: EmailTemplate }) {
   const html = useMemo(() => renderDocHtml(docFromTemplate(template)), [template]);
   return (
-    <span className="block h-36 overflow-hidden rounded border bg-white" aria-hidden>
+    <span className="border-border block h-36 overflow-hidden rounded border bg-white" aria-hidden>
       <iframe
         title=""
         tabIndex={-1}
@@ -40,7 +41,7 @@ export function TemplateChooser({
   onChange: (id: string) => void;
   blank?: boolean;
 }) {
-  const starters = useMemo(() => builtInTemplates(brand), [brand]);
+  const { starters } = useHost();
   const own = saved.filter((t) => t.brand === brand);
   const card = (id: string, name: string, about: string, picture: React.ReactNode) => (
     <button
@@ -51,7 +52,7 @@ export function TemplateChooser({
       onClick={() => onChange(id)}
       data-template={id}
       className={cn(
-        "space-y-1.5 rounded-lg border p-2 text-left transition-colors",
+        "border-border space-y-1.5 rounded-lg border p-2 text-left transition-colors",
         value === id ? "border-ochre ring-ochre ring-2" : "hover:border-foreground/40",
       )}
     >
@@ -71,7 +72,7 @@ export function TemplateChooser({
             "Blank",
             "The plain layout: logo, picture, headline, text, button.",
             <span
-              className="bg-sunken/40 text-muted-foreground flex h-36 items-center justify-center rounded border"
+              className="bg-sunken/40 text-muted-foreground border-border flex h-36 items-center justify-center rounded border"
               aria-hidden
             >
               <FileText className="h-8 w-8" />

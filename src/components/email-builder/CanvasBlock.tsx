@@ -113,7 +113,7 @@ export function CanvasBlock({
 
       {selected && (
         <div
-          className="bg-card absolute top-0 left-full z-30 ml-1.5 flex flex-col rounded-md border p-0.5 shadow-md"
+          className="bg-card border-border absolute top-0 left-full z-30 ml-1.5 flex flex-col rounded-md border p-0.5 shadow-md"
           role="toolbar"
           aria-label={`${name} actions`}
           onClick={(e) => e.stopPropagation()}

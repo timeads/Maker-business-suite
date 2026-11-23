@@ -1,5 +1,7 @@
 "use client";
 
+/* eslint-disable @next/next/no-img-element -- pictures in an email sit on other hosts, at addresses not known ahead of time */
+
 import { useLayoutEffect, useRef } from "react";
 import { BadgeCheck, Code2, ImageIcon, Link2, PlayCircle, Share2, ShoppingBag } from "lucide-react";
 import {

@@ -131,7 +131,7 @@ function DragCard({
             ? (saved.find((x) => x.id === source.id)?.name ?? "Saved section")
             : "";
   return (
-    <div className="bg-card inline-flex cursor-grabbing items-center gap-2 rounded-md border px-3 py-2 text-xs font-medium opacity-90 shadow-lg">
+    <div className="bg-card border-border inline-flex cursor-grabbing items-center gap-2 rounded-md border px-3 py-2 text-xs font-medium opacity-90 shadow-lg">
       {Icon ? (
         <Icon className="h-4 w-4" aria-hidden />
       ) : layout ? (
@@ -141,6 +141,13 @@ function DragCard({
     </div>
   );
 }
+
+// The two rules the canvas needs that Tailwind cannot say: the placeholder in an empty text box, and
+// links in the email's own link colour. Fixed text, written by us; nothing from the email goes in here.
+const CANVAS_CSS = `
+.eb-inline:empty::before { content: attr(data-placeholder); opacity: 0.45; }
+.eb-inline a { color: var(--eb-link); text-decoration: var(--eb-link-line, underline); font-weight: var(--eb-link-weight, inherit); }
+`;
 
 /** The whole builder for one email: top bar, side panel and canvas, with the document, its history and its saving. */
 export function EmailBuilder({
@@ -167,7 +174,7 @@ export function EmailBuilder({
   const [drop, setDrop] = useState<Drop | null>(null);
 
   // What is saved is the document made safe and bounded, so a half-typed address never reaches the database.
-  const save = useCallback((d: EmailDoc) => hostNow.current.save(normalizeDoc(d)), [hostNow]);
+  const save = (d: EmailDoc) => host.save(normalizeDoc(d));
   const { status, flush } = useAutosave(doc, save);
 
   // An email kept in the form used before the builder is stored as a document the first time it is opened, so it is only ever converted once.
@@ -176,8 +183,8 @@ export function EmailBuilder({
     if (!converted || stored.current) return;
     stored.current = true;
     // If this fails nothing is lost: the email is converted again next time, and any change saves it anyway.
-    save(initial).catch(() => undefined);
-  }, [converted, initial, save]);
+    hostNow.current.save(normalizeDoc(initial)).catch(() => undefined);
+  }, [converted, initial, hostNow]);
 
   // Something selected can vanish (undo, delete); then nothing is selected.
   const selection = useMemo<Selection>(() => {
@@ -262,7 +269,6 @@ export function EmailBuilder({
 
   /* Saved sections: kept for the workspace, shown at once and put back if storing them fails. */
   const [saved, setSaved] = useState<SavedSection[]>([]);
-  const savedNow = useLatest(saved);
   useEffect(() => {
     let wanted = true;
     hostNow.current
@@ -276,28 +282,25 @@ export function EmailBuilder({
       wanted = false;
     };
   }, [hostNow]);
-  const storeSaved = useCallback(
-    async (next: SavedSection[], done?: string) => {
-      const before = savedNow.current;
-      setSaved(next);
-      try {
-        await hostNow.current.storeSavedSections(next);
-        if (done) toast.success(done);
-      } catch (err) {
-        setSaved(before);
-        toast.error(
-          `Your saved sections could not be updated: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        return;
-      }
-      // Read back, so the list is what was really kept.
-      hostNow.current
-        .loadSavedSections()
-        .then(setSaved)
-        .catch(() => undefined);
-    },
-    [hostNow, savedNow],
-  );
+  const storeSaved = async (next: SavedSection[], done?: string) => {
+    const before = saved;
+    setSaved(next);
+    try {
+      await host.storeSavedSections(next);
+      if (done) toast.success(done);
+    } catch (err) {
+      setSaved(before);
+      toast.error(
+        `Your saved sections could not be updated: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return;
+    }
+    // Read back, so the list is what was really kept.
+    host
+      .loadSavedSections()
+      .then(setSaved)
+      .catch(() => undefined);
+  };
   const saveSection = (sectionId: string) => {
     const section = findSection(doc, sectionId);
     if (!section) return;
@@ -437,8 +440,9 @@ export function EmailBuilder({
 
   /* Dragging */
   // Which way the arrow keys last moved a picked-up block: 1 down or right, -1 up or left.
-  const heading = useRef(1);
-  const coordinateGetter = useMemo(() => keyboardSteps(heading), []);
+  // Kept in a plain holder, which the key handling in dnd.ts writes to.
+  const [heading] = useState(() => ({ current: 1 }));
+  const coordinateGetter = useMemo(() => keyboardSteps(heading), [heading]);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor, { coordinateGetter }),
@@ -585,8 +589,11 @@ export function EmailBuilder({
         >
           <div
             className="bg-card text-foreground flex h-dvh flex-col overflow-hidden"
-            data-email-builder
+            data-email-builder={id}
           >
+            <style href="email-builder-canvas" precedence="default">
+              {CANVAS_CSS}
+            </style>
             <TopBar
               status={status}
               onRetry={flush}

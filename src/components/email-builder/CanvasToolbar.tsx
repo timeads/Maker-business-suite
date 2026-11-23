@@ -169,6 +169,7 @@ function TextTools({ block }: { block: HeadingBlock | ParagraphBlock }) {
             </Button>
             <Button
               type="button"
+              variant="dark"
               size="sm"
               disabled={!href}
               onClick={() => {
@@ -264,13 +265,17 @@ export function CanvasToolbar({
     ["mobile", "Mobile", <Smartphone key="m" className="h-4 w-4" />],
   ];
   return (
-    <div className="bg-card grid h-10 shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-2 border-b px-2">
+    <div className="bg-card border-border grid h-10 shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-2 border-b px-2">
       <div className="min-w-0">
         {block && (block.type === "heading" || block.type === "paragraph") && (
           <TextTools key={block.id} block={block} />
         )}
       </div>
-      <div className="flex rounded-md border p-0.5" role="radiogroup" aria-label="View">
+      <div
+        className="border-border flex rounded-md border p-0.5"
+        role="radiogroup"
+        aria-label="View"
+      >
         {devices.map(([value, label, icon]) => (
           <button
             key={value}
@@ -312,7 +317,7 @@ export function CanvasToolbar({
           <Redo2 className="h-4 w-4" />
         </button>
         <Button type="button" variant="outline" size="sm" className="ml-2 h-8" onClick={onPreview}>
-          <Eye className="mr-1.5 h-4 w-4" /> Preview
+          <Eye className="h-4 w-4" /> Preview
         </Button>
       </div>
     </div>

@@ -17,8 +17,7 @@ import {
   StretchVertical,
   type LucideIcon,
 } from "lucide-react";
-import { builtInTemplates, type Align, type BlockType, type EmailTemplate } from "@/lib/design";
-import type { BrandId } from "@/lib/design/brands";
+import { type Align, type BlockType, type EmailTemplate } from "@/lib/design";
 
 /** Small things several parts of the builder share. */
 
@@ -108,5 +107,5 @@ export async function copyText(text: string): Promise<boolean> {
 }
 
 /** The template with this id, among a brand's starters and the owner's own. */
-export const findTemplate = (id: string, brand: BrandId, saved: EmailTemplate[]) =>
-  [...builtInTemplates(brand), ...saved].find((t) => t.id === id) ?? null;
+export const findTemplate = (id: string, starters: EmailTemplate[], saved: EmailTemplate[]) =>
+  [...starters, ...saved].find((t) => t.id === id) ?? null;

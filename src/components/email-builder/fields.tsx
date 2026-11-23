@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+/* eslint-disable @next/next/no-img-element -- pictures in an email sit on other hosts, at addresses not known ahead of time */
+
+import { useHost } from "./host";
+import { useId, useState } from "react";
 import { Ban, ImageIcon, Monitor, Smartphone, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "./ui";
-import { AssetPickerDialog } from "@/components/AssetPickerDialog";
 import { Input } from "@/components/ui/input";
-import { BRANDS, type BrandId } from "@/lib/design/brands";
+import type { BrandId } from "@/lib/design/brands";
 import {
   hexOr,
   safeUrl,
@@ -18,6 +20,7 @@ import {
 } from "@/lib/design";
 import { cn } from "@/lib/utils";
 import { useBuilder } from "./context";
+import { PhotoPicker } from "./PhotoPicker";
 import { ALIGN_OPTIONS, selectClass } from "./shared";
 
 export function Field({
@@ -87,7 +90,12 @@ export function NumberField({
   step?: number;
 }) {
   const [text, setText] = useState(String(value));
-  useEffect(() => setText(String(value)), [value]);
+  // When the value changes from elsewhere (undo, another control), the box follows it.
+  const [shown, setShown] = useState(value);
+  if (shown !== value) {
+    setShown(value);
+    setText(String(value));
+  }
   return (
     <label className="block space-y-1">
       <span className="block text-xs font-medium">{label}</span>
@@ -128,7 +136,11 @@ export function Segmented<T extends string | number>({
   return (
     <div className="space-y-1">
       <span className="block text-xs font-medium">{label}</span>
-      <div className="flex rounded-md border p-0.5" role="radiogroup" aria-label={label}>
+      <div
+        className="border-border flex rounded-md border p-0.5"
+        role="radiogroup"
+        aria-label={label}
+      >
         {options.map((o) => (
           <button
             key={String(o.value)}
@@ -153,10 +165,6 @@ export function Segmented<T extends string | number>({
   );
 }
 
-const swatchesFor = (brand: BrandId) => [
-  ...new Set([...Object.values(BRANDS[brand].palette), "#ffffff", "#000000"]),
-];
-
 /**
  * A colour: the brand's own as swatches, or any other typed as a hex code. With `onClear`, the
  * colour can be taken off so the email's own is used.
@@ -165,7 +173,6 @@ export function ColorField({
   label,
   value,
   onChange,
-  brand,
   onClear,
 }: {
   label: string;
@@ -176,8 +183,13 @@ export function ColorField({
 }) {
   const [text, setText] = useState(value ?? "");
   const id = useId();
-  useEffect(() => setText(value ?? ""), [value]);
-  const names = Object.entries(BRANDS[brand].palette);
+  const [shown, setShown] = useState(value);
+  if (shown !== value) {
+    setShown(value);
+    setText(value ?? "");
+  }
+  const host = useHost();
+  const names: [string, string][] = host.swatches.map((c) => [c.name, c.hex]);
   return (
     <div className="space-y-1.5">
       <label htmlFor={id} className="block text-xs font-medium">
@@ -192,14 +204,14 @@ export function ColorField({
             title="None"
             aria-pressed={!value}
             className={cn(
-              "text-muted-foreground flex h-6 w-6 items-center justify-center rounded-full border",
+              "text-muted-foreground border-border flex h-6 w-6 items-center justify-center rounded-full border",
               !value && "ring-ochre ring-2 ring-offset-1",
             )}
           >
             <Ban className="h-3.5 w-3.5" />
           </button>
         )}
-        {swatchesFor(brand).map((hex) => {
+        {[...new Set([...host.swatches.map((c) => c.hex), "#ffffff", "#000000"])].map((hex) => {
           const name =
             names.find(([, h]) => h === hex)?.[0] ?? (hex === "#ffffff" ? "white" : "black");
           return (
@@ -461,27 +473,25 @@ export function ImageField({
         <img
           src={value}
           alt=""
-          className="bg-sunken max-h-24 w-full rounded border object-contain"
+          className="bg-sunken border-border max-h-24 w-full rounded border object-contain"
         />
       )}
       <div className="flex flex-wrap gap-2">
         <Button type="button" variant="outline" size="sm" onClick={() => setPicking(true)}>
-          <ImageIcon className="mr-1 h-3.5 w-3.5" />{" "}
-          {value ? "Change picture" : "Choose from library"}
+          <ImageIcon className="h-3.5 w-3.5" /> {value ? "Change picture" : "Choose from library"}
         </Button>
         {value && removable && (
           <Button type="button" variant="ghost" size="sm" onClick={() => onChange("")}>
-            <X className="mr-1 h-3.5 w-3.5" /> Remove
+            <X className="h-3.5 w-3.5" /> Remove
           </Button>
         )}
       </div>
       {hint && <span className="text-muted-foreground block text-[11px] leading-snug">{hint}</span>}
-      <AssetPickerDialog
+      <PhotoPicker
         open={picking}
         onOpenChange={setPicking}
-        multiple={false}
-        onSelect={(urls) => {
-          const url = urls.map(safeUrl).find((u) => u && !/\.(mp4|mov|webm|avi|mkv)$/i.test(u));
+        onSelect={(picked) => {
+          const url = safeUrl(picked);
           if (url) onChange(url);
           setPicking(false);
         }}
@@ -505,14 +515,27 @@ export function DeviceCard({
 }) {
   const { device: showing } = useBuilder();
   const [tab, setTab] = useState<Device>(showing);
-  useEffect(() => setTab(showing), [showing]);
+  // Follows the canvas when it is switched between computer and phone.
+  const [seen, setSeen] = useState(showing);
+  if (seen !== showing) {
+    setSeen(showing);
+    setTab(showing);
+  }
   const device = same ? "desktop" : tab;
   return (
-    <div className="space-y-3 rounded-md border p-3" role="group" aria-label="Device-specific">
+    <div
+      className="border-border space-y-3 rounded-md border p-3"
+      role="group"
+      aria-label="Device-specific"
+    >
       <span className="block text-xs font-bold">Device-specific</span>
       <ToggleField label="Same styles for desktop and mobile" checked={same} onChange={onSame} />
       {!same && (
-        <div className="flex rounded-md border p-0.5" role="tablist" aria-label="Device">
+        <div
+          className="border-border flex rounded-md border p-0.5"
+          role="tablist"
+          aria-label="Device"
+        >
           {(
             [
               ["desktop", "Desktop", Monitor],

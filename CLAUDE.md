@@ -189,6 +189,17 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   save. `brandBrief()` puts the kit into drafting prompts as data;
   `toDesignKit()` turns it into the kit the email and slide designs draw
   with, choosing text colours by contrast. We never fetch a brand's website.
+- Emails: a marketing email is a document (`emails.doc`, the model in
+  `lib/design`, ported from the Content Hub with its tests) edited in the
+  drag-and-drop builder (`components/email-builder`, opened at
+  `w/[slug]/emails/[id]`). The builder knows nothing about the database: the
+  page hands it a `BuilderHost` of server actions. Every save runs
+  `normalizeDoc` on the server before `save_email`. Starters are the
+  built-in templates recoloured to the workspace's brand kit
+  (`lib/brand/email.ts`). We don't send email: the person copies the HTML
+  into their own email tool. Saved sections and templates are `configs`
+  (module `social`), so only owners and admins can change them. Not built
+  yet: banner pictures, live link checking, writing an email with Claude.
 - Schema changes are new files in `supabase/migrations`; never edit an
   applied migration.
 - Look: the "Tuft Life" house style (see the tuft-ui repo's DESIGN.md). Teal

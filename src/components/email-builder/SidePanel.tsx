@@ -47,9 +47,9 @@ export function SidePanel({ tab, onTab }: { tab: RailTab; onTab: (tab: RailTab) 
         : null;
 
   return (
-    <div className="bg-card flex min-h-0 shrink-0 border-r">
+    <div className="bg-card border-border flex min-h-0 shrink-0 border-r">
       <nav
-        className="flex w-14 shrink-0 flex-col items-center gap-1 border-r py-2"
+        className="border-border flex w-14 shrink-0 flex-col items-center gap-1 border-r py-2"
         aria-label="Builder panels"
       >
         {TABS.map(({ id, label, icon: Icon }) => {
@@ -92,7 +92,7 @@ export function SidePanel({ tab, onTab }: { tab: RailTab; onTab: (tab: RailTab) 
       >
         {title ? (
           <>
-            <div className="flex items-center gap-1 border-b px-2 py-2">
+            <div className="border-border flex items-center gap-1 border-b px-2 py-2">
               <button
                 type="button"
                 onClick={() => select(null)}

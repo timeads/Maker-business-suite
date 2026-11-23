@@ -1,10 +1,10 @@
 "use client";
 
+import { useHost } from "./host";
 import { useMemo, useState } from "react";
 import { Inbox, Link2, Monitor, Smartphone, type LucideIcon } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "./ui";
 import { Input } from "@/components/ui/input";
-import { BRANDS } from "@/lib/design/brands";
 import { SIZE_LIMIT, docChecks, htmlBytes, renderDocHtml } from "@/lib/design";
 import { cn } from "@/lib/utils";
 import { useBuilder, type Device } from "./context";
@@ -70,13 +70,13 @@ function SizeMeter({ bytes }: { bytes: number }) {
  */
 function InboxPreview() {
   const { doc, dispatch } = useBuilder();
-  const sender = BRANDS[doc.brand].name;
+  const sender = useHost().brandName;
   const subject = doc.meta.subject || "No subject yet";
   const preview = doc.meta.previewText;
   const quiet = "text-neutral-500";
   const other = (from: string, about: string, rest: string, when: string) => (
     <div
-      className="flex items-baseline gap-3 border-b px-4 py-2.5 text-sm text-neutral-500"
+      className="border-border flex items-baseline gap-3 border-b px-4 py-2.5 text-sm text-neutral-500"
       aria-hidden
     >
       <span className="w-40 shrink-0 truncate">{from}</span>
@@ -91,10 +91,10 @@ function InboxPreview() {
       <section className="space-y-2" aria-label="Inbox on a computer">
         <h3 className="text-xs font-bold">On a computer</h3>
         <div
-          className="overflow-hidden rounded-lg border bg-white text-neutral-900 shadow-sm"
+          className="border-border overflow-hidden rounded-lg border bg-white text-neutral-900 shadow-sm"
           data-inbox="desktop"
         >
-          <div className="flex items-baseline gap-3 border-b px-4 py-2.5 text-sm">
+          <div className="border-border flex items-baseline gap-3 border-b px-4 py-2.5 text-sm">
             <span className="w-40 shrink-0 truncate font-bold" data-inbox-sender>
               {sender}
             </span>
@@ -123,10 +123,10 @@ function InboxPreview() {
       <section className="space-y-2" aria-label="Inbox on a phone">
         <h3 className="text-xs font-bold">On a phone</h3>
         <div
-          className="w-[375px] max-w-full overflow-hidden rounded-2xl border bg-white text-neutral-900 shadow-sm"
+          className="border-border w-[375px] max-w-full overflow-hidden rounded-2xl border bg-white text-neutral-900 shadow-sm"
           data-inbox="mobile"
         >
-          <div className="flex gap-3 border-b px-4 py-3">
+          <div className="border-border flex gap-3 border-b px-4 py-3">
             <span
               className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-neutral-200 text-sm font-bold"
               aria-hidden
@@ -187,9 +187,9 @@ function InboxPreview() {
         </Field>
       </section>
       <p className="text-muted-foreground text-[11px] leading-relaxed">
-        The sender shown is the brand's name. The name readers really see is the one set in your
-        email platform. Every inbox cuts these lines at a slightly different point, so keep what
-        matters at the start.
+        The sender shown is the brand&apos;s name. The name readers really see is the one set in
+        your email platform. Every inbox cuts these lines at a slightly different point, so keep
+        what matters at the start.
       </p>
     </div>
   );
@@ -223,7 +223,7 @@ export function PreviewDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex h-[92vh] max-w-6xl flex-col gap-0 overflow-hidden p-0">
-        <DialogHeader className="border-b px-5 py-3">
+        <DialogHeader className="border-border border-b px-5 py-3">
           <DialogTitle>Preview</DialogTitle>
           <DialogDescription>
             The email as it will arrive. This is the same HTML that Copy HTML gives you.
@@ -231,8 +231,12 @@ export function PreviewDialog({
         </DialogHeader>
         <div className="flex min-h-0 flex-1">
           <div className="bg-sunken/40 flex min-w-0 flex-1 flex-col">
-            <div className="bg-card flex items-center gap-3 border-b px-4 py-2">
-              <div className="flex rounded-md border p-0.5" role="tablist" aria-label="Preview">
+            <div className="bg-card border-border flex items-center gap-3 border-b px-4 py-2">
+              <div
+                className="border-border flex rounded-md border p-0.5"
+                role="tablist"
+                aria-label="Preview"
+              >
                 {TABS.map(([value, label, Icon]) => (
                   <button
                     key={value}
@@ -256,10 +260,10 @@ export function PreviewDialog({
             <div className="mx-auto flex min-h-0 w-full flex-1 flex-col items-center overflow-auto p-4">
               {(tab === "desktop" || tab === "mobile") && (
                 <div
-                  className="bg-card flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border shadow-sm"
+                  className="bg-card border-border flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border shadow-sm"
                   style={{ width: FRAME[tab], maxWidth: "100%" }}
                 >
-                  <div className="truncate border-b px-3 py-2 text-sm" data-inbox-row>
+                  <div className="border-border truncate border-b px-3 py-2 text-sm" data-inbox-row>
                     <span className="font-bold">{doc.meta.subject || "No subject yet"}</span>
                     <span className="text-muted-foreground ml-2">{doc.meta.previewText}</span>
                   </div>
@@ -276,7 +280,7 @@ export function PreviewDialog({
             </div>
           </div>
           <aside
-            className="w-72 shrink-0 space-y-5 overflow-y-auto border-l p-4"
+            className="border-border w-72 shrink-0 space-y-5 overflow-y-auto border-l p-4"
             aria-label="Email information"
           >
             <SizeMeter bytes={htmlBytes(html)} />
@@ -299,7 +303,7 @@ export function PreviewDialog({
               onClick={() => setTab("links")}
               className="text-ochre-text text-xs font-medium underline-offset-2 hover:underline"
             >
-              Check the email's links
+              Check the email&apos;s links
             </button>
             {doc.platform === "shopify" && (
               <p className="text-muted-foreground text-[11px] leading-relaxed">

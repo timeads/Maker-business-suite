@@ -1,13 +1,14 @@
 "use client";
 
+/* eslint-disable @next/next/no-img-element -- pictures in an email sit on other hosts, at addresses not known ahead of time */
+
 import { useState } from "react";
-import { ImageIcon, Paintbrush, Plus, ShoppingBag, Trash2 } from "lucide-react";
+import { ImageIcon, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "./ui";
-import { AssetPickerDialog } from "@/components/AssetPickerDialog";
-import { ShopPhotoDialog } from "@/components/slides/ShopPhotoDialog";
 import { alignOf, safeHref, safeUrl, sanitizeHtml, type Block, type CodeBlock } from "@/lib/design";
 import { useBuilder } from "./context";
+import { PhotoPicker } from "./PhotoPicker";
 import { LogoContent, SocialContent, VideoContent } from "./MoreBlockContent";
 import { AlignField, Field, NumberField, Segmented, TextField } from "./fields";
 
@@ -66,54 +67,11 @@ function CodeContent({ block }: { block: CodeBlock }) {
 
 /** What a block holds: its picture, words, link and so on. How it looks is under Styles. */
 export function BlockContent({ block }: { block: Block }) {
-  const { doc, dispatch, editBanner, rendering } = useBuilder();
-  // Which picker is open: the library, or the website (for a picture or for a product).
-  const [picking, setPicking] = useState<"library" | "website" | null>(null);
+  const { doc, dispatch } = useBuilder();
+  // Whether the photo library is open.
+  const [picking, setPicking] = useState(false);
   const patch = (change: Record<string, unknown>) =>
     dispatch({ type: "updateBlock", id: block.id, patch: change });
-
-  const pickers = (
-    <>
-      <AssetPickerDialog
-        open={picking === "library"}
-        onOpenChange={(v) => !v && setPicking(null)}
-        multiple={false}
-        onSelect={(urls) => {
-          const url = urls.map(safeUrl).find((u) => u && !/\.(mp4|mov|webm|avi|mkv)$/i.test(u));
-          if (url && block.type === "image") patch({ src: url });
-          setPicking(null);
-        }}
-      />
-      <ShopPhotoDialog
-        brand={doc.brand}
-        open={picking === "website"}
-        onOpenChange={(v) => !v && setPicking(null)}
-        onSelect={(picked, product) => {
-          const url = safeUrl(picked);
-          if (!url) return;
-          if (block.type === "products")
-            patch({
-              items: [
-                ...block.items,
-                {
-                  title: product.title,
-                  price: product.price,
-                  url: safeUrl(product.page),
-                  image: url,
-                },
-              ],
-            });
-          else if (block.type === "image")
-            patch({
-              src: url,
-              alt: block.alt || product.title,
-              link: block.link || safeUrl(product.page),
-            });
-          setPicking(null);
-        }}
-      />
-    </>
-  );
 
   switch (block.type) {
     case "heading":
@@ -150,12 +108,12 @@ export function BlockContent({ block }: { block: Block }) {
               <img
                 src={doc.globalStyles.logo.src}
                 alt=""
-                className="max-h-24 w-full rounded border object-contain"
+                className="border-border max-h-24 w-full rounded border object-contain"
               />
             )}
             <Note>
-              This is the email's logo. To change the picture, its width, its place or its link, go
-              to Styles on the left, then Logo.
+              This is the email&apos;s logo. To change the picture, its width, its place or its
+              link, go to Styles on the left, then Logo.
             </Note>
             <TextField
               label="What the picture shows"
@@ -169,24 +127,15 @@ export function BlockContent({ block }: { block: Block }) {
       return (
         <div className="space-y-4">
           {block.src && (
-            <img src={block.src} alt="" className="max-h-40 w-full rounded border object-contain" />
+            <img
+              src={block.src}
+              alt=""
+              className="border-border max-h-40 w-full rounded border object-contain"
+            />
           )}
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="outline" size="sm" onClick={() => setPicking("library")}>
-              <ImageIcon className="mr-1 h-3.5 w-3.5" />{" "}
-              {block.src ? "Change picture" : "Choose from library"}
-            </Button>
-            {doc.brand !== "pyc" && (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setPicking("website")}
-              >
-                <ShoppingBag className="mr-1 h-3.5 w-3.5" /> From the website
-              </Button>
-            )}
-          </div>
+          <Button type="button" variant="outline" size="sm" onClick={() => setPicking(true)}>
+            <ImageIcon /> {block.src ? "Change picture" : "Choose from library"}
+          </Button>
           <TextField
             label="What the picture shows"
             value={block.alt}
@@ -216,7 +165,15 @@ export function BlockContent({ block }: { block: Block }) {
               dispatch({ type: "updateBlockStyles", id: block.id, patch: { align } })
             }
           />
-          {pickers}
+          <PhotoPicker
+            open={picking}
+            onOpenChange={setPicking}
+            onSelect={(picked) => {
+              const url = safeUrl(picked);
+              if (url) patch({ src: url });
+              setPicking(false);
+            }}
+          />
         </div>
       );
     case "button":
@@ -267,21 +224,10 @@ export function BlockContent({ block }: { block: Block }) {
     case "banner":
       return (
         <div className="space-y-4">
-          {block.image && <img src={block.image} alt="" className="w-full rounded border" />}
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => editBanner(block.id)}
-            disabled={rendering.has(block.id)}
-          >
-            <Paintbrush className="mr-1 h-3.5 w-3.5" />{" "}
-            {rendering.has(block.id) ? "Making the picture..." : "Edit design"}
-          </Button>
-          <Note>
-            The banner is a picture made with your brand's own fonts and colours. Edit design
-            changes its words, colours, layout or photo.
-          </Note>
+          {block.image && (
+            <img src={block.image} alt="" className="border-border w-full rounded border" />
+          )}
+          <Note>The banner is a picture made with your brand&apos;s own fonts and colours.</Note>
           <TextField
             label="What the banner says"
             value={block.alt}
@@ -306,7 +252,7 @@ export function BlockContent({ block }: { block: Block }) {
               <img
                 src={p.image}
                 alt=""
-                className="h-10 w-10 shrink-0 rounded border object-cover"
+                className="border-border h-10 w-10 shrink-0 rounded border object-cover"
               />
               <span className="min-w-0 flex-1 truncate">
                 {p.title} <span className="text-muted-foreground">{p.price}</span>
@@ -324,23 +270,7 @@ export function BlockContent({ block }: { block: Block }) {
               </Button>
             </div>
           ))}
-          {doc.brand === "ttw" ? (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setPicking("website")}
-              disabled={block.items.length >= 8}
-            >
-              <Plus className="mr-1 h-3.5 w-3.5" /> Add a product from the shop
-            </Button>
-          ) : (
-            <Note>
-              Products come from the Tuft the World shop, so they are only offered in its emails.
-            </Note>
-          )}
           <Note>Products sit two to a row. Each links to its page in the shop.</Note>
-          {pickers}
         </div>
       );
     case "code":

@@ -32,7 +32,7 @@ function Card({ found }: { found: Suggestion }) {
   };
   return (
     <li
-      className="bg-card space-y-2 rounded-md border p-3"
+      className="bg-card border-border space-y-2 rounded-md border p-3"
       data-suggestion={found.rule}
       data-level={found.level}
     >
@@ -64,7 +64,7 @@ function Card({ found }: { found: Suggestion }) {
               className="h-7 px-2 text-xs"
               onClick={fix}
             >
-              <Wand2 className="mr-1 h-3 w-3" /> {found.fixLabel ?? "Fix"}
+              <Wand2 className="h-3 w-3" /> {found.fixLabel ?? "Fix"}
             </Button>
           )}
         </div>
@@ -88,7 +88,7 @@ export function OptimizePanel() {
       </div>
       {found.length === 0 ? (
         <div
-          className="text-muted-foreground flex flex-col items-center gap-2 rounded-md border border-dashed p-6 text-center text-sm"
+          className="text-muted-foreground border-border flex flex-col items-center gap-2 rounded-md border border-dashed p-6 text-center text-sm"
           role="status"
         >
           <CheckCircle2 className="text-mint-ink h-6 w-6" aria-hidden />

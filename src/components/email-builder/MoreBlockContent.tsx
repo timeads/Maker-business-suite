@@ -1,10 +1,10 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+/* eslint-disable @next/next/no-img-element -- pictures in an email sit on other hosts, at addresses not known ahead of time */
+
 import { ArrowDown, ArrowUp, Plus, Sparkles, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { getBrandLogos } from "@/lib/emails";
 import { pickLogo } from "@/lib/design/brands";
 import {
   SOCIAL_NETWORKS,
@@ -20,6 +20,7 @@ import {
   type VideoBlock,
 } from "@/lib/design";
 import { useBuilder } from "./context";
+import { useHost } from "./host";
 import { DeviceCard, ImageField, NumberField, Segmented, SelectField, TextField } from "./fields";
 
 const Note = ({ children }: { children: React.ReactNode }) => (
@@ -52,7 +53,11 @@ export function SocialContent({ block }: { block: SocialBlock }) {
       />
       <ul className="space-y-2" aria-label="Accounts">
         {block.links.map((l, i) => (
-          <li key={l.network} className="space-y-1 rounded-md border p-2" data-social={l.network}>
+          <li
+            key={l.network}
+            className="border-border space-y-1 rounded-md border p-2"
+            data-social={l.network}
+          >
             <div className="flex items-center justify-between gap-1">
               <span className="text-xs font-medium">{SOCIAL_NETWORKS[l.network]}</span>
               <span className="flex">
@@ -122,7 +127,7 @@ export function SocialContent({ block }: { block: SocialBlock }) {
               className="h-7 px-2 text-xs"
               onClick={() => links([...block.links, { network: n, url: "" }])}
             >
-              <Plus className="mr-1 h-3 w-3" />
+              <Plus className="h-3 w-3" />
               {SOCIAL_NETWORKS[n]}
             </Button>
           ))}
@@ -183,7 +188,7 @@ export function VideoContent({ block }: { block: VideoBlock }) {
           size="sm"
           onClick={() => set({ thumbnail: suggested })}
         >
-          <Sparkles className="mr-1.5 h-3.5 w-3.5" /> Use YouTube's own picture
+          <Sparkles className="h-3.5 w-3.5" /> Use YouTube&apos;s own picture
         </Button>
       )}
       {block.url && !suggested && !block.thumbnail && (
@@ -205,24 +210,19 @@ export function LogoContent({ block }: { block: LogoBlock }) {
   const { doc, dispatch } = useBuilder();
   const set = (patch: Record<string, unknown>) =>
     dispatch({ type: "updateBlock", id: block.id, patch });
-  const { data: logos } = useQuery({
-    queryKey: ["brand-logos", doc.brand],
-    queryFn: () => getBrandLogos(doc.brand),
-    retry: false,
-    staleTime: 10 * 60 * 1000,
-  });
+  const { logos } = useHost();
   const look = logoLook(doc, block);
   // The colour the logo sits on decides which of the brand's logos reads on it.
   const found = findBlock(doc, block.id);
   const behind =
     block.styles.background ?? found?.section.styles.contentBg ?? doc.globalStyles.contentBg;
-  const suited = logos ? pickLogo(behind, logos, doc.brand) : null;
+  const suited = pickLogo(behind, logos, doc.brand);
   const choices: { value: string; label: string }[] = [
     { value: "", label: "The email's logo" },
-    ...(logos?.badge ? [{ value: logos.badge, label: "Badge, in full colour" }] : []),
-    ...(logos?.dark ? [{ value: logos.dark, label: "Mark, for light backgrounds" }] : []),
-    ...(logos?.light ? [{ value: logos.light, label: "Mark, for dark backgrounds" }] : []),
-    ...(block.src && ![logos?.badge, logos?.dark, logos?.light].includes(block.src)
+    ...(logos.badge ? [{ value: logos.badge, label: "Badge, in full colour" }] : []),
+    ...(logos.dark ? [{ value: logos.dark, label: "Mark, for light backgrounds" }] : []),
+    ...(logos.light ? [{ value: logos.light, label: "Mark, for dark backgrounds" }] : []),
+    ...(block.src && ![logos.badge, logos.dark, logos.light].includes(block.src)
       ? [{ value: block.src, label: "A picture you chose" }]
       : []),
   ];
@@ -232,7 +232,7 @@ export function LogoContent({ block }: { block: LogoBlock }) {
         <img
           src={look.src}
           alt=""
-          className="bg-sunken max-h-24 w-full rounded border object-contain"
+          className="bg-sunken border-border max-h-24 w-full rounded border object-contain"
         />
       )}
       <SelectField
@@ -243,7 +243,7 @@ export function LogoContent({ block }: { block: LogoBlock }) {
       />
       {suited && suited !== look.src && (
         <Button type="button" variant="outline" size="sm" onClick={() => set({ src: suited })}>
-          <Sparkles className="mr-1.5 h-3.5 w-3.5" /> Use the logo that suits this background
+          <Sparkles className="h-3.5 w-3.5" /> Use the logo that suits this background
         </Button>
       )}
       <ImageField

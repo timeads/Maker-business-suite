@@ -9,6 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui";
 import { newSection, type SavedSection, type Section } from "@/lib/design";
 import { cn } from "@/lib/utils";
 import { useBuilder } from "./context";
+import { useHost } from "./host";
 import { InsertLine } from "./Canvas";
 import type { DragSource, DropTarget } from "./dnd";
 
@@ -42,7 +43,7 @@ function ManageItem({ section }: { section: Section }) {
     <div
       ref={setNodeRef}
       className={cn(
-        "bg-card flex items-center gap-1 rounded-md border p-1",
+        "bg-card border-border flex items-center gap-1 rounded-md border p-1",
         isDragging && "opacity-40",
       )}
       data-outline={section.id}
@@ -76,6 +77,7 @@ function ManageItem({ section }: { section: Section }) {
 
 function SavedItem({ item }: { item: SavedSection }) {
   const { insertSaved, renameSaved, deleteSaved } = useBuilder();
+  const { canKeepShared } = useHost();
   const data: DragSource = { source: "saved", id: item.id };
   const { setNodeRef, setActivatorNodeRef, attributes, listeners, isDragging } = useDraggable({
     id: `saved:${item.id}`,
@@ -90,7 +92,10 @@ function SavedItem({ item }: { item: SavedSection }) {
   return (
     <li
       ref={setNodeRef}
-      className={cn("bg-card space-y-1 rounded-md border p-1", isDragging && "opacity-40")}
+      className={cn(
+        "bg-card border-border space-y-1 rounded-md border p-1",
+        isDragging && "opacity-40",
+      )}
       data-saved={item.id}
     >
       <div className="flex items-center gap-1">
@@ -132,50 +137,54 @@ function SavedItem({ item }: { item: SavedSection }) {
             }}
           />
         )}
-        {name === null ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="h-8 w-8 px-0"
-            aria-label={`Rename ${item.name}`}
-            title="Rename"
-            onClick={() => setName(item.name)}
-          >
-            <Pencil className="h-3.5 w-3.5" />
-          </Button>
-        ) : (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="h-8 w-8 px-0"
-            aria-label="Keep this name"
-            title="Keep this name"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={keep}
-          >
-            <Check className="h-3.5 w-3.5" />
-          </Button>
+        {canKeepShared && (
+          <>
+            {name === null ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-8 w-8 px-0"
+                aria-label={`Rename ${item.name}`}
+                title="Rename"
+                onClick={() => setName(item.name)}
+              >
+                <Pencil className="h-3.5 w-3.5" />
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-8 w-8 px-0"
+                aria-label="Keep this name"
+                title="Keep this name"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={keep}
+              >
+                <Check className="h-3.5 w-3.5" />
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="text-brick h-8 w-8 px-0"
+              aria-label={`Delete ${item.name}`}
+              title="Delete"
+              onClick={() => {
+                if (
+                  window.confirm(
+                    `Delete the saved section "${item.name}"? Emails that already use it keep their copy.`,
+                  )
+                )
+                  deleteSaved(item.id);
+              }}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          </>
         )}
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="text-brick h-8 w-8 px-0"
-          aria-label={`Delete ${item.name}`}
-          title="Delete"
-          onClick={() => {
-            if (
-              window.confirm(
-                `Delete the saved section "${item.name}"? Emails that already use it keep their copy.`,
-              )
-            )
-              deleteSaved(item.id);
-          }}
-        >
-          <Trash2 className="h-3.5 w-3.5" />
-        </Button>
       </div>
     </li>
   );
@@ -184,6 +193,7 @@ function SavedItem({ item }: { item: SavedSection }) {
 /** The email's sections as a list to reorder and add to, and the sections kept to use again. */
 export function SectionsPanel() {
   const { doc, dispatch, saved, showSection } = useBuilder();
+  const { canKeepShared } = useHost();
   const add = () => {
     const section = newSection("New section");
     dispatch({ type: "addSection", section });
@@ -217,7 +227,7 @@ export function SectionsPanel() {
             </li>
           </ul>
           <Button type="button" variant="outline" size="sm" className="w-full" onClick={add}>
-            <Plus className="mr-1.5 h-3.5 w-3.5" /> Add blank section
+            <Plus className="h-3.5 w-3.5" /> Add blank section
           </Button>
           <p className="text-muted-foreground text-[11px]">
             Click a section to select it. Drag by the dots to reorder.
@@ -225,9 +235,10 @@ export function SectionsPanel() {
         </TabsContent>
         <TabsContent value="saved" className="space-y-3">
           {saved.length === 0 ? (
-            <p className="text-muted-foreground rounded-md border border-dashed p-4 text-center text-xs">
-              Nothing saved yet. Select a section on the email, open its More menu (three dots) and
-              choose Save.
+            <p className="text-muted-foreground border-border rounded-md border border-dashed p-4 text-center text-xs">
+              {canKeepShared
+                ? "Nothing saved yet. Select a section on the email, open its More menu (three dots) and choose Save."
+                : "Nothing saved yet. Sections your team saves to use again show here."}
             </p>
           ) : (
             <ul className="space-y-1.5" aria-label="Saved sections">
