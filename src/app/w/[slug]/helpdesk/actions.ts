@@ -17,7 +17,7 @@ import {
   replyTemplatesSchema,
 } from "@/lib/helpdesk/config";
 import { draftReply } from "@/lib/helpdesk/draft";
-import { sendReply } from "@/lib/helpdesk/reply";
+import { sendReply, replyProblem } from "@/lib/helpdesk/reply";
 import { postAlert } from "@/lib/messages/alerts";
 import { handlesFor, nameOf, type Person } from "@/lib/messages/format";
 import { getAdminClient } from "@/lib/supabase/admin";
@@ -99,7 +99,7 @@ export async function sendTicketReply(
     if (recordError) throw new Error(recordError.message);
   } catch (err) {
     console.error("Reply failed", err instanceof Error ? err.message : err);
-    return { error: "We couldn't send that reply. Nothing was sent; try again in a moment." };
+    return { error: replyProblem(err) };
   }
   revalidatePath(`/w/${slug}/helpdesk`, "layout");
   return { message: "Reply sent." };
