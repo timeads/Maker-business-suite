@@ -420,3 +420,110 @@ describe("purchase orders", () => {
     ).rejects.toThrow(/isn't possible/);
   });
 });
+
+describe("what's owed to suppliers", () => {
+  const entry = (
+    user: User,
+    tenant: string,
+    supplier: string,
+    type: string,
+    date: string,
+    amount: number,
+    more: { stated?: number; ref?: string } = {},
+  ) =>
+    as<{ id: string }>(
+      user,
+      "select public.save_ledger_entry($1, $2, $3, $4::date, $5, $6, $7, '') as id",
+      [tenant, supplier, type, date, amount, more.stated ?? null, more.ref ?? null],
+    ).then((rows) => rows[0].id);
+
+  it("keeps an account of invoices, payments, statements and credits", async () => {
+    await entry(alice, tenantA, supplierA, "statement", "2026-10-01", 0, { stated: 1200.5 });
+    const invoice = await entry(alice, tenantA, supplierA, "invoice", "2026-10-05", 300, {
+      ref: "INV-77",
+    });
+    await entry(alice, tenantA, supplierA, "payment", "2026-10-09", 500);
+    await entry(alice, tenantA, supplierA, "adjustment", "2026-10-10", -25);
+    // Typing the same invoice number again corrects it; it isn't added twice.
+    const again = await entry(alice, tenantA, supplierA, "invoice", "2026-10-06", 310.4, {
+      ref: "inv-77",
+    });
+    expect(again).toBe(invoice);
+    const rows = await as<{ type: string; amount: string; stated_balance: string | null }>(
+      alice,
+      "select type, amount, stated_balance from public.supplier_ledger where supplier_id = $1 order by entry_date",
+      [supplierA],
+    );
+    expect(
+      rows.map((r) => [r.type, Number(r.amount), r.stated_balance && Number(r.stated_balance)]),
+    ).toEqual([
+      ["statement", 0, 1200.5],
+      ["invoice", 310.4, null],
+      ["payment", 500, null],
+      ["adjustment", -25, null],
+    ]);
+
+    await as(alice, "select public.mark_bill_paid($1, $2, true)", [tenantA, invoice]);
+    const marked = await as<{ payment_sent_at: string | null }>(
+      alice,
+      "select payment_sent_at from public.supplier_ledger where id = $1",
+      [invoice],
+    );
+    expect(marked[0].payment_sent_at).not.toBeNull();
+    await as(alice, "select public.set_supplier_terms($1, $2, 45)", [tenantA, supplierA]);
+  });
+
+  it("refuses entries that make no sense", async () => {
+    await expect(entry(alice, tenantA, supplierA, "invoice", "2026-10-05", 0)).rejects.toThrow(
+      /amount_needed/,
+    );
+    await expect(entry(alice, tenantA, supplierA, "payment", "2026-10-05", -5)).rejects.toThrow(
+      /amount_needed/,
+    );
+    await expect(entry(alice, tenantA, supplierA, "gift", "2026-10-05", 5)).rejects.toThrow(
+      /not valid/,
+    );
+    await expect(entry(alice, tenantA, supplierA, "invoice", "1990-01-01", 5)).rejects.toThrow(
+      /not valid/,
+    );
+  });
+
+  it("is for owners and admins of that workspace only", async () => {
+    // A plain member can't read the account or write to it.
+    expect(await as(carol, "select id from public.supplier_ledger")).toEqual([]);
+    await expect(entry(carol, tenantA, supplierA, "invoice", "2026-10-05", 10)).rejects.toThrow(
+      /Only owners|not allowed|permission/i,
+    );
+    // Another workspace sees nothing and can't touch it.
+    expect(await as(bob, "select id from public.supplier_ledger")).toEqual([]);
+    await expect(entry(bob, tenantB, supplierA, "invoice", "2026-10-05", 10)).rejects.toThrow(
+      /Supplier not found/,
+    );
+    await expect(entry(bob, tenantA, supplierA, "invoice", "2026-10-05", 10)).rejects.toThrow(
+      /Workspace not found|Only owners/,
+    );
+    const mine = await as<{ id: string }>(
+      alice,
+      "select id from public.supplier_ledger where supplier_id = $1 limit 1",
+      [supplierA],
+    );
+    await expect(
+      as(bob, "select public.remove_ledger_entry($1, $2)", [tenantB, mine[0].id]),
+    ).rejects.toThrow(/Entry not found/);
+    await expect(
+      as(bob, "select public.mark_bill_paid($1, $2, true)", [tenantB, mine[0].id]),
+    ).rejects.toThrow(/Entry not found/);
+    await expect(
+      as(bob, "select public.set_supplier_terms($1, $2, 10)", [tenantB, supplierA]),
+    ).rejects.toThrow(/Supplier not found/);
+    await expect(
+      as(
+        alice,
+        "insert into public.supplier_ledger (tenant_id, supplier_id, type, entry_date, amount) values ($1, $2, 'invoice', current_date, 1)",
+        [tenantA, supplierA],
+      ),
+    ).rejects.toThrow(/permission denied/);
+
+    await as(alice, "select public.remove_ledger_entry($1, $2)", [tenantA, mine[0].id]);
+  });
+});
