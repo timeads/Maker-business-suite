@@ -170,7 +170,12 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   item's cost is `resolveCost()` in `lib/stock/cost.ts`, on whole cents: the
   workspace's own figure (`stock_items.own_cost`, a planning column), else
   the average of checked-in deliveries (summed by `stock_received_costs`,
-  divided in the app), else the shop's cost; the average is never stored. Suppliers and orders are
+  divided in the app), else the shop's cost; the average is never stored.
+  Planning figures are changed in the grid ("Change figures": one box at a
+  time) or for the ticked items, both through `set_stock_items_planning`,
+  which changes only the keys it is handed (the older `plan_stock_items`
+  overwrites every figure and is not called). An order can carry any planned
+  item, whoever usually supplies it; the item keeps its own supplier. Suppliers and orders are
   manager-only; anyone on the team can check a delivery in. Supabase returns 1,000 rows at most, so `loadStock()`
   pages. The shop's vendor on a product becomes a supplier, and items
   with no supplier are filed under it; a supplier chosen by hand is never

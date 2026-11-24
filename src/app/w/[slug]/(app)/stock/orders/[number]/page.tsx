@@ -131,25 +131,36 @@ export default async function StockOrderPage({
     };
   });
   const onOrder = new Set(lines.map((line) => line.stock_item_id));
-  const addable: AddableItem[] = editable
+  // Anything planned for can go on the order. This supplier's own items come
+  // first; the rest follow, each saying who it usually comes from.
+  const toAddable = (row: (typeof rows)[number], theirs: boolean): AddableItem => ({
+    id: row.item.id,
+    name: row.name,
+    sku: row.item.sku,
+    cost: row.unitCost,
+    start: startingQty(row.suggestedQty, row.casePack, row.minimum),
+    case_pack: row.casePack,
+    // The long explanation is only sent for this supplier's own items: the
+    // rest of the catalogue can be thousands of rows.
+    why: theirs ? explainSuggestion(row, today) : "",
+    theirs,
+    usualSupplier: theirs ? null : (row.supplier?.name ?? null),
+  });
+  const canAdd = editable
     ? rows
-        .filter(
-          (row) =>
-            row.item.supplier_id === order.supplier_id &&
-            isPlanned(row) &&
-            !onOrder.has(row.item.id),
-        )
+        .filter((row) => isPlanned(row) && !onOrder.has(row.item.id))
         .sort((a, b) => a.name.localeCompare(b.name))
-        .slice(0, 800)
-        .map((row) => ({
-          id: row.item.id,
-          name: row.name,
-          cost: row.unitCost,
-          start: startingQty(row.suggestedQty, row.casePack, row.minimum),
-          case_pack: row.casePack,
-          why: explainSuggestion(row, today),
-        }))
     : [];
+  const addable: AddableItem[] = [
+    ...canAdd
+      .filter((row) => row.item.supplier_id === order.supplier_id)
+      .slice(0, 800)
+      .map((row) => toAddable(row, true)),
+    ...canAdd
+      .filter((row) => row.item.supplier_id !== order.supplier_id)
+      .slice(0, 2500)
+      .map((row) => toAddable(row, false)),
+  ];
 
   const adjustments = parseAdjustments(order.adjustments);
   const shipping = String(order.shipping_cost ?? "0");
@@ -316,6 +327,7 @@ export default async function StockOrderPage({
               tax={taxRate}
               adjustments={adjustments}
               addable={addable}
+              supplierName={supplier.name}
               currency={tenant.currency}
             />
           ) : lines.length === 0 ? (

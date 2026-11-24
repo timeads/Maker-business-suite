@@ -422,6 +422,7 @@ export const HELP_TOPICS: HelpTopic[] = [
       "Open Stock → Everything, or start from “To order” on the Stock front page.",
       "Tick the items you want and press “Draft an order”. You get one draft per supplier.",
       "Each line starts at the suggested quantity and says how it was reached. Change any you like.",
+      "Under “Add an item” you can put anything you stock on the order, not only that supplier's things. Their own items are listed first; type a name or SKU to find the rest.",
       "Add shipping, tax or other amounts if you know them, then mark the order as sent when you place it.",
     ],
     notes: [
@@ -443,6 +444,25 @@ export const HELP_TOPICS: HelpTopic[] = [
     ],
     notes: [
       "In Stock → Settings you can list words that hide matching items automatically. It starts with “gift card”.",
+    ],
+  },
+  {
+    slug: "change-planning-figures",
+    group: "stock",
+    title: "Change planning figures in the table",
+    summary:
+      "Days to arrive, cover, spare stock, smallest order, case size and cost, without opening each item.",
+    intro: "Owners and admins can change an item's planning figures right on Stock → Everything.",
+    steps: [
+      "Press “Change figures” above the table. The planning columns turn into boxes.",
+      "Type in a box and move on. It saves by itself, and “runs out”, “order by” and the suggestion catch up.",
+      "To set the same figure on lots of items, tick them, open “Set figures for the ticked items”, fill in only the boxes you want to change and press Set.",
+      "Press “Done changing” when you've finished.",
+    ],
+    notes: [
+      "An empty box in the table goes back to the supplier's own figure, shown in grey.",
+      "In the bar for ticked items an empty box means “leave it as it is”, so you can't wipe a figure by accident.",
+      "A cost you type is your own figure for that item. Empty it and we go back to the average of your deliveries, or the cost in your shop.",
     ],
   },
   {

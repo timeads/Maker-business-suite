@@ -520,3 +520,144 @@ describe("what an item costs", () => {
     ).rejects.toThrow(/permission denied/);
   });
 });
+
+describe("changing planning figures in the table", () => {
+  const plan = () =>
+    one<Record<string, unknown>>(
+      `select supplier_id, lead_time_days, coverage_days, safety_stock, moq, case_pack,
+              own_cost, supplier_sku, hidden from public.stock_items where id = $1`,
+      [rug],
+    );
+  const change = (user: User, tenant: string, ids: string[], changes: object) =>
+    as<{ n: number }>(user, "select public.set_stock_items_planning($1, $2, $3::jsonb) as n", [
+      tenant,
+      ids,
+      JSON.stringify(changes),
+    ]);
+
+  it("changes only the figures it is handed, for every ticked item", async () => {
+    await as(
+      alice,
+      "select public.save_stock_item_plan($1, $2, $3, 14, 60, 3, false, 12, 24, 'HM-1')",
+      [tenantA, rug, supplierA],
+    );
+    expect(await change(alice, tenantA, [rug, yarn], { case_pack: 36, safety_stock: 5 })).toEqual([
+      { n: 2 },
+    ]);
+    expect(await plan()).toEqual({
+      supplier_id: supplierA,
+      lead_time_days: 14,
+      coverage_days: 60,
+      safety_stock: 5,
+      moq: 24,
+      case_pack: 36,
+      own_cost: null,
+      supplier_sku: "HM-1",
+      hidden: false,
+    });
+    // Null clears a figure (back to the supplier's own); a case of one is single units.
+    await change(alice, tenantA, [rug], { lead_time_days: null, moq: null, case_pack: 1 });
+    await change(alice, tenantA, [rug], { own_cost: 12.345, supplier_sku: "  HM-2 " });
+    expect(await plan()).toMatchObject({
+      lead_time_days: null,
+      coverage_days: 60,
+      moq: null,
+      case_pack: null,
+      own_cost: "12.35",
+      supplier_sku: "HM-2",
+    });
+    await change(alice, tenantA, [rug], { own_cost: null, supplier_sku: null });
+    expect(await plan()).toMatchObject({ own_cost: null, supplier_sku: null, safety_stock: 5 });
+  });
+
+  it("refuses figures that make no sense, and anything that isn't a planning figure", async () => {
+    const before = await plan();
+    for (const changes of [
+      {},
+      { lead_time_days: 400 },
+      { coverage_days: 0 },
+      { safety_stock: -1 },
+      { moq: 0 },
+      { case_pack: 2.5 },
+      { case_pack: "12" },
+      { own_cost: -3 },
+      { hidden: true },
+      { supplier_id: supplierA },
+      { on_hand: 999 },
+      { tenant_id: tenantB },
+    ]) {
+      await expect(change(alice, tenantA, [rug], changes)).rejects.toThrow(
+        /not valid|planning figure|Nothing to change/,
+      );
+    }
+    await expect(change(alice, tenantA, [rug, yarn], { supplier_sku: "X" })).rejects.toThrow(
+      /one item at a time/,
+    );
+    expect(await plan()).toEqual(before);
+  });
+
+  it("is for owners and admins, and never reaches another workspace's items", async () => {
+    await expect(change(carol, tenantA, [rug], { safety_stock: 9 })).rejects.toThrow(
+      /Only owners and admins/,
+    );
+    await expect(change(bob, tenantA, [rug], { safety_stock: 9 })).rejects.toThrow(
+      /Only owners and admins/,
+    );
+    // Bob names his own workspace but Alice's item: nothing is touched.
+    const before = await plan();
+    expect(await change(bob, tenantB, [rug, bobRug], { safety_stock: 9 })).toEqual([{ n: 1 }]);
+    expect(await plan()).toEqual(before);
+    expect(
+      (
+        await one<{ safety_stock: number }>(
+          "select safety_stock from public.stock_items where id = $1",
+          [bobRug],
+        )
+      ).safety_stock,
+    ).toBe(9);
+  });
+
+  it("an order can carry an item that usually comes from someone else", async () => {
+    const other = await newSupplier(alice, tenantA, "Dye Works");
+    await as(alice, "select public.assign_stock_supplier($1, $2, $3)", [tenantA, [yarn], other]);
+    const [{ n }] = await as<{ n: number }>(
+      alice,
+      "select public.create_purchase_order($1, $2, $3::jsonb, '') as n",
+      [tenantA, supplierA, JSON.stringify([{ stock_item_id: rug, qty: 2, unit_cost: 60 }])],
+    );
+    const order = await one<{ id: string }>(
+      "select id from public.purchase_orders where tenant_id = $1 and number = $2",
+      [tenantA, n],
+    );
+    const save = (user: User, lines: object[]) =>
+      as(user, "select public.save_purchase_order($1, $2::jsonb, '', null, 0, 0, '[]'::jsonb)", [
+        order.id,
+        JSON.stringify(lines),
+      ]);
+    await save(alice, [
+      { stock_item_id: rug, qty: 2, unit_cost: 60 },
+      { stock_item_id: yarn, qty: 12, unit_cost: 8.5 },
+    ]);
+    const { rows } = await db.query<{ stock_item_id: string; qty_ordered: number }>(
+      "select stock_item_id, qty_ordered from public.purchase_order_lines where po_id = $1 and qty_ordered > 0",
+      [order.id],
+    );
+    expect(rows.map((r) => r.stock_item_id).sort()).toEqual([rug, yarn].sort());
+    // The item keeps its usual supplier; only this order carries it.
+    expect(
+      (
+        await one<{ supplier_id: string }>(
+          "select supplier_id from public.stock_items where id = $1",
+          [yarn],
+        )
+      ).supplier_id,
+    ).toBe(other);
+    // Never another workspace's item, and never by someone who isn't a manager.
+    await expect(save(alice, [{ stock_item_id: bobRug, qty: 1, unit_cost: 1 }])).rejects.toThrow(
+      /Item not found/,
+    );
+    await expect(save(carol, [{ stock_item_id: yarn, qty: 1, unit_cost: 1 }])).rejects.toThrow(
+      /Only owners and admins/,
+    );
+  });
+});

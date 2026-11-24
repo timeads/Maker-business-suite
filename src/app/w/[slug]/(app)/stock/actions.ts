@@ -234,6 +234,93 @@ export async function setItemHidden(
 }
 
 /**
+ * One planning figure as typed into the table or the bar above it. `empty`
+ * says what an empty box means: null clears the figure (back to the
+ * supplier's own, or single units); for "spare" it means none.
+ */
+const FIGURES = {
+  lead: {
+    key: "lead_time_days",
+    min: 0,
+    max: 365,
+    empty: null,
+    bad: "Days to arrive is 0 to 365.",
+  },
+  cover: { key: "coverage_days", min: 1, max: 365, empty: null, bad: "Cover is 1 to 365 days." },
+  spare: {
+    key: "safety_stock",
+    min: 0,
+    max: 1_000_000,
+    empty: 0,
+    bad: "Spare stock can't be negative.",
+  },
+  moq: {
+    key: "moq",
+    min: 1,
+    max: 1_000_000,
+    empty: null,
+    bad: "The smallest order is at least 1.",
+  },
+  case_pack: {
+    key: "case_pack",
+    min: 1,
+    max: 100_000,
+    empty: null,
+    bad: "A case holds at least 1.",
+  },
+} as const;
+export type FigureField = keyof typeof FIGURES | "cost";
+const isFigure = (value: string): value is keyof typeof FIGURES => value in FIGURES;
+
+/** A typed whole number for one figure: `{ value }`, or `{ error }` in plain words. */
+function figure(field: keyof typeof FIGURES, typed: string) {
+  const rule = FIGURES[field];
+  if (typed === "") return { value: rule.empty } as const;
+  const n = Number(typed);
+  if (!/^\d{1,7}$/.test(typed) || !(n >= rule.min && n <= rule.max)) {
+    return { error: rule.bad } as const;
+  }
+  return { value: n } as const;
+}
+
+/**
+ * One figure for one item, changed right in the table. An empty box clears
+ * it. The page is read again afterwards, so every sum that depends on the
+ * figure (runs out, order by, suggested) moves with it.
+ */
+export async function saveItemFigure(
+  slug: string,
+  itemId: string,
+  field: FigureField,
+  typed: string,
+): Promise<StockState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  if (!UUID.test(itemId)) return { error: OOPS };
+  const value = String(typed ?? "").trim();
+  let changes: Record<string, number | string | null>;
+  if (field === "cost") {
+    const cost = value === "" ? null : amount(value);
+    if (value !== "" && cost === null) return { error: "Type the cost like 12.50." };
+    changes = { own_cost: cost === null ? null : Number(cost) };
+  } else if (isFigure(field)) {
+    const parsed = figure(field, value);
+    if ("error" in parsed) return { error: parsed.error };
+    changes = { [FIGURES[field].key]: parsed.value };
+  } else {
+    return { error: OOPS };
+  }
+  const { error } = await ctx.supabase.rpc("set_stock_items_planning", {
+    p_tenant_id: ctx.tenant.id,
+    p_item_ids: [itemId],
+    p_changes: changes,
+  });
+  if (error) return { error: OOPS };
+  done(slug);
+  return { message: "Saved" };
+}
+
+/**
  * What the bar above the items grid does with the ticked rows. The button
  * pressed says which: draft orders, stop or restart reordering, or hand them
  * to a supplier.
@@ -285,6 +372,30 @@ export async function bulkItems(
       p_tenant_id: ctx.tenant.id,
       p_item_ids: ids,
       p_supplier_id: supplier || null,
+    });
+    if (error) return { error: OOPS };
+    done(slug);
+    return { message: `${plural((data as number) ?? 0, "item")} updated.` };
+  }
+
+  if (what === "plan") {
+    // Only the boxes that were filled in change anything; an empty one leaves
+    // that figure as it is on every ticked item (as TuftStock's bulk bar does).
+    const changes: Record<string, number | null> = {};
+    for (const field of Object.keys(FIGURES) as (keyof typeof FIGURES)[]) {
+      const typed = text(formData, `set_${field}`);
+      if (typed === "") continue;
+      const parsed = figure(field, typed);
+      if ("error" in parsed) return { error: parsed.error };
+      changes[FIGURES[field].key] = parsed.value;
+    }
+    if (Object.keys(changes).length === 0) {
+      return { error: "Fill in at least one figure to set for the ticked items." };
+    }
+    const { data, error } = await ctx.supabase.rpc("set_stock_items_planning", {
+      p_tenant_id: ctx.tenant.id,
+      p_item_ids: ids,
+      p_changes: changes,
     });
     if (error) return { error: OOPS };
     done(slug);

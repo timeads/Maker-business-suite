@@ -427,3 +427,43 @@ describe("costs on stock rows", () => {
     expect(cost).toEqual({ own: 9, avg: 6.67, shop: 12.5, none: 0 });
   });
 });
+
+describe("planning figures in the grid", () => {
+  it("shows what's used, and keeps the item's own figures beside it for changing", () => {
+    const rows = buildStockRows({
+      items: [
+        item("own", {
+          lead_time_days: 7,
+          coverage_days: 45,
+          safety_stock: 4,
+          moq: 6,
+          case_pack: 12,
+          own_cost: "3.20",
+        }),
+        item("plain"),
+      ],
+      suppliers: [mill],
+      sales: [],
+      openLines: [],
+      settings,
+      today: TODAY,
+    });
+    const [own, plain] = rows.map((r) => toGridRow(r, TODAY));
+    expect([own.lead, own.cover, own.spare, own.minimum, own.casePack]).toEqual([7, 45, 4, 6, 12]);
+    expect(own.own).toEqual({ cost: "3.20", lead: "7", cover: "45", moq: "6" });
+    // Nothing typed: the supplier's figures are used, and the boxes start empty.
+    expect([plain.lead, plain.cover, plain.spare]).toEqual([
+      mill.lead_time_days,
+      mill.coverage_days,
+      0,
+    ]);
+    expect(plain.own).toEqual({ cost: "", lead: "", cover: "", moq: "" });
+    expect(sortRows(rows, "cover", "desc").map((r) => r.item.id)).toEqual(["own", "plain"]);
+    expect(sortRows(rows, "spare", "asc").map((r) => r.item.id)).toEqual(["plain", "own"]);
+    expect(csvTable(rows, ["cover", "spare"])).toEqual([
+      ["Item", "SKU", "Supplier's code", "Order covers (days)", "Keep spare"],
+      ["Item own", "SKU-own", "", 45, 4],
+      ["Item plain", "SKU-plain", "", mill.coverage_days, 0],
+    ]);
+  });
+});

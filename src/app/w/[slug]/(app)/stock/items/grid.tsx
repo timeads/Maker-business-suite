@@ -1,23 +1,25 @@
 "use client";
 
-import { useActionState, useMemo, useState, useSyncExternalStore } from "react";
+import { useActionState, useMemo, useState, useSyncExternalStore, useTransition } from "react";
 import { useFormStatus } from "react-dom";
 import Link from "next/link";
-import { Download, SlidersHorizontal } from "lucide-react";
+import { Download, Pencil, SlidersHorizontal } from "lucide-react";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Label, Select } from "@/components/ui/input";
+import { Input, Label, Select } from "@/components/ui/input";
 import { formatMoney } from "@/lib/dashboard/format";
 import {
   COLUMNS,
+  COLUMNS_ADDED_LATER,
   DEFAULT_HIDDEN_COLUMNS,
+  EDITABLE_COLUMNS,
   isColumnKey,
   type ColumnKey,
   type GridRow,
   type SortDir,
 } from "@/lib/stock/views";
 import { cn } from "@/lib/utils";
-import { bulkItems } from "../actions";
+import { bulkItems, saveItemFigure, type FigureField } from "../actions";
 import { RequestKey, Result } from "../forms";
 
 const TONES: Record<GridRow["health"], BadgeTone> = {
@@ -51,7 +53,8 @@ const readStore = () => {
   }
 };
 function writeStore(hidden: ColumnKey[]) {
-  memory = JSON.stringify(hidden);
+  // `seen` marks a choice made with every column of today's grid on offer.
+  memory = JSON.stringify({ hidden, seen: COLUMNS.map((column) => column.key) });
   try {
     window.localStorage.setItem(STORE, memory);
   } catch {
@@ -63,7 +66,16 @@ function parseHidden(raw: string): ColumnKey[] {
   if (!raw) return DEFAULT_HIDDEN_COLUMNS;
   try {
     const value: unknown = JSON.parse(raw);
-    return Array.isArray(value) ? value.filter(isColumnKey).filter((k) => k !== "item") : [];
+    const keys = (list: unknown) =>
+      Array.isArray(list) ? list.filter(isColumnKey).filter((k) => k !== "item") : [];
+    // The first format was a bare list, saved before some columns existed.
+    if (Array.isArray(value)) return [...new Set([...keys(value), ...COLUMNS_ADDED_LATER])];
+    if (!value || typeof value !== "object") return DEFAULT_HIDDEN_COLUMNS;
+    const saved = value as { hidden?: unknown; seen?: unknown };
+    const seen = new Set<ColumnKey>(keys(saved.seen));
+    // A column that came along after this choice was saved starts as it does for everyone.
+    const unseen = DEFAULT_HIDDEN_COLUMNS.filter((key) => !seen.has(key));
+    return [...new Set([...keys(saved.hidden), ...unseen])];
   } catch {
     return DEFAULT_HIDDEN_COLUMNS;
   }
@@ -92,6 +104,79 @@ function DoButton({
   );
 }
 
+/**
+ * One planning figure, changed where it sits in the table. It saves when the
+ * box is left (or Enter is pressed); the page then reads everything again, so
+ * the sums beside it move too. An empty box clears the figure.
+ */
+function FigureBox({
+  slug,
+  itemId,
+  field,
+  value,
+  placeholder,
+  label,
+  emptyAs = "",
+}: {
+  slug: string;
+  itemId: string;
+  field: FigureField;
+  /** What's saved now, as it sits in the box ("" = nothing typed). */
+  value: string;
+  /** What's used while the box is empty (the supplier's figure, say). */
+  placeholder: string;
+  label: string;
+  emptyAs?: string;
+}) {
+  const [pending, start] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <span className="inline-flex flex-col items-end gap-0.5">
+      <Input
+        defaultValue={value}
+        placeholder={placeholder}
+        aria-label={label}
+        aria-invalid={error ? true : undefined}
+        inputMode={field === "cost" ? "decimal" : "numeric"}
+        maxLength={14}
+        className={cn("h-7 w-20 px-1.5 text-right text-sm", pending && "opacity-60")}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            event.currentTarget.blur();
+          }
+        }}
+        onBlur={(event) => {
+          const box = event.currentTarget;
+          const typed = box.value.trim() || emptyAs;
+          box.value = typed;
+          if (typed === value) {
+            setError(null);
+            return;
+          }
+          start(async () => {
+            const result = await saveItemFigure(slug, itemId, field, typed);
+            setError(result.error ?? null);
+          });
+        }}
+      />
+      {error && (
+        <span role="alert" className="text-brick max-w-36 text-right text-xs whitespace-normal">
+          {error}
+        </span>
+      )}
+    </span>
+  );
+}
+
+const BULK_FIGURES = [
+  ["spare", "Keep spare"],
+  ["lead", "Days to arrive"],
+  ["cover", "Order covers (days)"],
+  ["moq", "Smallest order"],
+  ["case_pack", "In a case"],
+] as const;
+
 export function ItemsGrid({
   slug,
   rows,
@@ -118,7 +203,12 @@ export function ItemsGrid({
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
   const stored = useSyncExternalStore(subscribe, readStore, () => "");
   const hidden = useMemo(() => new Set(parseHidden(stored)), [stored]);
-  const columns = COLUMNS.filter((column) => !hidden.has(column.key));
+  // "Change figures" turns the planning columns into boxes, and shows them
+  // all while it's on, whatever the viewer usually hides.
+  const [editing, setEditing] = useState(false);
+  const columns = COLUMNS.filter(
+    (column) => !hidden.has(column.key) || (editing && EDITABLE_COLUMNS.includes(column.key)),
+  );
 
   // Only rows still on screen count as ticked (the list changes after an action).
   const ticked = rows.filter((row) => picked.has(row.id));
@@ -151,7 +241,66 @@ export function ItemsGrid({
   })}`;
   const money = (value: number | null) => (value === null ? "–" : formatMoney(value, currency));
 
+  const box = (
+    row: GridRow,
+    field: FigureField,
+    value: string,
+    placeholder: string,
+    what: string,
+    emptyAs = "",
+  ) => (
+    <FigureBox
+      // A new box whenever the saved figure changes, so it shows what was saved.
+      key={`${row.id}:${field}:${value}`}
+      slug={slug}
+      itemId={row.id}
+      field={field}
+      value={value}
+      placeholder={placeholder}
+      label={`${what} for ${row.name}`}
+      emptyAs={emptyAs}
+    />
+  );
+  /** The box for a planning column while figures are being changed, else null. */
+  const editCell = (row: GridRow, key: ColumnKey): React.ReactNode => {
+    switch (key) {
+      case "cost":
+        return box(
+          row,
+          "cost",
+          row.own.cost,
+          row.cost === null ? "–" : row.cost.toFixed(2),
+          "Your own cost",
+        );
+      case "lead":
+        return box(row, "lead", row.own.lead, String(row.lead), "Days to arrive");
+      case "cover":
+        return box(row, "cover", row.own.cover, String(row.cover), "Days an order covers");
+      case "spare":
+        return box(row, "spare", String(row.spare), "0", "Spare to keep", "0");
+      case "minimum":
+        return box(
+          row,
+          "moq",
+          row.own.moq,
+          row.minimum > 1 ? String(row.minimum) : "–",
+          "Smallest order",
+        );
+      case "casePack":
+        return box(
+          row,
+          "case_pack",
+          row.casePack === null ? "" : String(row.casePack),
+          "–",
+          "How many in a case",
+        );
+      default:
+        return null;
+    }
+  };
+
   const cell = (row: GridRow, key: ColumnKey): React.ReactNode => {
+    if (editing && EDITABLE_COLUMNS.includes(key)) return editCell(row, key);
     switch (key) {
       case "item":
         return (
@@ -181,6 +330,10 @@ export function ItemsGrid({
         return money(row.price);
       case "lead":
         return row.lead;
+      case "cover":
+        return row.cover;
+      case "spare":
+        return row.spare || "–";
       case "minimum":
         return row.minimum > 1 ? row.minimum : "–";
       case "casePack":
@@ -271,6 +424,41 @@ export function ItemsGrid({
                 Apply
               </DoButton>
             </div>
+            {view !== "hidden" && (
+              <details className="basis-full">
+                <summary className="text-text-2 hover:text-foreground w-fit cursor-pointer text-xs font-semibold">
+                  Set figures for the ticked items
+                </summary>
+                <div className="bg-panel mt-2 flex flex-wrap items-end gap-2 rounded-md p-3">
+                  {BULK_FIGURES.map(([field, label]) => (
+                    <div key={field} className="flex flex-col gap-1.5">
+                      <Label htmlFor={`set-${field}`}>{label}</Label>
+                      <Input
+                        id={`set-${field}`}
+                        name={`set_${field}`}
+                        type="number"
+                        min={field === "spare" || field === "lead" ? 0 : 1}
+                        step={1}
+                        placeholder="Leave as is"
+                        className="w-32"
+                      />
+                    </div>
+                  ))}
+                  <DoButton
+                    value="plan"
+                    variant="outline"
+                    pendingText="Saving…"
+                    disabled={ticked.length === 0}
+                  >
+                    {ticked.length > 0 ? `Set for ${ticked.length}` : "Set"}
+                  </DoButton>
+                  <p className="text-muted-foreground basis-full text-xs">
+                    Only the boxes you fill in are changed. To clear a figure, press “Change
+                    figures” and empty its box in the table.
+                  </p>
+                </div>
+              </details>
+            )}
             <p className="text-muted-foreground self-center text-xs" aria-live="polite">
               {ticked.length === 0
                 ? "Tick some items to draft an order for each supplier among them."
@@ -287,6 +475,17 @@ export function ItemsGrid({
           {canEdit && (
             <Button asChild variant="ghost" size="sm">
               <Link href={`${base}/orders#new-order`}>Empty order</Link>
+            </Button>
+          )}
+          {canEdit && (
+            <Button
+              type="button"
+              variant={editing ? "dark" : "outline"}
+              size="sm"
+              aria-pressed={editing}
+              onClick={() => setEditing((now) => !now)}
+            >
+              <Pencil /> {editing ? "Done changing" : "Change figures"}
             </Button>
           )}
           <details className="relative">
@@ -319,6 +518,12 @@ export function ItemsGrid({
         </div>
       </div>
 
+      {editing && (
+        <p className="text-muted-foreground font-read text-sm print:hidden">
+          Type in a box and move on: it saves by itself, and the sums beside it catch up. An empty
+          box goes back to the supplier&apos;s own figure (shown in grey).
+        </p>
+      )}
       <div className="border-border bg-card overflow-x-auto rounded-xl border">
         <table className="w-full text-left text-sm">
           <thead className="text-muted-foreground bg-panel text-xs">

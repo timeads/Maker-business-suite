@@ -79,6 +79,8 @@ export const COLUMNS = [
   { key: "cost", label: "Costs you", numeric: true },
   { key: "price", label: "Sells for", numeric: true },
   { key: "lead", label: "Days to arrive", numeric: true },
+  { key: "cover", label: "Order covers (days)", numeric: true },
+  { key: "spare", label: "Keep spare", numeric: true },
   { key: "minimum", label: "Smallest order", numeric: true },
   { key: "casePack", label: "Case", numeric: true },
   { key: "have", label: "Have", numeric: true },
@@ -92,7 +94,21 @@ export type ColumnKey = (typeof COLUMNS)[number]["key"];
 export const isColumnKey = (value: unknown): value is ColumnKey =>
   COLUMNS.some((column) => column.key === value);
 /** Shown until the viewer chooses otherwise. */
-export const DEFAULT_HIDDEN_COLUMNS: ColumnKey[] = ["price", "lead"];
+export const DEFAULT_HIDDEN_COLUMNS: ColumnKey[] = ["price", "lead", "cover", "spare"];
+/**
+ * Columns added after people had already chosen theirs. A saved choice from
+ * before then says nothing about these, so they start hidden for it too.
+ */
+export const COLUMNS_ADDED_LATER: ColumnKey[] = ["cover", "spare"];
+/** The figures a manager can change right in the table. */
+export const EDITABLE_COLUMNS: ColumnKey[] = [
+  "cost",
+  "lead",
+  "cover",
+  "spare",
+  "minimum",
+  "casePack",
+];
 
 const time = (date: Date | null) => (date ? date.getTime() : Number.POSITIVE_INFINITY);
 const text = (a: string, b: string) => a.localeCompare(b, "en", { sensitivity: "base" });
@@ -106,6 +122,8 @@ const SORTERS: Record<ColumnKey, (a: StockRow, b: StockRow) => number> = {
   cost: (a, b) => a.unitCost - b.unitCost,
   price: (a, b) => (a.price ?? 0) - (b.price ?? 0),
   lead: (a, b) => a.leadTimeDays - b.leadTimeDays,
+  cover: (a, b) => a.coverageDays - b.coverageDays,
+  spare: (a, b) => a.item.safety_stock - b.item.safety_stock,
   minimum: (a, b) => a.minimum - b.minimum,
   casePack: (a, b) => (a.casePack ?? 0) - (b.casePack ?? 0),
   have: (a, b) => a.item.on_hand - b.item.on_hand,
@@ -147,8 +165,16 @@ export type GridRow = {
   costFrom: string;
   price: number | null;
   lead: number;
+  cover: number;
+  spare: number;
   minimum: number;
   casePack: number | null;
+  /**
+   * The item's own figures, as they'd sit in a box ("" = none typed), for
+   * changing them in the table. `lead`, `cover` and `minimum` above are what
+   * is used once the supplier's figures have filled the gaps.
+   */
+  own: { cost: string; lead: string; cover: string; moq: string };
   have: number;
   coming: number;
   runsOut: string;
@@ -178,6 +204,14 @@ export function toGridRow(row: StockRow, today: string): GridRow {
     costFrom: COST_SOURCE_LABELS[row.cost.source],
     price: row.price,
     lead: row.leadTimeDays,
+    cover: row.coverageDays,
+    spare: row.item.safety_stock,
+    own: {
+      cost: row.cost.own?.toFixed(2) ?? "",
+      lead: row.item.lead_time_days == null ? "" : String(row.item.lead_time_days),
+      cover: row.item.coverage_days == null ? "" : String(row.item.coverage_days),
+      moq: row.item.moq == null ? "" : String(row.item.moq),
+    },
     minimum: row.minimum,
     casePack: row.casePack,
     have: row.item.on_hand,
@@ -209,6 +243,8 @@ export const CSV_VALUES: Record<ColumnKey, (row: StockRow) => string | number> =
   cost: (row) => (row.cost.source === "none" ? "" : row.cost.cost.toFixed(2)),
   price: (row) => (row.price == null ? "" : row.price.toFixed(2)),
   lead: (row) => row.leadTimeDays,
+  cover: (row) => row.coverageDays,
+  spare: (row) => row.item.safety_stock,
   minimum: (row) => row.minimum,
   casePack: (row) => row.casePack ?? "",
   have: (row) => row.item.on_hand,

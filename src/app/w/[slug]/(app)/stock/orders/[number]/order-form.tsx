@@ -19,11 +19,16 @@ export type EditLine = OrderLine & {
 export type AddableItem = {
   id: string;
   name: string;
+  sku: string | null;
   cost: number;
   /** Where "how many" starts: the suggestion, else one case, else one. */
   start: number;
   case_pack: number | null;
   why: string;
+  /** One of this supplier's own items; the rest usually come from someone else. */
+  theirs: boolean;
+  /** Who it usually comes from, when that isn't this supplier (null = nobody yet). */
+  usualSupplier: string | null;
 };
 type Draft = { qty: string; cost: string };
 type Adjustment = { label: string; amount: string };
@@ -68,6 +73,7 @@ export function OrderForm({
   tax,
   adjustments,
   addable,
+  supplierName,
   currency,
 }: {
   slug: string;
@@ -81,6 +87,8 @@ export function OrderForm({
   tax: string;
   adjustments: Adjustment[];
   addable: AddableItem[];
+  /** Who the order is for, to head their own items in the "add" list. */
+  supplierName: string;
   currency: string;
 }) {
   const [state, action] = useActionState(saveOrder.bind(null, slug, orderId), {});
@@ -119,6 +127,21 @@ export function OrderForm({
       adjustments: now.adjustments.map((a, i) => (i === index ? { ...a, ...change } : a)),
     }));
   const adding = addable.find((item) => item.id === form.add.item);
+  // The list can run to thousands once other suppliers' items are in it, so
+  // it is narrowed by what's typed. The picked item always stays in the list.
+  const [find, setFind] = useState("");
+  const needle = find.trim().toLowerCase();
+  const offered = needle
+    ? addable.filter(
+        (item) =>
+          item.id === form.add.item ||
+          item.name.toLowerCase().includes(needle) ||
+          (item.sku ?? "").toLowerCase().includes(needle),
+      )
+    : addable;
+  const theirs = offered.filter((item) => item.theirs);
+  const others = offered.filter((item) => !item.theirs);
+  const hasOthers = addable.some((item) => !item.theirs);
   const money = (value: number) => formatMoney(value, currency);
   const totals = totalsOf(
     [
@@ -140,8 +163,8 @@ export function OrderForm({
       )}
       {lines.length === 0 && addable.length === 0 && (
         <p className="font-read text-sm">
-          This supplier has no items yet. Under Everything, tick what you buy from them and use
-          &quot;Give the ticked items to&quot;, then come back to add them here.
+          There&apos;s nothing to add yet. Your shop&apos;s items appear under Everything after the
+          next sync; then come back and add them here.
         </p>
       )}
       {lines.length > 0 && (
@@ -272,6 +295,22 @@ export function OrderForm({
 
       {addable.length > 0 && (
         <div className="bg-panel flex flex-col gap-2 rounded-md p-3">
+          {addable.length > 12 && (
+            <div className="flex flex-col gap-1.5 sm:max-w-xs">
+              <Label htmlFor="add-find">Find an item to add</Label>
+              <Input
+                id="add-find"
+                type="search"
+                value={find}
+                onChange={(e) => setFind(e.target.value)}
+                // Enter here narrows the list; it shouldn't save the order.
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") e.preventDefault();
+                }}
+                placeholder="Name or SKU"
+              />
+            </div>
+          )}
           <div className="grid gap-3 sm:grid-cols-[1fr_7rem_8rem]">
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="add-item">Add an item</Label>
@@ -290,12 +329,28 @@ export function OrderForm({
                   }));
                 }}
               >
-                <option value="">Nothing to add</option>
-                {addable.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name}
-                  </option>
-                ))}
+                <option value="">
+                  {needle && offered.length === 0 ? "Nothing matches" : "Nothing to add"}
+                </option>
+                {theirs.length > 0 && (
+                  <optgroup label={`From ${supplierName}`}>
+                    {theirs.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {others.length > 0 && (
+                  <optgroup label="Everything else">
+                    {others.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name}
+                        {item.usualSupplier ? ` (usually ${item.usualSupplier})` : ""}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
               </Select>
             </div>
             <div className="flex flex-col gap-1.5">
@@ -329,12 +384,22 @@ export function OrderForm({
           </div>
           <p className="text-muted-foreground font-read text-xs">
             {adding
-              ? `${adding.why}${
+              ? `${
+                  adding.theirs
+                    ? ""
+                    : adding.usualSupplier
+                      ? `Usually comes from ${adding.usualSupplier}; this order alone will carry it. `
+                      : "No supplier yet; this order alone will carry it. "
+                }${adding.why}${
                   caseLabel(Number.parseInt(form.add.qty || "0", 10) || 0, adding.case_pack)
                     ? ` That's ${caseLabel(Number.parseInt(form.add.qty || "0", 10) || 0, adding.case_pack)}.`
                     : ""
                 }`
-              : "Pick an item and “how many” fills in from its sales. Leave it empty and we'll use the suggested amount."}
+              : `Pick an item and “how many” fills in from its sales. Leave it empty and we'll use the suggested amount.${
+                  hasOthers
+                    ? " Anything you stock can go on this order; it keeps its usual supplier."
+                    : ""
+                }`}
           </p>
         </div>
       )}
