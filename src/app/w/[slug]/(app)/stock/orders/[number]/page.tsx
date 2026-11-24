@@ -101,7 +101,7 @@ export default async function StockOrderPage({
     supabase
       .from("stock_receipts")
       .select(
-        "id, quantity, shop_status, shop_error, shop_attempts, shop_can_retry, created_at, stock_items(title, variant_title)",
+        "id, quantity, shop_status, shop_error, shop_attempts, shop_can_retry, source, created_at, stock_items(title, variant_title)",
       )
       .eq("tenant_id", tenant.id)
       .in(
@@ -457,7 +457,9 @@ export default async function StockOrderPage({
                   <span className="text-muted-foreground">
                     {" "}
                     · {when.format(new Date(receipt.created_at as string))} ·{" "}
-                    {SHOP_NOTES[receipt.shop_status as string]}
+                    {receipt.source === "import"
+                      ? "from a spreadsheet, kept as history"
+                      : SHOP_NOTES[receipt.shop_status as string]}
                     {receipt.shop_status === "failed" && receipt.shop_error
                       ? ` (${receipt.shop_error})`
                       : ""}

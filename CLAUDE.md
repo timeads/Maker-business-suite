@@ -217,6 +217,21 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   (`row.buildAhead`, sized to last until the first order after they reopen
   could arrive) and `closureOrders()` turns those into the "Order before …"
   cards. Only the dates are stored.
+  Spreadsheet imports (Stock → Settings → "Bring your records across",
+  manager-only; docs/stock-import.md): the file is read in the browser, sent
+  as text and never kept. `lib/stock/import` (pure, tested) reads it and
+  reports unusable rows by line; the six `import_*` functions do the writing.
+  Each can be run for a look (`p_confirm` false): it does the whole import in
+  a block that is then undone and returns the counts, so the preview is the
+  import's own answer. A confirmed import needs a request key (logged in
+  `stock_imports`, so a second press finds the first), and each file is
+  matched against what is here, so the same file again changes nothing.
+  Imported history never reaches the shop and never raises `on_hand`: an
+  imported order writes `qty_received` on its lines and nothing else
+  (`purchase_orders.source = 'import'`), an imported delivery is a
+  `stock_receipts` row with `source = 'import'` that a table rule pins to
+  `skipped`, and `claim_stock_receipt_tries` skips them as well. Keep
+  `tests/db/stock-imports.test.ts` passing when touching receipts.
 - Shipping: `shipping_orders` holds what packing needs (address, what's left
   to send), kept apart from `orders` so the sales figures never carry an
   address. It is read from the shop in a separate query that is allowed to

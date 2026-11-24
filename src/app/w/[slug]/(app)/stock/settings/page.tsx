@@ -1,4 +1,6 @@
 import type { Metadata } from "next";
+import Link from "next/link";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { createClient } from "@/lib/supabase/server";
@@ -50,6 +52,22 @@ export default async function StockSettingsPage({ params }: { params: Promise<{ 
           )}
         </CardContent>
       </Card>
+      {canManage(role) && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Bring your records across</CardTitle>
+            <CardDescription>
+              Coming from another stock tool or a spreadsheet? Bring in your suppliers, planning
+              figures, past and open orders, supplier accounts and history as CSV files.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button asChild variant="outline">
+              <Link href={`/w/${tenant.slug}/stock/settings/import`}>Bring in a file</Link>
+            </Button>
+          </CardContent>
+        </Card>
+      )}
     </>
   );
 }

@@ -473,6 +473,30 @@ export const HELP_TOPICS: HelpTopic[] = [
     ],
   },
   {
+    slug: "stock-import",
+    group: "stock",
+    title: "Bring your stock records in from spreadsheets",
+    summary:
+      "Suppliers, planning figures, past and open orders, supplier accounts and history, as CSV files.",
+    intro:
+      "Coming from another stock tool, or from spreadsheets? Owners and admins can bring records in under Stock → Settings → “Bring your records across”.",
+    steps: [
+      "Connect your shop first and let it sync: rows are matched to the items your shop has, by SKU, or by product and option where there is no SKU.",
+      "Pick what's in the file, then the file. Bring them in this order: suppliers, item planning, purchase orders, past deliveries, supplier ledger, past daily counts.",
+      "You're shown what it would do before anything is saved: how many are new, how many would change, how many are already as the file says, and each row left out, by line, with the reason.",
+      "Press “Bring these in”. Fix any rows that were left out in the file and bring it in again whenever you like.",
+    ],
+    notes: [
+      "The page lists the columns each file takes. The first line of a file names its columns; their order doesn't matter.",
+      "Bringing the same file in twice changes nothing, and pressing the button twice only brings it in once.",
+      "An order that says goods have already arrived, and a past delivery, are kept as history. They never raise a count here and are never sent to your shop. What is still to come on an open order is checked in as usual.",
+      "An order whose reference is already here is left exactly as it is.",
+      "A supplier chosen for an item in a file counts as chosen by hand: syncing with your shop won't change it.",
+      "Past daily counts fill in the days before Stock was switched on, so sold-out days are known from the start. A day we already have a count for keeps it.",
+      "A file can be up to 4 MB. The file itself isn't kept, only its name and what it came to.",
+    ],
+  },
+  {
     slug: "supplier-closures",
     group: "stock",
     title: "Plan around a supplier's holidays and shutdowns",
