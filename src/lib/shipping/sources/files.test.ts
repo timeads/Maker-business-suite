@@ -65,3 +65,12 @@ describe("a label's file", () => {
     }
   });
 });
+
+describe("handing label files to the database", () => {
+  it("names the kind the way the database reads it", async () => {
+    const { filesForKeeping } = await import("./files");
+    expect(filesForKeeping([{ box: 2, contentType: "image/gif", data: "R0lGODlh" }])).toEqual([
+      { box: 2, content_type: "image/gif", data: "R0lGODlh" },
+    ]);
+  });
+});

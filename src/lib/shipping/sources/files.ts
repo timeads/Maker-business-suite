@@ -71,3 +71,11 @@ export async function downloadEasyPostLabel(
     return null;
   }
 }
+
+/**
+ * A label's files as the database functions read them. The database names
+ * the kind `content_type`; anything else is quietly left out there, and a
+ * label with no file can't be printed from here.
+ */
+export const filesForKeeping = (files: LabelFile[]) =>
+  files.map((file) => ({ box: file.box, content_type: file.contentType, data: file.data }));
