@@ -9,7 +9,7 @@ function line(over: Partial<SpendLineInput>): SpendLineInput {
     poId: "po1",
     date: new Date("2026-06-15T00:00:00Z"),
     supplierId: "sup1",
-    supplierName: "Karida",
+    supplierName: "Kestrel",
     sku: "SKU-A",
     title: "Yarn A",
     qtyOrdered: 10,

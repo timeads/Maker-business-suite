@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { classifyStockHealth, type StockHealthInput } from "./stock-health";
 
-// Karida-like defaults: 45d lead, 30d cover, 7d review → horizon 75, bridge 52,
+// Kestrel-like defaults: 45d lead, 30d cover, 7d review → horizon 75, bridge 52,
 // overstock line max(180, 150) = 180 days.
 function input(o: Partial<StockHealthInput>): StockHealthInput {
   return {

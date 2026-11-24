@@ -1,4 +1,15 @@
-import { Document, Image, Page, StyleSheet, Text, View, renderToBuffer } from "@react-pdf/renderer";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import {
+  Document,
+  Font,
+  Image,
+  Page,
+  StyleSheet,
+  Text,
+  View,
+  renderToBuffer,
+} from "@react-pdf/renderer";
 import type { PoDocument } from "./document";
 
 /**
@@ -7,46 +18,76 @@ import type { PoDocument } from "./document";
  * Order", number and status top right; supplier and dates; the lines; totals.
  * Drawn on the server only, with the PDF's own built-in Helvetica, so nothing
  * is fetched to make it.
+ *
+ * Helvetica has no Chinese, Japanese or Korean characters, and a supplier's
+ * contact is often written in them. For those, and only those, the page falls
+ * back on Noto Sans SC, which sits in this repository beside its licence
+ * (`fonts/OFL.txt`, the SIL Open Font License). Only the characters a page
+ * uses are put in the file, so an order in plain English is no bigger.
  */
 
-const s = StyleSheet.create({
-  page: { padding: 36, fontSize: 9, fontFamily: "Helvetica", color: "#111" },
-  row: { flexDirection: "row" },
-  between: { flexDirection: "row", justifyContent: "space-between" },
-  h1: { fontSize: 16, fontFamily: "Helvetica-Bold" },
-  muted: { color: "#666" },
-  section: { marginTop: 14 },
-  label: { fontFamily: "Helvetica-Bold", marginBottom: 2 },
-  th: {
-    fontFamily: "Helvetica-Bold",
-    borderBottom: 1,
-    borderColor: "#999",
-    paddingBottom: 3,
-    paddingTop: 3,
-  },
-  td: { borderBottom: 0.5, borderColor: "#ddd", paddingVertical: 3 },
-  cSku: { width: "15%", paddingRight: 4 },
-  cSupSku: { width: "15%", paddingRight: 4 },
-  cTitle: { width: "32%", paddingRight: 4 },
-  cMoq: { width: "8%", textAlign: "right" },
-  cQty: { width: "8%", textAlign: "right" },
-  cCost: { width: "10%", textAlign: "right" },
-  cTotal: { width: "12%", textAlign: "right" },
-  totals: { marginTop: 10, marginLeft: "auto", width: "45%" },
-  totalRow: { flexDirection: "row", justifyContent: "space-between", paddingVertical: 1 },
-  grand: {
-    fontFamily: "Helvetica-Bold",
-    borderTop: 1,
-    borderColor: "#999",
-    marginTop: 3,
-    paddingTop: 3,
-  },
-});
+const FALLBACK = "Noto Sans SC";
+const FALLBACK_FILE = join(
+  process.cwd(),
+  "src",
+  "lib",
+  "stock",
+  "po",
+  "fonts",
+  "NotoSansSC-Regular.woff",
+);
+let fallbackReady: boolean | null = null;
+/** Registers the bundled font once. Without the file the order is still drawn, in Helvetica alone. */
+function fallbackFont(): boolean {
+  if (fallbackReady === null) {
+    fallbackReady = existsSync(FALLBACK_FILE);
+    if (fallbackReady) Font.register({ family: FALLBACK, src: FALLBACK_FILE });
+  }
+  return fallbackReady;
+}
+const regular = () => (fallbackFont() ? ["Helvetica", FALLBACK] : "Helvetica");
+const bold = () => (fallbackFont() ? ["Helvetica-Bold", FALLBACK] : "Helvetica-Bold");
+
+const styles = () =>
+  StyleSheet.create({
+    page: { padding: 36, fontSize: 9, fontFamily: regular(), color: "#111" },
+    row: { flexDirection: "row" },
+    between: { flexDirection: "row", justifyContent: "space-between" },
+    h1: { fontSize: 16, fontFamily: bold() },
+    muted: { color: "#666" },
+    section: { marginTop: 14 },
+    label: { fontFamily: bold(), marginBottom: 2 },
+    th: {
+      fontFamily: bold(),
+      borderBottom: 1,
+      borderColor: "#999",
+      paddingBottom: 3,
+      paddingTop: 3,
+    },
+    td: { borderBottom: 0.5, borderColor: "#ddd", paddingVertical: 3 },
+    cSku: { width: "15%", paddingRight: 4 },
+    cSupSku: { width: "15%", paddingRight: 4 },
+    cTitle: { width: "32%", paddingRight: 4 },
+    cMoq: { width: "8%", textAlign: "right" },
+    cQty: { width: "8%", textAlign: "right" },
+    cCost: { width: "10%", textAlign: "right" },
+    cTotal: { width: "12%", textAlign: "right" },
+    totals: { marginTop: 10, marginLeft: "auto", width: "45%" },
+    totalRow: { flexDirection: "row", justifyContent: "space-between", paddingVertical: 1 },
+    grand: {
+      fontFamily: bold(),
+      borderTop: 1,
+      borderColor: "#999",
+      marginTop: 3,
+      paddingTop: 3,
+    },
+  });
 
 /** A logo the server already holds, as bytes. Only PNG and JPEG can be drawn. */
 export type PoLogo = { data: Buffer; format: "png" | "jpg" };
 
 export async function renderPoPdf(doc: PoDocument, logo: PoLogo | null = null): Promise<Buffer> {
+  const s = styles();
   return renderToBuffer(
     <Document title={doc.title} author={doc.business.name}>
       <Page size="A4" style={s.page}>

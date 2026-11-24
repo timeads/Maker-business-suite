@@ -56,7 +56,7 @@ export default async function StockOrderPage({
   const { data: order } = await supabase
     .from("purchase_orders")
     .select(
-      "id, number, status, notes, expected_on, ordered_at, supplier_id, shipping_cost, tax_rate_pct, adjustments, suppliers(name, email, notes), purchase_order_lines(id, stock_item_id, qty_ordered, qty_received, unit_cost, supplier_sku, note, stock_items(id, title, variant_title, sku, case_pack))",
+      "id, number, reference, status, notes, expected_on, ordered_at, supplier_id, shipping_cost, tax_rate_pct, adjustments, suppliers(name, email, notes), purchase_order_lines(id, stock_item_id, qty_ordered, qty_received, unit_cost, supplier_sku, note, stock_items(id, title, variant_title, sku, case_pack))",
     )
     .eq("tenant_id", tenant.id)
     .eq("number", Number(number))
@@ -218,7 +218,7 @@ export default async function StockOrderPage({
     <>
       <PageHeader
         back={{ href: `${base}/orders`, label: "Orders" }}
-        title={`Order #${order.number} · ${supplier.name}`}
+        title={`${order.reference} · ${supplier.name}`}
         description={
           <>
             {tenant.name} · {units} units · {money(totals.total.toNumber())}

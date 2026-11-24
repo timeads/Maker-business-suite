@@ -18,7 +18,7 @@ export interface VendorSummaryInput {
   aging: AgingResult;
   needsReviewCount: number;
   entryCount: number;
-  /** Still owed on bills Tim has ticked "Paid" (money sent, payment not posted yet). */
+  /** Still owed on bills the owner has ticked "Paid" (money sent, payment not posted yet). */
   markedPaid?: string;
 }
 
@@ -35,7 +35,7 @@ export interface VendorSummary {
   needsReview: number;
   /** No ledger entries at all yet — nothing to show but a prompt to add some. */
   empty: boolean;
-  /** Part of `balance` already paid by Tim, waiting for the payment to post. */
+  /** Part of `balance` already paid by the owner, waiting for the payment to post. */
   markedPaid: string;
 }
 
@@ -48,7 +48,7 @@ export interface CombinedSummary {
   credit: string;
   vendorsOwed: number;
   vendorsOverdue: number;
-  /** Part of `owed` Tim has already paid, waiting to post. */
+  /** Part of `owed` the owner has already paid, waiting to post. */
   markedPaid: string;
 }
 

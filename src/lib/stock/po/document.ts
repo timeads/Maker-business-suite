@@ -12,6 +12,8 @@ export type PoDocumentInput = {
   business: { name: string; addressLines: string[] };
   order: {
     number: number;
+    /** The order's name, e.g. KE-202611-A7A950; the plain number is used without one. */
+    reference?: string | null;
     status: string;
     /** Timestamps as stored (UTC); `expectedOn` is a plain day. */
     createdAt: string;
@@ -141,13 +143,14 @@ export function buildPoDocument(input: PoDocumentInput): PoDocument {
   const emails = [input.supplier.email, ...input.supplier.moreEmails].filter(
     (email): email is string => Boolean(email),
   );
+  const reference = input.order.reference?.trim() || null;
   return {
-    title: `Purchase order ${input.order.number}`,
+    title: `Purchase order ${reference ?? input.order.number}`,
     business: {
       name: input.business.name,
       addressLines: input.business.addressLines.map((line) => line.trim()).filter(Boolean),
     },
-    number: `No. ${input.order.number}`,
+    number: reference ?? `No. ${input.order.number}`,
     status: STATUS_WORDS[input.order.status] ?? input.order.status,
     supplier: {
       name: input.supplier.name,

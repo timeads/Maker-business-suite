@@ -25,7 +25,7 @@ export async function GET(
   const { data: order } = await supabase
     .from("purchase_orders")
     .select(
-      "number, shipping_cost, tax_rate_pct, adjustments, purchase_order_lines(qty_ordered, unit_cost, supplier_sku, note, stock_items(title, variant_title, sku, case_pack))",
+      "number, reference, shipping_cost, tax_rate_pct, adjustments, purchase_order_lines(qty_ordered, unit_cost, supplier_sku, note, stock_items(title, variant_title, sku, case_pack))",
     )
     .eq("tenant_id", ctx.tenant.id)
     .eq("number", Number(number))
@@ -65,6 +65,7 @@ export async function GET(
     }).subtotal.toFixed(2);
   const footer = (label: string, value: string) => ["", "", label, "", "", "", value, ""];
   const rows: (string | number)[][] = [
+    ["Purchase order", order.reference as string, "", "", "", "", "", ""],
     ["SKU", "Your code", "Item", "Quantity", "Cases", "Cost each", "Total", "Note"],
     ...lines.map((line, index) => [
       line.stock_items.sku ?? "",
@@ -91,7 +92,7 @@ export async function GET(
   return new NextResponse(rows.map((row) => row.map(csvCell).join(",")).join("\r\n") + "\r\n", {
     headers: {
       "Content-Type": "text/csv; charset=utf-8",
-      "Content-Disposition": `attachment; filename="order-${order.number}.csv"`,
+      "Content-Disposition": `attachment; filename="${(order.reference as string).replace(/[^A-Za-z0-9._-]+/g, "-")}.csv"`,
       "Cache-Control": "no-store",
     },
   });

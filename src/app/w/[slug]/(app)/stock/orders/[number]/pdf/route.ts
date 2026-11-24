@@ -17,6 +17,8 @@ import { canManage, getTenantContext } from "@/lib/tenants";
 
 const LOGO_TYPES: Record<string, PoLogo["format"]> = { "image/png": "png", "image/jpeg": "jpg" };
 const LOGO_MAX_BYTES = 2_000_000;
+/** A reference as a file name: nothing a header or a disk would trip on. */
+const fileName = (reference: string) => reference.replace(/[^A-Za-z0-9._-]+/g, "-");
 
 /**
  * The workspace's own logo: the picture tagged `logo` in its Assets, read
@@ -78,7 +80,7 @@ export async function GET(
     supabase
       .from("purchase_orders")
       .select(
-        "number, status, notes, created_at, ordered_at, expected_on, shipping_cost, tax_rate_pct, adjustments, suppliers(name, email, contact_name, more_emails, moq, moq_applies_to), purchase_order_lines(id, qty_ordered, unit_cost, supplier_sku, stock_items(title, variant_title, sku, moq))",
+        "number, reference, status, notes, created_at, ordered_at, expected_on, shipping_cost, tax_rate_pct, adjustments, suppliers(name, email, contact_name, more_emails, moq, moq_applies_to), purchase_order_lines(id, qty_ordered, unit_cost, supplier_sku, stock_items(title, variant_title, sku, moq))",
       )
       .eq("tenant_id", ctx.tenant.id)
       .eq("number", Number(number))
@@ -122,6 +124,7 @@ export async function GET(
     },
     order: {
       number: order.number as number,
+      reference: order.reference as string,
       status: order.status as string,
       createdAt: order.created_at as string,
       orderedAt: (order.ordered_at as string | null) ?? null,
@@ -155,7 +158,7 @@ export async function GET(
   return new NextResponse(new Uint8Array(pdf), {
     headers: {
       "Content-Type": "application/pdf",
-      "Content-Disposition": `inline; filename="purchase-order-${order.number}.pdf"`,
+      "Content-Disposition": `inline; filename="${fileName(order.reference as string)}.pdf"`,
       "Cache-Control": "no-store",
     },
   });

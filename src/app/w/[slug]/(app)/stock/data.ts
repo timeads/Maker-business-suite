@@ -225,6 +225,7 @@ export const stockToday = (timezone: string) => localDay(new Date(), timezone);
 type PlacedOrder = {
   id: string;
   number: number;
+  reference: string;
   status: string;
   ordered_at: string | null;
   expected_on: string | null;
@@ -257,7 +258,7 @@ export async function loadIncoming(
   const { data } = await supabase
     .from("purchase_orders")
     .select(
-      "id, number, status, ordered_at, expected_on, supplier_id, suppliers(name), purchase_order_lines(qty_ordered, qty_received, stock_receipts(created_at)), purchase_order_shipments(id, carrier, tracking, expected_on, arrived_on, removed_at)",
+      "id, number, reference, status, ordered_at, expected_on, supplier_id, suppliers(name), purchase_order_lines(qty_ordered, qty_received, stock_receipts(created_at)), purchase_order_shipments(id, carrier, tracking, expected_on, arrived_on, removed_at)",
     )
     .eq("tenant_id", tenant.id)
     .in("status", ["ordered", "partial", "closed"])
@@ -270,6 +271,7 @@ export async function loadIncoming(
     orders.map((order) => ({
       id: order.id,
       number: order.number,
+      reference: order.reference,
       supplierName: order.suppliers?.name ?? "",
       status: order.status,
       orderedOn: order.ordered_at ? localDay(new Date(order.ordered_at), tenant.timezone) : null,

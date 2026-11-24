@@ -38,9 +38,9 @@ function statement(date: string, balance: number): LedgerEntryInput {
 const ASOF = new Date("2026-07-08T00:00:00Z");
 
 describe("computeVendorBalance", () => {
-  // The real July 8 2026 Karida statement, reproduced exactly:
+  // A July 8 2026 Kestrel statement, reproduced exactly:
   // $21,871.38 (May 21 anchor) − $28,000 payments + $18,649.40 invoices = $12,520.78
-  it("reproduces Karida's stated July 8 balance from the May 21 anchor", () => {
+  it("reproduces Kestrel's stated July 8 balance from the May 21 anchor", () => {
     const entries = [
       statement("2026-05-21", 21871.38),
       entry("PAYMENT", "2026-06-03", 10000),
@@ -48,8 +48,8 @@ describe("computeVendorBalance", () => {
       entry("PAYMENT", "2026-07-03", 8000),
       entry("INVOICE", "2026-07-08", 3592.8, { reference: "KA-202607-YARN" }),
       entry("INVOICE", "2026-07-08", 11848.0, { reference: "KA-835CB5" }),
-      entry("INVOICE", "2026-07-08", 936.6, { reference: "KRD260612" }),
-      entry("INVOICE", "2026-07-08", 2272.0, { reference: "KRD260702" }),
+      entry("INVOICE", "2026-07-08", 936.6, { reference: "KST260612" }),
+      entry("INVOICE", "2026-07-08", 2272.0, { reference: "KST260702" }),
     ];
     const r = computeVendorBalance(entries, ASOF);
     expect(r.anchor?.statedBalance).toBe("21871.38");
@@ -83,12 +83,12 @@ describe("computeVendorBalance", () => {
   });
 
   it("excludes superseded entries (the Nov 7 -> Nov 20 invoice correction)", () => {
-    // Karida first billed $1,566.00 for KRD251021-8, then corrected it to $546.00.
+    // Kestrel first billed $1,566.00 for KST251021-8, then corrected it to $546.00.
     const wrong = entry("INVOICE", "2025-10-21", 1566.0, {
-      reference: "KRD251021-8",
+      reference: "KST251021-8",
       supersededById: "corrected",
     });
-    const right = entry("INVOICE", "2025-10-21", 546.0, { reference: "KRD251021-8" });
+    const right = entry("INVOICE", "2025-10-21", 546.0, { reference: "KST251021-8" });
     const r = computeVendorBalance([wrong, right], ASOF);
     expect(r.estimatedBalance).toBe("546.00");
     expect(r.entriesSince).toHaveLength(1);
@@ -115,7 +115,7 @@ describe("computeVendorBalance", () => {
   });
 
   it("flags a wire sent just before the statement that the vendor hasn't recorded", () => {
-    // Wired 7/31; statement written 8/01 before Karida logged receipt on 8/03.
+    // Wired 7/31; statement written 8/01 before Kestrel logged receipt on 8/03.
     const entries = [
       entry("PAYMENT", "2026-07-31", 8000, { source: "WELLS_FARGO_EMAIL" }),
       statement("2026-08-01", 20000),
@@ -138,7 +138,7 @@ describe("computeVendorBalance", () => {
   });
 
   it("counts a vendor-confirmed wire once, not once per source", () => {
-    // Wired 08/07 ($15,000); Karida's statement records it received on 08/10.
+    // Wired 08/07 ($15,000); Kestrel's statement records it received on 08/10.
     const entries = [
       statement("2026-08-06", 18803.5),
       entry("PAYMENT", "2026-08-07", 15000, { source: "WELLS_FARGO_EMAIL" }),
@@ -181,10 +181,10 @@ describe("computeVendorBalance", () => {
 });
 
 describe("auditStatements", () => {
-  // Real July 8 -> Aug 6 2026 chain. Karida's own arithmetic is 20 cents high:
+  // A July 8 -> Aug 6 2026 chain. Kestrel's own arithmetic is 20 cents high:
   // 12,520.78 − 8,000 − 2,366.56 = 2,154.22, but the email says 2,154.42,
   // which carries into the stated total of 18,803.50 (should be 18,803.30).
-  it("catches the 20-cent drift in Karida's Aug 6 statement", () => {
+  it("catches the 20-cent drift in Kestrel's Aug 6 statement", () => {
     const entries = [
       statement("2026-07-08", 12520.78),
       entry("PAYMENT", "2026-08-03", 8000),
@@ -192,9 +192,9 @@ describe("auditStatements", () => {
         description: "161kg wool yarn detained by customs — invoice credited back",
       }),
       entry("INVOICE", "2026-08-06", 5103.0, { reference: "KA-202607-YARN" }),
-      entry("INVOICE", "2026-08-06", 6122.8, { reference: "KRD260708" }),
-      entry("INVOICE", "2026-08-06", 4518.0, { reference: "KRD260716" }),
-      entry("INVOICE", "2026-08-06", 905.28, { reference: "KRD260803" }),
+      entry("INVOICE", "2026-08-06", 6122.8, { reference: "KST260708" }),
+      entry("INVOICE", "2026-08-06", 4518.0, { reference: "KST260716" }),
+      entry("INVOICE", "2026-08-06", 905.28, { reference: "KST260803" }),
       statement("2026-08-06", 18803.5),
     ];
     const audits = auditStatements(entries);

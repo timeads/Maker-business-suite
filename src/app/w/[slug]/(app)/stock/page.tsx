@@ -321,8 +321,8 @@ export default async function StockPage({ params }: { params: Promise<{ slug: st
                         href={`${base}/orders/${order.number}`}
                         className="hover:bg-hover -mx-2 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-sm px-2 py-2.5 text-sm"
                       >
-                        <span className="text-muted-foreground w-14 tabular-nums">
-                          #{order.number}
+                        <span className="text-muted-foreground w-40 font-mono text-xs">
+                          {order.reference ?? `#${order.number}`}
                         </span>
                         <span className="min-w-0 flex-1 basis-40 font-semibold">
                           {order.supplierName}

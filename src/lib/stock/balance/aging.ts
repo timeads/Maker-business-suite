@@ -4,8 +4,8 @@ import type { LedgerEntryInput } from "./balance";
 /**
  * Bill aging for an open account (pure, unit-tested).
  *
- * Tim pays Karida against a running balance, not invoice by invoice, so no bill is
- * ever explicitly "paid". The standard convention (and how Karida's statements read)
+ * The owner pays Kestrel against a running balance, not invoice by invoice, so no bill is
+ * ever explicitly "paid". The standard convention (and how Kestrel's statements read)
  * is first-in-first-out: every payment clears the OLDEST bills first. So whatever is
  * still owed is made of the MOST RECENT invoices — walk invoices newest first,
  * allocating the current balance until it's used up. Each of those bills is then
@@ -24,7 +24,7 @@ export interface OpenBill {
   ageDays: number;
   dueDate: string; // date + terms
   daysPastDue: number; // negative = days until due
-  /** ISO time Tim ticked "Paid" (money sent, not posted yet), or null. */
+  /** ISO time the owner ticked "Paid" (money sent, not posted yet), or null. */
   paymentSentAt?: string | null;
 }
 

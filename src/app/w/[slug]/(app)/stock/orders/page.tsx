@@ -19,6 +19,7 @@ export const metadata: Metadata = { title: "Stock orders" };
 type Row = {
   id: string;
   number: number;
+  reference: string;
   status: string;
   expected_on: string | null;
   created_at: string;
@@ -48,7 +49,7 @@ export default async function StockOrdersPage({
     supabase
       .from("purchase_orders")
       .select(
-        "id, number, status, expected_on, created_at, shipping_cost, tax_rate_pct, adjustments, suppliers(name), purchase_order_lines(qty_ordered, qty_received, unit_cost)",
+        "id, number, reference, status, expected_on, created_at, shipping_cost, tax_rate_pct, adjustments, suppliers(name), purchase_order_lines(qty_ordered, qty_received, unit_cost)",
       )
       .eq("tenant_id", tenant.id)
       .order("number", { ascending: false })
@@ -107,7 +108,9 @@ export default async function StockOrdersPage({
               href={`/w/${tenant.slug}/stock/orders/${order.number}`}
               className="hover:bg-hover -mx-2 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-sm px-2 py-2.5 text-sm"
             >
-              <span className="text-muted-foreground w-14 tabular-nums">#{order.number}</span>
+              <span className="text-muted-foreground w-40 font-mono text-xs">
+                {order.reference}
+              </span>
               <span className="min-w-0 flex-1 basis-40 font-semibold">{order.suppliers?.name}</span>
               {fresh.has(order.number) && order.status === "draft" && (
                 <Badge tone="waiting">Just drafted</Badge>
@@ -138,7 +141,7 @@ export default async function StockOrdersPage({
         <FormMessage kind="success">
           {drafted.length} draft orders are ready, one for each supplier:{" "}
           {drafted
-            .map((o) => `#${o.number} ${o.suppliers?.name ?? ""}`.trim())
+            .map((o) => `${o.reference} ${o.suppliers?.name ?? ""}`.trim())
             .reverse()
             .join(", ")}
           . Open each to check the quantities, then send it.

@@ -6,8 +6,8 @@ import type { AgingResult } from "./aging";
  * The "Paid" tick on a bill, cross-checked against the payments that actually post
  * (pure, unit-tested).
  *
- * Tim pays by ACH (Ronille, Protech — shows up in QuickBooks days later) or by wire
- * (Karida — several bills at once to save the $30 fee, sometimes before they're due).
+ * The owner pays by ACH (Rosewood, Pinewood — shows up in QuickBooks days later) or by wire
+ * (Kestrel — several bills at once to save the $30 fee, sometimes before they're due).
  * The tick is his note that the money has gone. The balance never changes because of
  * it; it changes when the payment posts, which (first-in-first-out) clears bills. So:
  *  - ticked and still owed, nothing posted since → waiting (amber after a week);
@@ -46,7 +46,7 @@ export interface PaidMarks {
 const DAY = 86400000;
 const LATE_DAYS = 7;
 const CONFIRMED_SHOWN_DAYS = 45;
-// A payment dated up to 3 days before the tick still counts as that payment (Tim may
+// A payment dated up to 3 days before the tick still counts as that payment (the owner may
 // tick the box a day or two after sending; wires carry their "send on" date).
 const SLACK_DAYS = 3;
 

@@ -187,8 +187,8 @@ describe("syncing stock items", () => {
 
   it("the shop's vendors come in as suppliers, without undoing a choice made by hand", async () => {
     const batch = [
-      { external_id: "v-1", title: "Loop pile yarn", on_hand: 4, vendor: " Karida Mills " },
-      { external_id: "v-2", title: "Cut pile yarn", on_hand: 9, vendor: "Karida Mills" },
+      { external_id: "v-1", title: "Loop pile yarn", on_hand: 4, vendor: " Kestrel Mills " },
+      { external_id: "v-2", title: "Cut pile yarn", on_hand: 9, vendor: "Kestrel Mills" },
       { external_id: "v-3", title: "Backing cloth", on_hand: 2, vendor: "Loom & Co", price: 18.5 },
       { external_id: "v-4", title: "Gift card", on_hand: 0, vendor: "" },
     ];
@@ -201,9 +201,9 @@ describe("syncing stock items", () => {
     await sync();
     const made = await as<{ name: string }>(
       alice,
-      "select name from public.suppliers where name in ('Karida Mills', 'Loom & Co') order by name",
+      "select name from public.suppliers where name in ('Kestrel Mills', 'Loom & Co') order by name",
     );
-    expect(made).toEqual([{ name: "Karida Mills" }, { name: "Loom & Co" }]);
+    expect(made).toEqual([{ name: "Kestrel Mills" }, { name: "Loom & Co" }]);
     const filed = await as<{ external_id: string; supplier: string | null; price: string | null }>(
       alice,
       `select si.external_id, s.name as supplier, si.price from public.stock_items si
@@ -211,8 +211,8 @@ describe("syncing stock items", () => {
        where si.external_id like 'v-%' order by si.external_id`,
     );
     expect(filed.map((row) => row.supplier)).toEqual([
-      "Karida Mills",
-      "Karida Mills",
+      "Kestrel Mills",
+      "Kestrel Mills",
       "Loom & Co",
       null,
     ]);
@@ -233,7 +233,7 @@ describe("syncing stock items", () => {
     expect(
       await as(
         bob,
-        "select name from public.suppliers where name in ('Karida Mills', 'Loom & Co')",
+        "select name from public.suppliers where name in ('Kestrel Mills', 'Loom & Co')",
       ),
     ).toEqual([]);
   });

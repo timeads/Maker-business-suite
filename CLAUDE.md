@@ -202,8 +202,13 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   image servers. Saved views are a config (`stock` / `saved_views`), shared by
   the workspace. A purchase order's PDF is words first (`po/document.ts`,
   pure) and then drawn (`po/pdf.tsx`, `@react-pdf/renderer`, server only,
-  built-in fonts); the route is manager-only, the address is Shipping's
-  ship-from, and the logo is the `logo` asset read from our own storage.
+  built-in fonts, with the Noto Sans SC file in `po/fonts/` as the fallback
+  for names Helvetica can't draw; no font is ever fetched); the route is
+  manager-only, the address is Shipping's ship-from, and the logo is the
+  `logo` asset read from our own storage. Every order has a `reference`
+  like `KE-202611-A7A950` (TuftStock's scheme: `po/reference.ts`, given by a
+  trigger on insert, one of a kind per workspace); it is what people read,
+  while the plain `number` still opens the order in its address.
   Supplier closures (`supplier_closures`, manager-only functions) are dated
   stretches a supplier is shut. The rule lives in `engine/closures.ts` (pure,
   plain calendar days): an order's lead time may not run through a closure,

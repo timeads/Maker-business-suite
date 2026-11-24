@@ -11,6 +11,8 @@ import { outstandingUnits } from "./po/totals";
 export interface IncomingOrderInput {
   id: string;
   number: number;
+  /** The order's name, e.g. KE-202611-A7A950. */
+  reference?: string;
   supplierName: string;
   status: string;
   /** Workspace-local days, YYYY-MM-DD. */
@@ -32,6 +34,7 @@ export type IncomingStage = "ordered" | "shipped" | "arrived";
 export interface IncomingOrder {
   id: string;
   number: number;
+  reference?: string;
   supplierName: string;
   /** Units still to be checked in. */
   units: number;
@@ -79,6 +82,7 @@ export function summarizeIncoming(orders: IncomingOrderInput[], today: string): 
     rows.push({
       id: order.id,
       number: order.number,
+      reference: order.reference,
       supplierName: order.supplierName,
       units,
       stage,

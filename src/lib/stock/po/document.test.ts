@@ -73,6 +73,16 @@ const input = (overrides: Partial<PoDocumentInput> = {}): PoDocumentInput => ({
 });
 
 describe("a purchase order as the supplier receives it", () => {
+  it("is headed with the order's own reference when it has one", () => {
+    const base = input();
+    const doc = buildPoDocument({
+      ...base,
+      order: { ...base.order, reference: " HI-202611-A7A950 " },
+    });
+    expect(doc.number).toBe("HI-202611-A7A950");
+    expect(doc.title).toBe("Purchase order HI-202611-A7A950");
+  });
+
   it("lays out who, when, what and how much", () => {
     const doc = buildPoDocument(input());
     expect(doc.business).toEqual({
@@ -80,6 +90,7 @@ describe("a purchase order as the supplier receives it", () => {
       addressLines: ["1 Mill Lane", "Hudson, NY 12534"],
     });
     expect(doc.number).toBe("No. 12");
+    expect(doc.title).toBe("Purchase order 12");
     expect(doc.status).toBe("Ordered");
     expect(doc.supplier).toEqual({
       name: "Hill Mill Yarns",

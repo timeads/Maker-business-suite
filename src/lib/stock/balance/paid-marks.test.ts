@@ -73,19 +73,19 @@ describe("paid marks", () => {
     ]);
   });
 
-  it("one wire for three Karida bills (some not due yet) confirms all three", () => {
+  it("one wire for three Kestrel bills (some not due yet) confirms all three", () => {
     const entries = [
-      inv("2026-10-18", "1922.87", "KRD261008", "2026-11-14"),
-      inv("2026-10-20", "898.40", "KRD261016", "2026-11-14"),
-      inv("2026-10-25", "2816.90", "KRD261019", "2026-11-14"),
-      inv("2026-11-10", "847.60", "KRD261105"),
+      inv("2026-10-18", "1922.87", "KST261008", "2026-11-14"),
+      inv("2026-10-20", "898.40", "KST261016", "2026-11-14"),
+      inv("2026-10-25", "2816.90", "KST261019", "2026-11-14"),
+      inv("2026-11-10", "847.60", "KST261105"),
       entry("PAYMENT", "2026-11-14", "5638.17"),
     ];
     const r = run(entries, "847.60");
     expect(r.confirmed.map((c) => c.reference).sort()).toEqual([
-      "KRD261008",
-      "KRD261016",
-      "KRD261019",
+      "KST261008",
+      "KST261016",
+      "KST261019",
     ]);
     expect(r.waiting).toEqual([]);
   });

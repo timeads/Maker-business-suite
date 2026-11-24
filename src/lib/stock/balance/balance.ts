@@ -3,8 +3,8 @@ import { Money } from "./money";
 /**
  * Open-account balance for a vendor (pure, no I/O so it can be unit-tested).
  *
- * The account is a running balance, not invoice-by-invoice matching: Karida bills
- * net-30 and Tim pays what he can, when he can. Karida periodically emails a
+ * The account is a running balance, not invoice-by-invoice matching: Kestrel bills
+ * net-30 and the owner pays what he can, when he can. Kestrel periodically emails a
  * "Statement of Account" asserting the balance as of a date — that stated balance
  * is the authoritative ANCHOR. Everything before it is already baked in, so the
  * current balance is:
@@ -14,7 +14,7 @@ import { Money } from "./money";
  * Anchoring this way means a mis-parsed older entry can never accumulate error:
  * the next statement re-syncs the whole account.
  *
- * Payment lag: wires leave Wells Fargo 1–3 days before Karida records receipt
+ * Payment lag: wires leave the bank 1–3 days before Kestrel records receipt
  * (wired 7/31 → "received August 3"). A wire sent just before a statement date may
  * therefore be missing from that statement. Those are reported separately as
  * `paymentsPossiblyUnreflected` rather than silently added (which would risk
@@ -37,7 +37,7 @@ export interface LedgerEntryInput {
   source: LedgerSource;
   needsReview: boolean;
   supersededById: string | null;
-  /** INVOICE: when Tim marked it paid (money sent, payment not posted yet). */
+  /** INVOICE: when the owner marked it paid (money sent, payment not posted yet). */
   paymentSentAt?: Date | null;
 }
 
@@ -53,7 +53,7 @@ export interface LedgerEntryView {
 }
 
 export interface VendorBalanceResult {
-  /** Karida's own most recent stated balance, the basis for the estimate. */
+  /** Kestrel's own most recent stated balance, the basis for the estimate. */
   anchor: { id: string; date: string; statedBalance: string } | null;
   invoicesSince: string;
   paymentsSince: string;
@@ -72,8 +72,8 @@ const DAY = 86400000;
 const ZERO = new Money(0);
 
 /**
- * The same wire shows up twice: once from the Wells Fargo confirmation and again
- * when the vendor's statement lists it as received (Tim wires 7/31, Karida writes
+ * The same wire shows up twice: once from the bank confirmation and again
+ * when the vendor's statement lists it as received (the owner wires 7/31, Kestrel writes
  * "received August 3"). Counting both would double-subtract and silently understate
  * the balance. The vendor's own record wins — it's what their books reflect — so a
  * bank row matched by amount within the lag window is dropped from the arithmetic.
@@ -213,7 +213,7 @@ export interface StatementAudit {
 /**
  * Walk statement to statement and re-derive each asserted balance from the entries
  * in between. A non-zero delta means the vendor's own arithmetic doesn't tie out —
- * this really happens (Karida's Aug 6 2026 statement was 20¢ high), and catching it
+ * this really happens (Kestrel's Aug 6 2026 statement was 20¢ high), and catching it
  * is the point: the anchor is trusted, so a silent error would persist until the
  * next statement. Only pairs with a known previous balance are audited.
  */

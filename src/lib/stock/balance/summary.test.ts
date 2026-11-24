@@ -40,7 +40,7 @@ function vendor(
 
 describe("summarizeVendor", () => {
   it("splits the balance into overdue and not-yet-due, oldest bill first", () => {
-    const s = vendor("Protech Chemical", "3000.00", [
+    const s = vendor("Pinewood Chemical", "3000.00", [
       inv("2026-09-01", "1000.00", "160735"), // due Oct 1 → 34 days late
       inv("2026-10-20", "2000.00", "162320"), // due Nov 19 → not due
     ]);
@@ -52,7 +52,7 @@ describe("summarizeVendor", () => {
   });
 
   it("an account with no entries is marked empty, owing nothing", () => {
-    const s = vendor("Ronille", "0", []);
+    const s = vendor("Rosewood", "0", []);
     expect(s).toMatchObject({ balance: "0.00", overdue: "0.00", oldest: null, empty: true });
   });
 });
@@ -60,12 +60,12 @@ describe("summarizeVendor", () => {
 describe("combineSummaries", () => {
   it("adds up what's owed across vendors and the overdue part", () => {
     const all = combineSummaries([
-      vendor("Karida Outdoors", "5638.17", [inv("2026-10-25", "5638.17", "KRD261019")]),
-      vendor("Protech Chemical", "3000.00", [
+      vendor("Kestrel Outdoors", "5638.17", [inv("2026-10-25", "5638.17", "KST261019")]),
+      vendor("Pinewood Chemical", "3000.00", [
         inv("2026-09-01", "1000.00", "160735"),
         inv("2026-10-20", "2000.00", "162320"),
       ]),
-      vendor("Ronille", "1200.50", [inv("2026-09-15", "1200.50", "10070172")]), // due Oct 15, late
+      vendor("Rosewood", "1200.50", [inv("2026-09-15", "1200.50", "10070172")]), // due Oct 15, late
     ]);
     expect(all).toEqual({
       owed: "9838.67",
@@ -80,8 +80,8 @@ describe("combineSummaries", () => {
 
   it("never nets one vendor's credit against another vendor's bill", () => {
     const all = combineSummaries([
-      vendor("Karida Outdoors", "-250.00", []),
-      vendor("Ronille", "800.00", [inv("2026-10-27", "800.00", "10070201")]),
+      vendor("Kestrel Outdoors", "-250.00", []),
+      vendor("Rosewood", "800.00", [inv("2026-10-27", "800.00", "10070201")]),
     ]);
     expect(all.owed).toBe("800.00");
     expect(all.credit).toBe("250.00");
@@ -91,7 +91,7 @@ describe("combineSummaries", () => {
 
 describe("combineAging", () => {
   it("lists every vendor's open bills together, soonest due first, buckets added up", () => {
-    const karida = computeAging([inv("2026-10-25", "5638.17", "KRD261019")], "5638.17", TODAY, 30);
+    const kestrel = computeAging([inv("2026-10-25", "5638.17", "KST261019")], "5638.17", TODAY, 30);
     const ronile = computeAging(
       [inv("2026-09-15", "1200.50", "10070172"), inv("2026-10-27", "546.36", "10070201")],
       "1746.86",
@@ -99,13 +99,13 @@ describe("combineAging", () => {
       30,
     );
     const all = combineAging([
-      { vendor: "Karida Outdoors", aging: karida },
-      { vendor: "Ronille", aging: ronile },
+      { vendor: "Kestrel Outdoors", aging: kestrel },
+      { vendor: "Rosewood", aging: ronile },
     ]);
     expect(all.bills.map((b) => [b.vendor, b.reference, b.dueDate])).toEqual([
-      ["Ronille", "10070172", "2026-10-15"],
-      ["Karida Outdoors", "KRD261019", "2026-11-24"],
-      ["Ronille", "10070201", "2026-11-26"],
+      ["Rosewood", "10070172", "2026-10-15"],
+      ["Kestrel Outdoors", "KST261019", "2026-11-24"],
+      ["Rosewood", "10070201", "2026-11-26"],
     ]);
     expect(all.openTotal).toBe("7385.03");
     expect(all.buckets.late1to30).toEqual({ amount: "1200.50", count: 1 });
@@ -132,13 +132,13 @@ describe("dueSchedule", () => {
     const { dueSchedule } = await import("./summary");
     const groups = dueSchedule(
       [
-        bill("Karida Outdoors", "KRD261019", "2026-11-24", "2816.90"),
-        bill("Ronille", "10070172", "2026-11-21", "545.39"),
-        bill("Karida Outdoors", "KRD261008", "2026-11-17", "1922.87"),
-        bill("Protech Chemical", "162320", "2026-11-19", "1175.89"),
-        bill("Ronille", "OLD", "2026-11-02", "100.00"),
-        bill("Ronille", "SOON", "2026-11-08", "50.00"),
-        bill("Ronille", "NEXT", "2026-11-09", "25.00"),
+        bill("Kestrel Outdoors", "KST261019", "2026-11-24", "2816.90"),
+        bill("Rosewood", "10070172", "2026-11-21", "545.39"),
+        bill("Kestrel Outdoors", "KST261008", "2026-11-17", "1922.87"),
+        bill("Pinewood Chemical", "162320", "2026-11-19", "1175.89"),
+        bill("Rosewood", "OLD", "2026-11-02", "100.00"),
+        bill("Rosewood", "SOON", "2026-11-08", "50.00"),
+        bill("Rosewood", "NEXT", "2026-11-09", "25.00"),
       ],
       "2026-11-04",
     );
@@ -146,8 +146,8 @@ describe("dueSchedule", () => {
       ["Past due", "100.00", ["OLD"]],
       ["This week · Nov 2 – Nov 8", "50.00", ["SOON"]],
       ["Next week · Nov 9 – Nov 15", "25.00", ["NEXT"]],
-      ["Week of Nov 16 – Nov 22", "3644.15", ["KRD261008", "162320", "10070172"]],
-      ["Week of Nov 23 – Nov 29", "2816.90", ["KRD261019"]],
+      ["Week of Nov 16 – Nov 22", "3644.15", ["KST261008", "162320", "10070172"]],
+      ["Week of Nov 23 – Nov 29", "2816.90", ["KST261019"]],
     ]);
     expect(groups[0]!.overdue).toBe(true);
   });
@@ -157,10 +157,10 @@ describe("dueSchedule", () => {
     const [week] = dueSchedule(
       [
         {
-          ...bill("Ronille", "10070201", "2026-11-26", "546.36"),
+          ...bill("Rosewood", "10070201", "2026-11-26", "546.36"),
           paymentSentAt: "2026-11-13T15:00:00Z",
         },
-        bill("Ronille", "10070200", "2026-11-26", "482.53"),
+        bill("Rosewood", "10070200", "2026-11-26", "482.53"),
       ],
       "2026-11-16",
     );
@@ -171,7 +171,7 @@ describe("dueSchedule", () => {
   it("a bill due today is this week, not past due", async () => {
     const { dueSchedule } = await import("./summary");
     expect(
-      dueSchedule([bill("Ronille", "T", "2026-11-04", "1.00")], "2026-11-04")[0]!.overdue,
+      dueSchedule([bill("Rosewood", "T", "2026-11-04", "1.00")], "2026-11-04")[0]!.overdue,
     ).toBe(false);
   });
 });
