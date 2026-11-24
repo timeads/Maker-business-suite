@@ -3,20 +3,23 @@
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/auth";
 import { getEntitlements } from "@/lib/entitlements";
-import { formatTenthOz } from "@/lib/shipping/easypost";
+import { formatTenthOz, tenthOzToLbOz } from "@/lib/shipping/easypost";
 import { listService } from "@/lib/shipping/list";
 import { pickService } from "@/lib/shipping/rules";
 import { createClient } from "@/lib/supabase/server";
 import { getTenantContext } from "@/lib/tenants";
 import { purchaseLabel, quoteRates } from "./label-core";
-import { assess, boughtLabels, planInput } from "./planned";
+import { benchAssess, boughtLabels, type BenchAsk } from "./planned";
+import type { OrderPlan } from "@/lib/shipping/plan";
 
 /**
- * Buying the planned label from the packing bench, once every item of an
- * order has been checked. The plan is the one the To ship list shows (box,
- * weight, service by saved choice, rule or memory). The price is asked fresh
- * and shown to the person; pressing Buy goes through `purchaseLabel`, the
- * one path every label takes. Nothing here buys on its own.
+ * Buying a label from the packing bench. The plan is the one the To ship
+ * list shows (box, weight, service by saved choice, rule or memory), with
+ * the box row as the bench changed it; or the scanned part of an order; or
+ * several orders in one parcel. The price is asked fresh and shown on the
+ * bench; buying goes through `purchaseLabel`, the one path every label
+ * takes, with every order, item and amount checked again from what is
+ * stored.
  */
 
 const NO_ACCESS = "Shipping isn't part of this workspace's plan right now.";
@@ -48,35 +51,101 @@ export type ScanOffer = {
   signature: boolean;
 };
 
-export type ScanPlan = {
-  /** This order can't be bought from the bench: said plainly, with the order page as the way on. */
-  why?: string;
-  offer?: ScanOffer;
+/** The planned box, as the bench's box row shows it. */
+export type ScanBox = {
+  boxId: string;
+  length: string;
+  width: string;
+  height: string;
+  weightLb: string;
+  weightOz: string;
 };
 
-/** The planned label for a packed order, with a fresh price. Buys nothing. */
+export type ScanPlan = {
+  /** This order can't be bought from the bench as it stands: said plainly. */
+  why?: string;
+  /** All that is missing is a weight: the box row asks for it. */
+  needsWeight?: boolean;
+  offer?: ScanOffer;
+  /** The one planned box, for the box row. Null when it is planned in several. */
+  box?: ScanBox | null;
+  /** Each planned box by name, when there are several. */
+  boxNames?: string[];
+  signature?: boolean;
+};
+
+const boxOf = (plan: OrderPlan): Pick<ScanPlan, "box" | "boxNames" | "signature"> => {
+  const [first] = plan.boxes;
+  const weight =
+    first && first.weightTenthOz !== null ? tenthOzToLbOz(first.weightTenthOz) : { lb: "", oz: "" };
+  return {
+    box:
+      plan.boxes.length === 1
+        ? {
+            boxId: first.box?.id ?? "",
+            length: String(first.length),
+            width: String(first.width),
+            height: String(first.height),
+            weightLb: weight.lb,
+            weightOz: weight.oz,
+          }
+        : null,
+    boxNames: plan.boxes.map((box) => box.box?.name ?? "custom size"),
+    signature: plan.signature,
+  };
+};
+
+const cleanAsk = (ask: BenchAsk | undefined): BenchAsk => {
+  const from = ask && typeof ask === "object" ? ask : {};
+  return {
+    labelFormat: from.labelFormat === "zpl" ? "zpl" : undefined,
+    withIds: Array.isArray(from.withIds)
+      ? from.withIds.filter((id) => typeof id === "string" && UUID.test(id)).slice(0, 20)
+      : undefined,
+    part: Array.isArray(from.part) ? from.part.slice(0, 250) : undefined,
+    holdRest: from.holdRest !== false,
+    box: from.box && typeof from.box === "object" ? from.box : undefined,
+    unpaidOk: from.unpaidOk === true,
+  };
+};
+
+/** The label the bench would buy, with a fresh price. Buys nothing. */
 export async function planScanLabel(
   slug: string,
   orderId: string,
-  /** "zpl" when this computer prints straight to a Zebra. */
-  labelFormat?: string,
+  asked?: BenchAsk,
 ): Promise<ScanPlan> {
   const ctx = await context(slug);
   if ("error" in ctx) return { why: String(ctx.error) };
   if (!UUID.test(orderId)) return { why: "We couldn't find that order." };
-  const [checked] = await assess(ctx, [orderId], false);
-  if (checked.refusal || !checked.plan) {
-    return { why: checked.refusal ?? "It has no box or weight to price yet." };
+  const ask = cleanAsk(asked);
+  const checked = await benchAssess(ctx, orderId, ask);
+  if ("refusal" in checked) {
+    return {
+      why: checked.refusal,
+      needsWeight: checked.needsWeight,
+      ...(checked.plan ? boxOf(checked.plan) : {}),
+    };
   }
   const { plan } = checked;
-  const quoted = await quoteRates(ctx, orderId, planInput(plan, checked.stored, labelFormat));
-  if ("error" in quoted) return { why: quoted.error };
+  if (checked.keep) {
+    // The box a person set at the bench is the order's own from here on: the
+    // list, the order page and a bulk run all start from it.
+    const { error } = await ctx.supabase.rpc("save_shipping_order_choice", {
+      p_shipping_order_id: orderId,
+      p_choice: checked.keep,
+    });
+    if (error) console.error("could not keep the bench's box", error.message);
+  }
+  const quoted = await quoteRates(ctx, orderId, checked.input);
+  if ("error" in quoted) return { why: quoted.error, ...boxOf(plan) };
   const picked = pickService(quoted.rates, plan.service);
-  if (!picked) return { why: "No carrier offered a price just now." };
+  if (!picked) return { why: "No carrier offered a price just now.", ...boxOf(plan) };
   const boxes = plan.boxes;
   const size =
     boxes[0]?.box?.name ?? `${boxes[0]?.length} × ${boxes[0]?.width} × ${boxes[0]?.height} in`;
   return {
+    ...boxOf(plan),
     offer: {
       rateId: picked.rate.id,
       service: listService(picked.rate.carrier, picked.rate.name),
@@ -109,25 +178,32 @@ export type ScanBought = {
 
 /**
  * Buys the rate the bench was just shown. The order is checked again from
- * what is stored and its plan rebuilt here; the rate must be one the server
- * quoted for this order, and (for UPS and Redo) the rebuilt request must be
- * exactly what was priced. Whether the shop is told follows the settings.
+ * what is stored and its plan rebuilt here (the same orders, the same part,
+ * the same box row); the rate must be one the server quoted for exactly
+ * that, and (for UPS and Redo) the rebuilt request must be exactly what was
+ * priced. Whether the shop is told follows the settings.
  */
 export async function buyScanLabel(
   slug: string,
   orderId: string,
   rateId: string,
-  labelFormat?: string,
+  asked?: BenchAsk,
 ): Promise<ScanBought> {
   const ctx = await context(slug);
   if ("error" in ctx) return { error: String(ctx.error) };
   if (!UUID.test(orderId)) return { error: "We couldn't find that order." };
-  const [checked] = await assess(ctx, [orderId], false);
-  if (checked.refusal || !checked.plan) {
-    return { error: `${checked.refusal ?? "It can't be priced right now."} Nothing was bought.` };
-  }
-  const input = planInput(checked.plan, checked.stored, labelFormat);
-  const result = await purchaseLabel(ctx, slug, orderId, rateId, undefined, [], input);
+  const ask = cleanAsk(asked);
+  const checked = await benchAssess(ctx, orderId, ask);
+  if ("refusal" in checked) return { error: `${checked.refusal} Nothing was bought.` };
+  const result = await purchaseLabel(
+    ctx,
+    slug,
+    orderId,
+    rateId,
+    undefined,
+    checked.input.withIds ?? [],
+    checked.input,
+  );
   revalidatePath(`/w/${slug}/shipping`, "layout");
   if (result.state === "refused") return { error: result.error };
   if (result.state === "unsure") return { unsure: true, error: result.error };

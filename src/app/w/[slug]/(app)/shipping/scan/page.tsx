@@ -4,16 +4,20 @@ import { PageHeader } from "@/components/ui/page-header";
 import { daysFromNow } from "@/lib/bookings/slots";
 import { countryName } from "@/lib/shipping/carriers";
 import { labelBoxes } from "@/lib/shipping/labels";
-import { groupHref } from "@/lib/shipping/merge";
+import { formatMoney } from "@/lib/dashboard/format";
+import { combineOrders, groupHref } from "@/lib/shipping/merge";
 import { formatHoldDate, holdState, todayIn } from "@/lib/shipping/queue";
 import { pickupTells } from "@/lib/shipping/shop-steps";
 import { boughtBoxes, parseSlipCode, slipBoxes, type SlipBox } from "@/lib/shipping/slip-boxes";
 import { createClient } from "@/lib/supabase/server";
 import {
   ORDER_FIELDS,
+  loadBoxes,
   loadGroup,
+  loadItemPhotos,
   loadKnownGroup,
   loadLabelConnections,
+  loadOpenLabelOrders,
   loadParcelBoxes,
   loadShippingSetup,
   parcelTracking,
@@ -68,15 +72,15 @@ export default async function ScanPage({
     }
     return { row: await find(read.parts[0]), box: read.box };
   };
-  const [setup, postage, found] = await Promise.all([
+  const [setup, postage, found, savedBoxes] = await Promise.all([
     loadShippingSetup(supabase, tenant.id),
     loadLabelConnections(supabase, tenant.id),
     lookUp(),
+    loadBoxes(supabase, tenant.id),
   ]);
-  const row = found.row;
+  let row = found.row;
   const today = todayIn(tenant.timezone, new Date(daysFromNow(0)));
   const home = setup.settings.ship_from_country;
-  const held = row && !row.cancelled && !row.picked_up_at && holdState(row, today) === "held";
   const open = Boolean(row && !row.cancelled && !row.picked_up_at && row.units_left > 0);
   // Saved (or approved) to go out with other orders: the label is bought for them all at once.
   let known = row && open ? await loadKnownGroup(supabase, tenant.id, row.id, today) : null;
@@ -98,7 +102,34 @@ export default async function ScanPage({
       }
     }
   }
-  const waitingWith = known;
+  // Orders going out together are packed as one, as their one slip says: every
+  // order's items on the bench, and the label bought on the oldest of them.
+  const loaded = row && known ? await loadGroup(supabase, tenant.id, known.ids, today) : null;
+  const together = loaded?.check.ok && loaded.orders.length > 1 ? loaded.orders : null;
+  const combined = together ? combineOrders(together) : null;
+  if (together) row = together[0];
+  const waitingWith = together ? known : null;
+  const held = row && !row.cancelled && !row.picked_up_at && holdState(row, today) === "held";
+  const labelOpen =
+    row && open ? (await loadOpenLabelOrders(supabase, tenant.id)).has(row.id) : false;
+  // Everything has gone and it wasn't collected: its label is bought.
+  const hasLabel = Boolean(
+    row && !row.cancelled && !row.picked_up_at && row.units_left <= 0 && !row.pickup,
+  );
+  const everyItem = combined ? combined.items : (row?.items ?? []);
+  const photoOf = await loadItemPhotos(supabase, tenant.id, everyItem);
+  const cameFrom = new Map(combined?.items.map((item) => [item.line_id, item.order_name]));
+  const lineOf = (item: ShippingOrder["items"][number], left: number) => ({
+    line_id: item.line_id,
+    title: item.title,
+    variant: item.variant,
+    sku: item.sku,
+    barcode: item.barcode ?? null,
+    left,
+    image: photoOf(item),
+    from: cameFrom.get(item.line_id) ?? null,
+  });
+  const paid = combined ? combined.shipping_paid : (row?.shipping_paid ?? null);
 
   // An order in several boxes is packed a box at a time: from the boxes its
   // label was bought for, else from the boxes it is planned in.
@@ -126,22 +157,25 @@ export default async function ScanPage({
     row && !boxGone
       ? {
           id: row.id,
-          name: row.name ?? "Order",
+          name: combined ? combined.name : (row.name ?? "Order"),
           customer: row.recipient ?? "no name",
           place: row.pickup ? "Collecting" : placeOf(row, home, countryName),
           chose: row.shipping_method ?? "",
+          paid:
+            row.pickup || paid === null || paid === undefined
+              ? null
+              : Number(paid) === 0
+                ? "free shipping"
+                : `paid ${formatMoney(Number(paid), tenant.currency)}`,
+          paidAmount: paid === null || paid === undefined ? null : Number(paid),
           note: row.note,
           lines:
             row.cancelled || row.picked_up_at
               ? []
-              : row.items.map((item) => ({
-                  line_id: item.line_id,
-                  title: item.title,
-                  variant: item.variant,
-                  sku: item.sku,
-                  barcode: item.barcode ?? null,
-                  left: item.left,
-                })),
+              : hasLabel
+                ? // Nothing is left to send, but the box can still be checked against its slip.
+                  row.items.map((item) => lineOf(item, item.qty))
+                : everyItem.map((item) => lineOf(item, item.left)),
           pickup: row.pickup,
           pickupReady: Boolean(row.pickup_ready_at),
           held: held
@@ -152,19 +186,23 @@ export default async function ScanPage({
             : row.picked_up_at
               ? "This order has been picked up."
               : null,
-          unpaid: !row.paid,
-          together: Boolean(waitingWith),
+          unpaid: together ? together.some((each) => !each.paid) : !row.paid,
+          hasLabel,
+          labelOpen,
+          together: waitingWith
+            ? {
+                ids: together!.map((each) => each.id),
+                names: together!.map((each) => each.name ?? "Order"),
+              }
+            : null,
+          builderHref: waitingWith
+            ? groupHref(
+                base,
+                together!.map((each) => each.id),
+              )
+            : `${base}/orders/${row.id}`,
           // Every line, whatever is left of it: a box's slip is packed from what went in the box.
-          items: row.cancelled
-            ? []
-            : row.items.map((item) => ({
-                line_id: item.line_id,
-                title: item.title,
-                variant: item.variant,
-                sku: item.sku,
-                barcode: item.barcode ?? null,
-                left: item.left,
-              })),
+          items: row.cancelled ? [] : row.items.map((item) => lineOf(item, item.left)),
           boxes: boxes.map((box) => ({
             n: box.n,
             of: box.of,
@@ -195,7 +233,7 @@ export default async function ScanPage({
     <>
       <PageHeader
         title="Shipping"
-        description="Check each order against its slip as you pack it. Scan the slip, then every item going in the box."
+        description="Orders waiting to ship, labels from every carrier, packing slips and the packing station."
       />
       <ShippingTabs slug={tenant.slug} />
       {justSent && !order && (
@@ -206,22 +244,6 @@ export default async function ScanPage({
           </Link>
         </p>
       )}
-      {row && waitingWith && (
-        <p role="status" className="bg-note rounded-md px-4 py-2.5 text-sm">
-          {row.name ?? "This order"} is going out together with{" "}
-          <span className="font-semibold tabular-nums">
-            {waitingWith.names.filter((_, index) => waitingWith.ids[index] !== row.id).join(" + ")}
-          </span>
-          , on one label.{" "}
-          <Link
-            href={groupHref(base, waitingWith.ids)}
-            className="font-semibold underline underline-offset-2"
-          >
-            Open them together
-          </Link>{" "}
-          to buy it. Recording a parcel here would send this order on its own.
-        </p>
-      )}
       <PackStation
         key={order?.id ?? "none"}
         slug={tenant.slug}
@@ -230,6 +252,13 @@ export default async function ScanPage({
         problem={boxGone}
         canWrite={entitlements.canWrite}
         labels={postage.active.length > 0}
+        boxes={savedBoxes.map((box) => ({
+          id: box.id,
+          name: box.name,
+          length: String(Number(box.length_in)),
+          width: String(Number(box.width_in)),
+          height: String(Number(box.height_in)),
+        }))}
         parcel={{
           defaultCarrier: setup.settings.default_carrier,
           shopOffered: setup.canSend,

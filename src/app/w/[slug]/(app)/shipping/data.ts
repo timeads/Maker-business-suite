@@ -40,6 +40,7 @@ import {
   signatureOverName,
 } from "@/lib/shipping/rules";
 import type { QueueFacts } from "@/lib/shipping/queue";
+import { shopPhotoAddress } from "@/lib/social/product-photos";
 import { LABEL_SOURCES, type LabelSourceKey } from "@/lib/shipping/sources/types";
 
 export type ShippingOrder = {
@@ -674,3 +675,51 @@ export const parcelTracking = (parcel: Pick<ParcelBoxes, "label_parcels" | "trac
           : null,
       )
     : [parcel.tracking_number];
+
+/**
+ * A picture for each item on these orders: the one of the very option that
+ * was ordered (kept with the line by the sync), else the one the stock sync
+ * noted for that item code or name. Only ever an address on the shop
+ * platform's own image servers.
+ */
+export async function loadItemPhotos(
+  supabase: SupabaseClient,
+  tenantId: string,
+  items: ShippingOrder["items"],
+  width = 120,
+): Promise<(item: ShippingOrder["items"][number]) => string | null> {
+  const titles = [...new Set(items.map((item) => item.title).filter(Boolean))];
+  const { data } = titles.length
+    ? await supabase
+        .from("stock_items")
+        .select("title, variant_title, sku, image_url, variant_image_url")
+        .eq("tenant_id", tenantId)
+        .in("title", titles.slice(0, 200))
+        .limit(1000)
+    : { data: [] };
+  const photos = new Map<string, string>();
+  for (const row of (data ?? []) as {
+    title: string;
+    variant_title: string | null;
+    sku: string | null;
+    image_url: string | null;
+    variant_image_url: string | null;
+  }[]) {
+    // The option's own photo first: on a bench full of colours it is what tells them apart.
+    const own = row.variant_image_url ?? row.image_url;
+    if (!own) continue;
+    if (row.sku) photos.set(`sku:${row.sku}`, own);
+    photos.set(`name:${row.title}|${row.variant_title ?? ""}`, own);
+    if (!photos.has(`name:${row.title}`) && row.image_url) {
+      photos.set(`name:${row.title}`, row.image_url);
+    }
+  }
+  return (item) =>
+    shopPhotoAddress(item.image, width) ??
+    shopPhotoAddress(
+      (item.sku ? photos.get(`sku:${item.sku}`) : undefined) ??
+        photos.get(`name:${item.title}|${item.variant ?? ""}`) ??
+        photos.get(`name:${item.title}`),
+      width,
+    );
+}

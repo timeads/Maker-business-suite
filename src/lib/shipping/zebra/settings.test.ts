@@ -34,6 +34,8 @@ describe("printing on this computer", () => {
       zebraName: "ZT220",
       zebraDpi: 300,
       slips: true,
+      slipPaper: "4x6",
+      autoPrint: false,
     });
     expect(wantedLabelFormat(printSettings(store))).toBe("zpl");
     expect([...store.kept.keys()]).toEqual([PRINT_SETTINGS_KEY]);
@@ -72,5 +74,21 @@ describe("printing on this computer", () => {
     savePrintSettings({ labels: "browser" }, store);
     expect(slipsGoToZebra(printSettings(store))).toBe(false);
     expect(slipsGoToZebra(savePrintSettings({ labels: "zebra", slips: true }, store))).toBe(true);
+  });
+
+  it("remembers the bench's auto-print tick and the paper slips are drawn for, per computer", () => {
+    const kept = new Map<string, string>();
+    const store = {
+      getItem: (key: string) => kept.get(key) ?? null,
+      setItem: (key: string, value: string) => void kept.set(key, value),
+    };
+    expect(printSettings(store)).toMatchObject({ autoPrint: false, slipPaper: "4x6" });
+    savePrintSettings({ autoPrint: true, slipPaper: "letter" }, store);
+    expect(printSettings(store)).toMatchObject({ autoPrint: true, slipPaper: "letter" });
+    // Anything odd falls back to the safe choice: nothing buys by itself.
+    expect(readPrintSettings({ autoPrint: "yes", slipPaper: "a4" })).toMatchObject({
+      autoPrint: false,
+      slipPaper: "4x6",
+    });
   });
 });

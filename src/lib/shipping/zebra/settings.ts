@@ -13,6 +13,10 @@ export type PrintSettings = {
   zebraDpi: 203 | 300;
   /** With a Zebra chosen: whether packing slips can go to it too. */
   slips: boolean;
+  /** Slips printed through the browser: a 4 × 6 label, or a letter page. */
+  slipPaper: "4x6" | "letter";
+  /** Scan & pack on this computer: buy and print the label the moment the last item is scanned. */
+  autoPrint: boolean;
 };
 
 export const PRINT_SETTINGS_KEY = "shipping.printing";
@@ -22,6 +26,8 @@ export const DEFAULT_PRINT_SETTINGS: PrintSettings = {
   zebraName: "",
   zebraDpi: 203,
   slips: true,
+  slipPaper: "4x6",
+  autoPrint: false,
 };
 
 type Store = Pick<Storage, "getItem" | "setItem">;
@@ -42,6 +48,8 @@ export function readPrintSettings(raw: unknown): PrintSettings {
     zebraName: typeof saved.zebraName === "string" ? saved.zebraName.slice(0, 200) : "",
     zebraDpi: Number(saved.zebraDpi) === 300 ? 300 : 203,
     slips: saved.slips !== false,
+    slipPaper: saved.slipPaper === "letter" ? "letter" : "4x6",
+    autoPrint: saved.autoPrint === true,
   };
 }
 
