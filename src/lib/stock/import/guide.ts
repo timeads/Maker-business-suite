@@ -63,7 +63,8 @@ export const IMPORT_GUIDE: Record<ImportKind, ImportGuide> = {
       { name: "safety_stock", about: "Spare units to keep" },
       { name: "moq", about: "This item's own smallest order" },
       { name: "case_pack", about: "Units in a case" },
-      { name: "hidden", about: "yes for “don't reorder”" },
+      { name: "dont_reorder", about: "yes stops suggestions; the item stays in your lists" },
+      { name: "hidden", about: "yes takes it out of your lists and out of planning" },
     ],
   },
   orders: {

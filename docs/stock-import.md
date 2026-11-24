@@ -92,13 +92,14 @@ order by s.name;
 | `safety_stock`   |              | Spare units to keep.                                                |
 | `moq`            |              | This item's own smallest order.                                     |
 | `case_pack`      |              | Units in a case. 1 means it is ordered in single units.             |
-| `hidden`         |              | `yes` is "don't reorder".                                           |
+| `dont_reorder`   |              | `yes` stops suggestions; the item stays in the lists.               |
+| `hidden`         |              | `yes` takes it out of the lists and out of planning.                |
 
 Apart from `supplier`, **a column that is in the file is applied to every row**: an empty cell clears that figure (back to the supplier's own, or to none). **A column that isn't in the file is left alone.** So to set only case sizes, bring in a file with only `sku` and `case_pack`.
 
 A supplier named here counts as chosen by hand: a later sync with your shop never changes it. A supplier that doesn't exist yet is added.
 
-Also accepted: `primary_supplier`, `lead_time_override`, `case_pack_size`, `cost`, and `dont_reorder` (either it or `hidden` being yes hides the item).
+Also accepted: `primary_supplier`, `lead_time_override`, `case_pack_size` and `cost`.
 
 From TuftStock:
 
@@ -114,7 +115,8 @@ select v.sku,
        v."safetyStockUnits"     as safety_stock,
        v.moq,
        v."casePackSize"         as case_pack,
-       (v."dontReorder" or v.hidden) as hidden
+       v."dontReorder"          as dont_reorder,
+       v.hidden
 from "Variant" v
 left join "Supplier" s on s.id = v."primarySupplierId"
 where v."discontinuedAt" is null

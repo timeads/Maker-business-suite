@@ -186,8 +186,8 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   (ported from TuftStock with its tests, on whole-cents `Money`); a
   statement re-anchors the account, and nothing derived is stored. Items are
   ordered by the case and can have their own smallest order
-  (`engine/case-pack.ts`); "don't reorder" is the one `hidden` flag, plus
-  name words in settings. Drafting orders from ticked items goes through
+  (`engine/case-pack.ts`); name words in settings leave items out as well
+  (the two switches a person has are described further down). Drafting orders from ticked items goes through
   `draft_purchase_orders` with a request key, so a second press finds the
   first one's orders. Order totals (shipping, tax, adjustments) come from
   `lib/stock/po/totals.ts`. Tracking on incoming orders
@@ -262,6 +262,37 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   `stock_receipts` row with `source = 'import'` that a table rule pins to
   `skipped`, and `claim_stock_receipt_tries` skips them as well. Keep
   `tests/db/stock-imports.test.ts` passing when touching receipts.
+  Selling seasons are a config (`stock` / `seasons`): a name, an in-stock
+  day, an optional lift and how its card sits (open, folded, hidden). The
+  rule is `engine/seasons.ts` (ported from TuftStock with its tests): order
+  by = in stock by, less the lead time, less the review buffer, one line per
+  supplier per lead time; a lift multiplies that month of the seasonal index
+  in `buildStockRows()` (only while seasonality is on) and rows bought into a
+  busy month carry `peakMark`. An item has two switches: `hidden` (out of
+  sight and out of planning) and `dont_reorder` (still listed, never
+  suggested; `isListed` against `isPlanned`); a shop tag can switch it off
+  too (`stock_items.tags`, written only by the sync through
+  `set_stock_item_tags`; the rule is the `skip_tags` setting, applied on
+  read). A supplier's `lead_time_days` may be null: it then follows the
+  workspace default. The Orders tab (its five views, search, shipping column
+  and spreadsheet) is `lib/stock/po/list.ts`. An order's timeline is put
+  together on read by `po/timeline.ts` from the tables that already hold
+  each fact; `purchase_order_events` holds only what no other table says
+  (sent, back to draft, closed, cancelled, renamed, archived, by whom) and is
+  written only by a trigger on `purchase_orders`. Renaming, archiving (never
+  an order still on its way) and deleting an unused draft are manager-only
+  functions. On Balances, notices can be hidden (`stock` / `hidden_notices`;
+  a key carries the notice's facts, `balance/notices.ts`), open bills can be
+  downloaded as a calendar file (`balance/calendar.ts`; we never reach into a
+  calendar), and payments can be read from the books: only when the
+  workspace's `payments_from_books` setting is on does the QuickBooks sync
+  ask for bill payments and purchases (`quickbooks-payments.ts`, read-only)
+  and hand them to `import_book_payments`, which files a payment on the
+  supplier of the same name, once (`external_key`), never one already typed
+  in, and never one a manager took off (`supplier_ledger_skips`). The help
+  desk reads Stock directly, as the member, for "when is this back?"
+  (`lib/stock/restock.ts`); the workspace home card does the same for its
+  facts (`lib/stock/home-summary.ts`, good news only).
 - Shipping: `shipping_orders` holds what packing needs (address, what's left
   to send), kept apart from `orders` so the sales figures never carry an
   address. It is read from the shop in a separate query that is allowed to

@@ -142,7 +142,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     title: "Answer a customer",
     summary: "Reply, use a saved reply, or let Claude draft one for you to edit.",
     steps: [
-      "Open a conversation. If the customer has ordered from your shop, their orders are shown beside the message.",
+      "Open a conversation. If the customer has ordered from your shop, their orders are shown beside the message. If you use Stock, “Back in stock?” under them says which of the things they bought are sold out or have more on the way, and when it's expected.",
       "Write your reply, pick a saved reply, or press the draft button for a first draft from Claude.",
       "Read it through and change what you like. Then press Send.",
       "Close the conversation when it's done, or snooze it to bring it back on a later day.",
@@ -427,7 +427,8 @@ export const HELP_TOPICS: HelpTopic[] = [
       "Suggestions round up to whole cases, and respect the smallest order you or your supplier set.",
     ],
     notes: [
-      "Lead time and days of cover come from the supplier unless an item has its own.",
+      "Lead time and days of cover come from the supplier unless an item has its own. A supplier whose “days to arrive” is left empty uses your usual figure from Stock → Settings.",
+      "Once a supplier's orders have arrived, Stock → Suppliers shows how long they really take, with a button to use that figure.",
       "Days an item was sold out don't count against it: a day with none on the shelf isn't a day nobody wanted it. We note each item's count once a day from the day Stock is switched on, so this gets better with time.",
       "Every figure is worked out fresh each time you look; nothing is stored, so it's never stale.",
     ],
@@ -529,7 +530,8 @@ export const HELP_TOPICS: HelpTopic[] = [
       "Open “Say what's in this parcel” to note which items, and how many, are in each one. It's a note for you: it doesn't check anything in.",
     ],
     notes: [
-      "The same status shows on the Stock front page under Incoming, and when you hover the green “on the way” chip on Stock → Everything.",
+      "Got several numbers for one order? Paste them all into the box, one to a line. Each becomes its own parcel with the same carrier, date and label; one the order already has is left as it is.",
+      "Every parcel still travelling also has a card on the Stock front page under “Parcels on the way”, with “It's here” and, for UPS, “Check now” and “Ask UPS about all of them”. The order-by-order view is under Incoming, and the green “on the way” chip on Stock → Everything says the same when you hover it.",
       "UPS's date takes the place of one you typed once UPS gives one. Your own “It's here” always stands.",
       "A delivered parcel still needs checking in: delivery doesn't change your counts.",
       "We stop asking once a parcel is delivered, once you mark it as here, when the order is closed, or after 45 days.",
@@ -590,13 +592,17 @@ export const HELP_TOPICS: HelpTopic[] = [
     group: "stock",
     title: "Stop an item appearing in reorders",
     summary: "For gift cards, one-offs and anything you won't restock.",
+    intro:
+      "There are two switches. “Don't reorder” stops the suggestions but keeps the item in your lists, with its count. “Hide” takes it out of your lists altogether.",
     steps: [
-      "Press “Hide” at the end of an item's row on Stock → Everything. For several at once, tick them and press “Don't reorder”. The switch is also on each item's own page.",
-      "They leave the suggestions and can't be added to draft orders.",
-      "Find them again under the “Hidden” view, where “Unhide” brings one back.",
+      "For a line you're selling through: tick it on Stock → Everything and press “Don't reorder”. It stays in the list with a “You said don't reorder” label, and is never suggested or put on an order. Tick it again and press “Reorder again” to undo it.",
+      "For things that were never stock (gift cards, made-to-order pieces): press “Hide” at the end of the row, or tick several and press “Hide”.",
+      "Find hidden items under the “Hidden” view, where “Unhide” brings one back.",
+      "Both switches are also on each item's own page.",
     ],
     notes: [
       "In Stock → Settings you can list words that hide matching items automatically. It starts with “gift card”.",
+      "You can also list tags there. Any product carrying one of those tags in your shop is left out after the next sync, and comes back when the tag is taken off.",
     ],
   },
   {
@@ -613,6 +619,7 @@ export const HELP_TOPICS: HelpTopic[] = [
       "Press “Done changing” when you've finished.",
     ],
     notes: [
+      "While “Change figures” is on, the Supplier column becomes a list to pick from, with a box under it for that supplier's own code for the item. Both save as soon as you change them.",
       "An empty box in the table goes back to the supplier's own figure, shown in grey.",
       "In the bar for ticked items an empty box means “leave it as it is”, so you can't wipe a figure by accident.",
       "A cost you type is your own figure for that item. Empty it and we go back to the average of your deliveries, or the cost in your shop.",
@@ -653,6 +660,67 @@ export const HELP_TOPICS: HelpTopic[] = [
       "Typed an amount wrong? Add the invoice again with the same number and it's corrected, not counted twice.",
       "A credit with one supplier is never taken off what you owe another.",
       "Set how many days each supplier gives you to pay; due dates follow it.",
+      "Four tiles show how late the money is: not due yet, 1–30 days late, 31–60, and over 60.",
+      "A payment dated in the few days before a statement may not be in that statement yet. We list it and don't take it off the balance, so nothing is counted twice; the supplier's next statement settles it.",
+      "Press “Hide” on a notice to put it away. It stays hidden for everyone, on every device, until something about it changes; “Show them” brings hidden notices back.",
+      "“Put these due dates on my calendar” downloads a calendar file with one entry per supplier per pay day (a weekend's bills go on the Friday before). Add it to your calendar; download it again later and the same entries update.",
+    ],
+  },
+  {
+    slug: "payments-from-books",
+    group: "stock",
+    title: "Have payments to suppliers read from QuickBooks",
+    summary: "Stop typing in payments you've already recorded in your books.",
+    intro:
+      "If QuickBooks is connected, Stock can read what you've paid your suppliers and add it to their accounts under Balances.",
+    steps: [
+      "Connect QuickBooks under Connections, if you haven't.",
+      "In Stock → Settings, tick “Read payments to my suppliers from QuickBooks” and save.",
+      "From the next sync (a few times a day), bill payments, cheques and card charges made out to a supplier appear on that supplier's account, marked “from your books”.",
+    ],
+    notes: [
+      "A payment is matched by name: the vendor in QuickBooks has to be spelled the same as the supplier in Stock (capitals don't matter).",
+      "Only suppliers whose account you've started get payments, and only payments dated on or after their first invoice or statement.",
+      "A payment you already typed in is left alone: the same amount within five days counts as the same payment.",
+      "Change a payment in QuickBooks and the entry here follows. Take one off the account here and it stays off.",
+      "Nothing is ever changed in your books. Until you tick the box, your books aren't read for payments at all.",
+    ],
+  },
+  {
+    slug: "seasons",
+    group: "stock",
+    title: "Plan ahead for a busy season",
+    summary: "Say when you want stock on the shelf, and get an order-by date for each supplier.",
+    steps: [
+      "In Stock → Settings, under “Seasons to plan ahead for”, add the season: a name, the day you want the stock in by, and a note if you like.",
+      "On Stock → To order the season gets a card with the last day to order from each supplier. Items that take different times to arrive get their own line.",
+      "Press “Draft an order” on a line to start that order, at today's suggested amounts.",
+      "Expecting more than usual, for a sale or a fair your past sales don't know about? Give the season an extra lift in percent. Suggestions for that month go up by that much, and rows being bought into the busy month show a mark like “↑1.25×”.",
+    ],
+    notes: [
+      "“Order by” is the in-stock day, less the days that supplier takes, less the days between your order reviews.",
+      "Fold a card to one line, or put it away, with the buttons on it. That's kept for the whole workspace, on every device.",
+      "The lift only counts while “plan for busy seasons” is on in Settings. A season whose day has passed no longer changes anything.",
+      "This is separate from a supplier being shut: see “Plan around the days a supplier is shut”.",
+    ],
+  },
+  {
+    slug: "orders-list",
+    group: "stock",
+    title: "Find, rename, tidy and follow your orders",
+    summary: "Views, search, a spreadsheet of the list, and each order's timeline.",
+    steps: [
+      "Stock → Orders opens on “In progress”. The other views are Draft, Overdue, All and Archived.",
+      "Search by reference or supplier, or pick one supplier from the list. “Export CSV” downloads what's showing.",
+      "The Shipping column says where an order's parcels are, from its tracking numbers: not shipped, shipped, some delivered, delivered or held up.",
+      "Open an order and press “Rename” to give it a reference of your own. It's what your supplier sees on the PDF and the email.",
+      "“What's happened” at the foot of an order lists everything in order: started, sent, each email, tracking added, each delivery and whether your shop took it, renamed, closed, with who did it.",
+    ],
+    notes: [
+      "A draft you never used can be deleted for good. One that was emailed is kept: cancel it or put it away instead.",
+      "“Put away (archive)” moves a draft or a finished order to the Archived view. An order still on its way is closed or cancelled first.",
+      "No two orders can share a reference. A finished order keeps the one it had.",
+      "On Stock → Suppliers each supplier shows how many orders they've had; press it to see just those.",
     ],
   },
 

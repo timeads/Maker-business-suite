@@ -701,3 +701,47 @@ describe("notices hidden on supplier balances", () => {
     expect(await read(bob)).toEqual([]);
   });
 });
+
+describe("bringing an item's two switches in from a spreadsheet", () => {
+  it("sets “don't reorder” and “hidden” each on its own, and the same file again changes nothing", async () => {
+    const run = (rows: object[], key: string | null) =>
+      as<{ counts: { changed: number; same: number } }>(
+        alice,
+        "select public.import_item_planning($1, $2, $3::jsonb, 'items.csv', $4) as counts",
+        [tenantA, key, JSON.stringify(rows), key !== null],
+      ).then((out) => out[0].counts);
+    const rows = [
+      { stock_item_id: rug, dont_reorder: true },
+      { stock_item_id: yarn, hidden: true, dont_reorder: false },
+    ];
+    // A look first: counted, and nothing kept.
+    expect(await run(rows, null)).toMatchObject({ changed: 2, same: 0 });
+    const flags = async (id: string) =>
+      one<{ dont_reorder: boolean; hidden: boolean }>(
+        "select dont_reorder, hidden from public.stock_items where id = $1",
+        [id],
+      );
+    expect(await flags(rug)).toEqual({ dont_reorder: false, hidden: false });
+    expect(await run(rows, "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa")).toMatchObject({ changed: 2 });
+    expect(await flags(rug)).toEqual({ dont_reorder: true, hidden: false });
+    expect(await flags(yarn)).toEqual({ dont_reorder: false, hidden: true });
+    expect(await run(rows, "bbbbbbbb-1111-4111-8111-bbbbbbbbbbbb")).toMatchObject({
+      changed: 0,
+      same: 2,
+    });
+    // A file with neither column leaves both switches alone.
+    await run([{ stock_item_id: rug, moq: 6 }], "cccccccc-1111-4111-8111-cccccccccccc");
+    expect(await flags(rug)).toEqual({ dont_reorder: true, hidden: false });
+    // Another workspace's item can't be reached through it.
+    await expect(
+      run([{ stock_item_id: bobRug, dont_reorder: true }], "dddddddd-1111-4111-8111-dddddddddddd"),
+    ).rejects.toThrow(/not found/i);
+    await run(
+      [
+        { stock_item_id: rug, dont_reorder: false },
+        { stock_item_id: yarn, hidden: false },
+      ],
+      "eeeeeeee-1111-4111-8111-eeeeeeeeeeee",
+    );
+  });
+});

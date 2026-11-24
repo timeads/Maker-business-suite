@@ -203,6 +203,7 @@ describe("item planning", () => {
         moq: 6,
         case_pack: 12,
         hidden: false,
+        dont_reorder: false,
       },
       // No supplier named: left with whoever it has. Empty figures are cleared.
       {
@@ -214,7 +215,9 @@ describe("item planning", () => {
         safety_stock: 0,
         moq: null,
         case_pack: null,
-        hidden: true,
+        // "Don't reorder" and "hidden" are two switches: each column sets its own.
+        hidden: false,
+        dont_reorder: true,
       },
     ]);
   });

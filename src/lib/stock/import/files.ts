@@ -461,12 +461,10 @@ function readItems(rows: Row[], has: (c: string) => boolean, items: ItemRef[]) {
       out.safety_stock = whole(row, "safety_stock", 0, 1_000_000, "spare stock") ?? 0;
     if (has("moq")) out.moq = whole(row, "moq", 1, 1_000_000, "smallest order");
     if (has("case_pack")) out.case_pack = whole(row, "case_pack", 1, 100_000, "case size");
-    // TuftStock keeps "don't reorder" and "hidden" apart; here they are one switch.
-    if (has("hidden") || has("dont_reorder")) {
-      out.hidden =
-        (has("hidden") && yesNo(row, "hidden")) ||
-        (has("dont_reorder") && yesNo(row, "dont_reorder"));
-    }
+    // Two switches, as in TuftStock: "hidden" puts the item out of sight,
+    // "don't reorder" only stops the suggestions. Each column sets its own.
+    if (has("hidden")) out.hidden = yesNo(row, "hidden");
+    if (has("dont_reorder")) out.dont_reorder = yesNo(row, "dont_reorder");
     seen.set(match.id, row.line);
     return out;
   });
