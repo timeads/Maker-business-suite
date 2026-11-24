@@ -69,6 +69,7 @@ async function connectWithKey(
   }
   revalidatePath(`/w/${slug}/connections`);
   revalidatePath(`/w/${slug}/shipping`, "layout");
+  revalidatePath(`/w/${slug}/stock`, "layout");
   return { message: `${ctx.adapter.name} is connected.` };
 }
 

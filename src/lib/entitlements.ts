@@ -8,7 +8,13 @@ import type { ModuleKey } from "@/lib/modules";
  * that depends on a workspace's plan or billing state asks here.
  */
 
-export type Feature = `module.${ModuleKey}` | "mcp";
+/**
+ * `michaels` is the Michaels Marketplace connector: an optional connection,
+ * open to any workspace whose plan has Stock (it works on Stock's items and
+ * lives under Stock). It has its own key so its place can move without
+ * touching the pages that ask.
+ */
+export type Feature = `module.${ModuleKey}` | "mcp" | "michaels";
 export type Limit = "seats" | "ai_credits";
 
 /**
@@ -99,8 +105,10 @@ export function resolveEntitlements(
     can(feature) {
       if (!plan) return false;
       if (feature === "mcp") return plan.mcp;
-      const moduleKey = feature.slice("module.".length) as ModuleKey;
-      return plan.includedModules.includes(moduleKey) || chosen.has(moduleKey);
+      const has = (moduleKey: ModuleKey) =>
+        plan.includedModules.includes(moduleKey) || chosen.has(moduleKey);
+      if (feature === "michaels") return has("stock");
+      return has(feature.slice("module.".length) as ModuleKey);
     },
     limit(name) {
       if (name === "seats") return plan?.seats ?? SEATS_WITHOUT_PLAN;

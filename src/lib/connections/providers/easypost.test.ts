@@ -31,7 +31,9 @@ describe("EasyPost adapter", () => {
     expect(adapter.connectFields).toHaveLength(1);
     expect(adapter.connectFields[0]).toMatchObject({ name: "api_key", secret: true });
     // The OAuth-shaped adapters are untouched: none of them takes a key.
-    for (const key of PROVIDER_ORDER.filter((k) => !["easypost", "ups", "redo"].includes(k))) {
+    for (const key of PROVIDER_ORDER.filter(
+      (k) => !["easypost", "ups", "redo", "michaels"].includes(k),
+    )) {
       expect(getAdapter(key).connectWithKey, key).toBeUndefined();
     }
   });

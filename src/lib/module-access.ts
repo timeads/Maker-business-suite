@@ -3,6 +3,7 @@ import {
   GRANT_COLUMNS,
   SUMMARY_COLUMNS,
   resolveEntitlements,
+  type Feature,
   type PlanGrant,
 } from "./entitlements";
 import type { ModuleKey } from "./modules";
@@ -19,6 +20,15 @@ export async function moduleOpen(
   module: ModuleKey,
   admin: SupabaseClient = getAdminClient(),
 ): Promise<boolean> {
+  return featureOpen(tenantId, `module.${module}`, admin);
+}
+
+/** The same question for any feature key (`michaels`, say), not only a tool. */
+export async function featureOpen(
+  tenantId: string,
+  feature: Feature,
+  admin: SupabaseClient = getAdminClient(),
+): Promise<boolean> {
   return withTenant(
     tenantId,
     async (scope) => {
@@ -30,7 +40,7 @@ export async function moduleOpen(
         data as never,
         grant.error ? null : (grant.data as PlanGrant | null),
       );
-      return entitlements.canWrite && entitlements.can(`module.${module}`);
+      return entitlements.canWrite && entitlements.can(feature);
     },
     admin,
   );

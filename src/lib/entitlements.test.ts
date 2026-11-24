@@ -56,6 +56,19 @@ describe("resolveEntitlements", () => {
     expect(studio.limit("ai_credits")).toBeGreaterThan(growth.limit("ai_credits"));
   });
 
+  it("opens the Michaels connector wherever Stock is open, and nowhere else", () => {
+    expect(resolveEntitlements(null).can("michaels")).toBe(false);
+    expect(resolveEntitlements(sub({ plan: "starter" })).can("michaels")).toBe(false);
+    expect(
+      resolveEntitlements(sub({ plan: "starter", selected_modules: ["bookings"] })).can("michaels"),
+    ).toBe(false);
+    expect(
+      resolveEntitlements(sub({ plan: "starter", selected_modules: ["stock"] })).can("michaels"),
+    ).toBe(true);
+    expect(resolveEntitlements(sub({ plan: "growth" })).can("michaels")).toBe(true);
+    expect(resolveEntitlements(sub({ plan: "studio" })).can("michaels")).toBe(true);
+  });
+
   it("keeps access during a trial and while a payment is being fixed", () => {
     const trial = resolveEntitlements(
       sub({ status: "trialing", trial_end: "2026-12-05T00:00:00Z" }),

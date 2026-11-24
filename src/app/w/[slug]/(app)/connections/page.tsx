@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { FormMessage } from "@/components/ui/form-message";
 import { requireUser } from "@/lib/auth";
+import { localDay } from "@/lib/bookings/slots";
 import { PROVIDER_ORDER, getAdapter, isProviderKey } from "@/lib/connections/registry";
 import type { ConnectionStatus, ProviderKey } from "@/lib/connections/types";
 import { getEntitlements } from "@/lib/entitlements";
@@ -95,6 +96,7 @@ export default async function ConnectionsPage({
     isProviderKey(key) ? getAdapter(key).name : "That account";
 
   const serverReady = Boolean(process.env.SUPABASE_SECRET_KEY);
+  const today = localDay(new Date(), tenant.timezone);
 
   return (
     <>
@@ -134,6 +136,7 @@ export default async function ConnectionsPage({
           const testKey = withKey && row?.metadata?.mode === "test";
           // Nothing is pulled from it, so there is no sync to show or start.
           const quiet = withKey || adapter.nothingToSync === true;
+          const note = row ? (adapter.statusNote?.(row.metadata ?? {}, today) ?? null) : null;
 
           return (
             <Card key={key}>
@@ -170,6 +173,18 @@ export default async function ConnectionsPage({
                   <p className="bg-teal-soft text-teal-soft-ink w-fit rounded-md px-3 py-2 text-sm font-medium">
                     Watch only: nothing in your store can be changed from here. Connect again and
                     choose the other option when you want orders marked sent or stock added.
+                  </p>
+                )}
+                {live && note && (
+                  <p
+                    className={cn(
+                      "w-fit rounded-md px-3 py-2 text-sm font-medium",
+                      note.tone === "good" && "bg-mint-soft text-mint-ink",
+                      note.tone === "waiting" && "bg-ochre-soft text-ochre-text",
+                      note.tone === "bad" && "bg-brick-soft text-brick",
+                    )}
+                  >
+                    {note.text}
                   </p>
                 )}
                 {live && testKey && (
@@ -221,11 +236,13 @@ export default async function ConnectionsPage({
                         providerName={adapter.name}
                         canSync={status === "active" && !quiet}
                         disconnectNote={
-                          withKey
-                            ? "We'll forget the key. Labels you already bought stay as they are."
-                            : adapter.nothingToSync
-                              ? "We'll forget the permission and ask the provider to cancel it. What you've already sent stays as it is."
-                              : undefined
+                          adapter.disconnectNote
+                            ? adapter.disconnectNote
+                            : withKey
+                              ? "We'll forget the key. Labels you already bought stay as they are."
+                              : adapter.nothingToSync
+                                ? "We'll forget the permission and ask the provider to cancel it. What you've already sent stays as it is."
+                                : undefined
                         }
                       />
                     )}

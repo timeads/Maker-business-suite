@@ -1,5 +1,13 @@
 export type ProviderKey =
-  "shopify" | "quickbooks" | "stripe" | "meta" | "easypost" | "ups" | "redo" | "google_mail";
+  | "shopify"
+  | "quickbooks"
+  | "stripe"
+  | "meta"
+  | "easypost"
+  | "ups"
+  | "redo"
+  | "google_mail"
+  | "michaels";
 
 export type ConnectionStatus = "active" | "needs_reconnect" | "disconnected";
 
@@ -297,6 +305,20 @@ export interface ProviderAdapter {
   optional?: boolean;
   /** Nothing is ever pulled from it: no "last synced", no "Sync now". */
   nothingToSync?: boolean;
+  /**
+   * For a connection made with a pasted key: what disconnecting means, for
+   * the "are you sure?" question. Without it the page uses its usual words.
+   */
+  disconnectNote?: string;
+  /**
+   * One line about the connection worth showing under it, worked out from its
+   * (never secret) details: how long a key has left, say. `today` is the
+   * workspace's own day, YYYY-MM-DD.
+   */
+  statusNote?(
+    metadata: Record<string, unknown>,
+    today: string,
+  ): { tone: "good" | "waiting" | "bad"; text: string } | null;
   /** Where to send the person to approve the connection. */
   beginConnect(start: ConnectStart): string;
   /** Exchanges the callback for tokens and identifies the account. */
