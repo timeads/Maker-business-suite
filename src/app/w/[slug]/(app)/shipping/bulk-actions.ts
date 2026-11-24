@@ -4,43 +4,14 @@ import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/auth";
 import { formatMoney } from "@/lib/dashboard/format";
 import { getEntitlements } from "@/lib/entitlements";
-import {
-  bulkEstimate,
-  orderRefusal,
-  planRefusal,
-  priceMoved,
-  type BulkOutcome,
-} from "@/lib/shipping/bulk";
-import { priceToCents, tenthOzToLbOz } from "@/lib/shipping/easypost";
-import { shownBoxes } from "@/lib/shipping/labels";
+import { bulkEstimate, priceMoved, type BulkOutcome } from "@/lib/shipping/bulk";
+import { priceToCents } from "@/lib/shipping/easypost";
 import { listService } from "@/lib/shipping/list";
-import { dismissedKeys, liveSavedGroups, mergeSuggestions } from "@/lib/shipping/merge";
-import {
-  addressSettled,
-  choiceOf,
-  planFor,
-  quoteFresh,
-  type OrderPlan,
-  type StoredPlan,
-} from "@/lib/shipping/plan";
-import { holdState, isInternational, todayIn } from "@/lib/shipping/queue";
 import { pickService } from "@/lib/shipping/rules";
 import { createClient } from "@/lib/supabase/server";
 import { getTenantContext } from "@/lib/tenants";
-import {
-  loadBoxes,
-  loadGroups,
-  loadLabelConnections,
-  loadOpenLabelOrders,
-  loadOpenOrders,
-  loadPackingMemory,
-  loadPlans,
-  loadShippingSetup,
-  planSetupOf,
-  withRuleFacts,
-  type ShippingOrder,
-} from "./data";
-import { purchaseLabel, quoteRates, type LabelCtx, type RatesInput } from "./label-core";
+import { purchaseLabel, quoteRates, type LabelCtx } from "./label-core";
+import { assess, boughtLabels, planInput } from "./planned";
 
 /**
  * Buying labels for several ticked orders. A run is a list of orders and a
@@ -56,7 +27,6 @@ const NO_ACCESS = "Shipping isn't part of this workspace's plan right now.";
 const READ_ONLY =
   "This workspace is read-only because its plan has ended. Pick a plan to make changes.";
 const UUID = /^[0-9a-f-]{36}$/i;
-const GONE = "It isn't waiting to ship any more.";
 
 async function context(slug: string) {
   const user = await requireUser(`/w/${slug}/shipping`);
@@ -68,124 +38,6 @@ async function context(slug: string) {
   return { user, tenant: ctx.tenant, supabase: await createClient() } as const;
 }
 type Ctx = Exclude<Awaited<ReturnType<typeof context>>, { error: string }>;
-
-type Assessed = {
-  id: string;
-  name: string;
-  /** Why the run leaves it out; null when it may be bought. */
-  refusal: string | null;
-  order: ShippingOrder | null;
-  plan: OrderPlan | null;
-  stored: StoredPlan | null;
-  /** The list's price for this plan, when one stands. */
-  cents: number | null;
-  currency: string | null;
-};
-
-/**
- * Looks at each order afresh, from what is stored: is it still waiting, free
- * of holds and other labels, going somewhere the carriers know, with a plan
- * and a price the list worked out for that very plan? Nothing from the
- * browser is believed but the ids.
- */
-async function assess(ctx: Ctx, ids: string[]): Promise<Assessed[]> {
-  const { tenant, supabase } = ctx;
-  const [loaded, shipping, boxes, postage, groups, labelOpen, stored] = await Promise.all([
-    loadOpenOrders(supabase, tenant.id),
-    loadShippingSetup(supabase, tenant.id),
-    loadBoxes(supabase, tenant.id),
-    loadLabelConnections(supabase, tenant.id),
-    loadGroups(supabase, tenant.id),
-    loadOpenLabelOrders(supabase, tenant.id),
-    loadPlans(supabase, tenant.id, ids),
-  ]);
-  const now = new Date();
-  const today = todayIn(tenant.timezone, now);
-  const home = shipping.settings.ship_from_country;
-  const bare = planSetupOf(
-    { shipping, boxes, postage, memory: { exact: new Map(), similar: new Map() } },
-    tenant.currency,
-  );
-  const ruled = withRuleFacts(loaded, bare);
-  const ruleHolds = new Map(ruled.holds.map((hold) => [hold.id, hold.note]));
-  const open = new Map(ruled.orders.map((order) => [order.id, order]));
-  const wanted = ids.map((id) => open.get(id)).filter((order): order is ShippingOrder => !!order);
-  const setup = { ...bare, memory: await loadPackingMemory(supabase, tenant.id, wanted) };
-
-  // Orders that are waiting to go in one parcel, or could: those are for the group's own page.
-  const partners = new Map<string, string[]>();
-  const names = new Map(ruled.orders.map((order) => [order.id, order.name ?? "another order"]));
-  for (const group of [
-    ...liveSavedGroups(groups, ruled.orders, today),
-    ...mergeSuggestions(ruled.orders, dismissedKeys(groups), today),
-  ]) {
-    for (const id of group.orderIds) {
-      const others = group.orderIds
-        .filter((other) => other !== id)
-        .map((other) => names.get(other)!);
-      partners.set(id, [...new Set([...(partners.get(id) ?? []), ...others])].slice(0, 3));
-    }
-  }
-
-  return ids.map((id): Assessed => {
-    const order = open.get(id) ?? null;
-    const row = stored.get(id) ?? null;
-    if (!order) {
-      return {
-        id,
-        name: "Order",
-        refusal: GONE,
-        order,
-        plan: null,
-        stored: row,
-        cents: null,
-        currency: null,
-      };
-    }
-    const name = order.name ?? "Order";
-    const derived = ruleHolds.get(id) ?? null;
-    const first = orderRefusal({
-      cancelled: order.cancelled,
-      unitsLeft: order.units_left,
-      pickedUp: Boolean(order.picked_up_at),
-      // A hold a rule calls for that isn't written down yet is said as the rule's.
-      hold: derived === null ? holdState(order, today) : "none",
-      ruleHold: derived,
-      paid: order.paid,
-      pickup: order.pickup,
-      abroad: isInternational(order.country_code, home),
-      partSent: order.items.some((item) => item.left < item.qty),
-      labelOpen: labelOpen.has(id),
-      togetherWith: partners.get(id) ?? [],
-    });
-    const plan = planFor(order, choiceOf(row), order.order_total, setup);
-    const fresh = quoteFresh(row, plan, now);
-    const refusal =
-      first ??
-      planRefusal({
-        noQuote: plan.noQuote,
-        canCheck: plan.canCheck,
-        address:
-          addressSettled(row, plan, now) && row?.address_status === "found"
-            ? "found"
-            : addressSettled(row, plan, now) && row?.address_status === "not_found"
-              ? "not_found"
-              : "unchecked",
-        quote: !fresh ? "missing" : row?.quote_status === "ok" ? "ok" : "none",
-      });
-    const priced = fresh && row?.quote_status === "ok" && row.quote_cents !== null;
-    return {
-      id,
-      name,
-      refusal,
-      order,
-      plan,
-      stored: row,
-      cents: priced ? row!.quote_cents : null,
-      currency: priced ? (row!.quote_currency ?? tenant.currency) : null,
-    };
-  });
-}
 
 export type RunStart = {
   error?: string;
@@ -236,27 +88,6 @@ export type RunStep = BulkOutcome & {
   shipmentId?: string;
   labels?: { href: string; text: string }[];
 };
-
-/** The rates request for an order's plan: the same shape the order page sends. */
-function planInput(plan: OrderPlan, stored: StoredPlan | null, labelFormat?: string): RatesInput {
-  return {
-    boxes: plan.boxes.map((box) => {
-      const weight = tenthOzToLbOz(box.weightTenthOz ?? 0);
-      return {
-        boxId: box.box?.id ?? "",
-        length: String(box.length),
-        width: String(box.width),
-        height: String(box.height),
-        weightLb: weight.lb,
-        weightOz: weight.oz,
-        alloc: box.items,
-      };
-    }),
-    residential: stored?.address_residential ?? true,
-    signature: plan.signatureKind,
-    ...(labelFormat === "zpl" ? { labelFormat: "zpl" } : {}),
-  };
-}
 
 /**
  * Buys the label for one order of a run, then writes down what happened.
@@ -352,31 +183,14 @@ async function buyPlanned(
   if (result.state === "refused") return { status: "skipped", reason: result.error };
   if (result.state === "unsure") return { status: "unsure", reason: result.error };
 
-  // The parcel, for printing its label from the run.
-  const { data: parcel } = await ctx.supabase
-    .from("shipments")
-    .select("id, tracking_number, tracking_url, label_url, label_parcels")
-    .eq("tenant_id", ctx.tenant.id)
-    .eq("number", result.number)
-    .maybeSingle();
-  const boxes = parcel
-    ? shownBoxes({
-        tracking_number: parcel.tracking_number as string | null,
-        tracking_url: parcel.tracking_url as string | null,
-        label_url: parcel.label_url as string | null,
-        boxes: parcel.label_parcels,
-      }).filter((box) => box.labelUrl)
-    : [];
+  const printable = await boughtLabels(ctx, result.number);
   return {
     status: "bought",
     service: listService(result.carrier, result.service),
     price: result.price,
     currency: result.currency,
     number: result.number,
-    shipmentId: (parcel?.id as string | undefined) ?? undefined,
-    labels: boxes.map((box, index) => ({
-      href: box.labelUrl as string,
-      text: boxes.length > 1 ? `Label ${index + 1}` : "Label",
-    })),
+    shipmentId: printable.shipmentId,
+    labels: printable.labels,
   };
 }

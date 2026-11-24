@@ -22,7 +22,11 @@ import { getBookingDetails, getBookingEmails, livePaymentDeps } from "../src/lib
 import { PROVIDER_ORDER, getAdapter } from "../src/lib/connections/registry";
 import { runSyncJob, type RunnerDeps, type SyncJob } from "../src/lib/connections/runner";
 import { rpcSyncStore } from "../src/lib/connections/store";
-import { createShopifySender } from "../src/lib/connections/providers/shopify-fulfil";
+import {
+  SHOP_NO_PERMISSION,
+  ShopPermissionError,
+  createShopifySender,
+} from "../src/lib/connections/providers/shopify-fulfil";
 import { createShopifyStockWriter } from "../src/lib/connections/providers/shopify-stock";
 import { getProviderToken, vaultTokenStore, type TokenDeps } from "../src/lib/connections/tokens";
 import { sendEmail } from "../src/lib/email";
@@ -400,6 +404,7 @@ async function drainShipments(): Promise<number> {
   };
   for (const shipment of shipments) {
     let failure: string | null = null;
+    let fulfilmentId: string | null = null;
     try {
       if (shipment.provider !== "shopify" || !shipment.order_external_id) {
         throw new Error("This parcel isn't for an order in the shop");
@@ -408,7 +413,7 @@ async function drainShipments(): Promise<number> {
         throw new Error("Shipping isn't part of this workspace's plan right now");
       }
       const stored = await getProviderToken(shipment.tenant_id, "shopify", tokenDeps);
-      await sender.send(stored.externalAccountId, stored.token, {
+      ({ fulfilmentId } = await sender.send(stored.externalAccountId, stored.token, {
         orderExternalId: shipment.order_external_id,
         carrier: shipment.carrier,
         trackingNumber: shipment.tracking_number,
@@ -418,14 +423,16 @@ async function drainShipments(): Promise<number> {
         trackingUrls: shipment.tracking_urls ?? undefined,
         items: shipment.items,
         notifyCustomer: shipment.notify_customer,
-      });
+      }));
     } catch (err) {
       failure = err instanceof Error ? err.message : String(err);
       console.error(`shipment ${shipment.id}: ${failure}`);
     }
-    const { error: finishError } = await admin.rpc("finish_shipment_send", {
+    // The shop's id for what it made is kept, so the parcel can be undone there later.
+    const { error: finishError } = await admin.rpc("finish_shipment_send_with", {
       p_id: shipment.id,
       p_error: failure,
+      p_fulfilment_id: fulfilmentId,
     });
     if (finishError)
       console.error(`could not mark shipment ${shipment.id}: ${finishError.message}`);
@@ -439,6 +446,160 @@ async function drainShipments(): Promise<number> {
     }
   }
   return shipments.length;
+}
+
+/** What a shop step came to, in the words the database keeps. */
+function shopStepFailure(err: unknown): { outcome: "not_allowed" | "failed"; error: string } {
+  const error = err instanceof Error ? err.message : String(err);
+  return { outcome: err instanceof ShopPermissionError ? "not_allowed" : "failed", error };
+}
+
+/**
+ * Undoes voided parcels in the shop, so their orders show as unfulfilled
+ * again. Tried once each, like everything else we tell a shop: what happened
+ * is written on the parcel, and a failure is told to the team to fix there.
+ * Runs before parcels are sent, so an order that was voided and sent again
+ * is free in the shop by the time the new parcel reaches it.
+ */
+async function drainShipmentUndos(): Promise<number> {
+  const admin = getAdminClient();
+  const { data, error } = await admin.rpc("claim_shipment_undos", { p_limit: 20 });
+  if (error) throw new Error(`Could not claim parcels to undo: ${error.message}`);
+  const undos = (data ?? []) as {
+    id: string;
+    tenant_id: string;
+    number: number;
+    order_name: string | null;
+    provider: string | null;
+    order_external_id: string | null;
+    fulfilment_id: string | null;
+    tracking_numbers: string[] | null;
+    can_write: boolean;
+  }[];
+  if (undos.length === 0) return 0;
+  const sender = createShopifySender();
+  const tokenDeps: TokenDeps = {
+    store: vaultTokenStore(admin),
+    adapter: getAdapter,
+    now: Date.now,
+    wait: sleep,
+    onNeedsReconnect: notifyNeedsReconnect,
+  };
+  for (const undo of undos) {
+    let outcome: "done" | "not_found" | "not_allowed" | "failed" = "failed";
+    let failure: string | null = null;
+    try {
+      if (undo.provider !== "shopify" || !undo.order_external_id) {
+        throw new Error("This parcel isn't for an order in the shop");
+      }
+      // A shop connected to watch only is never written to.
+      if (!undo.can_write) throw new ShopPermissionError(SHOP_NO_PERMISSION);
+      if (!(await moduleOpen(undo.tenant_id, "shipping", admin))) {
+        throw new Error("Shipping isn't part of this workspace's plan right now");
+      }
+      const stored = await getProviderToken(undo.tenant_id, "shopify", tokenDeps);
+      const result = await sender.cancel(stored.externalAccountId, stored.token, {
+        orderExternalId: undo.order_external_id,
+        fulfilmentId: undo.fulfilment_id,
+        trackingNumbers: undo.tracking_numbers ?? [],
+      });
+      outcome = result === "cancelled" ? "done" : "not_found";
+    } catch (err) {
+      ({ outcome, error: failure } = shopStepFailure(err));
+      console.error(`undo of shipment ${undo.id}: ${failure}`);
+    }
+    const { error: finishError } = await admin.rpc("finish_shipment_undo", {
+      p_id: undo.id,
+      p_outcome: outcome,
+      p_error: failure,
+    });
+    if (finishError) console.error(`could not mark undo ${undo.id}: ${finishError.message}`);
+    if (outcome !== "done") {
+      const why =
+        outcome === "not_found"
+          ? "your shop has no fulfilment with its tracking number"
+          : outcome === "not_allowed"
+            ? "your shop is connected without permission to change orders"
+            : failure;
+      await postAlert(
+        admin,
+        undo.tenant_id,
+        "shipping",
+        `Parcel ${undo.number}${undo.order_name ? ` (${undo.order_name})` : ""} was undone here, but we couldn't undo it in your shop: ${why}. Cancel the fulfilment there so the order shows as unfulfilled again.`,
+      );
+    }
+  }
+  return undos.length;
+}
+
+/**
+ * Passes pickup steps on to the shop: "ready for pickup" (the shop emails the
+ * customer to come and collect) and "picked up" (the order is marked
+ * fulfilled there). Tried once each; what happened is kept on the order.
+ */
+async function drainPickupSteps(): Promise<number> {
+  const admin = getAdminClient();
+  const { data, error } = await admin.rpc("claim_pickup_steps", { p_limit: 20 });
+  if (error) throw new Error(`Could not claim pickup steps: ${error.message}`);
+  const steps = (data ?? []) as {
+    id: string;
+    tenant_id: string;
+    name: string | null;
+    provider: string | null;
+    order_external_id: string | null;
+    step: "ready" | "picked_up";
+    can_write: boolean;
+  }[];
+  if (steps.length === 0) return 0;
+  const sender = createShopifySender();
+  const tokenDeps: TokenDeps = {
+    store: vaultTokenStore(admin),
+    adapter: getAdapter,
+    now: Date.now,
+    wait: sleep,
+    onNeedsReconnect: notifyNeedsReconnect,
+  };
+  for (const step of steps) {
+    let outcome: "sent" | "not_allowed" | "failed" = "sent";
+    let failure: string | null = null;
+    try {
+      if (step.provider !== "shopify" || !step.order_external_id) {
+        throw new Error("This order isn't one from the shop");
+      }
+      if (!step.can_write) throw new ShopPermissionError(SHOP_NO_PERMISSION);
+      if (!(await moduleOpen(step.tenant_id, "shipping", admin))) {
+        throw new Error("Shipping isn't part of this workspace's plan right now");
+      }
+      const stored = await getProviderToken(step.tenant_id, "shopify", tokenDeps);
+      if (step.step === "ready") {
+        await sender.readyForPickup(stored.externalAccountId, stored.token, step.order_external_id);
+      } else {
+        await sender.pickedUp(stored.externalAccountId, stored.token, step.order_external_id);
+      }
+    } catch (err) {
+      ({ outcome, error: failure } = shopStepFailure(err));
+      console.error(`pickup step for order ${step.id}: ${failure}`);
+    }
+    const { error: finishError } = await admin.rpc("finish_pickup_step", {
+      p_id: step.id,
+      p_step: step.step,
+      p_outcome: outcome,
+      p_error: failure,
+    });
+    if (finishError) console.error(`could not mark pickup step ${step.id}: ${finishError.message}`);
+    if (outcome !== "sent") {
+      const name = step.name ?? "A pickup order";
+      await postAlert(
+        admin,
+        step.tenant_id,
+        "shipping",
+        step.step === "ready"
+          ? `${name} is marked ready for pickup here, but your shop couldn't be told: ${failure}. Mark it ready in your shop so your customer hears about it.`
+          : `${name} is marked picked up here, but your shop couldn't be told: ${failure}. Mark it fulfilled in your shop.`,
+      );
+    }
+  }
+  return steps.length;
 }
 
 /** Sends scheduled social posts whose time has come. */
@@ -532,7 +693,9 @@ async function main() {
       (await attempt(drainInboundEmails, 0)) +
       (await attempt(drainSocialPosts, 0)) +
       (await attempt(drainStockReceipts, 0)) +
-      (await attempt(drainShipments, 0));
+      (await attempt(drainShipmentUndos, 0)) +
+      (await attempt(drainShipments, 0)) +
+      (await attempt(drainPickupSteps, 0));
 
     if (Date.now() - lastSchedule > SCHEDULE_EVERY_MS) {
       lastSchedule = Date.now();

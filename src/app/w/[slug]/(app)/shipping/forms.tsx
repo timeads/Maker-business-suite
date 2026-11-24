@@ -274,19 +274,69 @@ export function SeenBackFromHold({ slug, orderId }: { slug: string; orderId: str
   return null;
 }
 
-/** The two steps of an in-store pickup. Kept here; the shop isn't told. */
+/** Where telling the shop about a step has got to. */
+export type ShopStep = "none" | "pending" | "sending" | "sent" | "not_allowed" | "failed";
+
+/** One plain line on whether the shop heard about a pickup step. */
+function ShopHeard({
+  step,
+  error,
+  heard,
+  byHand,
+}: {
+  step: ShopStep;
+  error: string | null;
+  /** What to say once the shop has it. */
+  heard: string;
+  /** What the person should do in the shop when we couldn't. */
+  byHand: string;
+}) {
+  if (step === "none") return null;
+  if (step === "pending" || step === "sending") {
+    return <p className="text-muted-foreground text-xs">Telling your shop…</p>;
+  }
+  if (step === "sent") return <p className="text-mint-ink text-xs">{heard}</p>;
+  return (
+    <p className="text-brick text-xs">
+      {step === "not_allowed"
+        ? "Your shop wasn't told: it's connected without permission to change orders."
+        : `Your shop couldn't be told${error ? `: ${error}` : ""}.`}{" "}
+      {byHand}
+    </p>
+  );
+}
+
+/**
+ * The two steps of an in-store pickup. Kept here, and passed on to the shop
+ * when the workspace wants that and the shop allows it.
+ */
 export function PickupForm({
   slug,
   orderId,
   ready,
   pickedUp,
   canUndo,
+  tells = "off",
+  shop,
 }: {
   slug: string;
   orderId: string;
   ready: boolean;
   pickedUp: boolean;
   canUndo: boolean;
+  /**
+   * Whether the next step will reach the shop: "yes", "no_permission" (the
+   * workspace wants it, but the shop is connected without permission to
+   * change orders) or "off" (the workspace keeps pickups to itself).
+   */
+  tells?: "yes" | "no_permission" | "off";
+  /** What became of telling the shop about each step already taken. */
+  shop?: {
+    ready: ShopStep;
+    readyError: string | null;
+    pickedUp: ShopStep;
+    pickedUpError: string | null;
+  };
 }) {
   const [readyState, readyAction] = useActionState(
     async (): Promise<ShippingState> => markPickupReady(slug, [orderId]),
@@ -294,10 +344,38 @@ export function PickupForm({
   );
   const [pickedState, pickedAction] = useActionState(markPickedUp.bind(null, slug, orderId), {});
   const [undoState, undoAction] = useActionState(undoPickup.bind(null, slug, orderId), {});
+  const notTold = (
+    <p className="text-muted-foreground text-xs">
+      Your shop won&apos;t be told: it&apos;s connected without permission to change orders. This
+      step is kept here only, so do it in your shop too.
+    </p>
+  );
   return (
     <div className="flex flex-col gap-3">
+      {shop && ready && (
+        <ShopHeard
+          step={shop.ready}
+          error={shop.readyError}
+          heard="Your shop was told it's ready, and emails the customer to come and collect."
+          byHand="Mark it ready for pickup there so your customer hears about it."
+        />
+      )}
+      {shop && pickedUp && (
+        <ShopHeard
+          step={shop.pickedUp}
+          error={shop.pickedUpError}
+          heard="Marked as fulfilled in your shop."
+          byHand="Mark it fulfilled there."
+        />
+      )}
       {!ready && !pickedUp && (
         <form action={readyAction} className="flex flex-col gap-2">
+          {tells === "yes" && (
+            <p className="text-muted-foreground text-xs">
+              Your shop will email the customer to come and collect.
+            </p>
+          )}
+          {tells === "no_permission" && notTold}
           <Result state={readyState} />
           <SubmitButton pendingText="Saving…" className="w-fit">
             Mark ready for pickup
@@ -306,6 +384,12 @@ export function PickupForm({
       )}
       {ready && !pickedUp && (
         <form action={pickedAction} className="flex flex-col gap-2">
+          {tells === "yes" && (
+            <p className="text-muted-foreground text-xs">
+              Your shop will show the order as fulfilled. The customer isn&apos;t emailed again.
+            </p>
+          )}
+          {tells === "no_permission" && notTold}
           <Result state={pickedState} />
           <SubmitButton pendingText="Saving…" className="w-fit">
             Mark picked up
@@ -318,17 +402,42 @@ export function PickupForm({
             {pickedUp ? "Not picked up after all" : "Not ready after all"}
           </SubmitButton>
           <FormMessage>{undoState.error}</FormMessage>
+          <FormMessage kind="success">{undoState.message}</FormMessage>
         </form>
       )}
     </div>
   );
 }
 
+/** What undoing a parcel will mean in the shop, said before it happens. */
+export function voidShopWords(inShop: VoidInShop | undefined): string {
+  if (!inShop?.sent) return "";
+  return `${
+    inShop.canUndo
+      ? " The order will be marked unfulfilled in your shop again, so you can send it another way."
+      : " Your shop still shows it as sent, and it's connected without permission to change that, so cancel the fulfilment there yourself."
+  }${
+    inShop.emailed
+      ? " Your customer has already been emailed this tracking number. They aren't emailed again about the change."
+      : ""
+  }`;
+}
+
+export type VoidInShop = {
+  /** The shop was told this parcel went. */
+  sent: boolean;
+  /** ...and asked to email the customer their tracking number. */
+  emailed: boolean;
+  /** The shop is connected with permission to undo it. */
+  canUndo: boolean;
+};
+
 export function VoidButton({
   slug,
   shipmentId,
   label = false,
   source = "easypost",
+  inShop,
 }: {
   slug: string;
   shipmentId: string;
@@ -336,21 +445,28 @@ export function VoidButton({
   label?: boolean;
   /** Where it was bought: "easypost", "ups" or "redo". */
   source?: string | null;
+  /** What the shop knows about this parcel, so the question can say what undoing means there. */
+  inShop?: VoidInShop;
 }) {
   const via = source === "ups" ? "UPS" : source === "redo" ? "Redo" : "EasyPost";
-  const ask =
-    source === "ups"
-      ? "Void this label? We'll cancel it with UPS so it isn't billed, and put its items back on your to-send list. Don't use the label after this."
-      : source === "redo"
-        ? "Void this label? We'll ask Redo to cancel it and put the postage back on your labels balance, and put its items back on your to-send list. Don't use the label after this."
-        : "Void this label? We'll ask EasyPost to refund the postage and put its items back on your to-send list. Don't use the label after this.";
+  const shopWords = voidShopWords(inShop);
+  const ask = !label
+    ? `Undo this parcel? Its items go back on your to-send list.${shopWords}`
+    : `${
+        source === "ups"
+          ? "Void this label? We'll cancel it with UPS so it isn't billed, and put its items back on your to-send list."
+          : source === "redo"
+            ? "Void this label? We'll ask Redo to cancel it and put the postage back on your labels balance, and put its items back on your to-send list."
+            : "Void this label? We'll ask EasyPost to refund the postage and put its items back on your to-send list."
+      }${shopWords} Don't use the label after this.`;
   const [state, action] = useActionState(voidParcel.bind(null, slug, shipmentId), {});
   return (
     <form
       action={action}
       className="flex flex-col items-end gap-1"
       onSubmit={(event) => {
-        if (label && !window.confirm(ask)) {
+        // A plain undo that the shop never heard about goes straight through, as before.
+        if ((label || inShop?.sent) && !window.confirm(ask)) {
           event.preventDefault();
         }
       }}
@@ -389,6 +505,7 @@ export function ShippingSettingsForm({
     default_carrier: string;
     mark_sent_in_shop: boolean;
     notify_customer: boolean;
+    tell_shop_pickups: boolean;
     signature_over: number | null;
   };
   canSend: boolean;
@@ -540,6 +657,24 @@ export function ShippingSettingsForm({
             disabled={!canSend}
           />
           …and have my shop email the customer their tracking number
+        </label>
+        {canSend && <input type="hidden" name="pickups_offered" value="1" />}
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            name="tell_shop_pickups"
+            defaultChecked={settings.tell_shop_pickups && canSend}
+            disabled={!canSend}
+            className="mt-1"
+          />
+          <span>
+            Tell my shop about pickups
+            <span className="text-muted-foreground block text-xs">
+              {canSend
+                ? "When you mark a pickup ready, your shop emails the customer to come and collect. When it's picked up, the order is marked fulfilled there."
+                : "Your shop hasn't given permission for this yet. Until it does, pickup steps are kept here and your shop isn't told."}
+            </span>
+          </span>
         </label>
       </fieldset>
 

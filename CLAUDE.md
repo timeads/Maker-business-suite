@@ -239,7 +239,31 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   `shipping_label_batches` (the Label batches tab); `claim_label_batch_order`
   gives each order one turn per run, and `claim_label_purchase` still refuses
   a second label whatever a run does.
-  Pickup steps are kept here, not sent to the shop. The packing slip's
+  The shop is kept in step in three more places, each through the same
+  once-only queue as "parcel went" (claim, try once, write down what
+  happened; a claim never finished is marked failed, not retried), all in
+  `shopify-fulfil.ts` and `worker/index.ts`, and none of it ever queued for a
+  shop without the write permission (`private.shop_can_fulfil`, the database's
+  twin of `canSendInShopify`; a watch-only shop gets `not_allowed` and the
+  page says so). Voids: a pushed parcel keeps the shop's fulfilment id
+  (`shipments.shop_fulfilment_id`, via `finish_shipment_send_with`);
+  `void_shipment` queues `shop_undo_status` for it and every rider, and the
+  worker cancels the fulfilment (found by tracking number when no id was
+  kept) before it sends anything new. Pickups: `mark_pickup_ready` /
+  `mark_picked_up` queue `pickup_ready_shop_status` / `picked_up_shop_status`
+  when the `tell_shop_pickups` setting is on (the database reads the config
+  itself); a step the shop has heard is never told twice, and there is no
+  un-telling. Words for these statuses live in `lib/shipping/shop-steps.ts`.
+  Part of an order with a bought label (`?part=` on the order page,
+  `lib/shipping/part.ts`): the quote keeps which items and how many
+  (`shipping_label_quotes.part_items`, written only by
+  `save_part_label_quote` after checking them against the order),
+  `record_label_shipment` records exactly those and then holds what's left
+  ("Part sent — waiting on: …") unless `hold_rest` was unticked; quantities
+  are never taken from the browser at buying time, and packing isn't learned.
+  Scan & pack buys the planned label once every item is checked
+  (`scan-actions.ts`): `assess` and `planInput` in `planned.ts` are shared
+  with bulk runs, and the purchase is still `purchaseLabel`. The packing slip's
   layout is a config (`slip_layout`); its barcode (`code128.ts`) is what
   Scan & pack reads. Packing details are asked of the shop ten orders at a
   time, and without delivery methods if the shop won't share them.

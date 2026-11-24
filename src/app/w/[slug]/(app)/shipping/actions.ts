@@ -188,19 +188,49 @@ export async function seenBackFromHold(slug: string, orderId: string): Promise<v
   if (data === true) done(slug);
 }
 
-/** Pickup orders are packed and waiting at the counter. Kept here; your shop isn't told. */
+/** What became of telling the shop about a pickup step, as the page words it. */
+type ShopStep = "none" | "pending" | "sending" | "sent" | "not_allowed" | "failed";
+const NOT_TOLD =
+  "Your shop wasn't told: it's connected without permission to change orders. Do this step in your shop too.";
+
+/**
+ * Pickup orders are packed and waiting at the counter. Kept here, and passed
+ * on to the shop (which emails the customer to come and collect) when the
+ * workspace wants that and the shop allows it: the database decides, and the
+ * worker does the telling.
+ */
 export async function markPickupReady(slug: string, ids: string[]): Promise<ShippingState> {
   const ctx = await context(slug);
   if ("error" in ctx) return { error: ctx.error };
+  const picked = pick(ids);
   const { data, error } = await ctx.supabase.rpc("mark_pickup_ready", {
     p_tenant_id: ctx.tenant.id,
-    p_ids: pick(ids),
+    p_ids: picked,
   });
   if (error) return { error: OOPS };
   done(slug);
   const n = Number(data ?? 0);
   if (n === 0) return { error: "None of those are pickup orders still waiting to be packed." };
-  return { message: count(n, "Ready for pickup.", "% orders ready for pickup.") };
+  const { data: rows } = await ctx.supabase
+    .from("shipping_orders")
+    .select("pickup_ready_shop_status")
+    .eq("tenant_id", ctx.tenant.id)
+    .in("id", picked)
+    .not("pickup_ready_at", "is", null);
+  const steps = ((rows ?? []) as { pickup_ready_shop_status: ShopStep }[]).map(
+    (row) => row.pickup_ready_shop_status,
+  );
+  const told = steps.some((step) => ["pending", "sending", "sent"].includes(step));
+  const refused = steps.some((step) => step === "not_allowed");
+  return {
+    message: `${count(n, "Ready for pickup.", "% orders ready for pickup.")}${
+      told
+        ? n === 1
+          ? " Your shop is being told, and will email the customer to come and collect."
+          : " Your shop is being told, and will email each customer to come and collect."
+        : ""
+    }${refused ? ` ${NOT_TOLD}` : ""}`,
+  };
 }
 
 export async function markPickedUp(
@@ -214,7 +244,22 @@ export async function markPickedUp(
   const { error } = await ctx.supabase.rpc("mark_picked_up", { p_id: orderId });
   if (error) return { error: OOPS };
   done(slug);
-  return { message: "Picked up. It's off your list." };
+  const { data: row } = await ctx.supabase
+    .from("shipping_orders")
+    .select("picked_up_shop_status")
+    .eq("tenant_id", ctx.tenant.id)
+    .eq("id", orderId)
+    .maybeSingle();
+  const step = (row?.picked_up_shop_status ?? "none") as ShopStep;
+  return {
+    message: `Picked up. It's off your list.${
+      ["pending", "sending", "sent"].includes(step)
+        ? " Your shop is being told, so the order shows as fulfilled there."
+        : step === "not_allowed"
+          ? ` ${NOT_TOLD}`
+          : ""
+    }`,
+  };
 }
 
 export async function undoPickup(
@@ -225,10 +270,27 @@ export async function undoPickup(
 ): Promise<ShippingState> {
   const ctx = await context(slug, true);
   if ("error" in ctx) return { error: ctx.error };
+  const { data: before } = await ctx.supabase
+    .from("shipping_orders")
+    .select("picked_up_at, pickup_ready_shop_status, picked_up_shop_status")
+    .eq("tenant_id", ctx.tenant.id)
+    .eq("id", orderId)
+    .maybeSingle();
   const { error } = await ctx.supabase.rpc("undo_pickup", { p_id: orderId });
   if (error) return { error: OOPS };
   done(slug);
-  return { message: "Stepped back." };
+  // What the shop has already heard can't be unsaid from here.
+  const heard = (
+    before?.picked_up_at ? before.picked_up_shop_status : before?.pickup_ready_shop_status
+  ) as ShopStep | undefined;
+  return {
+    message:
+      heard === "sent" || heard === "sending"
+        ? before?.picked_up_at
+          ? "Stepped back here. Your shop still shows the order as fulfilled; change that there if it matters."
+          : "Stepped back here. Your shop has already told the customer it's ready, which can't be taken back from here."
+        : "Stepped back.",
+  };
 }
 
 /** Notes that these slips have been printed, so they aren't printed twice. */
@@ -342,13 +404,41 @@ export async function voidParcel(
     };
   }
   done(slug);
-  const shop = together
-    ? data === "sent"
-      ? " Every order that went in it is back on your to-send list. Your shop still shows at least one of them as sent, so cancel those fulfilments there too."
-      : " Every order that went in it is back on your to-send list."
-    : data === "sent"
-      ? " Your shop still shows it as sent, so cancel the fulfilment there too."
-      : " Its items are back on the to-send list.";
+  // What the shop is being told: every order in the parcel that was marked as sent there.
+  const { data: undone } = await ctx.supabase
+    .from("shipments")
+    .select("shop_status, shop_undo_status")
+    .eq("tenant_id", ctx.tenant.id)
+    .or(`id.eq.${shipmentId},merged_with.eq.${shipmentId}`)
+    .not("voided_at", "is", null);
+  const undos = ((undone ?? []) as { shop_status: string; shop_undo_status: string }[]).filter(
+    (row) => row.shop_status === "sent",
+  );
+  const queued = undos.some((row) => ["pending", "sending", "done"].includes(row.shop_undo_status));
+  const byHand = undos.some(
+    (row) => !["pending", "sending", "done"].includes(row.shop_undo_status),
+  );
+  const back = together
+    ? " Every order that went in it is back on your to-send list."
+    : " Its items are back on the to-send list.";
+  const shop =
+    undos.length === 0 && data !== "sent"
+      ? back
+      : `${back}${
+          queued
+            ? together
+              ? " We're marking them unfulfilled in your shop too."
+              : " We're marking it unfulfilled in your shop too."
+            : ""
+        }${
+          byHand
+            ? together
+              ? " Your shop is connected without permission to change orders, so cancel those fulfilments there too."
+              : " Your shop is connected without permission to change orders, so cancel the fulfilment there too."
+            : undos.length === 0
+              ? " Your shop still shows it as sent, so cancel the fulfilment there too."
+              : ""
+        }`;
   return {
     message: label
       ? sourceKey === "ups"
@@ -356,9 +446,7 @@ export async function voidParcel(
         : sourceKey === "redo"
           ? `Cancelled through Redo. The postage goes back on your Redo labels balance once the carrier confirms the label wasn't used.${shop}`
           : `Refund requested. EasyPost pays it back once the carrier confirms the label wasn't used, which can take a few weeks.${shop}`
-      : data === "sent"
-        ? "Undone here. Your shop still shows it as sent, so cancel the fulfilment there too."
-        : "Undone. Its items are back on the to-send list.",
+      : `Undone.${shop}`,
   };
 }
 
@@ -412,6 +500,11 @@ export async function saveShippingSettings(
     mark_sent_in_shop: formData.get("mark_sent_in_shop") === "on",
     notify_customer: formData.get("notify_customer") === "on",
     signature_over: signatureOver,
+    // Only offered when the shop allows it; otherwise what was saved stands.
+    tell_shop_pickups:
+      formData.get("pickups_offered") === "1"
+        ? formData.get("tell_shop_pickups") === "on"
+        : before.tell_shop_pickups,
     // Set on its own form ("Remember how I pack"); carried along here.
     remember_packing: before.remember_packing,
   });

@@ -8,6 +8,10 @@ import { shopifyApiVersion } from "./shopify";
  */
 
 export class ShopSendError extends Error {}
+/** The shop itself said this connection may not do that (a watch-only connection, say). */
+export class ShopPermissionError extends ShopSendError {}
+
+export const SHOP_NO_PERMISSION = "Your shop hasn't given permission for this";
 
 const FULFILMENT_ORDERS = `query Open($id: ID!) {
   order(id: $id) {
@@ -18,6 +22,22 @@ const FULFILMENT_ORDERS = `query Open($id: ID!) {
 }`;
 const FULFIL = `mutation Fulfil($f: FulfillmentInput!) {
   fulfillmentCreate(fulfillment: $f) { fulfillment { id } userErrors { message } }
+}`;
+// Undoing a parcel: the fulfilments on an order (to find ours by tracking
+// number when its id was never kept), and cancelling one.
+const FULFILMENTS = `query F($id: ID!) {
+  order(id: $id) { fulfillments(first: 20) { id status trackingInfo(first: 10) { number } } }
+}`;
+const CANCEL = `mutation C($id: ID!) {
+  fulfillmentCancel(id: $id) { fulfillment { id status } userErrors { message } }
+}`;
+// In-store pickup: which of the order's fulfilment orders are for collecting,
+// and telling the shop they are packed and waiting (the shop emails the customer).
+const PICKUP_ORDERS = `query FO($id: ID!) {
+  order(id: $id) { fulfillmentOrders(first: 10) { nodes { id status deliveryMethod { methodType } } } }
+}`;
+const READY_FOR_PICKUP = `mutation R($input: FulfillmentOrderLineItemsPreparedForPickupInput!) {
+  fulfillmentOrderLineItemsPreparedForPickup(input: $input) { userErrors { message } }
 }`;
 
 export const canSendInShopify = (scopes: unknown): boolean =>
@@ -79,6 +99,22 @@ export function trackingFor(shipment: {
   };
 }
 
+/** Shopify's own "this app may not do that": said per field, with a code. */
+const accessDenied = (errors: unknown): boolean =>
+  Array.isArray(errors) &&
+  errors.some(
+    (each) =>
+      (each as { extensions?: { code?: unknown } } | null)?.extensions?.code === "ACCESS_DENIED",
+  );
+
+const said = (errors: { message: string }[]) =>
+  errors
+    .map((e) => e.message)
+    .join("; ")
+    .slice(0, 300);
+
+const orderGid = (externalId: string) => `gid://shopify/Order/${externalId}`;
+
 export function createShopifySender(fetchImpl: Fetch = fetch) {
   async function graphql<T>(shop: string, token: TokenSet, query: string, variables?: object) {
     try {
@@ -95,12 +131,17 @@ export function createShopifySender(fetchImpl: Fetch = fetch) {
           body: JSON.stringify({ query, variables }),
         },
       );
-      if (result.errors || !result.data)
+      if (result.errors || !result.data) {
+        if (accessDenied(result.errors)) throw new ShopPermissionError(SHOP_NO_PERMISSION);
         throw new ShopSendError("The shop turned the request down");
+      }
       return result.data;
     } catch (err) {
       if (err instanceof ProviderHttpError && err.status === 401) {
         throw new ReconnectRequiredError("Shopify no longer accepts this store's access");
+      }
+      if (err instanceof ProviderHttpError && err.status === 403) {
+        throw new ShopPermissionError(SHOP_NO_PERMISSION);
       }
       throw err;
     }
@@ -124,7 +165,7 @@ export function createShopifySender(fetchImpl: Fetch = fetch) {
         items: { line_id: string; qty: number }[];
         notifyCustomer: boolean;
       },
-    ): Promise<void> {
+    ): Promise<{ fulfilmentId: string | null }> {
       const found = await graphql<{
         order: { fulfillmentOrders: { nodes: OpenOrder[] } } | null;
       }>(shop, token, FULFILMENT_ORDERS, { id: `gid://shopify/Order/${shipment.orderExternalId}` });
@@ -138,7 +179,10 @@ export function createShopifySender(fetchImpl: Fetch = fetch) {
       }
       const tracking = trackingFor(shipment);
       const result = await graphql<{
-        fulfillmentCreate: { userErrors: { message: string }[] };
+        fulfillmentCreate: {
+          fulfillment?: { id?: string } | null;
+          userErrors: { message: string }[];
+        };
       }>(shop, token, FULFIL, {
         f: {
           lineItemsByFulfillmentOrder: plan,
@@ -149,14 +193,121 @@ export function createShopifySender(fetchImpl: Fetch = fetch) {
         },
       });
       const errors = result.fulfillmentCreate.userErrors;
-      if (errors.length > 0) {
+      if (errors.length > 0) throw new ShopSendError(said(errors));
+      // Kept so the parcel can be undone in the shop later.
+      return { fulfilmentId: result.fulfillmentCreate.fulfillment?.id ?? null };
+    },
+
+    /**
+     * Undoes "this has been sent" for a voided parcel, so the order shows as
+     * unfulfilled again. With no kept id (a parcel sent before ids were
+     * kept), the fulfilment is found by its tracking number. "not_found":
+     * the shop has nothing of ours left to cancel.
+     */
+    async cancel(
+      shop: string,
+      token: TokenSet,
+      parcel: {
+        orderExternalId: string;
+        fulfilmentId: string | null;
+        trackingNumbers: string[];
+      },
+    ): Promise<"cancelled" | "not_found"> {
+      let id = parcel.fulfilmentId;
+      if (!id) {
+        const numbers = parcel.trackingNumbers.filter((number) => number.trim() !== "");
+        const found = await graphql<{
+          order: {
+            fulfillments: {
+              id: string;
+              status: string;
+              trackingInfo: { number: string | null }[];
+            }[];
+          } | null;
+        }>(shop, token, FULFILMENTS, { id: orderGid(parcel.orderExternalId) });
+        id =
+          (found.order?.fulfillments ?? []).find(
+            (each) =>
+              each.status !== "CANCELLED" &&
+              each.trackingInfo.some((info) => info.number && numbers.includes(info.number)),
+          )?.id ?? null;
+      }
+      if (!id) return "not_found";
+      const result = await graphql<{
+        fulfillmentCancel: { userErrors: { message: string }[] };
+      }>(shop, token, CANCEL, { id });
+      const errors = result.fulfillmentCancel.userErrors;
+      if (errors.length > 0) throw new ShopSendError(said(errors));
+      return "cancelled";
+    },
+
+    /**
+     * In-store pickup, packed and waiting: tells the shop, which emails the
+     * customer to come and collect.
+     */
+    async readyForPickup(shop: string, token: TokenSet, orderExternalId: string): Promise<void> {
+      const found = await graphql<{
+        order: {
+          fulfillmentOrders: {
+            nodes: { id: string; status: string; deliveryMethod: { methodType: string } | null }[];
+          };
+        } | null;
+      }>(shop, token, PICKUP_ORDERS, { id: orderGid(orderExternalId) });
+      if (!found.order) throw new ShopSendError("The shop no longer has this order");
+      const open = found.order.fulfillmentOrders.nodes.filter(
+        (order) =>
+          ["OPEN", "IN_PROGRESS"].includes(order.status) &&
+          order.deliveryMethod?.methodType === "PICK_UP",
+      );
+      if (open.length === 0) {
         throw new ShopSendError(
-          errors
-            .map((e) => e.message)
-            .join("; ")
-            .slice(0, 300),
+          "The shop doesn't have this order set up for in-store pickup, or it has already been picked up",
         );
       }
+      const result = await graphql<{
+        fulfillmentOrderLineItemsPreparedForPickup: { userErrors: { message: string }[] };
+      }>(shop, token, READY_FOR_PICKUP, {
+        input: {
+          lineItemsByFulfillmentOrder: open.map((order) => ({ fulfillmentOrderId: order.id })),
+        },
+      });
+      const errors = result.fulfillmentOrderLineItemsPreparedForPickup.userErrors;
+      if (errors.length > 0) throw new ShopSendError(said(errors));
+    },
+
+    /**
+     * In-store pickup, collected: everything still open on the order is
+     * marked fulfilled, with no tracking and no email to the customer.
+     */
+    async pickedUp(
+      shop: string,
+      token: TokenSet,
+      orderExternalId: string,
+    ): Promise<{ fulfilmentId: string | null }> {
+      const found = await graphql<{
+        order: { fulfillmentOrders: { nodes: OpenOrder[] } } | null;
+      }>(shop, token, FULFILMENT_ORDERS, { id: orderGid(orderExternalId) });
+      if (!found.order) throw new ShopSendError("The shop no longer has this order");
+      const open = found.order.fulfillmentOrders.nodes.filter((order) =>
+        ["OPEN", "IN_PROGRESS"].includes(order.status),
+      );
+      if (open.length === 0) {
+        throw new ShopSendError("The shop shows nothing left to hand over on this order");
+      }
+      const result = await graphql<{
+        fulfillmentCreate: {
+          fulfillment?: { id?: string } | null;
+          userErrors: { message: string }[];
+        };
+      }>(shop, token, FULFIL, {
+        f: {
+          lineItemsByFulfillmentOrder: open.map((order) => ({ fulfillmentOrderId: order.id })),
+          notifyCustomer: false,
+        },
+      });
+      const errors = result.fulfillmentCreate.userErrors;
+      if (errors.length > 0) throw new ShopSendError(said(errors));
+      return { fulfilmentId: result.fulfillmentCreate.fulfillment?.id ?? null };
     },
   };
 }

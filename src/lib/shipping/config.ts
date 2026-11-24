@@ -57,6 +57,13 @@ export const shippingSettingsSchema = z.object({
   /** ...and have the shop email the customer their tracking number. */
   notify_customer: z.boolean().default(true),
   /**
+   * In-store pickups: tell the shop when one is ready (the shop then emails
+   * the customer to come and collect) and when it has been picked up. On
+   * unless switched off; it only happens when the shop allows it. The
+   * database reads this same key when a pickup step is marked.
+   */
+  tell_shop_pickups: z.boolean().default(true),
+  /**
    * Labels for orders worth at least this much ask for a signature on
    * delivery. Null: never ask unless the person choosing the label does.
    */

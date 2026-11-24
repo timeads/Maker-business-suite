@@ -18,7 +18,9 @@ import {
   shipToEdit,
   shownBoxes,
 } from "@/lib/shipping/labels";
+import { leftBehind, parsePart, partOrder } from "@/lib/shipping/part";
 import { choiceOf, planFor, type OrderPlan } from "@/lib/shipping/plan";
+import { pickupTells, undoWords } from "@/lib/shipping/shop-steps";
 import { combineOrders, groupHref, groupKey, parseWith, sumAmounts } from "@/lib/shipping/merge";
 import {
   formatHoldDate,
@@ -54,12 +56,20 @@ import {
   type Sale,
   type ShippingOrder,
 } from "../../data";
-import { HoldForm, ParcelForm, PickupForm, SeenBackFromHold, VoidButton } from "../../forms";
+import {
+  HoldForm,
+  ParcelForm,
+  PickupForm,
+  SeenBackFromHold,
+  VoidButton,
+  type ShopStep,
+} from "../../forms";
 import { shippingAccess } from "../../gate";
 import { ClearUnsureLabelButton, FinishLabelButton } from "../../label-card";
 import { LabelDesk, type DeskStart } from "../../label-desk";
 import { OrderRailActions } from "../../order-rail";
 import { OrderSteps } from "../../order-steps";
+import { PartPicker } from "../../part-picker";
 import { LabelPrint } from "../../print-ui";
 import { TogetherNote } from "../../together-ui";
 
@@ -107,7 +117,14 @@ export default async function ShippingOrderPage({
   searchParams,
 }: {
   params: Promise<{ slug: string; id: string }>;
-  searchParams: Promise<{ label?: string; view?: string; with?: string; apart?: string }>;
+  searchParams: Promise<{
+    label?: string;
+    view?: string;
+    with?: string;
+    apart?: string;
+    /** Only these items are going now (see `lib/shipping/part.ts`). */
+    part?: string;
+  }>;
 }) {
   const { slug, id } = await params;
   const query = await searchParams;
@@ -140,7 +157,7 @@ export default async function ShippingOrderPage({
     supabase
       .from("shipments")
       .select(
-        "id, number, order_name, carrier, service, tracking_number, tracking_url, shipped_at, items, voided_at, label_provider, label_url, label_mode, label_parcels, merged_with, label_printed_at",
+        "id, number, order_name, carrier, service, tracking_number, tracking_url, shipped_at, items, voided_at, label_provider, label_url, label_mode, label_parcels, merged_with, label_printed_at, shop_status, notify_customer",
       )
       .eq("tenant_id", tenant.id)
       .eq("shipping_order_id", id)
@@ -160,6 +177,45 @@ export default async function ShippingOrderPage({
   ]);
   const own = data as unknown as OrderWithSale | null;
   if (!own) notFound();
+  // What the shop has heard about this order's pickup steps and undone parcels. Asked apart
+  // and allowed to fail, so the page still opens on a database from before these were kept.
+  const [{ data: pickupRow }, { data: undoneRows }] = await Promise.all([
+    supabase
+      .from("shipping_orders")
+      .select(
+        "pickup_ready_shop_status, pickup_ready_shop_error, picked_up_shop_status, picked_up_shop_error",
+      )
+      .eq("tenant_id", tenant.id)
+      .eq("id", id)
+      .maybeSingle(),
+    supabase
+      .from("shipments")
+      .select("id, number, voided_at, shop_undo_status, shop_undo_error")
+      .eq("tenant_id", tenant.id)
+      .eq("shipping_order_id", id)
+      .not("voided_at", "is", null)
+      .neq("shop_undo_status", "none")
+      .order("voided_at", { ascending: false })
+      .limit(10),
+  ]);
+  const pickupShop = {
+    ready: (pickupRow?.pickup_ready_shop_status ?? "none") as ShopStep,
+    readyError: (pickupRow?.pickup_ready_shop_error ?? null) as string | null,
+    pickedUp: (pickupRow?.picked_up_shop_status ?? "none") as ShopStep,
+    pickedUpError: (pickupRow?.picked_up_shop_error ?? null) as string | null,
+  };
+  const undone = (
+    (undoneRows ?? []) as {
+      id: string;
+      number: number;
+      voided_at: string;
+      shop_undo_status: string;
+      shop_undo_error: string | null;
+    }[]
+  ).flatMap((row) => {
+    const words = undoWords(row.shop_undo_status, row.shop_undo_error);
+    return words ? [{ ...row, words }] : [];
+  });
   const base = `/w/${tenant.slug}/shipping`;
   const today = todayIn(tenant.timezone, new Date(daysFromNow(0)));
 
@@ -412,6 +468,11 @@ export default async function ShippingOrderPage({
       : Number(order.shipping_paid) === 0
         ? "Free shipping"
         : money(order.shipping_paid);
+  // Sending part of the order with its own label (`?part=`): only for one order on its own,
+  // where a label can be bought. Held to what is still left; the server checks it again.
+  const part = !group && desk ? parsePart(query.part, left) : null;
+  const sending: OrderWithSale = part ? partOrder(order, part) : order;
+  const sendingLines = part ? sending.items.filter((item) => item.left > 0) : left;
   // The plan the bench starts from: what a person saved for this order, else a rule's box,
   // the packing remembered for these items, or the usual box. Several orders in one parcel
   // are planned as one, with nothing saved.
@@ -420,13 +481,14 @@ export default async function ShippingOrderPage({
       shipping: setup,
       boxes,
       postage,
-      memory: await loadPackingMemory(supabase, tenant.id, todo ? [order] : []),
+      memory: await loadPackingMemory(supabase, tenant.id, todo ? [sending] : []),
     },
     tenant.currency,
   );
   const total = sale ? Number(sale.total) : null;
-  const choice = group ? {} : choiceOf(plans.get(order.id));
-  const plan = planFor(order, choice, total, planSetup);
+  // What a person saved is for the whole order; part of it starts from the plan alone.
+  const choice = group || part ? {} : choiceOf(plans.get(order.id));
+  const plan = planFor(sending, choice, total, planSetup);
   // Where "Reset" goes back to: the plan with nothing saved, and the usual box.
   const planOnly = choice.saved || choice.boxId ? planFor(order, {}, total, planSetup) : plan;
   const usual = planFor(order, {}, total, { ...planSetup, rules: [], memory: undefined });
@@ -787,7 +849,7 @@ export default async function ShippingOrderPage({
                 <CardTitle>In-store pickup</CardTitle>
                 <CardDescription>
                   {pickedUp
-                    ? `Collected ${when.format(new Date(order.picked_up_at!))}. If your shop still shows it as unfulfilled, mark it there too.`
+                    ? `Collected ${when.format(new Date(order.picked_up_at!))}.${pickupShop.pickedUp === "none" ? " Your shop wasn't told, so if it still shows the order as unfulfilled, mark it there too." : ""}`
                     : order.pickup_ready_at
                       ? `Packed and waiting since ${when.format(new Date(order.pickup_ready_at))}. When they come by, mark it picked up.`
                       : "Nothing to post. Pack it, then mark it ready so the team knows it's waiting at the counter."}
@@ -801,6 +863,12 @@ export default async function ShippingOrderPage({
                     ready={Boolean(order.pickup_ready_at)}
                     pickedUp={pickedUp}
                     canUndo={canManage(role)}
+                    tells={pickupTells({
+                      wanted: setup.settings.tell_shop_pickups && order.provider === "shopify",
+                      canSend: setup.canSend,
+                      connected: setup.connected,
+                    })}
+                    shop={pickupShop}
                   />
                   {todo && (
                     <details className="border-border border-t pt-3 text-sm">
@@ -815,7 +883,7 @@ export default async function ShippingOrderPage({
             </Card>
           )}
           <LabelDesk
-            key={`${order.id}:${riders.join(",")}`}
+            key={`${order.id}:${riders.join(",")}:${part ? (query.part ?? "") : ""}`}
             slug={tenant.slug}
             orderId={order.id}
             withIds={group ? group.slice(1).map((each) => each.id) : undefined}
@@ -832,7 +900,7 @@ export default async function ShippingOrderPage({
             }))}
             start={deskStart(plan)}
             resets={
-              group
+              group || part
                 ? undefined
                 : {
                     plan: deskStart(planOnly),
@@ -840,7 +908,31 @@ export default async function ShippingOrderPage({
                     usual: { ...deskStart(planOnly), boxes: deskStart(usual).boxes },
                   }
             }
-            contentsTenthOz={order.weight_grams ? gramsToTenthOz(Number(order.weight_grams)) : null}
+            contentsTenthOz={
+              sending.weight_grams ? gramsToTenthOz(Number(sending.weight_grams)) : null
+            }
+            part={
+              part
+                ? {
+                    items: part,
+                    leaving: leftBehind(left, part),
+                    exitHref: `${base}/orders/${order.id}${carry}`,
+                  }
+                : null
+            }
+            partPicker={
+              desk && !group && stillToSend > 1 ? (
+                <PartPicker
+                  href={`${base}/orders/${order.id}${carry}`}
+                  lines={left}
+                  going={
+                    part
+                      ? Object.fromEntries(part.map((item) => [item.line_id, item.qty]))
+                      : undefined
+                  }
+                />
+              ) : null
+            }
             paid={{
               cents:
                 order.shipping_paid === null ? null : Math.round(Number(order.shipping_paid) * 100),
@@ -855,7 +947,7 @@ export default async function ShippingOrderPage({
             }}
             sources={postage.active}
             testSources={postage.testMode}
-            lines={left.map((item) => ({
+            lines={sendingLines.map((item) => ({
               id: item.line_id,
               title: item.title,
               detail: [cameFrom.get(item.line_id), item.variant, item.sku]
@@ -890,6 +982,47 @@ export default async function ShippingOrderPage({
             {itemsList}
           </LabelDesk>
 
+          {undone.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Undone parcels</CardTitle>
+                <CardDescription>
+                  Parcels that were marked as sent in your shop and then undone here.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ul className="flex flex-col gap-2 text-sm">
+                  {undone.map((row) => (
+                    <li key={row.id} className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <span className="font-semibold">Parcel {row.number}</span>
+                      <span className="text-muted-foreground">
+                        undone {when.format(new Date(row.voided_at))}
+                      </span>
+                      <Badge tone={row.words.tone}>{row.words.text}</Badge>
+                      {row.words.detail && (
+                        <span className="text-muted-foreground w-full text-xs">
+                          {row.words.detail}
+                          {shopLink && (
+                            <>
+                              {" "}
+                              <a
+                                href={shopLink}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className={linkClass}
+                              >
+                                Open the order in your shop
+                              </a>
+                            </>
+                          )}
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </CardContent>
+            </Card>
+          )}
           {sent.length > 0 && (
             <Card>
               <CardHeader>
@@ -985,6 +1118,13 @@ export default async function ShippingOrderPage({
                                 shipmentId={parcel.id as string}
                                 label
                                 source={parcel.label_provider as string}
+                                inShop={{
+                                  sent: parcel.shop_status === "sent",
+                                  emailed:
+                                    parcel.shop_status === "sent" &&
+                                    parcel.notify_customer === true,
+                                  canUndo: setup.canSend,
+                                }}
                               />
                             )}
                           </span>

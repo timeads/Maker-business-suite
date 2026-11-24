@@ -5,11 +5,13 @@ import { daysFromNow } from "@/lib/bookings/slots";
 import { countryName } from "@/lib/shipping/carriers";
 import { formatHoldDate, holdState, todayIn } from "@/lib/shipping/queue";
 import { orderCode } from "@/lib/shipping/scan";
+import { pickupTells } from "@/lib/shipping/shop-steps";
 import { createClient } from "@/lib/supabase/server";
 import { groupHref } from "@/lib/shipping/merge";
 import {
   ORDER_FIELDS,
   loadKnownGroup,
+  loadLabelConnections,
   loadShippingSetup,
   placeOf,
   type ShippingOrder,
@@ -37,8 +39,9 @@ export default async function ScanPage({
   const justSent = /^\d{1,9}$/.test(query.sent ?? "") ? query.sent : null;
 
   const supabase = await createClient();
-  const [setup, found] = await Promise.all([
+  const [setup, postage, found] = await Promise.all([
     loadShippingSetup(supabase, tenant.id),
+    loadLabelConnections(supabase, tenant.id),
     code
       ? supabase
           .from("shipping_orders")
@@ -90,6 +93,12 @@ export default async function ScanPage({
             ? "This order has been picked up."
             : null,
         unpaid: !row.paid,
+        together: Boolean(waitingWith),
+        pickupTells: pickupTells({
+          wanted: setup.settings.tell_shop_pickups,
+          canSend: setup.canSend,
+          connected: setup.connected,
+        }),
       }
     : null;
 
@@ -121,7 +130,7 @@ export default async function ScanPage({
           >
             Open them together
           </Link>{" "}
-          to pack and buy it. Recording a parcel here would send this order on its own.
+          to buy it. Recording a parcel here would send this order on its own.
         </p>
       )}
       <PackStation
@@ -130,6 +139,7 @@ export default async function ScanPage({
         order={order}
         missing={code && !order ? code : null}
         canWrite={entitlements.canWrite}
+        labels={postage.active.length > 0}
         parcel={{
           defaultCarrier: setup.settings.default_carrier,
           shopOffered: setup.canSend,

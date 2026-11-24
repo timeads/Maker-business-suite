@@ -37,6 +37,7 @@ import {
   type MemoryItem,
 } from "@/lib/shipping/memory";
 import { groupName, parseWith } from "@/lib/shipping/merge";
+import { cleanPart, samePart, type PartItem } from "@/lib/shipping/part";
 import { isWholeOrder, memoryItems } from "@/lib/shipping/plan";
 import { isInternational, todayIn } from "@/lib/shipping/queue";
 import { boughtForZebra, easyPostZplFiles, labelSource } from "@/lib/shipping/sources";
@@ -160,6 +161,14 @@ export type RatesInput = {
    * part of what was priced, so buying must send the same again.
    */
   labelFormat?: string;
+  /**
+   * Only these items and amounts are going now; the rest of the order waits.
+   * Checked against the order and kept with the quote: what is recorded
+   * later is what the quote says, never what is said at buying time.
+   */
+  part?: PartItem[];
+  /** With `part`: leave what's left in the queue rather than putting it on hold. */
+  holdRest?: boolean;
 };
 
 const TOGETHER_CHANGED =
@@ -177,6 +186,8 @@ type Prepared = {
   items: MemoryItem[];
   /** Nothing of these orders had gone before: only then is the packing worth remembering. */
   whole: boolean;
+  /** The items going now, when this label is for part of what's left. Null: all of it. */
+  part: PartItem[] | null;
 };
 
 /**
@@ -224,6 +235,14 @@ export async function prepareRequest(
     if (group.orders[0].id !== stored.id) return { error: TOGETHER_CHANGED };
     reference = groupName(group.orders);
     together = group.orders;
+  }
+  // Part of an order: only on its own, and only what is still there to send.
+  const parted = cleanPart(input.part, stored.items);
+  if ("error" in parted) return { error: parted.error };
+  if (parted.part && riders.length > 0) {
+    return {
+      error: "Orders going together are sent whole. Open this order on its own to send part of it.",
+    };
   }
   if (isInternational(stored.country_code, home)) return { error: INTERNATIONAL };
   // What a person changed on the screen goes on this label and nowhere else.
@@ -286,7 +305,9 @@ export async function prepareRequest(
         together.length > 1 ? { ...item, line_id: `${each.id}:${item.line_id}` } : item,
       ),
     ),
-    whole: together.every(isWholeOrder),
+    // A box that held only some of the items teaches nothing about the order.
+    whole: !parted.part && together.every(isWholeOrder),
+    part: parted.part,
     request: {
       from: shipFromAddress(setup.settings),
       to: {
@@ -404,7 +425,7 @@ export async function quoteRates(
   // Only prices and the sources' own ids are kept: no address. EasyPost's id
   // for what it quoted stays where it always was; without EasyPost, ours stands in.
   const easypost = answers.find((answer) => answer.source === "easypost")?.quote;
-  const { error } = await getAdminClient().rpc("save_label_quote_from", {
+  const kept = {
     p_tenant_id: ctx.tenant.id,
     p_shipping_order_id: stored.id,
     p_created_by: ctx.user.id,
@@ -413,10 +434,19 @@ export async function quoteRates(
     p_rates: rates,
     p_kind: several ? "order" : "shipment",
     p_boxes: request.parcels.length,
-    // Which orders these prices are for; only this exact set can buy them.
-    p_rider_ids: riders,
     p_request_hash: requestFingerprint(request),
-  });
+  };
+  const { error } = prepared.part
+    ? // Which items these prices are for; recording uses exactly these.
+      await getAdminClient().rpc("save_part_label_quote", {
+        ...kept,
+        p_part_items: prepared.part,
+      })
+    : await getAdminClient().rpc("save_label_quote_from", {
+        ...kept,
+        // Which orders these prices are for; only this exact set can buy them.
+        p_rider_ids: riders,
+      });
   if (error) {
     console.error("could not save label quote", error.message);
     return { error: "We got rates but couldn't keep them. Try again." };
@@ -439,6 +469,8 @@ type Claim = {
   request_hash?: unknown;
   /** The rate as the server stored it when it was quoted. */
   rate?: (Partial<SourceRate> & { id?: unknown }) | null;
+  /** The items the quote was priced for, when it is for part of the order. */
+  part?: unknown;
 };
 
 const CLAIM_ERRORS: [match: string, message: string][] = [
@@ -683,6 +715,27 @@ export async function purchaseLabel(
     }
     request = prepared.request;
     packed = prepared;
+  }
+
+  // A label for part of an order records the items its quote was priced for.
+  // The screen must be showing those same items, or the person would be
+  // buying for something other than what they see.
+  const quotedPart = Array.isArray(claim.part) ? (claim.part as PartItem[]) : null;
+  if ((quotedPart || input?.part) && !samePart(quotedPart, packed?.part ?? null)) {
+    await release();
+    return {
+      state: "refused",
+      error:
+        "What's going in this parcel changed after these rates were fetched. Press Get rates again, then choose one. Nothing was bought.",
+    };
+  }
+  if (quotedPart) {
+    // Whether the rest waits on hold: the one thing still open after the price is in.
+    const { error: holdError } = await ctx.supabase.rpc("set_label_quote_hold_rest", {
+      p_quote_id: claim.quote_id,
+      p_hold: input?.holdRest !== false,
+    });
+    if (holdError) console.error("could not note the hold for a part label", holdError.message);
   }
 
   const held = await labelAccess(ctx.tenant.id, sourceKey);

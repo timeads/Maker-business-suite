@@ -35,6 +35,7 @@ import {
   withoutBox,
   type Alloc,
 } from "@/lib/shipping/packing";
+import type { PartItem } from "@/lib/shipping/part";
 import { pickService } from "@/lib/shipping/rules";
 import type { SourceRateChoice } from "@/lib/shipping/sources/rates";
 import {
@@ -248,6 +249,8 @@ export function LabelDesk({
   record = null,
   recordOpen = false,
   off = null,
+  part = null,
+  partPicker = null,
   children,
 }: {
   slug: string;
@@ -310,6 +313,19 @@ export function LabelDesk({
     /** A warning about the address, where there is one. */
     addressNote?: string | null;
   } | null;
+  /**
+   * This label is for part of the order: `lines` are only what is going now.
+   * The server keeps these items with the quote and records exactly them.
+   */
+  part?: {
+    items: PartItem[];
+    /** "1 × Tufting Cloth, 2 × Yarn": what stays behind. */
+    leaving: string;
+    /** Back to the whole order. */
+    exitHref: string;
+  } | null;
+  /** The form for choosing how many of each item go now. */
+  partPicker?: React.ReactNode;
   /** The items in the order, shown under the box. */
   children: React.ReactNode;
 }) {
@@ -367,7 +383,8 @@ export function LabelDesk({
   });
   /** Counts a person's own changes to boxes, weights, split, signature or service: each is saved. */
   const [edits, setEdits] = useState(0);
-  const canSave = !off && !withIds?.length;
+  // What is set up for part of an order says nothing about the order itself.
+  const canSave = !off && !withIds?.length && !part;
   const touched = () => {
     if (!canSave) return;
     setMode("saved");
@@ -402,6 +419,15 @@ export function LabelDesk({
   /** Money was spent (or may have been): never offer Buy again on this screen. */
   const [locked, setLocked] = useState(false);
   const [recording, setRecording] = useState(recordOpen);
+  const [parting, setParting] = useState(false);
+  /** After a part shipment, what's left waits on hold unless this is unticked. */
+  const [holdRest, setHoldRest] = useState(true);
+  const partKey = part ? part.items.map((item) => `${item.line_id}×${item.qty}`).join("|") : "";
+  const partItems = useMemo(
+    () => (part ? part.items : undefined),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the same items are the same part
+    [partKey],
+  );
   const recordRef = useRef<HTMLDivElement>(null);
   const [quoting, startQuote] = useTransition();
   const [buying, startBuy] = useTransition();
@@ -451,6 +477,8 @@ export function LabelDesk({
           withIds: together,
           // This computer's own choice: a Zebra is sent its own format, not a picture.
           labelFormat: wantedLabelFormat(printSettings()),
+          // Only these items are going; the server keeps them with the prices.
+          ...(partItems ? { part: partItems } : {}),
         };
         const result = await getLabelRates(slug, orderId, input);
         // The details changed while the carriers were answering: these prices are for something else.
@@ -470,7 +498,7 @@ export function LabelDesk({
           pickService(result.rates, policyNow.current)?.rate.id ?? result.rates[0]?.id ?? "",
         );
       }),
-    [slug, orderId, together],
+    [slug, orderId, together, partItems],
   );
   const quoteNow = () =>
     quote(
@@ -781,7 +809,7 @@ export function LabelDesk({
         chosen,
         { markSent, notify },
         together,
-        asked ?? undefined,
+        asked ? (asked.part ? { ...asked, holdRest } : asked) : undefined,
       );
       // On success the page moves on to the finished label; there is no result.
       if (!result) return;
@@ -793,7 +821,7 @@ export function LabelDesk({
       }
       setError(result.error ?? "Something went wrong. Reload this page before trying again.");
     });
-  }, [slug, orderId, together, chosen, locked, markSent, notify, packed, lines, asked]);
+  }, [slug, orderId, together, chosen, locked, markSent, notify, packed, lines, asked, holdRest]);
 
   // Ctrl+P (or ⌘P) buys and prints, the way it does on the bench.
   useEffect(() => {
@@ -952,6 +980,33 @@ export function LabelDesk({
                       ))}
                   </div>
                 </div>
+                {part && (
+                  <div className="bg-note flex flex-wrap items-center gap-x-6 gap-y-2 rounded-md px-3 py-2 text-sm">
+                    <p className="min-w-0 flex-1 basis-64">
+                      <span className="font-semibold">Sending part of this order.</span> This label
+                      is for the items below only. Staying behind:{" "}
+                      <span className="font-read">{part.leaving}</span>.
+                    </p>
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={holdRest}
+                        disabled={busy || locked}
+                        onChange={(event) => setHoldRest(event.target.checked)}
+                      />
+                      Hold what&apos;s left
+                    </label>
+                    <a href={part.exitHref} className="text-ochre-text font-medium hover:underline">
+                      Send the whole order instead
+                    </a>
+                    <span className="text-muted-foreground w-full text-xs">
+                      {holdRest
+                        ? "What's left goes on hold with a note saying what it's waiting on. Release it when it can go."
+                        : "What's left stays in Ready to ship, for another box later today."}{" "}
+                      {markSent ? "Your shop is told about just these items." : ""}
+                    </span>
+                  </div>
+                )}
                 <div className="border-border flex flex-wrap items-center gap-x-6 gap-y-2 border-t pt-3 text-sm">
                   <label className="flex items-center gap-2">
                     <input
@@ -1176,6 +1231,19 @@ export function LabelDesk({
                   Split evenly
                 </Button>
               )}
+              {partPicker && !off && (
+                <Button
+                  type="button"
+                  variant={parting || part ? "dark" : "outline"}
+                  size="sm"
+                  aria-expanded={parting}
+                  aria-controls="ship-part"
+                  title="Some items not ready? Send what you have now, with its own label; the rest waits."
+                  onClick={() => setParting(!parting)}
+                >
+                  {part ? "Change what's going" : "Ship part of this order"}
+                </Button>
+              )}
               {record && (
                 <Button
                   type="button"
@@ -1183,10 +1251,10 @@ export function LabelDesk({
                   size="sm"
                   aria-expanded={recording}
                   aria-controls="record-by-hand"
-                  title="Some items not ready? Send what you have now; the rest stays on your to-send list."
+                  title="Bought the postage somewhere else? Put its tracking number here."
                   onClick={() => (recording ? setRecording(false) : openRecord())}
                 >
-                  Ship part of this order
+                  {partPicker && !off ? "Record by hand" : "Ship part of this order"}
                 </Button>
               )}
             </div>
@@ -1396,6 +1464,18 @@ export function LabelDesk({
           ) : (
             children
           )}
+          {partPicker && parting && !off && (
+            <div id="ship-part" className="border-border flex flex-col gap-3 border-t pt-4">
+              <div>
+                <p className="text-sm font-semibold">Ship part of this order</p>
+                <p className="text-muted-foreground text-sm">
+                  Say how many of each item are going now. You&apos;ll get rates and a label for
+                  just those, and the rest waits until it can go.
+                </p>
+              </div>
+              {partPicker}
+            </div>
+          )}
           {record && recording && (
             <div
               id="record-by-hand"
@@ -1403,13 +1483,11 @@ export function LabelDesk({
               className="border-border flex scroll-mt-4 flex-col gap-3 border-t pt-4"
             >
               <div>
-                <p className="text-sm font-semibold">
-                  {off ? "Record the parcel by hand" : "Ship part of this order"}
-                </p>
+                <p className="text-sm font-semibold">Record the parcel by hand</p>
                 <p className="text-muted-foreground text-sm">
                   {off
                     ? "Buy the postage wherever you usually do, then put the tracking number here. Lower a number to send part now."
-                    : "A part shipment is recorded by hand for now: lower a number to send part of the order, buy that postage wherever you usually do, and put the tracking number here. The rest stays on your to-send list. This is also the place for postage you bought somewhere else."}
+                    : "For postage you bought somewhere else: put the tracking number here. Lower a number to record only part of the order; the rest stays on your to-send list."}
                 </p>
               </div>
               {record}

@@ -9,6 +9,7 @@ import { createClient } from "@/lib/supabase/server";
 import { cn } from "@/lib/utils";
 import { canManage } from "@/lib/tenants";
 import { loadShippingSetup } from "../data";
+import { undoWords } from "@/lib/shipping/shop-steps";
 import { ParcelForm, VoidButton } from "../forms";
 import { shippingAccess } from "../gate";
 import { ShippingTabs } from "../tabs";
@@ -69,7 +70,7 @@ export default async function SentParcelsPage({
     supabase
       .from("shipments")
       .select(
-        "id, number, order_name, recipient, destination, carrier, service, tracking_number, tracking_url, cost, shipped_at, voided_at, shop_status, shop_error, label_provider, label_url, label_mode, label_refund_status, merged_with",
+        "id, number, order_name, recipient, destination, carrier, service, tracking_number, tracking_url, cost, shipped_at, voided_at, shop_status, shop_error, notify_customer, label_provider, label_url, label_mode, label_refund_status, merged_with",
       )
       .eq("tenant_id", tenant.id)
       .order("number", { ascending: false })
@@ -77,7 +78,21 @@ export default async function SentParcelsPage({
     loadShippingSetup(supabase, tenant.id),
     supabase.rpc("shipping_report", { p_tenant_id: tenant.id, p_days: range }),
   ]);
-  const parcels = (data ?? []) as Parcel[];
+  const parcels = (data ?? []) as (Parcel & { notify_customer?: boolean })[];
+  // What became of undoing voided parcels in the shop. Asked apart and allowed to fail,
+  // so the list still opens on a database from before this was kept.
+  const { data: undoRows } = await supabase
+    .from("shipments")
+    .select("id, shop_undo_status, shop_undo_error")
+    .eq("tenant_id", tenant.id)
+    .neq("shop_undo_status", "none")
+    .order("number", { ascending: false })
+    .limit(300);
+  const undoOf = new Map(
+    (
+      (undoRows ?? []) as { id: string; shop_undo_status: string; shop_undo_error: string | null }[]
+    ).map((row) => [row.id, undoWords(row.shop_undo_status, row.shop_undo_error)]),
+  );
   // An order that went in another order's parcel points at it.
   const numberOf = new Map(parcels.map((parcel) => [parcel.id, parcel.number]));
   const report = (reported ?? null) as Report | null;
@@ -278,6 +293,13 @@ export default async function SentParcelsPage({
                             <Badge tone="waiting">Label voided · refund requested</Badge>
                           )}
                           {parcel.label_mode === "test" && <Badge tone="waiting">Test label</Badge>}
+                          {parcel.voided_at && undoOf.get(parcel.id) && (
+                            <span title={undoOf.get(parcel.id)!.detail ?? undefined}>
+                              <Badge tone={undoOf.get(parcel.id)!.tone}>
+                                {undoOf.get(parcel.id)!.text}
+                              </Badge>
+                            </span>
+                          )}
                           {!parcel.voided_at && parcel.shop_status === "sent" && (
                             <Badge tone="good">Marked in shop</Badge>
                           )}
@@ -322,6 +344,12 @@ export default async function SentParcelsPage({
                               shipmentId={parcel.id}
                               label={Boolean(parcel.label_provider)}
                               source={parcel.label_provider}
+                              inShop={{
+                                sent: parcel.shop_status === "sent",
+                                emailed:
+                                  parcel.shop_status === "sent" && parcel.notify_customer === true,
+                                canUndo: setup.canSend,
+                              }}
                             />
                           )}
                         </td>
