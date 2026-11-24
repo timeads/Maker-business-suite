@@ -44,9 +44,12 @@ import {
 } from "../shipping/config";
 import { DEFAULT_SHIPPING_RULES, SHIPPING_RULES_KEY, shippingRulesSchema } from "../shipping/rules";
 import {
+  DEFAULT_SAVED_VIEWS,
   DEFAULT_STOCK_SETTINGS,
   STOCK_MODULE,
   STOCK_SETTINGS_KEY,
+  STOCK_VIEWS_KEY,
+  savedViewsSchema,
   stockSettingsSchema,
 } from "../stock/config";
 
@@ -125,6 +128,16 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
       "The lead time and days of cover used when a supplier doesn't say, how often orders are reviewed, whether busy seasons are planned for, whether checked-in deliveries are added to the shop's count, and the words in an item's name that mean it is never reordered (gift cards and the like).",
     schema: stockSettingsSchema,
     defaultBody: () => DEFAULT_STOCK_SETTINGS,
+  },
+  {
+    module: STOCK_MODULE,
+    key: STOCK_VIEWS_KEY,
+    feature: "stock",
+    name: "Saved views of the reorder list",
+    description:
+      "Named views of Stock's Everything list, shared by the whole workspace: which built-in view (all, onorder, nosales, hidden, atrisk, out, under, healthy, over, nosupplier), a search, the column it is sorted by and which way, the columns on show, and whether the list opens on it (opens_first, at most one). Each view needs a short id of lowercase letters and digits.",
+    schema: savedViewsSchema,
+    defaultBody: () => DEFAULT_SAVED_VIEWS,
   },
   {
     module: SHIPPING_MODULE,

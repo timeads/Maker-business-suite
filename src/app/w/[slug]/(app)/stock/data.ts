@@ -1,7 +1,13 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { localDay } from "@/lib/bookings/slots";
 import { canWriteShopifyStock } from "@/lib/connections/providers/shopify-stock";
-import { STOCK_MODULE, STOCK_SETTINGS_KEY, parseStockSettings } from "@/lib/stock/config";
+import {
+  STOCK_MODULE,
+  STOCK_SETTINGS_KEY,
+  STOCK_VIEWS_KEY,
+  parseSavedViews,
+  parseStockSettings,
+} from "@/lib/stock/config";
 import {
   observedLeadTimeDays,
   type LeadTimeSample,
@@ -17,11 +23,14 @@ import {
   type ReceivedCostRow,
   type ItemRow,
   type OpenLine,
+  type RevenueRow,
   type SaleRow,
   type SupplierRow,
 } from "@/lib/stock/plan";
 
 const PAGE = 1000;
+
+type OrderOfLine = { status: string; number: number; created_at: string };
 
 /** Reads every row of a query, a page at a time (the API hands back 1,000 at most). */
 async function all<T>(
@@ -52,92 +61,117 @@ export async function loadStock(
   tenant: { id: string; timezone: string },
 ) {
   const today = localDay(new Date(), tenant.timezone);
-  const [items, suppliers, sales, lines, emptyDays, received, { data: config }, { data: shop }] =
-    await Promise.all([
-      all<ItemRow & { synced_at: string }>((from, to) =>
-        supabase
-          .from("stock_items")
-          .select(
-            "id, title, variant_title, sku, on_hand, unit_cost, tracked, product_status, supplier_id, lead_time_days, coverage_days, safety_stock, hidden, vendor, price, case_pack, moq, supplier_sku, own_cost, synced_at",
-          )
-          .eq("tenant_id", tenant.id)
-          .order("title")
-          .order("id")
-          .range(from, to),
-      ),
-      all<SupplierRow & { email: string | null; notes: string }>((from, to) =>
-        supabase
-          .from("suppliers")
-          .select(
-            "id, name, email, lead_time_days, coverage_days, moq, moq_applies_to, notes, archived_at",
-          )
-          .eq("tenant_id", tenant.id)
-          .order("name")
-          .range(from, to),
-      ),
-      all<SaleRow>((from, to) =>
-        supabase
-          .rpc("stock_sales_by_day", { p_tenant_id: tenant.id, p_days: 730 })
-          .order("day")
-          .order("stock_item_id")
-          .range(from, to),
-      ),
-      all<{
-        stock_item_id: string;
-        qty_ordered: number;
-        qty_received: number;
-        purchase_orders: { status: string } | { status: string }[];
-      }>((from, to) =>
-        supabase
-          .from("purchase_order_lines")
-          .select("stock_item_id, qty_ordered, qty_received, purchase_orders!inner(status)")
-          .eq("tenant_id", tenant.id)
-          .in("purchase_orders.status", ["ordered", "partial"])
-          .order("id")
-          .range(from, to),
-      ),
-      // Only the days an item had none: the sales rate leaves those out. Days it
-      // was in stock aren't read.
-      all<EmptyDayRow>((from, to) =>
-        supabase
-          .from("stock_daily_counts")
-          .select("stock_item_id, day")
-          .eq("tenant_id", tenant.id)
-          .lte("on_hand", 0)
-          .gte("day", emptyDaysSince(today))
-          .order("day")
-          .order("stock_item_id")
-          .range(from, to),
-      ),
-      // What checked-in deliveries cost, summed per item, for the average cost.
-      all<ReceivedCostRow>((from, to) =>
-        supabase
-          .rpc("stock_received_costs", { p_tenant_id: tenant.id })
-          .order("stock_item_id")
-          .range(from, to),
-      ),
+  const [
+    items,
+    suppliers,
+    sales,
+    lines,
+    emptyDays,
+    received,
+    revenue,
+    { data: configs },
+    { data: shop },
+  ] = await Promise.all([
+    all<ItemRow & { synced_at: string }>((from, to) =>
       supabase
-        .from("configs")
-        .select("body")
+        .from("stock_items")
+        .select(
+          "id, title, variant_title, sku, on_hand, unit_cost, tracked, product_status, supplier_id, lead_time_days, coverage_days, safety_stock, hidden, vendor, price, case_pack, moq, supplier_sku, own_cost, image_url, variant_image_url, synced_at",
+        )
         .eq("tenant_id", tenant.id)
-        .eq("module", STOCK_MODULE)
-        .eq("key", STOCK_SETTINGS_KEY)
-        .maybeSingle(),
+        .order("title")
+        .order("id")
+        .range(from, to),
+    ),
+    all<SupplierRow & { email: string | null; notes: string }>((from, to) =>
       supabase
-        .from("connections")
-        .select("status, scopes, last_synced_at")
+        .from("suppliers")
+        .select(
+          "id, name, email, lead_time_days, coverage_days, moq, moq_applies_to, notes, archived_at",
+        )
         .eq("tenant_id", tenant.id)
-        .eq("provider", "shopify")
-        .maybeSingle(),
-    ]);
-  const settings = parseStockSettings(config?.body);
-  const openLines: OpenLine[] = lines.map((line) => ({
-    stock_item_id: line.stock_item_id,
-    qty_ordered: line.qty_ordered,
-    qty_received: line.qty_received,
-    status: (Array.isArray(line.purchase_orders) ? line.purchase_orders[0] : line.purchase_orders)
-      .status,
-  }));
+        .order("name")
+        .range(from, to),
+    ),
+    all<SaleRow>((from, to) =>
+      supabase
+        .rpc("stock_sales_by_day", { p_tenant_id: tenant.id, p_days: 730 })
+        .order("day")
+        .order("stock_item_id")
+        .range(from, to),
+    ),
+    all<{
+      stock_item_id: string;
+      qty_ordered: number;
+      qty_received: number;
+      purchase_orders: OrderOfLine | OrderOfLine[];
+    }>((from, to) =>
+      supabase
+        .from("purchase_order_lines")
+        .select(
+          "stock_item_id, qty_ordered, qty_received, purchase_orders!inner(status, number, created_at)",
+        )
+        .eq("tenant_id", tenant.id)
+        .in("purchase_orders.status", ["ordered", "partial"])
+        .order("id")
+        .range(from, to),
+    ),
+    // Only the days an item had none: the sales rate leaves those out. Days it
+    // was in stock aren't read.
+    all<EmptyDayRow>((from, to) =>
+      supabase
+        .from("stock_daily_counts")
+        .select("stock_item_id, day")
+        .eq("tenant_id", tenant.id)
+        .lte("on_hand", 0)
+        .gte("day", emptyDaysSince(today))
+        .order("day")
+        .order("stock_item_id")
+        .range(from, to),
+    ),
+    // What checked-in deliveries cost, summed per item, for the average cost.
+    all<ReceivedCostRow>((from, to) =>
+      supabase
+        .rpc("stock_received_costs", { p_tenant_id: tenant.id })
+        .order("stock_item_id")
+        .range(from, to),
+    ),
+    // What each item brought in over 90 days, for "% Rev" and the best sellers.
+    all<RevenueRow>((from, to) =>
+      supabase
+        .rpc("stock_revenue_by_item", { p_tenant_id: tenant.id, p_days: 90 })
+        .order("stock_item_id")
+        .range(from, to),
+    ),
+    supabase
+      .from("configs")
+      .select("key, body")
+      .eq("tenant_id", tenant.id)
+      .eq("module", STOCK_MODULE)
+      .in("key", [STOCK_SETTINGS_KEY, STOCK_VIEWS_KEY]),
+    supabase
+      .from("connections")
+      .select("status, scopes, last_synced_at")
+      .eq("tenant_id", tenant.id)
+      .eq("provider", "shopify")
+      .maybeSingle(),
+  ]);
+  const config = (key: string) =>
+    ((configs ?? []) as { key: string; body: unknown }[]).find((row) => row.key === key)?.body;
+  const settings = parseStockSettings(config(STOCK_SETTINGS_KEY));
+  const openLines: OpenLine[] = lines.map((line) => {
+    const order = Array.isArray(line.purchase_orders)
+      ? line.purchase_orders[0]
+      : line.purchase_orders;
+    return {
+      stock_item_id: line.stock_item_id,
+      qty_ordered: line.qty_ordered,
+      qty_received: line.qty_received,
+      status: order.status,
+      order_number: order.number,
+      order_created_at: order.created_at,
+    };
+  });
   const link: ShopLink = {
     connected: shop?.status === "active",
     canPush: shop?.status === "active" && canWriteShopifyStock(shop.scopes),
@@ -151,11 +185,13 @@ export async function loadStock(
       openLines,
       emptyDays,
       received,
+      revenue,
       settings,
       today,
     }),
     suppliers,
     settings,
+    savedViews: parseSavedViews(config(STOCK_VIEWS_KEY)).views,
     today,
     link,
   };

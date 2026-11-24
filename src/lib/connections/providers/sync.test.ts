@@ -412,6 +412,44 @@ describe("Shopify sync", () => {
     expect(result.cursor).toBeDefined();
   });
 
+  it("notes each option's own photo, and still counts stock for a shop that won't share photos", async () => {
+    const stock = [
+      {
+        nodes: [
+          variant("v1", { image: { url: "https://cdn.shopify.com/s/rug-large.jpg" } }),
+          // Not on the shop platform's image servers: never kept.
+          variant("v2", { image: { url: "https://elsewhere.example/x.jpg" } }),
+        ],
+        hasNextPage: false,
+        endCursor: null,
+      },
+    ];
+    const cursor = { synced_through: "2026-11-20T00:00:00.000Z" };
+    const net = pagedGraphql([{ nodes: [], hasNextPage: false, endCursor: null }], stock);
+    const first = context({ type: "incremental", cursor });
+    await syncShopify(first.ctx, net.graphql, NOW);
+    expect(first.state.variantPhotos).toEqual([
+      { external_id: "v1", image_url: "https://cdn.shopify.com/s/rug-large.jpg?width=160" },
+      { external_id: "v2", image_url: null },
+    ]);
+
+    // A shop that refuses the question with photos is asked again without them.
+    const plain = pagedGraphql([{ nodes: [], hasNextPage: false, endCursor: null }], stock);
+    const asked: boolean[] = [];
+    const picky = (async (shop, token, query, variables) => {
+      if (query.includes("productVariants")) {
+        asked.push(query.includes("image {"));
+        if (query.includes("image {")) throw new Error("Field 'image' doesn't exist");
+      }
+      return plain.graphql(shop, token, query, variables);
+    }) as ShopifyGraphql;
+    const second = context({ type: "incremental", cursor });
+    await syncShopify(second.ctx, picky, NOW);
+    expect(asked).toEqual([true, false]);
+    expect(second.state.stock.map((item) => item.external_id)).toEqual(["v1", "v2"]);
+    expect(second.state.variantPhotos).toEqual([]);
+  });
+
   it("reads the stock count once the orders are in, and carries on where it left off", async () => {
     const net = pagedGraphql(
       [{ nodes: [], hasNextPage: false, endCursor: null }],

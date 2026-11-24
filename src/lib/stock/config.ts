@@ -32,3 +32,38 @@ export function parseStockSettings(body: unknown): StockSettings {
   const parsed = stockSettingsSchema.safeParse(body);
   return parsed.success ? parsed.data : DEFAULT_STOCK_SETTINGS;
 }
+
+/**
+ * Saved views of the reorder list: a view, a search, an order and the columns
+ * on show, kept under a name for the whole workspace (as TuftStock keeps
+ * them). One may be the view the list opens on.
+ */
+export const STOCK_VIEWS_KEY = "saved_views";
+export const MAX_SAVED_VIEWS = 20;
+
+export const savedViewSchema = z.object({
+  id: z.string().regex(/^[a-z0-9]{6,16}$/),
+  name: z.string().trim().min(1).max(40),
+  /** One of the built-in views (lib/stock/views.ts); an unknown one opens "All". */
+  view: z.string().max(20).default("all"),
+  q: z.string().max(80).default(""),
+  sort: z.string().max(20).default("orderBy"),
+  dir: z.enum(["asc", "desc"]).default("asc"),
+  /** The columns on show, by key. Empty means the usual ones. */
+  columns: z.array(z.string().max(20)).max(30).default([]),
+  /** The list opens on this view. */
+  opens_first: z.boolean().default(false),
+});
+export type SavedView = z.infer<typeof savedViewSchema>;
+
+export const savedViewsSchema = z.object({
+  version: z.literal(1),
+  views: z.array(savedViewSchema).max(MAX_SAVED_VIEWS).default([]),
+});
+export type SavedViews = z.infer<typeof savedViewsSchema>;
+export const DEFAULT_SAVED_VIEWS: SavedViews = { version: 1, views: [] };
+
+export function parseSavedViews(body: unknown): SavedViews {
+  const parsed = savedViewsSchema.safeParse(body);
+  return parsed.success ? parsed.data : DEFAULT_SAVED_VIEWS;
+}

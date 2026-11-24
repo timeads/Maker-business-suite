@@ -8,7 +8,16 @@ import { localDay } from "@/lib/bookings/slots";
 import { canWriteShopifyStock } from "@/lib/connections/providers/shopify-stock";
 import { guessCarrier, tidyTracking } from "@/lib/shipping/carriers";
 import { Money } from "@/lib/stock/balance/money";
-import { STOCK_MODULE, STOCK_SETTINGS_KEY, stockSettingsSchema } from "@/lib/stock/config";
+import {
+  MAX_SAVED_VIEWS,
+  STOCK_MODULE,
+  STOCK_SETTINGS_KEY,
+  STOCK_VIEWS_KEY,
+  parseSavedViews,
+  savedViewsSchema,
+  stockSettingsSchema,
+} from "@/lib/stock/config";
+import { isColumnKey, isViewKey } from "@/lib/stock/views";
 import { startingQty } from "@/lib/stock/engine";
 import { draftOrders, draftOrdersForItems, type DraftOrder, type StockRow } from "@/lib/stock/plan";
 import { createClient } from "@/lib/supabase/server";
@@ -354,7 +363,7 @@ export async function bulkItems(
     const n = (data as number) ?? 0;
     if (what === "hide") {
       return {
-        message: `${plural(n, "item")} won't be reordered. You'll find ${n === 1 ? "it" : "them"} under “Not reordering”.`,
+        message: `${plural(n, "item")} won't be reordered. You'll find ${n === 1 ? "it" : "them"} under “Hidden”.`,
       };
     }
     return {
@@ -830,4 +839,87 @@ export async function saveStockSettings(
   if (error) return { error: OOPS };
   done(slug);
   return { message: "Saved." };
+}
+
+async function readSavedViews(ctx: {
+  supabase: Awaited<ReturnType<typeof createClient>>;
+  tenant: { id: string };
+}) {
+  const { data } = await ctx.supabase
+    .from("configs")
+    .select("body")
+    .eq("tenant_id", ctx.tenant.id)
+    .eq("module", STOCK_MODULE)
+    .eq("key", STOCK_VIEWS_KEY)
+    .maybeSingle();
+  return parseSavedViews(data?.body).views;
+}
+
+/**
+ * Keeps the reorder list as it stands (view, search, order, columns) under a
+ * name, for the whole workspace. The same name again replaces that view.
+ */
+export async function saveStockView(
+  slug: string,
+  _prev: StockState,
+  formData: FormData,
+): Promise<StockState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const name = text(formData, "name").slice(0, 40);
+  if (!name) return { error: "Give the view a name." };
+  const show = text(formData, "show");
+  const sort = text(formData, "sort");
+  const views = await readSavedViews(ctx);
+  const same = views.find((view) => view.name.toLowerCase() === name.toLowerCase());
+  if (!same && views.length >= MAX_SAVED_VIEWS) {
+    return { error: `That's the most views we keep (${MAX_SAVED_VIEWS}). Take one off first.` };
+  }
+  const opensFirst = formData.get("opens_first") === "on";
+  const id = same?.id ?? crypto.randomUUID().replace(/-/g, "").slice(0, 10);
+  const parsed = savedViewsSchema.safeParse({
+    version: 1,
+    views: [
+      ...views
+        .filter((view) => view.id !== id)
+        .map((view) => (opensFirst ? { ...view, opens_first: false } : view)),
+      {
+        id,
+        name,
+        view: isViewKey(show) ? show : "all",
+        q: text(formData, "q").slice(0, 80),
+        sort: isColumnKey(sort) ? sort : "orderBy",
+        dir: text(formData, "dir") === "desc" ? "desc" : "asc",
+        columns: text(formData, "columns").split(",").filter(isColumnKey),
+        opens_first: opensFirst,
+      },
+    ],
+  });
+  if (!parsed.success) return { error: OOPS };
+  const { error } = await ctx.supabase.rpc("save_config", {
+    p_tenant_id: ctx.tenant.id,
+    p_module: STOCK_MODULE,
+    p_key: STOCK_VIEWS_KEY,
+    p_body: parsed.data,
+  });
+  if (error) return { error: OOPS };
+  done(slug);
+  redirect(`/w/${slug}/stock/items?saved=${id}`);
+}
+
+/** Takes a saved view off the list. The items themselves are untouched. */
+export async function removeStockView(slug: string, viewId: string): Promise<void> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return;
+  const views = await readSavedViews(ctx);
+  if (!views.some((view) => view.id === viewId)) return;
+  const { error } = await ctx.supabase.rpc("save_config", {
+    p_tenant_id: ctx.tenant.id,
+    p_module: STOCK_MODULE,
+    p_key: STOCK_VIEWS_KEY,
+    p_body: { version: 1, views: views.filter((view) => view.id !== viewId) },
+  });
+  if (error) return;
+  done(slug);
+  redirect(`/w/${slug}/stock/items?show=all`);
 }

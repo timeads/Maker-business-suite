@@ -44,11 +44,15 @@ export async function GET(request: Request, { params }: { params: Promise<{ slug
       : COLUMNS.map((column) => column.key).filter((key) => !DEFAULT_HIDDEN_COLUMNS.includes(key));
 
   const { rows, today } = await loadStock(await createClient(), ctx.tenant);
+  // "Export the ticked rows": the page sends their ids; none means the whole view.
+  const only = new Set(
+    (query.get("ids") ?? "").split(",").filter((id) => /^[0-9a-f-]{36}$/i.test(id)),
+  );
   const shown = sortRows(
     searchRows(viewRows(rows, today)[view], (query.get("q") ?? "").slice(0, 80)),
     sort.key,
     sort.dir,
-  );
+  ).filter((row) => only.size === 0 || only.has(row.item.id));
   const table = csvTable(shown, columns);
   return new NextResponse(table.map((row) => row.map(csvCell).join(",")).join("\r\n") + "\r\n", {
     headers: {

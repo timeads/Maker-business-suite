@@ -117,6 +117,9 @@ export type StockItemRow = {
   price: number | null;
 };
 
+/** One option's own photo (a product with several colours has one each). */
+export type VariantPhotoRow = { external_id: string; image_url: string | null };
+
 export type ProductPhotoRow = {
   product_external_id: string;
   image_url: string | null;
@@ -185,6 +188,8 @@ export type SyncStore = {
   upsertStock(items: StockItemRow[]): Promise<void>;
   /** Each product's main photo and its page in the shop. */
   setProductPhotos(products: ProductPhotoRow[]): Promise<void>;
+  /** Each option's own photo, for the reorder list. */
+  setVariantPhotos(items: VariantPhotoRow[]): Promise<void>;
   /** Turns orders with workshop dates on them into bookings. Safe to repeat. */
   bookShopOrders(orders: ShopBookingOrder[]): Promise<void>;
   /** For orders already stored with upsertCommerce. */

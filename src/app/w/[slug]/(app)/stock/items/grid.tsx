@@ -3,23 +3,31 @@
 import { useActionState, useMemo, useState, useSyncExternalStore, useTransition } from "react";
 import { useFormStatus } from "react-dom";
 import Link from "next/link";
-import { Download, Pencil, SlidersHorizontal } from "lucide-react";
+import { Download, Pencil, Plus, SlidersHorizontal, X } from "lucide-react";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input, Label, Select } from "@/components/ui/input";
+import { SubmitButton } from "@/components/ui/submit-button";
 import { formatMoney } from "@/lib/dashboard/format";
 import {
   COLUMNS,
-  COLUMNS_ADDED_LATER,
   DEFAULT_HIDDEN_COLUMNS,
   EDITABLE_COLUMNS,
+  MAIN_VIEW_COUNT,
   isColumnKey,
   type ColumnKey,
   type GridRow,
   type SortDir,
 } from "@/lib/stock/views";
 import { cn } from "@/lib/utils";
-import { bulkItems, saveItemFigure, type FigureField } from "../actions";
+import {
+  bulkItems,
+  removeStockView,
+  saveItemFigure,
+  saveStockView,
+  setItemHidden,
+  type FigureField,
+} from "../actions";
 import { RequestKey, Result } from "../forms";
 
 const TONES: Record<GridRow["health"], BadgeTone> = {
@@ -32,8 +40,9 @@ const TONES: Record<GridRow["health"], BadgeTone> = {
 
 // Which columns this viewer has switched off. Kept in the browser as a
 // convenience only: if storage is blocked the choice lasts until the page is
-// left, and the grid works the same either way.
-const STORE = "stock.items.columns.v1";
+// left, and the grid works the same either way. (A saved view carries its own
+// columns for everyone; this is only the viewer's choice outside one.)
+const STORE = "stock.items.columns.v2";
 const CHANGED = "stock-columns-changed";
 let memory: string | null = null;
 const subscribe = (notify: () => void) => {
@@ -68,8 +77,6 @@ function parseHidden(raw: string): ColumnKey[] {
     const value: unknown = JSON.parse(raw);
     const keys = (list: unknown) =>
       Array.isArray(list) ? list.filter(isColumnKey).filter((k) => k !== "item") : [];
-    // The first format was a bare list, saved before some columns existed.
-    if (Array.isArray(value)) return [...new Set([...keys(value), ...COLUMNS_ADDED_LATER])];
     if (!value || typeof value !== "object") return DEFAULT_HIDDEN_COLUMNS;
     const saved = value as { hidden?: unknown; seen?: unknown };
     const seen = new Set<ColumnKey>(keys(saved.seen));
@@ -79,6 +86,99 @@ function parseHidden(raw: string): ColumnKey[] {
   } catch {
     return DEFAULT_HIDDEN_COLUMNS;
   }
+}
+
+const chip = "rounded-full px-2.5 py-1 text-xs whitespace-nowrap transition-colors duration-150";
+const chipOn = "bg-teal font-semibold text-white";
+const chipOff = "bg-sunken text-text-2 hover:bg-hover";
+const popover =
+  "border-border bg-card absolute z-10 mt-1 flex flex-col gap-2 rounded-lg border p-3 shadow-[var(--tuft-shadow)]";
+const toolButton = cn(
+  "border-input bg-card hover:bg-hover flex h-[30px] cursor-pointer list-none items-center gap-2 rounded-sm border px-2.5 text-xs font-semibold",
+  "[&::-webkit-details-marker]:hidden",
+);
+
+/** "Hide" on a row (or "Unhide" in the Hidden view): the Don't-reorder switch, one press. */
+function HideButton({ slug, row }: { slug: string; row: GridRow }) {
+  const [pending, start] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const hide = !row.hiddenByHand;
+  // Left out by the shop or by a rule, not by a person: nothing here to undo.
+  if (row.left && !row.hiddenByHand) return null;
+  return (
+    <>
+      <button
+        type="button"
+        disabled={pending}
+        aria-label={`${hide ? "Hide" : "Unhide"} ${row.name}`}
+        title={hide ? "Don't reorder this one" : "Plan for this one again"}
+        className="text-muted-foreground hover:text-foreground text-xs font-semibold hover:underline disabled:opacity-50"
+        onClick={() =>
+          start(async () => {
+            const result = await setItemHidden(slug, row.id, hide, {}, new FormData());
+            setError(result.error ?? null);
+          })
+        }
+      >
+        {pending ? "Saving…" : hide ? "Hide" : "Unhide"}
+      </button>
+      {error && (
+        <span role="alert" className="text-brick block text-xs">
+          {error}
+        </span>
+      )}
+    </>
+  );
+}
+
+/** "+ Save view": keeps the list as it stands under a name, for the whole workspace. */
+function SaveView({
+  slug,
+  view,
+  q,
+  sort,
+  columns,
+}: {
+  slug: string;
+  view: string;
+  q: string;
+  sort: { key: ColumnKey; dir: SortDir };
+  columns: ColumnKey[];
+}) {
+  const [state, action] = useActionState(saveStockView.bind(null, slug), {});
+  return (
+    <details className="relative">
+      <summary
+        className={cn(
+          chip,
+          "border-input text-text-2 hover:bg-hover flex cursor-pointer list-none items-center gap-1 border [&::-webkit-details-marker]:hidden",
+        )}
+      >
+        <Plus className="size-3" /> Save view
+      </summary>
+      <form action={action} className={cn(popover, "left-0 w-64")}>
+        <input type="hidden" name="show" value={view} />
+        <input type="hidden" name="q" value={q} />
+        <input type="hidden" name="sort" value={sort.key} />
+        <input type="hidden" name="dir" value={sort.dir} />
+        <input type="hidden" name="columns" value={columns.join(",")} />
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="save-view-name">Call this view</Label>
+          <Input id="save-view-name" name="name" maxLength={40} placeholder="Yarn" required />
+        </div>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" name="opens_first" /> Open the list on this view
+        </label>
+        <p className="text-muted-foreground text-xs">
+          Keeps the view, search, order and columns you have now, for everyone in the workspace.
+        </p>
+        <Result state={state} />
+        <SubmitButton variant="outline" size="sm" pendingText="Saving…">
+          Save view
+        </SubmitButton>
+      </form>
+    </details>
+  );
 }
 
 /** A button on the bar. The one that was pressed shows its own "working" words. */
@@ -131,7 +231,7 @@ function FigureBox({
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   return (
-    <span className="inline-flex flex-col items-end gap-0.5">
+    <span className="inline-flex flex-col items-start gap-0.5">
       <Input
         defaultValue={value}
         placeholder={placeholder}
@@ -180,29 +280,60 @@ const BULK_FIGURES = [
 export function ItemsGrid({
   slug,
   rows,
+  total,
   canEdit,
   suppliers,
+  views,
   view,
+  note,
+  q,
+  savedViews,
+  savedId,
+  savedColumns,
   query,
   sort,
   currency,
+  emptyText,
 }: {
   slug: string;
   rows: GridRow[];
+  /** Rows in the view after the search, across every page. */
+  total: number;
   canEdit: boolean;
   suppliers: { id: string; name: string }[];
+  views: { key: string; label: string; count: number }[];
   /** The view on screen; "hidden" swaps the bar to bringing items back. */
   view: string;
+  note: string | null;
+  q: string;
+  savedViews: { id: string; name: string }[];
+  /** The saved view on screen, if one is. */
+  savedId: string | null;
+  /** That view's own columns, which win over the viewer's usual choice. */
+  savedColumns: ColumnKey[] | null;
   /** The view and search as a query string, without sort ("show=under&q=wool"). */
   query: string;
   sort: { key: ColumnKey; dir: SortDir };
   currency: string;
+  emptyText: string;
 }) {
   const base = `/w/${slug}/stock`;
   const [state, action] = useActionState(bulkItems.bind(null, slug), {});
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
   const stored = useSyncExternalStore(subscribe, readStore, () => "");
-  const hidden = useMemo(() => new Set(parseHidden(stored)), [stored]);
+  // Inside a saved view its columns are shown, until the viewer changes one.
+  const [changed, setChanged] = useState<{ view: string | null; hidden: ColumnKey[] } | null>(null);
+  const hidden = useMemo(() => {
+    if (changed && changed.view === savedId) return new Set(changed.hidden);
+    if (savedColumns) {
+      return new Set(
+        COLUMNS.map((column) => column.key).filter(
+          (key) => key !== "item" && !savedColumns.includes(key),
+        ),
+      );
+    }
+    return new Set(parseHidden(stored));
+  }, [stored, savedColumns, savedId, changed]);
   // "Change figures" turns the planning columns into boxes, and shows them
   // all while it's on, whatever the viewer usually hides.
   const [editing, setEditing] = useState(false);
@@ -220,8 +351,11 @@ export function ItemsGrid({
       else next.add(id);
       return next;
     });
-  const toggleColumn = (key: ColumnKey) =>
-    writeStore(hidden.has(key) ? [...hidden].filter((k) => k !== key) : [...hidden, key]);
+  const toggleColumn = (key: ColumnKey) => {
+    const next = hidden.has(key) ? [...hidden].filter((k) => k !== key) : [...hidden, key];
+    if (savedId) setChanged({ view: savedId, hidden: next });
+    else writeStore(next);
+  };
 
   const href = (params: Record<string, string>) => {
     const search = new URLSearchParams(query);
@@ -234,10 +368,14 @@ export function ItemsGrid({
       sort: key,
       dir: sort.key === key && sort.dir === "asc" ? "desc" : "asc",
     })}`;
+  // A handful of ticked rows can be named in the address; more than that, and
+  // the download is the whole view.
+  const exportTicked = ticked.length > 0 && ticked.length <= 150;
   const exportHref = `${base}/items/export${href({
     sort: sort.key,
     dir: sort.dir,
     cols: columns.map((column) => column.key).join(","),
+    ...(exportTicked ? { ids: ticked.map((row) => row.id).join(",") } : {}),
   })}`;
   const money = (value: number | null) => (value === null ? "–" : formatMoney(value, currency));
 
@@ -304,24 +442,51 @@ export function ItemsGrid({
     switch (key) {
       case "item":
         return (
-          <>
-            <Link
-              href={`${base}/items/${row.id}`}
-              className="font-read font-semibold hover:underline"
-            >
-              {row.name}
-            </Link>
-            {(row.sku || row.left) && (
-              <span className="text-muted-foreground block text-xs">
-                {[row.sku, row.left].filter(Boolean).join(" · ")}
-              </span>
+          <div className="flex items-start gap-3">
+            {row.photo ? (
+              // eslint-disable-next-line @next/next/no-img-element -- a small photo on the shop platform's own image servers
+              <img
+                src={row.photo}
+                alt=""
+                width={36}
+                height={36}
+                loading="lazy"
+                className="border-border size-9 flex-none rounded-sm border object-cover"
+              />
+            ) : (
+              <span className="border-border bg-sunken size-9 flex-none rounded-sm border" />
             )}
-          </>
+            <div className="min-w-0">
+              <Link
+                href={`${base}/items/${row.id}`}
+                className="font-read font-semibold hover:underline"
+              >
+                {row.title}
+              </Link>
+              {(row.sku || row.option) && (
+                <span className="text-muted-foreground block text-xs">
+                  {[row.sku, row.option].filter(Boolean).join(" · ")}
+                </span>
+              )}
+              <span className="mt-0.5 flex flex-wrap gap-1">
+                {row.supplier && (
+                  <span className="bg-sunken text-text-2 rounded-sm px-1.5 py-0.5 text-xs">
+                    {row.supplier}
+                  </span>
+                )}
+                {row.left && <Badge>{row.left}</Badge>}
+              </span>
+            </div>
+          </div>
         );
       case "supplier":
         return row.supplier ?? <span className="text-muted-foreground">No supplier</span>;
       case "sold30":
         return row.sold30;
+      case "forecast":
+        return row.forecast;
+      case "pctRev":
+        return row.pctRev;
       case "monthly":
         return row.monthly;
       case "cost":
@@ -339,13 +504,39 @@ export function ItemsGrid({
       case "casePack":
         return row.casePack ?? "–";
       case "have":
-        return <span className={cn(row.have <= 0 && "text-brick font-semibold")}>{row.have}</span>;
+        return (
+          <span className="flex items-center gap-1.5 tabular-nums">
+            <span className={cn(row.have <= 0 && "text-brick font-semibold")}>{row.have}</span>
+            {row.coming > 0 && (
+              <Link
+                href={`${base}/orders${row.comingOrder ? `/${row.comingOrder}` : ""}`}
+                title={`${row.coming} on the way, on ${row.comingOrders || 1} order${row.comingOrders === 1 ? "" : "s"} you've sent`}
+                className="bg-teal-soft text-teal-soft-ink rounded-full px-1.5 py-0.5 text-xs whitespace-nowrap hover:underline"
+              >
+                + {row.coming} ({row.comingOrders || 1}{" "}
+                {row.comingOrders === 1 ? "order" : "orders"})
+              </Link>
+            )}
+          </span>
+        );
       case "coming":
         return row.coming || "–";
       case "runsOut":
-        return row.runsOut;
+        return (
+          <span
+            className={cn(row.runsOutSoon && "text-brick")}
+            title={row.runsOutSoon ? "Before a new order could arrive" : undefined}
+          >
+            {row.runsOut}
+          </span>
+        );
       case "orderBy":
-        return row.overdue ? <Badge tone="bad">{row.orderBy}</Badge> : row.orderBy;
+        return (
+          <span className={cn(row.overdue && "text-brick font-semibold")}>
+            {row.orderBy}
+            {row.overdue && <span className="sr-only"> (late)</span>}
+          </span>
+        );
       case "suggest":
         return row.suggest > 0 ? (
           <span title={row.why}>
@@ -364,10 +555,127 @@ export function ItemsGrid({
     }
   };
 
+  const mainViews = views.slice(0, MAIN_VIEW_COUNT);
+  const moreViews = views.slice(MAIN_VIEW_COUNT);
+  const viewLink = (item: { key: string; label: string; count: number }) => (
+    <Link
+      key={item.key}
+      href={`${base}/items?show=${item.key}`}
+      aria-current={!savedId && view === item.key ? "page" : undefined}
+      className={cn(chip, !savedId && view === item.key ? chipOn : chipOff)}
+    >
+      {item.label} <span className="tabular-nums opacity-80">{item.count}</span>
+    </Link>
+  );
+
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-end justify-between gap-3 print:hidden">
-        {canEdit ? (
+      <div className="flex flex-col gap-3 print:hidden">
+        <nav aria-label="Views" className="flex flex-wrap items-center gap-1.5">
+          {mainViews.map(viewLink)}
+          <span aria-hidden className="bg-border mx-1 h-4 w-px" />
+          {moreViews.map(viewLink)}
+          {(savedViews.length > 0 || canEdit) && (
+            <span aria-hidden className="bg-border mx-1 h-4 w-px" />
+          )}
+          {savedViews.map((saved) => (
+            <span
+              key={saved.id}
+              className={cn(
+                chip,
+                "flex items-center gap-1",
+                savedId === saved.id ? chipOn : "text-ochre-text hover:bg-hover font-semibold",
+              )}
+            >
+              <Link
+                href={`${base}/items?saved=${saved.id}`}
+                aria-current={savedId === saved.id ? "page" : undefined}
+              >
+                {saved.name}
+              </Link>
+              {canEdit && (
+                <form action={removeStockView.bind(null, slug, saved.id)} className="flex">
+                  <button
+                    type="submit"
+                    aria-label={`Take off the saved view ${saved.name}`}
+                    title="Take this view off"
+                    className="opacity-70 hover:opacity-100"
+                  >
+                    <X className="size-3" />
+                  </button>
+                </form>
+              )}
+            </span>
+          ))}
+          {canEdit && (
+            <SaveView
+              slug={slug}
+              view={view}
+              q={q}
+              sort={sort}
+              columns={columns.map((column) => column.key)}
+            />
+          )}
+        </nav>
+        {note && <p className="text-muted-foreground font-read text-sm">{note}</p>}
+        <div className="flex flex-wrap items-center gap-2">
+          <form role="search" className="w-full max-w-xs">
+            <input type="hidden" name="show" value={view} />
+            <input type="hidden" name="sort" value={sort.key} />
+            <input type="hidden" name="dir" value={sort.dir} />
+            {savedId && <input type="hidden" name="saved" value={savedId} />}
+            <Input
+              name="q"
+              type="search"
+              defaultValue={q}
+              placeholder="Search products, SKU, supplier…"
+              aria-label="Search items"
+              className="h-[30px] text-sm"
+            />
+          </form>
+          <details className="relative">
+            <summary className={toolButton}>
+              <SlidersHorizontal className="size-4" /> Columns
+            </summary>
+            <div className={cn(popover, "left-0 w-52 gap-1.5")}>
+              {COLUMNS.filter((column) => column.key !== "item").map((column) => (
+                <label key={column.key} className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={!hidden.has(column.key)}
+                    onChange={() => toggleColumn(column.key)}
+                  />
+                  {column.label}
+                </label>
+              ))}
+            </div>
+          </details>
+          <Button asChild variant="outline" size="sm">
+            <a href={exportHref}>
+              <Download /> {exportTicked ? `Export ${ticked.length} ticked` : "Export CSV"}
+            </a>
+          </Button>
+          <span className="text-muted-foreground text-xs tabular-nums">
+            {total} row{total === 1 ? "" : "s"}
+          </span>
+          {canEdit && (
+            <span className="ml-auto flex items-center gap-2">
+              <Button asChild variant="ghost" size="sm">
+                <Link href={`${base}/orders#new-order`}>Empty order</Link>
+              </Button>
+              <Button
+                type="button"
+                variant={editing ? "dark" : "outline"}
+                size="sm"
+                aria-pressed={editing}
+                onClick={() => setEditing((now) => !now)}
+              >
+                <Pencil /> {editing ? "Done changing" : "Change figures"}
+              </Button>
+            </span>
+          )}
+        </div>
+        {canEdit && (
           <form action={action} className="flex min-w-0 flex-1 flex-wrap items-end gap-2">
             <RequestKey
               resetOn={ticked
@@ -468,136 +776,111 @@ export function ItemsGrid({
               <Result state={state} />
             </div>
           </form>
-        ) : (
-          <span />
         )}
-        <div className="flex items-center gap-2">
-          {canEdit && (
-            <Button asChild variant="ghost" size="sm">
-              <Link href={`${base}/orders#new-order`}>Empty order</Link>
-            </Button>
-          )}
-          {canEdit && (
-            <Button
-              type="button"
-              variant={editing ? "dark" : "outline"}
-              size="sm"
-              aria-pressed={editing}
-              onClick={() => setEditing((now) => !now)}
-            >
-              <Pencil /> {editing ? "Done changing" : "Change figures"}
-            </Button>
-          )}
-          <details className="relative">
-            <summary
-              className={cn(
-                "border-input bg-card hover:bg-hover flex h-[30px] cursor-pointer list-none items-center gap-2 rounded-sm border px-2.5 text-xs font-semibold",
-                "[&::-webkit-details-marker]:hidden",
-              )}
-            >
-              <SlidersHorizontal className="size-4" /> Columns
-            </summary>
-            <div className="border-border bg-card absolute right-0 z-10 mt-1 flex w-52 flex-col gap-1.5 rounded-lg border p-3 shadow-[var(--tuft-shadow)]">
-              {COLUMNS.filter((column) => column.key !== "item").map((column) => (
-                <label key={column.key} className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={!hidden.has(column.key)}
-                    onChange={() => toggleColumn(column.key)}
-                  />
-                  {column.label}
-                </label>
-              ))}
-            </div>
-          </details>
-          <Button asChild variant="outline" size="sm">
-            <a href={exportHref}>
-              <Download /> Spreadsheet
-            </a>
-          </Button>
-        </div>
       </div>
 
+      {rows.length === 0 && (
+        <p className="text-muted-foreground border-border bg-card rounded-xl border p-5 text-sm">
+          {emptyText}
+        </p>
+      )}
       {editing && (
         <p className="text-muted-foreground font-read text-sm print:hidden">
           Type in a box and move on: it saves by itself, and the sums beside it catch up. An empty
           box goes back to the supplier&apos;s own figure (shown in grey).
         </p>
       )}
-      <div className="border-border bg-card overflow-x-auto rounded-xl border">
-        <table className="w-full text-left text-sm">
-          <thead className="text-muted-foreground bg-panel text-xs">
-            <tr>
-              {canEdit && (
-                <th className="w-9 py-2 pl-4">
-                  <input
-                    type="checkbox"
-                    checked={allTicked}
-                    onChange={() =>
-                      setPicked(allTicked ? new Set() : new Set(rows.map((row) => row.id)))
-                    }
-                    aria-label="Tick every item on this page"
-                  />
-                </th>
-              )}
-              {columns.map((column) => {
-                const active = sort.key === column.key;
-                return (
-                  <th
-                    key={column.key}
-                    aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
-                    className={cn(
-                      "px-3 py-2 font-semibold whitespace-nowrap first:pl-4",
-                      column.numeric && "text-right",
-                    )}
-                  >
-                    <Link
-                      href={sortHref(column.key)}
-                      scroll={false}
-                      className={cn("hover:text-foreground", active && "text-foreground")}
-                    >
-                      {column.label}
-                      {active && <span aria-hidden> {sort.dir === "asc" ? "↑" : "↓"}</span>}
-                    </Link>
-                  </th>
-                );
-              })}
-            </tr>
-          </thead>
-          <tbody className="divide-border divide-y">
-            {rows.map((row) => (
-              <tr
-                key={row.id}
-                className={cn("align-top", picked.has(row.id) && "bg-[var(--tuft-select)]")}
-              >
+      {rows.length > 0 && (
+        <div className="border-border bg-card overflow-x-auto rounded-xl border">
+          <table className="w-full text-left text-sm">
+            <thead className="text-muted-foreground bg-panel text-xs">
+              <tr>
                 {canEdit && (
-                  <td className="py-2.5 pl-4">
+                  <th className="w-9 py-2 pl-4">
                     <input
                       type="checkbox"
-                      checked={picked.has(row.id)}
-                      onChange={() => toggle(row.id)}
-                      aria-label={`Tick ${row.name}`}
+                      checked={allTicked}
+                      onChange={() =>
+                        setPicked(allTicked ? new Set() : new Set(rows.map((row) => row.id)))
+                      }
+                      aria-label="Tick every item on this page"
                     />
-                  </td>
+                  </th>
                 )}
-                {columns.map((column) => (
-                  <td
-                    key={column.key}
-                    className={cn(
-                      "px-3 py-2.5 first:pl-4",
-                      column.numeric && "text-right tabular-nums",
-                      column.key === "item" && "max-w-md min-w-56",
-                      (column.key === "runsOut" || column.key === "orderBy") && "whitespace-nowrap",
-                    )}
-                  >
-                    {cell(row, column.key)}
-                  </td>
-                ))}
+                <th
+                  className="w-12 px-3 py-2 font-semibold"
+                  title="Its place when the soonest to reorder comes first"
+                >
+                  #
+                </th>
+                {columns.map((column) => {
+                  const active = sort.key === column.key;
+                  return (
+                    <th
+                      key={column.key}
+                      aria-sort={
+                        active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"
+                      }
+                      className="px-3 py-2 font-semibold whitespace-nowrap"
+                    >
+                      <Link
+                        href={sortHref(column.key)}
+                        scroll={false}
+                        className={cn("hover:text-foreground", active && "text-foreground")}
+                      >
+                        {column.label}
+                        {active && <span aria-hidden> {sort.dir === "asc" ? "▲" : "▼"}</span>}
+                      </Link>
+                    </th>
+                  );
+                })}
+                {canEdit && <th className="w-16 px-3 py-2" />}
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody className="divide-border divide-y">
+              {rows.map((row) => (
+                <tr
+                  key={row.id}
+                  className={cn("align-middle", picked.has(row.id) && "bg-[var(--tuft-select)]")}
+                >
+                  {canEdit && (
+                    <td className="py-2.5 pl-4">
+                      <input
+                        type="checkbox"
+                        checked={picked.has(row.id)}
+                        onChange={() => toggle(row.id)}
+                        aria-label={`Tick ${row.name}`}
+                      />
+                    </td>
+                  )}
+                  <td className="text-muted-foreground px-3 py-2.5 tabular-nums">
+                    {row.rank ?? "–"}
+                  </td>
+                  {columns.map((column) => (
+                    <td
+                      key={column.key}
+                      className={cn(
+                        "px-3 py-2.5",
+                        column.numeric && "tabular-nums",
+                        column.key === "item" && "w-[38%] min-w-64",
+                        (column.key === "runsOut" || column.key === "orderBy") &&
+                          "whitespace-nowrap",
+                      )}
+                    >
+                      {cell(row, column.key)}
+                    </td>
+                  ))}
+                  {canEdit && (
+                    <td className="px-3 py-2.5 text-right">
+                      <HideButton slug={slug} row={row} />
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

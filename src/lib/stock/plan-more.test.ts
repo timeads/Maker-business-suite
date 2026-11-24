@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_STOCK_SETTINGS, parseStockSettings } from "./config";
+import { DEFAULT_STOCK_SETTINGS, parseSavedViews, parseStockSettings } from "./config";
 import {
   buildStockRows,
   draftOrders,
@@ -14,7 +14,7 @@ import {
   type ItemRow,
   type SupplierRow,
 } from "./plan";
-import { csvTable, searchRows, sortRows, toGridRow, viewRows } from "./views";
+import { csvTable, rankRows, searchRows, sortRows, toGridRow, viewRows } from "./views";
 
 const TODAY = "2026-11-20";
 const item = (id: string, overrides: Partial<ItemRow> = {}): ItemRow => ({
@@ -240,14 +240,14 @@ describe("saying how the number was reached", () => {
       today: TODAY,
     });
     expect(explainSuggestion(row, TODAY)).toBe(
-      "Sells about 30 a month. 10 on the shelf, 8 on the way, runs out in 3 weeks. To last the 20 days it takes to arrive and 30 days after, keeping 5 spare, order 60 (raised to the smallest order of 60).",
+      "Sells about 30 a month. 10 on the shelf, 8 on the way, runs out in 18 days. To last the 20 days it takes to arrive and 30 days after, keeping 5 spare, order 60 (raised to the smallest order of 60).",
     );
   });
 
   it("says so when there's enough, or when nothing sells", () => {
     const [enough] = build([item("a", { on_hand: 500 })]);
     expect(explainSuggestion(enough, TODAY)).toMatch(
-      /^Sells about 30 a month\. 500 on the shelf: enough for now, runs out in \d+ months\.$/,
+      /^Sells about 30 a month\. 500 on the shelf: enough for now, runs out in over 1 year\.$/,
     );
     const [dead] = build([item("a")], [mill], []);
     expect(explainSuggestion(dead, TODAY)).toBe(
@@ -320,8 +320,8 @@ describe("the Everything grid", () => {
   it("writes the view as a spreadsheet, with the columns asked for", () => {
     const all = build([item("a", { case_pack: 36, supplier_sku: "HM-77", price: "20" })]);
     expect(csvTable(all, ["have", "suggest", "casePack", "runsOut", "price"])).toEqual([
-      ["Item", "SKU", "Supplier's code", "Sells for", "Case", "Have", "Runs out", "Suggest"],
-      ["Item a", "SKU-a", "HM-77", "20.00", 36, 10, "2026-11-30", 72],
+      ["Product", "SKU", "Supplier's code", "Stock", "Stock Out", "Suggest", "Sells for", "Case"],
+      ["Item a", "SKU-a", "HM-77", 10, "2026-11-30", 72, "20.00", 36],
     ]);
   });
 });
@@ -461,9 +461,175 @@ describe("planning figures in the grid", () => {
     expect(sortRows(rows, "cover", "desc").map((r) => r.item.id)).toEqual(["own", "plain"]);
     expect(sortRows(rows, "spare", "asc").map((r) => r.item.id)).toEqual(["plain", "own"]);
     expect(csvTable(rows, ["cover", "spare"])).toEqual([
-      ["Item", "SKU", "Supplier's code", "Order covers (days)", "Keep spare"],
+      ["Product", "SKU", "Supplier's code", "Order covers (days)", "Keep spare"],
       ["Item own", "SKU-own", "", 45, 4],
       ["Item plain", "SKU-plain", "", mill.coverage_days, 0],
     ]);
+  });
+});
+
+describe("the reorder list as TuftStock shows it", () => {
+  const rows = () =>
+    buildStockRows({
+      items: [
+        item("top", { on_hand: 5, variant_image_url: "https://cdn.shopify.com/top-red.jpg" }),
+        item("slow", { on_hand: 5, image_url: "https://cdn.shopify.com/slow.jpg" }),
+        item("dead", { on_hand: 7 }),
+        item("gone", { on_hand: 0 }),
+        item("off", { on_hand: 5, hidden: true }),
+      ],
+      suppliers: [mill],
+      sales: ["top", "slow", "off"].flatMap((id) => steady(id, 90)),
+      openLines: [
+        // Two sent orders still owing some of "slow"; the older one is number 7.
+        {
+          stock_item_id: "slow",
+          qty_ordered: 9,
+          qty_received: 0,
+          status: "ordered",
+          order_number: 12,
+          order_created_at: "2026-11-10T10:00:00Z",
+        },
+        {
+          stock_item_id: "slow",
+          qty_ordered: 6,
+          qty_received: 2,
+          status: "partial",
+          order_number: 7,
+          order_created_at: "2026-11-01T10:00:00Z",
+        },
+        // All of this line has arrived: it no longer counts as an order to wait for.
+        {
+          stock_item_id: "slow",
+          qty_ordered: 4,
+          qty_received: 4,
+          status: "partial",
+          order_number: 3,
+          order_created_at: "2026-10-01T10:00:00Z",
+        },
+      ],
+      revenue: [
+        { stock_item_id: "top", revenue: "750.00" },
+        { stock_item_id: "slow", revenue: "150.00" },
+        { stock_item_id: "off", revenue: "100.00" },
+      ],
+      settings,
+      today: TODAY,
+    });
+
+  it("% of revenue is each item's share of everything sold in 90 days", () => {
+    const all = rows();
+    const share = Object.fromEntries(all.map((r) => [r.item.id, r.revenueShare]));
+    // Hidden items still count in the total, as in TuftStock.
+    expect(share).toEqual({ top: 0.75, slow: 0.15, dead: 0, gone: 0, off: 0.1 });
+    expect(toGridRow(all[0], TODAY).pctRev).toBe("75.0%");
+    expect(toGridRow(all[2], TODAY).pctRev).toBe("0.0%");
+  });
+
+  it("with no sales to add up, the share falls back to units × today's price", () => {
+    const all = buildStockRows({
+      items: [item("a", { price: 30 }), item("b", { price: 10 })],
+      suppliers: [mill],
+      sales: ["a", "b"].flatMap((id) => steady(id, 90)),
+      openLines: [],
+      settings,
+      today: TODAY,
+    });
+    expect(all.map((r) => r.revenueShare)).toEqual([0.75, 0.25]);
+  });
+
+  it("the 30-day forecast is the engine's own, and nothing for dead stock", () => {
+    const [top, , dead] = rows();
+    expect(top.plan.forecast30d).toBe(30);
+    expect(toGridRow(top, TODAY).forecast).toBe(30);
+    expect(dead.plan.forecast30d).toBe(0);
+  });
+
+  it("dead stock: nothing sold in 90 days and some still on the shelf", () => {
+    const views = viewRows(rows(), TODAY);
+    // "gone" hasn't sold either, but there's none left to be stuck with.
+    expect(views.nosales.map((r) => r.item.id)).toEqual(["dead"]);
+    expect(views.hidden.map((r) => r.item.id)).toEqual(["off"]);
+  });
+
+  it("at-risk top sellers: the top fifth by share, due within a week, with a supplier in use", () => {
+    const all = rows();
+    // Five items: the top fifth is one.
+    expect([...topSellerIds(all)]).toEqual(["top"]);
+    expect(viewRows(all, TODAY).atrisk.map((r) => r.item.id)).toEqual(["top"]);
+    // The same best seller from a supplier no longer used is nobody's to order.
+    const retired = buildStockRows({
+      items: [item("top", { on_hand: 5 })],
+      suppliers: [{ ...mill, archived_at: "2026-01-01T00:00:00Z" }],
+      sales: steady("top", 90),
+      openLines: [],
+      settings,
+      today: TODAY,
+    });
+    expect(viewRows(retired, TODAY).atrisk).toEqual([]);
+  });
+
+  it("the on-order chip counts orders still owing some, and links to the oldest", () => {
+    const slow = rows()[1];
+    expect(slow.onOrder).toBe(13);
+    expect(slow.openOrders).toEqual({ count: 2, firstNumber: 7 });
+    expect(toGridRow(slow, TODAY)).toMatchObject({ coming: 13, comingOrders: 2, comingOrder: 7 });
+  });
+
+  it("uses the option's own photo first, then the product's", () => {
+    const [top, slow, dead] = rows();
+    expect(top.photo).toBe("https://cdn.shopify.com/top-red.jpg");
+    expect(slow.photo).toBe("https://cdn.shopify.com/slow.jpg");
+    expect(dead.photo).toBeNull();
+  });
+
+  it("marks a stock-out that comes before a new order could arrive, and a late reorder", () => {
+    const [top, , dead] = rows().map((r) => toGridRow(r, TODAY));
+    // 5 left at one a day, 20 days to arrive.
+    expect(top).toMatchObject({ runsOut: "in 5 days", runsOutSoon: true, overdue: true });
+    expect(top.orderBy).toBe("22 days ago");
+    expect(dead).toMatchObject({ runsOut: "–", runsOutSoon: false, overdue: false });
+  });
+
+  it("numbers rows by their place with the soonest reorder first, whatever the sort", () => {
+    const planned = viewRows(rows(), TODAY).all;
+    const ranks = rankRows(planned);
+    // Two with no date at all come last, by name.
+    expect([ranks.get("dead"), ranks.get("gone")]).toEqual([3, 4]);
+    expect([ranks.get("top"), ranks.get("slow")].sort()).toEqual([1, 2]);
+    const byName = sortRows(planned, "item", "desc");
+    expect(toGridRow(byName[0], TODAY, { rank: ranks.get(byName[0].item.id) }).rank).toBe(
+      ranks.get(byName[0].item.id),
+    );
+  });
+
+  it("sorts and exports the new columns", () => {
+    const all = rows();
+    expect(sortRows(all, "pctRev", "desc")[0].item.id).toBe("top");
+    expect(sortRows(all, "forecast", "desc").at(-1)!.plan.forecast30d).toBe(0);
+    const table = csvTable(all.slice(0, 1), ["forecast", "pctRev"]);
+    expect(table[0]).toEqual(["Product", "SKU", "Supplier's code", "30D Forecast", "% Rev"]);
+    expect(table[1].slice(3)).toEqual([30, "75.0"]);
+  });
+});
+
+describe("saved views", () => {
+  it("reads what was saved and falls back to none when the body is wrong", () => {
+    const body = {
+      version: 1,
+      views: [{ id: "yarn000001", name: "Yarn", q: "yarn", columns: ["sold30", "have"] }],
+    };
+    expect(parseSavedViews(body).views[0]).toEqual({
+      id: "yarn000001",
+      name: "Yarn",
+      view: "all",
+      q: "yarn",
+      sort: "orderBy",
+      dir: "asc",
+      columns: ["sold30", "have"],
+      opens_first: false,
+    });
+    expect(parseSavedViews({ version: 1, views: [{ id: "BAD ID", name: "" }] }).views).toEqual([]);
+    expect(parseSavedViews(null).views).toEqual([]);
   });
 });

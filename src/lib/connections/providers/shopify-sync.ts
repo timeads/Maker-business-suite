@@ -6,6 +6,7 @@ import type {
   ShippingOrderRow,
   ShopBookingOrder,
   StockItemRow,
+  VariantPhotoRow,
   SyncContext,
   SyncResult,
   TokenSet,
@@ -440,18 +441,32 @@ type ShopifyVariant = {
     vendor?: string | null;
   } | null;
   inventoryItem: { id: string; tracked: boolean; unitCost: { amount: string } | null } | null;
+  /** This option's own photo, when the shop has one for it. */
+  image?: { url?: string | null } | null;
 };
 
-const VARIANTS_QUERY = `query Variants($first: Int!, $after: String) {
+// With each option's own photo, and without: a shop that won't answer the
+// first is asked the second, so a picture can never cost the stock count.
+const variantsQuery = (photos: boolean) => `query Variants($first: Int!, $after: String) {
   productVariants(first: $first, after: $after) {
     pageInfo { hasNextPage endCursor }
     nodes {
       legacyResourceId title sku inventoryQuantity price
       product { legacyResourceId title status vendor }
       inventoryItem { id tracked unitCost { amount } }
+      ${photos ? `image { url(transform: { maxWidth: ${VARIANT_PHOTO_WIDTH} }) }` : ""}
     }
   }
 }`;
+const VARIANT_PHOTO_WIDTH = 160;
+
+/** Each option's own photo, only ever one on the shop platform's image servers. */
+export function mapVariantPhotos(variants: ShopifyVariant[]): VariantPhotoRow[] {
+  return variants.map((variant) => ({
+    external_id: variant.legacyResourceId,
+    image_url: shopPhotoAddress(variant.image?.url, VARIANT_PHOTO_WIDTH),
+  }));
+}
 const VARIANT_PAGE_SIZE = 100;
 
 /** A product with no options has one variant that Shopify calls "Default Title". */
@@ -565,16 +580,42 @@ async function pullStock(
 ): Promise<SyncResult> {
   let after = from;
   let calls = 0;
+  let photos = true;
+  type Page = {
+    productVariants: {
+      pageInfo: { hasNextPage: boolean; endCursor: string | null };
+      nodes: ShopifyVariant[];
+    };
+  };
   for (let page = 0; page < PAGES_PER_RUN; page++) {
-    const data = await graphql<{
-      productVariants: {
-        pageInfo: { hasNextPage: boolean; endCursor: string | null };
-        nodes: ShopifyVariant[];
-      };
-    }>(ctx.externalAccountId, ctx.token, VARIANTS_QUERY, { first: VARIANT_PAGE_SIZE, after });
-    calls += 1;
+    const ask = (withPhotos: boolean) =>
+      graphql<Page>(ctx.externalAccountId, ctx.token, variantsQuery(withPhotos), {
+        first: VARIANT_PAGE_SIZE,
+        after,
+      });
+    let data: Page;
+    try {
+      calls += 1;
+      data = await ask(photos);
+    } catch (err) {
+      if (err instanceof ReconnectRequiredError || !photos) throw err;
+      // The count matters more than the pictures: ask again without them.
+      photos = false;
+      calls += 1;
+      data = await ask(false);
+    }
     if (data.productVariants.nodes.length > 0) {
       await ctx.store.upsertStock(mapShopifyVariants(data.productVariants.nodes));
+      if (photos) {
+        try {
+          await ctx.store.setVariantPhotos(mapVariantPhotos(data.productVariants.nodes));
+        } catch (err) {
+          console.warn(
+            `variant photos not saved for ${ctx.externalAccountId}:`,
+            err instanceof Error ? err.message : err,
+          );
+        }
+      }
     }
     if (!data.productVariants.pageInfo.hasNextPage) {
       calls += await pullProductPhotos(ctx, graphql);

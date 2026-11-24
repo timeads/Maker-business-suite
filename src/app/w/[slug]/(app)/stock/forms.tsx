@@ -641,7 +641,7 @@ export function StockSettingsForm({
         />
         <p className="text-muted-foreground text-xs">
           One per line. Matching items are left out of suggestions and orders, and listed under
-          Everything → Not reordering. Take a word off and they come straight back.
+          Everything → Hidden. Take a word off and they come straight back.
         </p>
       </div>
       <Result state={state} />

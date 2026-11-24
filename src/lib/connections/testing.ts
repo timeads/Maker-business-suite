@@ -2,6 +2,7 @@ import type {
   CustomerRow,
   OrderRow,
   ProductPhotoRow,
+  VariantPhotoRow,
   ProductRow,
   SnapshotRow,
   ShippingOrderRow,
@@ -21,6 +22,7 @@ export function memoryStore() {
     snapshots: [] as SnapshotRow[],
     shopBookings: [] as ShopBookingOrder[],
     productPhotos: [] as ProductPhotoRow[],
+    variantPhotos: [] as VariantPhotoRow[],
     redacted: [] as { externalId: string; email: string | null }[],
     purged: 0,
     usage: 0,
@@ -40,6 +42,9 @@ export function memoryStore() {
     },
     async setProductPhotos(products) {
       state.productPhotos.push(...products);
+    },
+    async setVariantPhotos(items) {
+      state.variantPhotos.push(...items);
     },
     async bookShopOrders(orders) {
       state.shopBookings.push(...orders);

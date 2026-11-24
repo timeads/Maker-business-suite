@@ -47,7 +47,12 @@ export type ItemRow = {
   supplier_sku?: string | null;
   /** The workspace's own cost for a unit; wins over every other figure. */
   own_cost?: number | string | null;
+  /** Photos the shop sync noted: this option's own, and the product's main one. */
+  variant_image_url?: string | null;
+  image_url?: string | null;
 };
+/** What an item brought in over the last 90 days (units × the price paid). */
+export type RevenueRow = { stock_item_id: string; revenue: number | string };
 /** Units checked in for an item across all its orders, and what they cost in all. */
 export type ReceivedCostRow = {
   stock_item_id: string;
@@ -71,6 +76,9 @@ export type OpenLine = {
   qty_ordered: number;
   qty_received: number;
   status: string;
+  /** The order the line sits on, for the "on order" chip. */
+  order_number?: number;
+  order_created_at?: string;
 };
 
 export type StockRow = {
@@ -100,6 +108,16 @@ export type StockRow = {
   due: boolean;
   /** A rule in Settings ("gift card"...) keeps this one out of planning. */
   skippedByRule: boolean;
+  /** What it brought in over 90 days, and that as a share (0 to 1) of everything sold. */
+  revenue90: number;
+  revenueShare: number;
+  /**
+   * Sent orders still owing some of this item: how many, and the oldest one's
+   * number. A line that has all arrived no longer counts, as in TuftStock.
+   */
+  openOrders: { count: number; firstNumber: number | null };
+  /** This option's photo, else the product's. Null when the shop gave none. */
+  photo: string | null;
 };
 
 /** True when the item's name carries one of the workspace's "never reorder" words. */
@@ -151,6 +169,11 @@ export function buildStockRows(input: {
   emptyDays?: EmptyDayRow[];
   /** What checked-in deliveries cost, per item, for the average cost. */
   received?: ReceivedCostRow[];
+  /**
+   * What each item brought in over the last 90 days, from the sales
+   * themselves. Left out, it is estimated as units sold × today's price.
+   */
+  revenue?: RevenueRow[];
   settings: StockSettings;
   /** The workspace's own "today", YYYY-MM-DD. */
   today: string;
@@ -195,8 +218,11 @@ export function buildStockRows(input: {
       };
     });
   const storeIndex = input.settings.seasonality ? monthlyIndex(forIndex(everything)) : null;
+  const revenueByItem = input.revenue
+    ? new Map(input.revenue.map((row) => [row.stock_item_id, Number(row.revenue) || 0]))
+    : null;
 
-  return input.items.map((item) => {
+  const built = input.items.map((item) => {
     const supplier = item.supplier_id ? (suppliers.get(item.supplier_id) ?? null) : null;
     const leadTimeDays =
       item.lead_time_days ?? supplier?.lead_time_days ?? input.settings.default_lead_time_days;
@@ -272,8 +298,31 @@ export function buildStockRows(input: {
       health,
       due,
       skippedByRule: matchesSkipWords(item, input.settings.skip_words),
+      revenue90: revenueByItem
+        ? (revenueByItem.get(item.id) ?? 0)
+        : plan.sales90d * (Number(item.price) || 0),
+      revenueShare: 0,
+      openOrders: openOrdersOf(linesByItem.get(item.id) ?? []),
+      photo: item.variant_image_url ?? item.image_url ?? null,
     };
   });
+  // Each item's share of everything sold in 90 days (TuftStock's "% Rev").
+  const grand = built.reduce((sum, row) => sum + row.revenue90, 0);
+  if (grand > 0) for (const row of built) row.revenueShare = row.revenue90 / grand;
+  return built;
+}
+
+/** Sent orders that still owe some of an item, oldest first. */
+function openOrdersOf(lines: OpenLine[]): StockRow["openOrders"] {
+  const seen = new Map<number, string>();
+  for (const line of lines) {
+    const status = line.status.toLowerCase();
+    if (status !== "ordered" && status !== "partial") continue;
+    if (line.qty_ordered - line.qty_received <= 0 || line.order_number == null) continue;
+    if (!seen.has(line.order_number)) seen.set(line.order_number, line.order_created_at ?? "");
+  }
+  const oldest = [...seen].sort((a, b) => a[1].localeCompare(b[1]) || a[0] - b[0])[0];
+  return { count: seen.size, firstNumber: oldest ? oldest[0] : null };
 }
 
 /**
@@ -429,32 +478,40 @@ export function draftOrdersForItems(
 }
 
 /**
- * The best sellers: the top fifth of planned items by what they brought in
- * over 90 days (units × the shop's price; plain units when no prices are known).
+ * The best sellers: the top fifth of all items by their share of what the
+ * shop took in over 90 days. TuftStock's rule, kept as it is: every item is
+ * ranked (left-out ones too), and the cut is a fifth of the list, at least one.
  */
 export function topSellerIds(rows: StockRow[]): Set<string> {
-  const planned = rows.filter(isPlanned);
-  const priced = planned.some((row) => (row.price ?? 0) > 0 && row.plan.sales90d > 0);
-  const worth = (row: StockRow) => row.plan.sales90d * (priced ? (row.price ?? 0) : 1);
-  const sorted = [...planned].sort((a, b) => worth(b) - worth(a));
+  const sorted = [...rows].sort((a, b) => b.revenueShare - a.revenueShare);
   const cut = Math.max(1, Math.ceil(sorted.length * 0.2));
-  return new Set(
-    sorted
-      .slice(0, cut)
-      .filter((row) => worth(row) > 0)
-      .map((row) => row.item.id),
-  );
+  return new Set(sorted.slice(0, cut).map((row) => row.item.id));
 }
 
-/** A best seller whose order-by date is within a week, or already past. */
+/**
+ * A best seller, with a supplier still in use, whose order-by date is within
+ * a week or already past.
+ */
 export function isAtRisk(row: StockRow, top: Set<string>, today: string): boolean {
   return (
     isPlanned(row) &&
+    hasLiveSupplier(row) &&
     top.has(row.item.id) &&
     row.plan.reorderDate !== null &&
-    row.plan.reorderDate.getTime() <= addDays(dayToDate(today), 7).getTime()
+    daysFrom(row.plan.reorderDate, today) <= 7
   );
 }
+
+/** Dead stock, as TuftStock counts it: nothing sold in 90 days and some still on the shelf. */
+export const isDeadStock = (row: StockRow) => row.plan.isDeadStock && row.item.on_hand > 0;
+
+/** Whole days from the workspace's today to a date (negative when it has passed). */
+export const daysFrom = (date: Date, today: string) =>
+  Math.round((date.getTime() - dayToDate(today).getTime()) / 86_400_000);
+
+/** It will run out before a new order could arrive. */
+export const runsOutBeforeArrival = (row: StockRow, today: string) =>
+  row.plan.stockOutDate !== null && daysFrom(row.plan.stockOutDate, today) < row.leadTimeDays;
 
 /** "12", "0.5": a monthly rate short enough to read at a glance. */
 export const perMonth = (row: StockRow) => {
@@ -495,19 +552,29 @@ export function explainSuggestion(row: StockRow, today: string): string {
   return `${text}.`;
 }
 
-/** "in 5 days", "3 days ago", "today": how far a date is from the workspace's today. */
+/**
+ * A number of days as words, the way TuftStock's lists say it: "14 days",
+ * "about 1 month", "3 months", "about 1 year".
+ */
+export function distanceWords(days: number): string {
+  const n = Math.abs(Math.round(days));
+  if (n < 30) return `${n} day${n === 1 ? "" : "s"}`;
+  const months = Math.round(n / 30);
+  if (n < 60) return `about ${months} month${months === 1 ? "" : "s"}`;
+  if (months < 12) return `${months} months`;
+  const years = Math.floor(months / 12);
+  const extra = months % 12;
+  if (extra < 3) return `about ${years} year${years === 1 ? "" : "s"}`;
+  if (extra < 9) return `over ${years} year${years === 1 ? "" : "s"}`;
+  return `almost ${years + 1} years`;
+}
+
+/** "in 14 days", "about 1 month ago", "today": how far a date is from the workspace's today. */
 export function relativeDay(date: Date | null, today: string): string {
   if (!date) return "–";
-  const days = Math.round((date.getTime() - dayToDate(today).getTime()) / 86_400_000);
+  const days = daysFrom(date, today);
   if (days === 0) return "today";
-  const n = Math.abs(days);
-  const span =
-    n < 14
-      ? `${n} day${n === 1 ? "" : "s"}`
-      : n < 70
-        ? `${Math.round(n / 7)} weeks`
-        : `${Math.round(n / 30)} months`;
-  return days > 0 ? `in ${span}` : `${span} ago`;
+  return days > 0 ? `in ${distanceWords(days)}` : `${distanceWords(days)} ago`;
 }
 
 export const HEALTH_LABELS = {

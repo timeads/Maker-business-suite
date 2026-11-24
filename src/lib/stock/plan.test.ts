@@ -151,7 +151,13 @@ describe("wording", () => {
     expect(relativeDay(new Date(2026, 10, 20), TODAY)).toBe("today");
     expect(relativeDay(new Date(2026, 10, 25), TODAY)).toBe("in 5 days");
     expect(relativeDay(new Date(2026, 10, 17), TODAY)).toBe("3 days ago");
-    expect(relativeDay(new Date(2026, 11, 25), TODAY)).toBe("in 5 weeks");
+    // Said the way TuftStock's list says it.
+    expect(relativeDay(new Date(2026, 11, 4), TODAY)).toBe("in 14 days");
+    expect(relativeDay(new Date(2026, 9, 21), TODAY)).toBe("about 1 month ago");
+    expect(relativeDay(new Date(2026, 11, 25), TODAY)).toBe("in about 1 month");
+    expect(relativeDay(new Date(2027, 0, 9), TODAY)).toBe("in about 2 months");
+    expect(relativeDay(new Date(2027, 0, 25), TODAY)).toBe("in 2 months");
+    expect(relativeDay(new Date(2027, 10, 20), TODAY)).toBe("in about 1 year");
     expect(relativeDay(null, TODAY)).toBe("–");
   });
 });
