@@ -340,9 +340,16 @@ export function LabelDesk({
   const [buying, startBuy] = useTransition();
   const sent = useRef(false);
   const opened = useRef(false);
+  /** Counts what has been asked and changed, so a late answer to an old question is dropped. */
+  const asking = useRef(0);
+  /** How many times the details have changed since the page opened. */
+  const [changes, setChanges] = useState(0);
 
   // A price belongs to one address and one set of boxes and weights: change any and it's gone.
   const stale = () => {
+    // Anything still on its way back was asked with the old details: it is ignored.
+    asking.current += 1;
+    setChanges((count) => count + 1);
     setRates(null);
     setNotes([]);
     setAsked(null);
@@ -357,6 +364,7 @@ export function LabelDesk({
   const quote = useCallback(
     (ask: Ask, parcels: (Pick<Packed, "boxId" | "size"> & { tenths: number | null })[]) =>
       startQuote(async () => {
+        const mine = ++asking.current;
         setError(null);
         const input: RatesInput = {
           boxes: parcels.map((parcel) => {
@@ -376,6 +384,8 @@ export function LabelDesk({
           labelFormat: wantedLabelFormat(printSettings()),
         };
         const result = await getLabelRates(slug, orderId, input);
+        // The details changed while the carriers were answering: these prices are for something else.
+        if (mine !== asking.current) return;
         if (result.error || !result.rates) {
           setRates(null);
           setNotes([]);
@@ -546,6 +556,38 @@ export function LabelDesk({
 
   const rate = rates?.find((item) => item.id === chosen) ?? null;
   const busy = quoting || buying;
+
+  // Prices follow the page: once a change settles (the weight, the box, the signature, or an
+  // address that has been checked again), the carriers are asked again without a press.
+  const busyNow = useRef(false);
+  const quoteLatest = useRef<() => void>(() => {});
+  useEffect(() => {
+    busyNow.current = busy;
+    quoteLatest.current = quoteNow;
+  });
+  const settled =
+    !off &&
+    !locked &&
+    !setup &&
+    rates === null &&
+    checked.state !== "edited" &&
+    checked.state !== "checking" &&
+    packed.every((box) => {
+      const tenths = tenthsOf(box);
+      return tenths !== null && tenths > 0 && box.size.length && box.size.width && box.size.height;
+    });
+  useEffect(() => {
+    if (changes === 0 || !settled) return;
+    let timer: ReturnType<typeof setTimeout>;
+    const ask = () => {
+      // Still asking about the last change: wait for it, then ask about this one.
+      if (busyNow.current) timer = setTimeout(ask, 400);
+      else quoteLatest.current();
+    };
+    timer = setTimeout(ask, 900);
+    return () => clearTimeout(timer);
+    // Each change counts once; what is asked is read fresh when the wait is over.
+  }, [changes, settled]);
   const canBuy = Boolean(rate) && !busy && !locked && !off;
 
   const buy = useCallback(() => {
