@@ -723,6 +723,33 @@ export const HELP_TOPICS: HelpTopic[] = [
       "On Stock → Suppliers each supplier shows how many orders they've had; press it to see just those.",
     ],
   },
+  {
+    slug: "michaels",
+    group: "stock",
+    title: "Sell on Michaels: connect, match your listings and watch",
+    summary:
+      "See how your Michaels listings line up with your shop, and what would be sent. For now it only watches.",
+    intro:
+      "If you sell on Michaels Marketplace, you can connect your seller account. The suite matches each Michaels listing to the item in your shop and shows what stock and prices it would send. For now it only watches: nothing is changed on Michaels or in your shop, so keep using whatever keeps Michaels up to date today.",
+    steps: [
+      "In the Michaels Developer Account Center, make an API key. Read Only access to Listing, Inventory, Price and Order is enough for now. Note the day you made it.",
+      "Open Connections and find Michaels Marketplace. Paste the key, type the day it was made, choose the real marketplace (or the sandbox, if you're testing) and connect. We check the key with one small read.",
+      "Open Stock → Michaels → Settings, tick “Look at Michaels” and save. The first look happens within a few minutes, then about once an hour.",
+      "Open Listings. Each thing you sell on Michaels is matched to your shop by its seller SKU. “Needs a look” lists the ones that didn't match or are out of step.",
+      "For a listing that didn't match, type the SKU it has in your shop and press “Pair”. A pairing you make by hand wins over the automatic matching, and “Take pairing off” undoes it.",
+      "Open Would send to see every listing whose stock or price on Michaels differs from what your shop says it should be.",
+      "Open Orders to see recent Michaels orders and what bringing each into your shop would make.",
+    ],
+    notes: [
+      "Nothing is sent. Not stock, not prices, not orders, not tracking. Sending comes later, with its own switch and a cut-over time you choose.",
+      "Stock would be your shop's count less the units held back (1 unless you change it in Settings), never below zero. Prices would be exactly your shop's prices.",
+      "Safety stop: if more than one listing in ten has no item in your shop, nothing could ever be sent until they're sorted out. You'll get a heads-up in Messages.",
+      "Michaels ends every API key 90 days after it was made, and keys tend to misbehave in their last month. We count from the day you gave and remind you in Messages 14, 7, 3 and 1 days before the 60-day mark.",
+      "To put in a new key: make it in the Developer Account Center, then under Connections disconnect Michaels Marketplace and connect again with the new key. Your pairings are kept.",
+      "We keep an order's number, status, dates, totals and lines. We don't keep the buyer's name, phone or address.",
+      "Anyone on the team can look. Only owners and admins can pair listings, change the settings or press “Look now”.",
+    ],
+  },
 
   // --------------------------------------------------------------- bookings
   {

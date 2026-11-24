@@ -293,6 +293,30 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   desk reads Stock directly, as the member, for "when is this back?"
   (`lib/stock/restock.ts`); the workspace home card does the same for its
   facts (`lib/stock/home-summary.ts`, good news only).
+- Michaels Marketplace (docs/michaels-connector.md): an optional connection
+  (provider `michaels`, a pasted seller key in Vault, read only through
+  `getMichaelsAccess()`), gated by the `michaels` entitlement key and shown
+  under Stock → Michaels once connected. THIS STAGE CANNOT WRITE, to Michaels
+  or to the shop, and that is held in four places: `lib/michaels/client.ts`
+  refuses anything but a GET while `MICHAELS_WRITES_ENABLED` is false (a
+  constant, with no setting behind it); no code calls a write; the settings
+  (`michaels` / `settings`) have one mode, `watch`; and in the database every
+  run is `watch_only`, every order `observed`, and every finished run carries
+  why nothing could be sent (`michaels_send_blocked`, which never answers
+  "free" and answers `unmatched` when more than a tenth of the listings have no
+  item). Keep `client.test.ts` and `tests/db/michaels.test.ts` passing; a
+  later stage that sends changes those on purpose and must ask
+  `michaels_send_blocked` before every send. All Michaels HTTP goes through
+  that one client (throttled, reads retried, ids kept as text by `json.ts`).
+  The worker claims a look about once an hour per workspace
+  (`claim_michaels_runs`; a look that never finishes is marked failed, not
+  retried), reads the whole catalog and recent orders, and records listings
+  matched to `stock_items` (`lib/michaels/mapping.ts`, ported from TuftStock
+  with its tests: a hand pairing first, then exact SKU, then capitals and outer
+  spaces ignored; never a guess between two), what it WOULD send
+  (`would-send.ts`: the shop's count less the units held back, the shop's
+  price to the cent) and orders with their lines. Nothing about a buyer is
+  kept. Pairings are manager-only functions; the whole team can look.
 - Shipping: `shipping_orders` holds what packing needs (address, what's left
   to send), kept apart from `orders` so the sales figures never carry an
   address. It is read from the shop in a separate query that is allowed to
