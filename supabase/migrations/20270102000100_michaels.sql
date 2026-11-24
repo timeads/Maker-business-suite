@@ -357,8 +357,9 @@ $$;
 -- Hands out looks, one worker each. First tidies up: a look claimed over
 -- thirty minutes ago never finished and is marked failed (not retried), and a
 -- look still waiting for a workspace that has since switched off is closed.
--- Then queues a look for every workspace that is switched on and hasn't had
--- one in the last hour, and claims what is waiting.
+-- Then forgets looks older than sixty days, queues a look for every workspace
+-- that is switched on and hasn't had one in the last hour, and claims what is
+-- waiting.
 create function public.claim_michaels_runs(p_limit int default 5)
 returns table (id uuid, tenant_id uuid, source text)
 language plpgsql security definer set search_path = ''
@@ -374,6 +375,10 @@ begin
       error = 'Michaels was switched off or disconnected before this look ran.',
       send_blocked = public.michaels_send_blocked(r.tenant_id)
   where r.status = 'queued' and not private.michaels_on(r.tenant_id);
+
+  -- Looks are kept for sixty days; the listings and orders they left stay.
+  delete from public.michaels_runs r
+  where r.status in ('done', 'failed') and r.created_at < now() - interval '60 days';
 
   insert into public.michaels_runs (tenant_id, source)
   select c.tenant_id, 'schedule'

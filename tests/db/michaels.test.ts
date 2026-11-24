@@ -768,6 +768,40 @@ describe("heads-ups", () => {
   });
 });
 
+describe("old looks", () => {
+  it("are forgotten after sixty days, leaving the listings they found", async () => {
+    const before = await one<{ n: number }>(
+      "select count(*)::int as n from public.michaels_listings where tenant_id = $1",
+      [tenantA],
+    );
+    const old = await one<{ id: string }>(
+      "insert into public.michaels_runs (tenant_id, status, send_blocked, created_at) values ($1, 'done', 'watch_only', now() - interval '61 days') returning id",
+      [tenantA],
+    );
+    const recent = await one<{ id: string }>(
+      "insert into public.michaels_runs (tenant_id, status, send_blocked, created_at) values ($1, 'failed', 'watch_only', now() - interval '59 days') returning id",
+      [tenantA],
+    );
+    await claim();
+    const left = await db.query<{ id: string }>(
+      "select id from public.michaels_runs where id = any($1)",
+      [[old.id, recent.id]],
+    );
+    expect(left.rows).toEqual([{ id: recent.id }]);
+    expect(
+      await one("select count(*)::int as n from public.michaels_listings where tenant_id = $1", [
+        tenantA,
+      ]),
+    ).toEqual(before);
+    // Leave no look open for the tests that follow.
+    for (const run of await service<{ id: string }>(
+      "select id from public.michaels_runs where status = 'running'",
+    )) {
+      await finish(run.id);
+    }
+  });
+});
+
 describe("who can see and change what", () => {
   it("has row security on every table, with a tenant on every row", async () => {
     const rls = await db.query<{ relname: string; relrowsecurity: boolean }>(
