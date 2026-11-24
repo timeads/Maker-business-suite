@@ -7,6 +7,13 @@ import { downloadEasyPostLabel, isEasyPostFileLink } from "@/lib/shipping/source
 import { printKind, type PrintLabel } from "@/lib/shipping/zebra/labels";
 import { createClient } from "@/lib/supabase/server";
 import { getTenantContext } from "@/lib/tenants";
+import {
+  loadSlipRun,
+  slipsToPrint,
+  type SlipPrinted,
+  type SlipSelection,
+  type SlipToPrint,
+} from "./slips-data";
 
 export type LabelPrintData = {
   error?: string;
@@ -145,4 +152,55 @@ export async function markLabelPrinted(
   revalidatePath(`/w/${slug}/shipping`, "layout");
   const printedAt = (data as { printed_at?: unknown } | null)?.printed_at;
   return typeof printedAt === "string" ? { printedAt } : {};
+}
+
+export type SlipPrintData = {
+  error?: string;
+  slips?: SlipToPrint[];
+  /** Orders among them whose slip was printed before. */
+  printed?: SlipPrinted[];
+};
+
+/**
+ * The packing slips a press asks for, as plain words, for the computer that
+ * sends them to its own Zebra. The same choice of slips as the slips page
+ * shows for the same link.
+ */
+export async function getSlipPrintData(
+  slug: string,
+  selection: SlipSelection,
+): Promise<SlipPrintData> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const picked = selection && typeof selection === "object" ? selection : {};
+  const text = (value: unknown) => (typeof value === "string" ? value.slice(0, 6000) : undefined);
+  const run = await loadSlipRun(ctx.supabase, ctx.tenant, {
+    order: text(picked.order),
+    ids: text(picked.ids),
+    together: text(picked.together),
+    all: text(picked.all),
+  });
+  return slipsToPrint(run, ctx.tenant);
+}
+
+/** Notes that these orders' slips went to a printer, so the next run leaves them out. */
+export async function noteSlipsPrinted(slug: string, ids: string[]): Promise<{ error?: string }> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  // A read-only workspace can still print; it just isn't written down.
+  if (!ctx.entitlements.canWrite) return {};
+  const clean = (Array.isArray(ids) ? ids : [])
+    .filter((id) => typeof id === "string" && UUID.test(id))
+    .slice(0, 500);
+  if (clean.length === 0) return {};
+  const { error } = await ctx.supabase.rpc("mark_slips_printed", {
+    p_tenant_id: ctx.tenant.id,
+    p_ids: clean,
+  });
+  if (error) {
+    console.error("could not mark slips printed", error.message);
+    return { error: "They printed, but we couldn't note that here." };
+  }
+  revalidatePath(`/w/${slug}/shipping`, "layout");
+  return {};
 }

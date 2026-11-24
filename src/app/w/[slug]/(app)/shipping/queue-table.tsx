@@ -16,6 +16,7 @@ import { useLabelRun } from "./bulk-run";
 import { CarrierMark } from "./carrier-mark";
 import { HoldPicker, type HoldChoice } from "./hold-picker";
 import { planNextOrders } from "./plan-actions";
+import { SlipsButton } from "./print-ui";
 import { useShipTogether } from "./together-ui";
 
 export type QueueRow = {
@@ -267,9 +268,14 @@ export function QueueTable({
                 {together.pending ? "Opening…" : "Ship together"}
               </Button>
             )}
-            <Button asChild size="sm" variant={offerBuy ? "outline" : "default"}>
-              <Link href={`${base}/slips?ids=${ids.slice(0, 150).join(",")}`}>Packing slips</Link>
-            </Button>
+            <SlipsButton
+              slug={slug}
+              href={`${base}/slips?ids=${ids.slice(0, 150).join(",")}`}
+              selection={{ ids: ids.slice(0, 150).join(",") }}
+              variant={offerBuy ? "outline" : "default"}
+            >
+              Packing slips
+            </SlipsButton>
             {offerBuy && (
               <Button
                 size="sm"

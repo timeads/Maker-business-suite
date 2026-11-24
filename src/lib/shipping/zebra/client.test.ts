@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { ZEBRA_AGENTS, ZEBRA_MESSAGES, ZebraError, createZebraClient, splitLabels } from "./client";
+import {
+  ZEBRA_AGENTS,
+  ZEBRA_MESSAGES,
+  ZebraError,
+  createZebraClient,
+  parseZebraStatus,
+  splitLabels,
+} from "./client";
 
 const HTTPS = "https://localhost:9101";
 const HTTP = "http://localhost:9100";
@@ -222,5 +229,124 @@ describe("sending labels", () => {
     const { client, calls } = agent(() => "down");
     await expect(client.send("^XA^XZ")).rejects.toMatchObject({ problem: "not-running" });
     expect(calls.some((call) => path(call) === "/write")).toBe(false);
+  });
+});
+
+const READY = `
+  PRINTER STATUS
+   ERRORS:         0 00000000 00000000
+   WARNINGS:       0 00000000 00000000
+`;
+const PAUSED_NO_LABELS = `
+  PRINTER STATUS
+   ERRORS:         1 00000000 00000101
+   WARNINGS:       0 00000000 00000000
+`;
+
+describe("asking the printer how it is", () => {
+  it("reads the printer's own answer", () => {
+    expect(parseZebraStatus(READY)).toEqual({ known: true, ok: true, problems: [] });
+    expect(parseZebraStatus(PAUSED_NO_LABELS)).toEqual({
+      known: true,
+      ok: false,
+      problems: ["out of labels", "paused"],
+    });
+    expect(parseZebraStatus("")).toEqual({ known: false, problems: [] });
+    expect(parseZebraStatus("something else entirely")).toEqual({ known: false, problems: [] });
+  });
+
+  it("clears what was waiting, asks, and reads until the answer is whole", async () => {
+    let reads = 0;
+    const { client, calls } = agent((call) => {
+      if (path(call) === "/read") {
+        reads += 1;
+        // The first read drops old words; the answer then arrives in two parts.
+        return {
+          text:
+            reads === 1 ? "old" : reads === 2 ? "ERRORS: 1 00000000 00000004" : " WARNINGS: 0 0 0",
+        };
+      }
+      return healthy(call);
+    });
+    const state = await client.status(ZT as never);
+    expect(state).toEqual({ known: true, ok: false, problems: ["print head open"] });
+    expect(written(calls).map((write) => write.data)).toEqual(["~HQES"]);
+    expect(reads).toBe(3);
+  });
+
+  it("says it doesn't know when the printer stays silent", async () => {
+    const { client } = agent(healthy);
+    expect(await client.status(ZT as never)).toEqual({ known: false, problems: [] });
+  });
+});
+
+describe("resetting the printer", () => {
+  it("cancels what is waiting, closes an open label and resumes, printing nothing", async () => {
+    const { client, calls } = agent(healthy);
+    const device = await client.reset("ZT220");
+    expect(device.name).toBe("ZT220");
+    expect(written(calls).map((write) => write.data)).toEqual(["~JA", "^XA^XZ~PS"]);
+  });
+
+  it("says so when the printer won't take it", async () => {
+    const { client } = agent((call) => (path(call) === "/write" ? { status: 500 } : healthy(call)));
+    await expect(client.reset()).rejects.toMatchObject({ problem: "send-failed" });
+  });
+});
+
+describe("checking the connection", () => {
+  it("walks through each step and says all is well", async () => {
+    const { client } = agent((call) => (path(call) === "/read" ? { text: READY } : healthy(call)));
+    const checks = await client.diagnose();
+    expect(checks.every((check) => check.ok)).toBe(true);
+    const words = checks.map((check) => check.text).join(" ");
+    expect(words).toContain("Browser Print answers at localhost:9101.");
+    expect(words).toContain("Printers it can see: ZT220, ZD420 upstairs.");
+    expect(words).toContain("Sending to ZT220.");
+    expect(words).toContain("The printer says it's ready.");
+    expect(words).toContain("Big labels go through in one piece.");
+  });
+
+  it("stops at the step that failed when nothing is listening", async () => {
+    const { client } = agent(() => "down");
+    const checks = await client.diagnose();
+    expect(checks.map((check) => check.ok)).toEqual([false, false, false]);
+    expect(checks[2].text).toBe(ZEBRA_MESSAGES["not-running"]);
+  });
+
+  it("explains the browser's own block, the way Chrome names it", async () => {
+    const calls: string[] = [];
+    const client = createZebraClient({
+      fetch: async (input) => {
+        calls.push(input);
+        throw new TypeError("Failed to fetch");
+      },
+      sleep: async () => undefined,
+      permission: async () => "denied",
+    });
+    const checks = await client.diagnose();
+    expect(checks[0]).toEqual({ ok: false, text: ZEBRA_MESSAGES.blocked });
+    expect(ZEBRA_MESSAGES.blocked).toMatch(/Local network access/);
+    expect(ZEBRA_MESSAGES.blocked).toMatch(/Apps on device/);
+    expect(ZEBRA_MESSAGES["not-running"]).toMatch(/apps on this computer/);
+  });
+
+  it("learns to send in small pieces when Browser Print refuses big requests", async () => {
+    const { client, calls } = agent((call) => {
+      if (path(call) === "/write") {
+        const { data } = JSON.parse(call.body) as { data: string };
+        return data.length > 1000 ? { status: 500 } : { text: "" };
+      }
+      return path(call) === "/read" ? { text: READY } : healthy(call);
+    });
+    const checks = await client.diagnose();
+    expect(checks.at(-1)).toMatchObject({ ok: true });
+    expect(checks.at(-1)?.text).toMatch(/small pieces/);
+    calls.length = 0;
+    // The next label goes out in pieces no bigger than what got through.
+    await client.send(`^XA${"A".repeat(3000)}^XZ`);
+    const pieces = written(calls).filter((write) => write.data !== "");
+    expect(pieces.length).toBeGreaterThan(3);
+    expect(Math.max(...pieces.map((piece) => piece.data.length))).toBeLessThanOrEqual(800);
   });
 });

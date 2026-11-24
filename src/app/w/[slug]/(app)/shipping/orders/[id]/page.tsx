@@ -1209,12 +1209,16 @@ export default async function ShippingOrderPage({
               )}
               <div className="pt-3 empty:hidden">
                 <OrderRailActions
+                  slug={tenant.slug}
                   slip={
                     todo
                       ? {
                           href: group
                             ? `${base}/slips?together=${group.map((each) => each.id).join(",")}`
                             : `${base}/slips?order=${order.id}`,
+                          selection: group
+                            ? { together: group.map((each) => each.id).join(",") }
+                            : { order: order.id },
                           label: group ? "One packing slip" : "Packing slip",
                           printed: !group && Boolean(order.slip_printed_at),
                         }

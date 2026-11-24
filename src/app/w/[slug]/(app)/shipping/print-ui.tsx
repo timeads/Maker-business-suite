@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import Link from "next/link";
 import { Printer } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FormMessage } from "@/components/ui/form-message";
@@ -9,21 +10,61 @@ import {
   ZEBRA_DOWNLOAD_LINK,
   ZEBRA_TRUST_LINK,
   ZebraError,
-  createZebraClient,
+  zebraClient,
+  type ZebraCheck,
   type ZebraDevice,
 } from "@/lib/shipping/zebra/client";
 import { labelsToZpl } from "@/lib/shipping/zebra/labels";
 import { PdfLabelError } from "@/lib/shipping/zebra/pdf";
-import { slipZpl, type SlipData } from "@/lib/shipping/zebra/slip";
+import { reprintQuestion } from "@/lib/shipping/zebra/reprint";
+import { slipZpl } from "@/lib/shipping/zebra/slip";
+import { slipsGoToZebra } from "@/lib/shipping/zebra/settings";
 import { usePrintSettings } from "@/lib/shipping/zebra/use-print-settings";
 import { testLabelZpl } from "@/lib/shipping/zebra/zpl";
-import { getLabelPrintData, markLabelPrinted } from "./print-actions";
+import {
+  getLabelPrintData,
+  getSlipPrintData,
+  markLabelPrinted,
+  noteSlipsPrinted,
+} from "./print-actions";
+import type { SlipPrinted, SlipSelection, SlipToPrint } from "./slips-data";
 
 const linkClass = "text-ochre-text font-medium hover:underline";
 type Note = { kind: "error" | "success"; text: string } | null;
 
 const said = (err: unknown, fallback: string) =>
   err instanceof ZebraError || err instanceof PdfLabelError ? err.message : fallback;
+
+/** Where this computer's printing is set, as a link straight to that part of Shipping settings. */
+export const printingSettingsHref = (slug: string) => `/w/${slug}/shipping/settings#printing`;
+
+const never = () => () => undefined;
+/** False on the server and while the page wakes up, so nothing about this computer is guessed. */
+const useAwake = () =>
+  useSyncExternalStore(
+    never,
+    () => true,
+    () => false,
+  );
+
+/**
+ * Beside a print button on a computer that prints through the browser: a
+ * plain word that it could go straight to a Zebra, and where to set that up.
+ * Says nothing on a computer already set to one.
+ */
+export function BrowserPrintingHint({ slug }: { slug: string }) {
+  const [settings] = usePrintSettings();
+  const awake = useAwake();
+  if (!awake || settings.labels === "zebra") return null;
+  return (
+    <span className="text-muted-foreground text-xs print:hidden">
+      This computer prints through the browser. Print straight to a Zebra?{" "}
+      <Link href={printingSettingsHref(slug)} className={linkClass}>
+        Set it up
+      </Link>
+    </span>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Shipping settings: "Printing on this computer"
@@ -36,15 +77,70 @@ const said = (err: unknown, fallback: string) =>
 export function PrintingOnThisComputer({ workspaceName }: { workspaceName: string }) {
   const [settings, save] = usePrintSettings();
   const [printers, setPrinters] = useState<ZebraDevice[] | null>(null);
-  const [busy, setBusy] = useState<"find" | "test" | null>(null);
+  const [busy, setBusy] = useState<"look" | "find" | "test" | "check" | "reset" | null>(null);
   const [note, setNote] = useState<Note>(null);
+  const [checks, setChecks] = useState<ZebraCheck[] | null>(null);
   const zebra = settings.labels === "zebra";
+
+  // Only ever on a press: a browser may ask the person before a page talks to apps on their computer.
+  const look = async () => {
+    setBusy("look");
+    setNote(null);
+    setChecks(null);
+    try {
+      const found = await zebraClient().findPrinters();
+      setPrinters(found);
+      const kept = found.find((device) => device.name === settings.zebraName) ?? found[0];
+      save({ labels: "zebra", zebraName: kept.name });
+      setNote({
+        kind: "success",
+        text: `Found ${kept.name}${found.length > 1 ? ` and ${found.length - 1} more` : ""}. This computer now sends labels and packing slips straight to it. Print a test label to check.`,
+      });
+    } catch (err) {
+      setNote({
+        kind: "error",
+        text: `${said(err, "We couldn't look for a Zebra. Try again.")} Nothing was changed: this computer still prints through the browser.`,
+      });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const check = async () => {
+    setBusy("check");
+    setNote(null);
+    try {
+      setChecks(await zebraClient().diagnose(settings.zebraName));
+    } catch {
+      setChecks(null);
+      setNote({ kind: "error", text: "We couldn't check the connection. Try again." });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const reset = async () => {
+    setBusy("reset");
+    setNote(null);
+    try {
+      const device = await zebraClient().reset(settings.zebraName);
+      setNote({
+        kind: "success",
+        text: `Cleared anything stuck in ${device.name} and took it out of pause. Nothing was printed.`,
+      });
+    } catch (err) {
+      setNote({ kind: "error", text: said(err, "The printer didn't take the reset. Try again.") });
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const find = async () => {
     setBusy("find");
     setNote(null);
+    setChecks(null);
     try {
-      const found = await createZebraClient().findPrinters();
+      const found = await zebraClient().findPrinters();
       setPrinters(found);
       // The first time, the one Browser Print calls its own is chosen.
       const kept = found.find((device) => device.name === settings.zebraName) ?? found[0];
@@ -68,10 +164,7 @@ export function PrintingOnThisComputer({ workspaceName }: { workspaceName: strin
     setBusy("test");
     setNote(null);
     try {
-      const { device } = await createZebraClient().send(
-        testLabelZpl(workspaceName),
-        settings.zebraName,
-      );
+      const { device } = await zebraClient().send(testLabelZpl(workspaceName), settings.zebraName);
       if (device.name !== settings.zebraName) save({ zebraName: device.name });
       setNote({ kind: "success", text: `Sent a test label to ${device.name}.` });
     } catch (err) {
@@ -100,6 +193,7 @@ export function PrintingOnThisComputer({ workspaceName }: { workspaceName: strin
             checked={!zebra}
             onChange={() => {
               save({ labels: "browser" });
+              setChecks(null);
               setNote({ kind: "success", text: "Saved for this computer." });
             }}
           />
@@ -124,12 +218,33 @@ export function PrintingOnThisComputer({ workspaceName }: { workspaceName: strin
           <span>
             Zebra thermal printer
             <span className="text-muted-foreground block text-xs">
-              Labels go straight to the Zebra the moment you buy them, with no print window. Needs
-              Zebra Browser Print (free) installed and running on this computer.
+              Labels and packing slips go straight to the Zebra on one press, with no print window.
+              Needs Zebra Browser Print (free) installed and running on this computer.
             </span>
           </span>
         </label>
       </fieldset>
+
+      {!zebra && (
+        <div className="flex flex-col gap-1.5">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="w-fit"
+            onClick={look}
+            disabled={busy !== null}
+          >
+            <Printer aria-hidden />
+            {busy === "look" ? "Looking…" : "Look for a Zebra on this computer"}
+          </Button>
+          <p className="text-muted-foreground text-xs">
+            If one is found, this computer is switched to it and you can print a test label. Your
+            browser may ask whether this site can reach apps or devices on this computer: choose
+            Allow.
+          </p>
+        </div>
+      )}
 
       {zebra && (
         <>
@@ -179,7 +294,35 @@ export function PrintingOnThisComputer({ workspaceName }: { workspaceName: strin
             >
               <Printer aria-hidden /> {busy === "test" ? "Sending…" : "Print test label"}
             </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={check}
+              disabled={busy !== null}
+            >
+              {busy === "check" ? "Checking…" : "Check the connection"}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={reset}
+              disabled={busy !== null}
+              title="Clears stuck or half-sent labels and takes the printer out of pause. Prints nothing."
+            >
+              {busy === "reset" ? "Resetting…" : "Reset printer"}
+            </Button>
           </div>
+          {checks && (
+            <ul className="flex flex-col gap-1 text-xs" aria-label="Connection check">
+              {checks.map((line, index) => (
+                <li key={index} className={line.ok ? "text-muted-foreground" : "text-brick"}>
+                  <span className="font-semibold">{line.ok ? "OK" : "Problem"}:</span> {line.text}
+                </li>
+              ))}
+            </ul>
+          )}
           {names.length > 0 && (
             <div className="flex flex-col gap-1.5 sm:max-w-xs">
               <Label htmlFor="zebra-printer">Printer on this computer</Label>
@@ -224,10 +367,10 @@ export function PrintingOnThisComputer({ workspaceName }: { workspaceName: strin
               }}
             />
             <span>
-              Offer to send packing slips to the Zebra too
+              Send packing slips to the Zebra too
               <span className="text-muted-foreground block text-xs">
-                They print on the same 4 × 6 labels. Printing through the browser stays there as
-                well.
+                They print on the same 4 × 6 labels, on one press. “Print on paper” stays there as a
+                second choice.
               </span>
             </span>
           </label>
@@ -313,10 +456,7 @@ export function LabelPrint({
           return;
         }
         const jobs = await labelsToZpl(data.labels, settings.zebraDpi);
-        const { device, labels } = await createZebraClient().send(
-          jobs.join("\n"),
-          settings.zebraName,
-        );
+        const { device, labels } = await zebraClient().send(jobs.join("\n"), settings.zebraName);
         setPrintedHere(true);
         const marked = await markLabelPrinted(slug, shipmentId).catch(() => null);
         setNote({
@@ -400,6 +540,7 @@ export function LabelPrint({
           {openLinks(primary ? 1 : 0)}
         </>
       )}
+      {!zebra && primary && links.length > 0 && <BrowserPrintingHint slug={slug} />}
       {!zebra && links.length === 0 && (
         <span className="text-muted-foreground text-xs">
           This label&apos;s file isn&apos;t kept here. Print it from the account it was bought on.
@@ -421,41 +562,250 @@ export function LabelPrint({
 // Packing slips
 // ---------------------------------------------------------------------------
 
-/** Sends the slips on this page to the Zebra as 4 × 6 labels. Only shown on a computer set up for one. */
-export function ZebraSlipsButton({ slips }: { slips: SlipData[] }) {
-  const [settings] = usePrintSettings();
-  const [printing, setPrinting] = useState(false);
-  const [note, setNote] = useState<Note>(null);
-  if (settings.labels !== "zebra" || !settings.slips || slips.length === 0) return null;
+type Choice = "new" | "again" | "cancel";
+type Asking = {
+  title: string;
+  lines: string[];
+  /** How many haven't been printed yet; none means there is only "print again". */
+  fresh: number;
+  answer: (choice: Choice) => void;
+};
 
-  const print = async () => {
-    setPrinting(true);
+/** Slips that were printed before: print them again, only the new ones, or nothing. */
+function ReprintDialog({ asking }: { asking: Asking | null }) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = ref.current;
+    if (!asking || !dialog) return;
+    if (!dialog.open) dialog.showModal();
+    return () => {
+      if (dialog.open) dialog.close();
+    };
+  }, [asking]);
+  if (!asking) return null;
+  return (
+    <dialog
+      ref={ref}
+      aria-labelledby="reprint-title"
+      className="fixed inset-0 m-0 grid h-full max-h-none w-full max-w-none place-items-center bg-transparent p-4 backdrop:bg-black/50"
+      onCancel={(event) => {
+        event.preventDefault();
+        asking.answer("cancel");
+      }}
+    >
+      <div className="bg-card text-foreground border-border flex w-full max-w-md flex-col gap-3 rounded-lg border p-5 text-left text-sm shadow-lg">
+        <p id="reprint-title" className="text-base font-bold">
+          {asking.title}
+        </p>
+        <ul className="list-disc pl-5">
+          {asking.lines.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+        <p className="text-muted-foreground text-xs">Printing again makes a duplicate slip.</p>
+        <div className="flex flex-wrap items-center gap-2">
+          {asking.fresh > 0 && (
+            <Button type="button" size="sm" onClick={() => asking.answer("new")}>
+              Print only the {asking.fresh} new {asking.fresh === 1 ? "one" : "ones"}
+            </Button>
+          )}
+          <Button
+            type="button"
+            size="sm"
+            variant={asking.fresh > 0 ? "outline" : "default"}
+            onClick={() => asking.answer("again")}
+          >
+            {asking.fresh > 0 ? "Print all again" : "Print again"}
+          </Button>
+          <Button type="button" size="sm" variant="ghost" onClick={() => asking.answer("cancel")}>
+            Cancel
+          </Button>
+        </div>
+      </div>
+    </dialog>
+  );
+}
+
+/** The slips a press is about: already in hand (the slips page), or to be asked for by the link's own choice. */
+type SlipSource = { slips: SlipToPrint[]; printed: SlipPrinted[] } | SlipSelection;
+
+/**
+ * Sends packing slips straight to this computer's Zebra: no window, no print
+ * box. Slips printed before are asked about first; what goes out is noted as
+ * printed, so the next run leaves it out.
+ */
+function useSlipPrinter(slug: string) {
+  const [settings] = usePrintSettings();
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<Note>(null);
+  const [asking, setAsking] = useState<Asking | null>(null);
+  const running = useRef(false);
+  const zebra = slipsGoToZebra(settings);
+
+  const print = async (source: SlipSource) => {
+    if (running.current) return;
+    running.current = true;
+    setBusy(true);
     setNote(null);
     try {
-      const zpl = slips.map((slip) => slipZpl(slip, settings.zebraDpi)).join("\n");
-      const { device } = await createZebraClient().send(zpl, settings.zebraName);
+      const data = "slips" in source ? source : await getSlipPrintData(slug, source);
+      if (("error" in data && data.error) || !data.slips) {
+        setNote({
+          kind: "error",
+          text: ("error" in data && data.error) || "We couldn't load those slips. Try again.",
+        });
+        return;
+      }
+      let slips = data.slips;
+      if (slips.length === 0) {
+        setNote({ kind: "error", text: "Nothing there is waiting for a slip." });
+        return;
+      }
+      const question = reprintQuestion(slips, data.printed ?? []);
+      if (question) {
+        const choice = await new Promise<Choice>((answer) =>
+          setAsking({
+            title: question.title,
+            lines: question.lines,
+            fresh: question.freshOrders,
+            answer,
+          }),
+        );
+        setAsking(null);
+        if (choice === "cancel") return;
+        if (choice === "new") slips = question.fresh;
+        if (slips.length === 0) return;
+      }
+      const zpl = slips.map((slip) => slipZpl(slip.data, settings.zebraDpi)).join("\n");
+      const { device } = await zebraClient().send(zpl, settings.zebraName);
+      const marked = await noteSlipsPrinted(slug, [
+        ...new Set(slips.flatMap((slip) => slip.orderIds)),
+      ]).catch(() => ({ error: "They printed, but we couldn't note that here." }));
       setNote({
-        kind: "success",
-        text: `${slips.length === 1 ? "Slip" : `${slips.length} slips`} sent to ${device.name}.`,
+        kind: marked.error ? "error" : "success",
+        text: `${slips.length === 1 ? "Packing slip" : `${slips.length} packing slips`} sent to ${device.name}.${marked.error ? ` ${marked.error}` : ""}`,
       });
     } catch (err) {
+      const partly = err instanceof ZebraError && err.printed > 0;
       setNote({
         kind: "error",
-        text: `${said(err, "The slips didn't reach the printer.")} You can still use Print these.`,
+        text: `${said(err, "The slips didn't reach the printer.")}${partly ? " None of them was marked as printed." : ""} You can still print them on paper.`,
       });
     } finally {
-      setPrinting(false);
+      running.current = false;
+      setBusy(false);
     }
   };
 
+  return { zebra, busy, note, print, dialog: <ReprintDialog asking={asking} /> };
+}
+
+/**
+ * The buttons at the top of the slips page. On a computer set to a Zebra the
+ * main one sends every slip on the page straight to it, and printing through
+ * the browser is the quiet second choice. Anywhere else the main one is the
+ * browser's own print, with a word about setting up a Zebra.
+ */
+export function SlipsPagePrint({
+  slug,
+  slips,
+  printed,
+}: {
+  slug: string;
+  slips: SlipToPrint[];
+  printed: SlipPrinted[];
+}) {
+  const printer = useSlipPrinter(slug);
+  if (slips.length === 0) return null;
+  const many = slips.length !== 1;
   return (
     <>
-      <Button type="button" variant="outline" size="sm" onClick={print} disabled={printing}>
-        <Printer aria-hidden /> {printing ? "Sending…" : "Print on the Zebra"}
-      </Button>
-      {note && (
+      {printer.zebra ? (
+        <>
+          <Button
+            type="button"
+            size="sm"
+            title="Sends straight to this computer's Zebra"
+            onClick={() => void printer.print({ slips, printed })}
+            disabled={printer.busy}
+          >
+            <Printer aria-hidden />
+            {printer.busy ? "Sending to the Zebra…" : many ? "Print these" : "Print this"}
+          </Button>
+          <Button type="button" variant="ghost" size="sm" onClick={() => window.print()}>
+            Print on paper
+          </Button>
+        </>
+      ) : (
+        <Button type="button" size="sm" onClick={() => window.print()}>
+          <Printer aria-hidden /> {many ? "Print these" : "Print this"}
+        </Button>
+      )}
+      {printer.dialog}
+      {printer.note && (
         <span className="w-full print:hidden">
-          <FormMessage kind={note.kind}>{note.text}</FormMessage>
+          <FormMessage kind={printer.note.kind}>{printer.note.text}</FormMessage>
+        </span>
+      )}
+    </>
+  );
+}
+
+/**
+ * A "Packing slip" button anywhere else (an order's page, the ticked orders
+ * in the queue). On a computer set to a Zebra it prints them then and there;
+ * anywhere else it opens the slips page, as it always has.
+ */
+export function SlipsButton({
+  slug,
+  href,
+  selection,
+  variant = "outline",
+  title,
+  children,
+}: {
+  slug: string;
+  /** The slips page for the same slips: the link on a browser-printing computer, and the way out here. */
+  href: string;
+  selection: SlipSelection;
+  variant?: "default" | "outline";
+  title?: string;
+  children: React.ReactNode;
+}) {
+  const printer = useSlipPrinter(slug);
+  if (!printer.zebra) {
+    return (
+      <Button asChild variant={variant} size="sm">
+        <Link href={href} title={title}>
+          {children}
+        </Link>
+      </Button>
+    );
+  }
+  return (
+    <>
+      <Button
+        type="button"
+        variant={variant}
+        size="sm"
+        title={title ?? "Sends straight to this computer's Zebra"}
+        onClick={() => void printer.print(selection)}
+        disabled={printer.busy}
+      >
+        <Printer aria-hidden />
+        {printer.busy ? "Sending…" : children}
+      </Button>
+      {printer.dialog}
+      {printer.note && (
+        <span className="w-full">
+          <FormMessage kind={printer.note.kind}>
+            {printer.note.text}{" "}
+            {printer.note.kind === "error" && (
+              <Link href={href} className="font-semibold underline">
+                Open the slips
+              </Link>
+            )}
+          </FormMessage>
         </span>
       )}
     </>

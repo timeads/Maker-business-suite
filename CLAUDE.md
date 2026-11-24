@@ -290,7 +290,15 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   built by `lib/shipping/label-page.ts`): a 4 × 6 inch sheet with no margin,
   the picture fitted whole and turned only when its header says it is wider
   than tall; its one script runs under a per-response nonce, so keep that
-  policy as tight as it is. `?raw=1` is the file. Telling the shop a
+  policy as tight as it is. `?raw=1` is the file. Nothing talks to
+  Browser Print except on a person's press (Chrome asks before a page may
+  reach apps on the computer): a new computer is switched over by "Look for a
+  Zebra on this computer" in Shipping → Settings (`#printing`), and print
+  buttons on a browser-printing computer carry a hint that leads there. On a
+  Zebra computer every slip button (`SlipsButton`, `SlipsPagePrint` in
+  `print-ui.tsx`) sends straight to the printer; which slips a press means is
+  worked out in one place (`slips-data.ts`), what was printed before is asked
+  about first (`zebra/reprint.ts`), and what went out is marked printed. Telling the shop a
   parcel went (`shopify-fulfil.ts`) follows the same once-only queue as
   stock receipts. The to-ship queue's views (ready, pickup, priority,
   on hold, international) and "back from hold" are worked out on read by

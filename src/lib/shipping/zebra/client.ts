@@ -4,9 +4,13 @@
  * The browser calls it directly; nothing here goes through our servers.
  *
  * Ported from the single-tenant help desk (`public/js/printing.js`): the same
- * two addresses, the same four calls (`/default`, `/available`, `/write`),
- * the same plain-text request so the browser sends no preflight, and the same
- * habit of sending a label in pieces and retrying a piece that is refused.
+ * two addresses, the same calls (`/default`, `/available`, `/write`, `/read`),
+ * the same plain-text request so the browser sends no preflight, the same
+ * habit of sending a label in pieces and retrying a piece that is refused,
+ * and the same ways of asking the printer how it is and clearing a stuck job.
+ *
+ * Nothing here runs by itself: a browser may ask the person before a page
+ * talks to apps on their computer, so every call follows a person's press.
  */
 
 /** Browser Print listens here on the computer it is installed on. */
@@ -37,12 +41,43 @@ export class ZebraError extends Error {
 
 export const ZEBRA_MESSAGES = {
   "not-running":
-    "We couldn't reach Zebra Browser Print on this computer. Check that it's installed and running (its icon sits in the system tray or menu bar). If it is, open localhost:9101/ssl_support once in this browser, accept it, and try again.",
+    "We couldn't reach Zebra Browser Print on this computer. Either it isn't installed and running (its icon sits in the system tray or menu bar), or the browser is stopping this site from talking to apps on this computer. If Chrome asked whether this site may reach devices or apps on this computer, choose Allow. If Browser Print is running, open localhost:9101/ssl_support once in this browser, accept it, and try again.",
   blocked:
-    "This browser is stopping the page from talking to Zebra Browser Print. Click the icon at the left of the address bar, open Site settings, set “Local network access” to Allow, then reload this page.",
+    "Chrome is blocking this site from talking to Zebra Browser Print. Click the icon at the left of the address bar, open Site settings, set “Local network access” (or “Apps on device”) to Allow, then reload this page.",
   "no-printer":
     "Zebra Browser Print is running but can't see a printer. Check the cable and that the printer is switched on, then choose it in Browser Print's own settings.",
 } as const;
+
+/** What the printer says about itself, in words for the bench. */
+export type ZebraStatus =
+  { known: true; ok: boolean; problems: string[] } | { known: false; problems: [] };
+
+const STATUS_ERRORS: [number, string][] = [
+  [0x1, "out of labels"],
+  [0x2, "out of ribbon"],
+  [0x4, "print head open"],
+  [0x8, "cutter jam"],
+  [0x10, "print head too hot"],
+  [0x20, "motor too hot"],
+  [0x40, "a print head element has failed"],
+  [0x80, "print head not found"],
+  [0x100, "paused"],
+];
+
+/** Reads a Zebra's answer to `~HQES` (its errors and warnings as hex flags). */
+export function parseZebraStatus(text: string): ZebraStatus {
+  const match = /ERRORS:\s+(\d)\s+(\w+)\s+(\w+)[\s\S]*?WARNINGS:\s+(\d)\s+(\w+)\s+(\w+)/.exec(text);
+  if (!match) return { known: false, problems: [] };
+  const flags = parseInt(match[3], 16);
+  const problems =
+    match[1] === "1" && Number.isFinite(flags)
+      ? STATUS_ERRORS.filter(([bit]) => flags & bit).map(([, words]) => words)
+      : [];
+  return { known: true, ok: problems.length === 0, problems };
+}
+
+/** One line of "Check the connection": what was looked at and how it went. */
+export type ZebraCheck = { ok: boolean; text: string };
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -221,7 +256,7 @@ export function createZebraClient(deps: ZebraDeps = {}) {
           const before = index > 0 ? ` The first ${index === 1 ? "one" : index} printed.` : "";
           throw new ZebraError(
             "send-failed",
-            `We found ${device.name} but couldn't send ${which}.${before} Check the printer is on, has labels and isn't paused, then print again.`,
+            `We found ${device.name} but couldn't send ${which}.${before} Check the printer is on, has labels and isn't paused, then print again. If it stays stuck, press “Reset printer” in Shipping settings.`,
             index,
           );
         }
@@ -232,7 +267,153 @@ export function createZebraClient(deps: ZebraDeps = {}) {
     return { device, labels: jobs.length };
   }
 
-  return { findPrinters, pickPrinter, send };
+  const read = async (device: ZebraDevice) =>
+    (
+      await agent("/read", {
+        method: "POST",
+        headers: { "content-type": "text/plain;charset=UTF-8" },
+        body: JSON.stringify({ device }),
+      })
+    ).text();
+
+  /** Asks the printer how it is (`~HQES`): paused, head open, out of labels. */
+  async function status(device: ZebraDevice): Promise<ZebraStatus> {
+    // Drop anything old waiting to be read.
+    await read(device).catch(() => "");
+    await write(device, "~HQES");
+    let text = "";
+    for (let tries = 0; tries < 6 && !/WARNINGS/.test(text); tries++) {
+      await sleep(250);
+      text += await read(device).catch(() => "");
+    }
+    return parseZebraStatus(text);
+  }
+
+  /** Clears stuck or half-sent jobs and takes the printer out of pause. Prints nothing. */
+  async function reset(savedName = ""): Promise<ZebraDevice> {
+    const device = await pickPrinter(savedName);
+    try {
+      // Cancel everything waiting in the printer, then close any open label and resume.
+      await write(device, "~JA");
+      await sleep(300);
+      await write(device, "^XA^XZ~PS");
+    } catch {
+      throw new ZebraError(
+        "send-failed",
+        `We found ${device.name} but it didn't take the reset. Switch the printer off and on, then try again.`,
+      );
+    }
+    return device;
+  }
+
+  /**
+   * "Check the connection": each step on its own, so a failure says where it
+   * is. The last step also learns how big a request Browser Print takes
+   * (comments only, so nothing prints) and sends in pieces that size from then on.
+   */
+  async function diagnose(savedName = ""): Promise<ZebraCheck[]> {
+    const out: ZebraCheck[] = [];
+    const allowed = await permission().catch(() => null);
+    if (allowed) {
+      out.push(
+        allowed === "denied"
+          ? { ok: false, text: ZEBRA_MESSAGES.blocked }
+          : {
+              ok: true,
+              text:
+                allowed === "granted"
+                  ? "Chrome lets this site reach apps on this computer."
+                  : "Chrome will ask whether this site may reach apps on this computer: choose Allow.",
+            },
+      );
+    }
+    for (const base of ZEBRA_AGENTS) {
+      const where = base.replace(/^https?:\/\//, "");
+      try {
+        const response = await fetchImpl(`${base}/default?type=printer`);
+        out.push({
+          ok: response.ok,
+          text: response.ok
+            ? `Browser Print answers at ${where}.`
+            : `Browser Print at ${where} answered ${response.status}.`,
+        });
+      } catch {
+        out.push({
+          ok: false,
+          text: `Nothing answered at ${where}: Browser Print isn't running, or the browser wouldn't connect.`,
+        });
+      }
+    }
+    let device: ZebraDevice;
+    try {
+      const all = await findPrinters();
+      device = all.find((each) => savedName && each.name === savedName) ?? all[0];
+      try {
+        await write(device, "");
+      } catch {
+        device = all.find((each) => each.uid !== device.uid) ?? device;
+      }
+      out.push({
+        ok: true,
+        text: `Printers it can see: ${all.map((each) => each.name).join(", ")}.`,
+      });
+      out.push({ ok: true, text: `Sending to ${device.name}.` });
+    } catch (err) {
+      out.push({
+        ok: false,
+        text: err instanceof ZebraError ? err.message : "We couldn't look for printers.",
+      });
+      return out;
+    }
+    try {
+      const state = await status(device);
+      out.push(
+        !state.known
+          ? { ok: true, text: "The printer didn't say how it is (some models don't)." }
+          : state.ok
+            ? { ok: true, text: "The printer says it's ready." }
+            : { ok: false, text: `The printer says: ${state.problems.join(", ")}.` },
+      );
+    } catch {
+      out.push({ ok: false, text: "We couldn't ask the printer how it is." });
+    }
+    const sizes = [100, 1000, 4000, 16000];
+    let passed = 0;
+    for (const size of sizes) {
+      try {
+        await write(device, `^XA^FX${"x".repeat(Math.max(0, size - 12))}^FS^XZ`);
+        passed = size;
+      } catch {
+        break;
+      }
+    }
+    if (passed === sizes[sizes.length - 1]) {
+      out.push({ ok: true, text: "Big labels go through in one piece." });
+    } else if (passed > 0) {
+      pieceSize = Math.max(SMALLEST_PIECE, passed - 200);
+      out.push({
+        ok: true,
+        text: `Browser Print takes small requests only, so labels and slips will be sent in small pieces. That's fine, just a little slower.`,
+      });
+    } else {
+      out.push({ ok: false, text: "The printer was found but took nothing we sent." });
+    }
+    return out;
+  }
+
+  return { findPrinters, pickPrinter, send, status, reset, diagnose };
 }
 
 export type ZebraClient = ReturnType<typeof createZebraClient>;
+
+let shared: ZebraClient | null = null;
+
+/**
+ * The one client a page uses. It remembers which address answered and how
+ * big a piece Browser Print takes, so the second label is as quick as the
+ * first was slow.
+ */
+export function zebraClient(): ZebraClient {
+  shared ??= createZebraClient();
+  return shared;
+}

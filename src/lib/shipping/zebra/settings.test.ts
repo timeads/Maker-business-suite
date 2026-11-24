@@ -5,6 +5,7 @@ import {
   printSettings,
   readPrintSettings,
   savePrintSettings,
+  slipsGoToZebra,
   wantedLabelFormat,
 } from "./settings";
 
@@ -59,5 +60,17 @@ describe("printing on this computer", () => {
     };
     expect(printSettings(locked)).toEqual(DEFAULT_PRINT_SETTINGS);
     expect(savePrintSettings({ labels: "zebra" }, locked).labels).toBe("zebra");
+  });
+
+  it("sends slips to the Zebra as soon as one is chosen, until someone unticks it", () => {
+    const store = memory();
+    expect(slipsGoToZebra(printSettings(store))).toBe(false);
+    // Choosing a Zebra is all it takes: nothing else was ever saved on this computer.
+    expect(slipsGoToZebra(savePrintSettings({ labels: "zebra" }, store))).toBe(true);
+    expect(slipsGoToZebra(savePrintSettings({ slips: false }, store))).toBe(false);
+    // Back to the browser and then to the Zebra again: the untick is remembered.
+    savePrintSettings({ labels: "browser" }, store);
+    expect(slipsGoToZebra(printSettings(store))).toBe(false);
+    expect(slipsGoToZebra(savePrintSettings({ labels: "zebra", slips: true }, store))).toBe(true);
   });
 });

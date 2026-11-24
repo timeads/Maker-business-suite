@@ -70,3 +70,10 @@ export function savePrintSettings(
 /** The format labels are asked for on this computer. */
 export const wantedLabelFormat = (settings: PrintSettings): "zpl" | undefined =>
   settings.labels === "zebra" ? "zpl" : undefined;
+
+/**
+ * Whether a slip button on this computer sends straight to the Zebra. On as
+ * soon as a Zebra is chosen, unless someone unticked it on this computer.
+ */
+export const slipsGoToZebra = (settings: PrintSettings): boolean =>
+  settings.labels === "zebra" && settings.slips;

@@ -94,7 +94,7 @@ export default async function ShippingSettingsPage({
         description="What your packing slips say, the boxes you pack in, your shipping rules, and what happens when you record a parcel."
       />
       <ShippingTabs slug={tenant.slug} />
-      <Card>
+      <Card id="printing" className="scroll-mt-6">
         <CardHeader>
           <CardTitle>Printing on this computer</CardTitle>
           <CardDescription>
