@@ -52,6 +52,7 @@ import {
   savedViewsSchema,
   stockSettingsSchema,
 } from "../stock/config";
+import { DEFAULT_PO_EMAIL, PO_EMAIL_KEY, poEmailSchema } from "../stock/po/email";
 
 /**
  * Every setting the assistant may read or propose a change to. Anything not
@@ -138,6 +139,16 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
       "Named views of Stock's Everything list, shared by the whole workspace: which built-in view (all, onorder, nosales, hidden, atrisk, out, under, healthy, over, nosupplier), a search, the column it is sorted by and which way, the columns on show, and whether the list opens on it (opens_first, at most one). Each view needs a short id of lowercase letters and digits.",
     schema: savedViewsSchema,
     defaultBody: () => DEFAULT_SAVED_VIEWS,
+  },
+  {
+    module: STOCK_MODULE,
+    key: PO_EMAIL_KEY,
+    feature: "stock",
+    name: "Purchase order email",
+    description:
+      "The subject and message an order's email to a supplier starts from when it is sent from the business's own Gmail, whether a copy to the sender is ticked to begin with (cc_me), and the name suppliers see it from (from_name; empty uses the workspace's name). The subject and body may use {{po_reference}}, {{supplier_name}}, {{contact_name}}, {{month}} and {{sender_name}}. This only changes the starting words: a person still looks each email over and presses send themselves.",
+    schema: poEmailSchema,
+    defaultBody: () => DEFAULT_PO_EMAIL,
   },
   {
     module: SHIPPING_MODULE,

@@ -3,12 +3,16 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
+import { googleMailConfigured } from "@/lib/connections/providers/google-mail";
+import { STOCK_MODULE } from "@/lib/stock/config";
+import { PO_EMAIL_KEY, parsePoEmail } from "@/lib/stock/po/email";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
 import { loadStock } from "../data";
 import { StockSettingsForm } from "../forms";
 import { stockAccess } from "../gate";
 import { StockTabs } from "../tabs";
+import { OrderEmailTemplateForm } from "./email-template-form";
 
 export const metadata: Metadata = { title: "Stock settings" };
 
@@ -17,7 +21,18 @@ export default async function StockSettingsPage({ params }: { params: Promise<{ 
   const access = await stockAccess(slug, `/w/${slug}/stock/settings`);
   if (!access.ok) return access.upsell;
   const { tenant, role, entitlements } = access;
-  const { settings, link } = await loadStock(await createClient(), tenant);
+  const supabase = await createClient();
+  const [{ settings, link }, { data: emailConfig }] = await Promise.all([
+    loadStock(supabase, tenant),
+    supabase
+      .from("configs")
+      .select("body")
+      .eq("tenant_id", tenant.id)
+      .eq("module", STOCK_MODULE)
+      .eq("key", PO_EMAIL_KEY)
+      .maybeSingle(),
+  ]);
+  const emailTemplate = parsePoEmail(emailConfig?.body);
   const synced = link.lastSyncedAt
     ? new Intl.DateTimeFormat("en-US", {
         timeZone: tenant.timezone,
@@ -52,6 +67,28 @@ export default async function StockSettingsPage({ params }: { params: Promise<{ 
           )}
         </CardContent>
       </Card>
+      {canManage(role) && entitlements.canWrite && googleMailConfigured() && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Emailing orders</CardTitle>
+            <CardDescription>
+              What an order&apos;s email starts out saying when you send it from your own Gmail. You
+              can change any one of them before it goes. Connect Gmail under{" "}
+              <Link href={`/w/${tenant.slug}/connections`} className="underline">
+                Connections
+              </Link>
+              .
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <OrderEmailTemplateForm
+              slug={tenant.slug}
+              template={emailTemplate}
+              workspaceName={tenant.name}
+            />
+          </CardContent>
+        </Card>
+      )}
       {canManage(role) && (
         <Card>
           <CardHeader>

@@ -1,5 +1,5 @@
 export type ProviderKey =
-  "shopify" | "quickbooks" | "stripe" | "meta" | "easypost" | "ups" | "redo";
+  "shopify" | "quickbooks" | "stripe" | "meta" | "easypost" | "ups" | "redo" | "google_mail";
 
 export type ConnectionStatus = "active" | "needs_reconnect" | "disconnected";
 
@@ -264,6 +264,14 @@ export interface ProviderAdapter {
   }[];
   /** True when this environment has the provider's app credentials. */
   configured(): boolean;
+  /**
+   * Not every deployment has this one. Where its credentials aren't set it is
+   * left off the Connections page altogether, rather than shown as "not
+   * available yet".
+   */
+  optional?: boolean;
+  /** Nothing is ever pulled from it: no "last synced", no "Sync now". */
+  nothingToSync?: boolean;
   /** Where to send the person to approve the connection. */
   beginConnect(start: ConnectStart): string;
   /** Exchanges the callback for tokens and identifies the account. */

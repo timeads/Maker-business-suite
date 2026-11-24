@@ -1,4 +1,5 @@
 import { createEasyPostAdapter } from "./providers/easypost";
+import { createGoogleMailAdapter } from "./providers/google-mail";
 import { createMetaAdapter } from "./providers/meta";
 import { createQuickBooksAdapter } from "./providers/quickbooks";
 import { createRedoAdapter } from "./providers/redo";
@@ -15,6 +16,7 @@ const adapters: Record<ProviderKey, ProviderAdapter> = {
   easypost: createEasyPostAdapter(),
   ups: createUpsAdapter(),
   redo: createRedoAdapter(),
+  google_mail: createGoogleMailAdapter(),
 };
 
 export const PROVIDER_ORDER: readonly ProviderKey[] = [
@@ -25,6 +27,7 @@ export const PROVIDER_ORDER: readonly ProviderKey[] = [
   "easypost",
   "ups",
   "redo",
+  "google_mail",
 ];
 
 export function isProviderKey(value: unknown): value is ProviderKey {

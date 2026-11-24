@@ -224,6 +224,21 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   like `KE-202611-A7A950` (TuftStock's scheme: `po/reference.ts`, given by a
   trigger on insert, one of a kind per workspace); it is what people read,
   while the plain `number` still opens the order in its address.
+  An order can be emailed to its supplier from the business's own Gmail
+  (provider `google_mail`, a `ProviderAdapter` asking only for `gmail.send`;
+  offered only where `GOOGLE_MAIL_CLIENT_ID`/`_SECRET` are set;
+  docs/gmail-orders.md). It is always a manager's press, after a preview.
+  `lib/stock/po/send.ts` is the one path: claim the send under the page's
+  request key (`begin_po_email`), draw the PDF, build the message ourselves
+  (`po/mime.ts`, no library; headers can't carry a line break), ask Gmail
+  once, and write down how it went (`finish_po_email`): sent, failed (Gmail
+  said no, so the same press may go again) or unsure (never heard back, so
+  nothing is resent without a person). `purchase_order_emails` is that claim
+  and the record on the order (when, who, to whom, Gmail's ids, never a
+  token). A sent email marks a draft as ordered. "Changed since you emailed
+  it" is the stored fingerprint against today's (`po/email.ts`, ported from
+  TuftStock with its tests), worked out on read. The starting words are a
+  config (`stock` / `po_email`).
   Supplier closures (`supplier_closures`, manager-only functions) are dated
   stretches a supplier is shut. The rule lives in `engine/closures.ts` (pure,
   plain calendar days): an order's lead time may not run through a closure,

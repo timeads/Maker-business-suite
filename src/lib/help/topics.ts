@@ -469,7 +469,33 @@ export const HELP_TOPICS: HelpTopic[] = [
       "For your logo, upload it under Social → Assets and tag it “logo”. It needs to be a PNG or a JPEG.",
       "Add the contact name and any extra email addresses on the supplier, under Stock → Suppliers.",
       "Dates are shown on your own calendar, whatever timezone the supplier is in.",
-      "We don't email the order for you yet: you send the PDF yourself.",
+      "You can also email the order straight from your own Gmail, with this PDF attached: see “Email an order to your supplier from your own Gmail”.",
+      "A name written in Chinese, Japanese or Korean characters prints as written.",
+    ],
+  },
+  {
+    slug: "email-orders",
+    group: "stock",
+    title: "Email an order to your supplier from your own Gmail",
+    summary:
+      "Connect Gmail once, then send any order with its PDF attached. It lands in your own Sent folder.",
+    intro:
+      "Orders go out from your own address, so the supplier's reply comes back to you and the whole conversation stays in your Gmail.",
+    steps: [
+      "An owner or admin opens Connections and presses “Connect Gmail (to email orders)”. Google asks you to choose the mailbox and to allow sending email on your behalf. Leave that ticked and continue.",
+      "Open an order under Stock → Orders. Under “Email this order” the supplier's addresses, a subject and a message are filled in for you. Change anything you like, and tick “Send a copy” if you want one.",
+      "Press “Look it over”. You see who it goes to, the subject, the message and the attached PDF, exactly as they'll be sent.",
+      "Press the send button. For a draft it reads “Send & mark ordered”: the order goes and is marked as ordered in one step.",
+    ],
+    notes: [
+      "The permission is only to send. We can't read, search or delete anything in your mailbox, and nothing is ever sent without someone pressing the button.",
+      "Every send is noted on the order: when, who pressed, who it went to and from which mailbox.",
+      "If you change an order after emailing it, the order says “Changed since you emailed it” and lists what changed. Sending again replies in the same conversation with the new PDF and says what's different.",
+      "Pressing send twice sends once. If Gmail says no, nothing went and you can try again. If we never hear back from Gmail we say so and don't send again by ourselves: check your Sent folder first.",
+      "If the supplier has no email saved, whoever you send to is saved as their contact for next time.",
+      "Set the words every order email starts from under Stock → Settings → “Emailing orders”. You can use {{po_reference}}, {{supplier_name}}, {{contact_name}}, {{month}} and {{sender_name}}.",
+      "To stop, press Disconnect on Gmail under Connections, or remove the app in your Google account's security settings. Either one ends it.",
+      "Don't see Gmail under Connections? It hasn't been switched on for your suite yet. You can still download the PDF and send it yourself.",
     ],
   },
   {

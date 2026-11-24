@@ -111,7 +111,9 @@ export default async function ConnectionsPage({
         <FormMessage kind="success">
           {query.warning
             ? `${nameOf(query.connected)} is connected, but we couldn't switch on live updates. Use Sync now, or reconnect to try again.`
-            : `${nameOf(query.connected)} is connected. The first sync is underway.`}
+            : getAdapter(query.connected).nothingToSync
+              ? `${nameOf(query.connected)} is connected.`
+              : `${nameOf(query.connected)} is connected. The first sync is underway.`}
         </FormMessage>
       )}
       {query.error && ERRORS[query.error] && (
@@ -125,9 +127,13 @@ export default async function ConnectionsPage({
           const status = row?.status ?? "none";
           const live = status === "active" || status === "needs_reconnect";
           const available = adapter.configured() && serverReady;
+          // Not set up in this deployment and never connected here: leave it off the page.
+          if (adapter.optional && !adapter.configured() && !live) return null;
           // Connected with a pasted key: no account id worth showing, nothing to sync.
           const withKey = Boolean(adapter.connectWithKey);
           const testKey = withKey && row?.metadata?.mode === "test";
+          // Nothing is pulled from it, so there is no sync to show or start.
+          const quiet = withKey || adapter.nothingToSync === true;
 
           return (
             <Card key={key}>
@@ -144,11 +150,11 @@ export default async function ConnectionsPage({
                     <dt className="text-muted-foreground">Account</dt>
                     <dd>
                       {row.display_name ?? row.external_account_id}
-                      {row.display_name && !withKey && (
+                      {row.display_name && !quiet && (
                         <span className="text-muted-foreground"> ({row.external_account_id})</span>
                       )}
                     </dd>
-                    {!withKey && (
+                    {!quiet && (
                       <>
                         <dt className="text-muted-foreground">Last synced</dt>
                         <dd>
@@ -177,7 +183,9 @@ export default async function ConnectionsPage({
                   <FormMessage>
                     {withKey
                       ? `${adapter.name} stopped accepting the saved key. Paste a current one to carry on.`
-                      : `${adapter.name} stopped accepting our access, so its data isn't updating. Reconnect to pick up where it left off.`}
+                      : adapter.nothingToSync
+                        ? `${adapter.name} stopped accepting our access. Reconnect to carry on.`
+                        : `${adapter.name} stopped accepting our access, so its data isn't updating. Reconnect to pick up where it left off.`}
                   </FormMessage>
                 )}
                 {status === "active" && row?.last_error && (
@@ -211,11 +219,13 @@ export default async function ConnectionsPage({
                         slug={tenant.slug}
                         provider={key}
                         providerName={adapter.name}
-                        canSync={status === "active" && !withKey}
+                        canSync={status === "active" && !quiet}
                         disconnectNote={
                           withKey
                             ? "We'll forget the key. Labels you already bought stay as they are."
-                            : undefined
+                            : adapter.nothingToSync
+                              ? "We'll forget the permission and ask the provider to cancel it. What you've already sent stays as it is."
+                              : undefined
                         }
                       />
                     )}

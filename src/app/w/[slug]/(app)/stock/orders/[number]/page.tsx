@@ -7,10 +7,23 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { FormMessage } from "@/components/ui/form-message";
 import { PageHeader } from "@/components/ui/page-header";
+import { googleMailConfigured } from "@/lib/connections/providers/google-mail";
 import { formatMoney } from "@/lib/dashboard/format";
+import { nameOf, type Person } from "@/lib/messages/format";
+import { STOCK_MODULE } from "@/lib/stock/config";
 import { trackingUrl } from "@/lib/shipping/carriers";
 import { caseLabel, casePackOf, startingQty } from "@/lib/stock/engine";
 import { ORDER_STATUS, explainSuggestion, isPlanned, itemName } from "@/lib/stock/plan";
+import {
+  PO_EMAIL_KEY,
+  composeDefaults,
+  fingerprint,
+  firstName,
+  parsePoEmail,
+  poSnapshot,
+  readSnapshot,
+  sendLabel,
+} from "@/lib/stock/po/email";
 import { computePoTotals, parseAdjustments } from "@/lib/stock/po/totals";
 import { CARRIER_WORDS, canAskCarrier, isCarrierStatus, parcelDates } from "@/lib/stock/tracking";
 import { createClient } from "@/lib/supabase/server";
@@ -25,6 +38,8 @@ import {
 } from "../../forms";
 import { stockAccess } from "../../gate";
 import { OrderForm, type AddableItem, type EditLine } from "./order-form";
+import { OrderEmail, type EmailCompose } from "./email-card";
+import { loadPoForSupplier, poFileName } from "./po-data";
 import { AddShipmentForm, ShipmentList, type ShipmentRow } from "./shipments";
 
 export const metadata: Metadata = { title: "Stock order" };
@@ -49,7 +64,7 @@ export default async function StockOrderPage({
   const { slug, number } = await params;
   const access = await stockAccess(slug, `/w/${slug}/stock/orders/${number}`);
   if (!access.ok) return access.upsell;
-  const { tenant, role, entitlements } = access;
+  const { tenant, role, entitlements, user } = access;
   if (!/^\d{1,9}$/.test(number)) notFound();
   const flags = await searchParams;
 
@@ -253,6 +268,110 @@ export default async function StockOrderPage({
     };
   });
   const hasUpsNumber = shipments.some((s) => /^1Z[0-9A-Z]{16}$/.test(s.tracking));
+  // Emailing the order from the workspace's own Gmail: only where this
+  // deployment has a Google app, and only owners and admins send.
+  const mailOffered = googleMailConfigured() && order.status !== "cancelled" && lines.length > 0;
+  const [
+    { data: mailbox },
+    { data: emailConfig },
+    { data: emailed },
+    { data: people },
+    forSupplier,
+  ] = await Promise.all([
+    supabase
+      .from("connections")
+      .select("status, metadata")
+      .eq("tenant_id", tenant.id)
+      .eq("provider", "google_mail")
+      .maybeSingle(),
+    supabase
+      .from("configs")
+      .select("body")
+      .eq("tenant_id", tenant.id)
+      .eq("module", STOCK_MODULE)
+      .eq("key", PO_EMAIL_KEY)
+      .maybeSingle(),
+    supabase
+      .from("purchase_order_emails")
+      .select(
+        "id, status, to_emails, cc_emails, subject, sender_email, sent_by, sent_at, created_at, snapshot, fingerprint, error",
+      )
+      .eq("tenant_id", tenant.id)
+      .eq("po_id", order.id)
+      .order("created_at", { ascending: false })
+      .limit(20),
+    supabase.rpc("chat_people", { p_tenant_id: tenant.id }),
+    manager && mailOffered ? loadPoForSupplier(supabase, tenant, { id: order.id }) : null,
+  ]);
+  const team = new Map(((people ?? []) as Person[]).map((person) => [person.user_id, person]));
+  const sends = (emailed ?? []) as {
+    id: string;
+    status: string;
+    to_emails: string[];
+    cc_emails: string[];
+    subject: string;
+    sender_email: string;
+    sent_by: string | null;
+    sent_at: string | null;
+    created_at: string;
+    snapshot: unknown;
+    fingerprint: string;
+    error: string | null;
+  }[];
+  const mailboxEmail = String((mailbox?.metadata as { email?: unknown } | null)?.email ?? "");
+  const mailReady = mailOffered && mailbox?.status === "active" && mailboxEmail !== "";
+  const lastSent = sends.find((send) => send.status === "sent" && send.sent_at) ?? null;
+  let compose: EmailCompose | null = null;
+  if (manager && mailReady && forSupplier) {
+    const template = parsePoEmail(emailConfig?.body);
+    const now = fingerprint(poSnapshot(forSupplier.forEmail));
+    const changedSince = lastSent !== null && lastSent.fingerprint !== now;
+    const defaults = composeDefaults({
+      po: forSupplier.forEmail,
+      contactEmails: forSupplier.supplierEmails,
+      templates: template,
+      // Signed with the first name of whoever is sending.
+      senderName: firstName(nameOf(team.get(user.id)), user.email ?? mailboxEmail),
+      last: lastSent
+        ? {
+            subject: lastSent.subject,
+            sentAt: lastSent.sent_at as string,
+            snapshot: readSnapshot(lastSent.snapshot),
+          }
+        : null,
+      now: new Date(),
+      timezone: tenant.timezone,
+    });
+    compose = {
+      from: mailboxEmail,
+      to: defaults.to,
+      subject: defaults.subject,
+      body: defaults.body,
+      ccMe: template.cc_me,
+      filename: poFileName(forSupplier.reference),
+      sendLabel: sendLabel({ isDraft, isResend: defaults.isResend, changed: changedSince }),
+      isDraft,
+      changed:
+        changedSince && lastSent
+          ? {
+              sentOn: new Intl.DateTimeFormat("en-US", {
+                timeZone: tenant.timezone,
+                month: "short",
+                day: "numeric",
+              }).format(new Date(lastSent.sent_at as string)),
+              changes: defaults.changes,
+            }
+          : null,
+      supplierName: supplier.name,
+      hasSavedEmail: forSupplier.supplierEmails.length > 0,
+    };
+  }
+  const SEND_NOTES: Record<string, { label: string; tone: "good" | "bad" | "waiting" }> = {
+    sent: { label: "Sent", tone: "good" },
+    failed: { label: "Didn't send", tone: "bad" },
+    unsure: { label: "Can't tell if it went", tone: "waiting" },
+    sending: { label: "Sending", tone: "waiting" },
+  };
   const SHOP_NOTES: Record<string, string> = {
     pending: "waiting to be added to your shop",
     sending: "being added to your shop",
@@ -305,7 +424,7 @@ export default async function StockOrderPage({
             to="ordered"
             label="I've sent this order"
             pending="Saving…"
-            variant="default"
+            variant={compose ? "outline" : "default"}
           />
         )}
       </PageHeader>
@@ -507,6 +626,81 @@ export default async function StockOrderPage({
           )}
         </CardContent>
       </Card>
+
+      {(compose || sends.length > 0 || (manager && mailOffered)) && (
+        <Card className="print:hidden">
+          <CardHeader>
+            <CardTitle>
+              {compose?.changed
+                ? "Send the changed order"
+                : lastSent
+                  ? "Email this order again"
+                  : "Email this order"}
+            </CardTitle>
+            <CardDescription>
+              {compose
+                ? `Goes to ${supplier.name} from your own Gmail, with the order attached as a PDF. You'll see exactly what goes before it's sent.`
+                : manager && mailOffered
+                  ? "Send orders to suppliers from your own Gmail, with the PDF attached."
+                  : "When this order was emailed to the supplier."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4">
+            {compose ? (
+              <OrderEmail
+                // A different order, or a send that changed it, starts the form afresh.
+                key={`${order.id}:${sends[0]?.id ?? "none"}:${sends[0]?.status ?? ""}`}
+                slug={tenant.slug}
+                orderId={order.id}
+                compose={compose}
+                primary={isDraft}
+              />
+            ) : (
+              manager &&
+              mailOffered && (
+                <p className="text-muted-foreground text-sm">
+                  {mailbox && mailbox.status === "needs_reconnect"
+                    ? "Gmail needs reconnecting before orders can be emailed. "
+                    : "Connect Gmail once and you can email orders from here. "}
+                  <Link href={`/w/${tenant.slug}/connections`} className="underline">
+                    Open Connections
+                  </Link>
+                  . Until then, download the PDF and send it yourself.
+                </p>
+              )
+            )}
+            {sends.length > 0 && (
+              <ul className="divide-border border-border flex flex-col divide-y border-t text-sm">
+                {sends.map((send) => {
+                  const note = SEND_NOTES[send.status] ?? SEND_NOTES.sending;
+                  return (
+                    <li
+                      key={send.id}
+                      className="flex flex-wrap items-baseline gap-x-3 gap-y-1 py-2"
+                    >
+                      <Badge tone={note.tone}>{note.label}</Badge>
+                      <span className="font-read min-w-0 flex-1 basis-64">
+                        to {send.to_emails.join(", ")}
+                        {send.cc_emails.length > 0 && `, copy to ${send.cc_emails.join(", ")}`}
+                        <span className="text-muted-foreground block text-xs">
+                          “{send.subject}” · from {send.sender_email} ·{" "}
+                          {send.sent_by ? nameOf(team.get(send.sent_by)) : "Someone"} pressed send
+                        </span>
+                        {send.status !== "sent" && send.error && (
+                          <span className="text-brick block text-xs">{send.error}</span>
+                        )}
+                      </span>
+                      <span className="text-muted-foreground">
+                        {when.format(new Date(send.sent_at ?? send.created_at))}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {(receipts ?? []).length > 0 && (
         <Card className="print:hidden">
