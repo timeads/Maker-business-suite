@@ -9,6 +9,7 @@ import { canManage } from "@/lib/tenants";
 import { cn } from "@/lib/utils";
 import { loadSpendLines, stockToday } from "../data";
 import { stockAccess } from "../gate";
+import { SpendItemsTable } from "./items-table";
 import { StockTabs } from "../tabs";
 
 export const metadata: Metadata = { title: "Stock spend" };
@@ -19,7 +20,8 @@ const RANGES = [
   { key: "12", label: "12 months", months: 12 },
   { key: "all", label: "All time", months: null },
 ] as const;
-const ITEM_LIMIT = 200;
+// Every item goes to the browser for searching and sorting, up to this many.
+const ITEM_LIMIT = 5000;
 
 export default async function StockSpendPage({
   params,
@@ -200,44 +202,25 @@ export default async function StockSpendPage({
             <CardHeader>
               <CardTitle>By item</CardTitle>
               <CardDescription>
-                The most spent on first
-                {data.bySku.length > ITEM_LIMIT
-                  ? `: the top ${ITEM_LIMIT} of ${data.bySku.length}.`
-                  : "."}
+                The most spent on first. Press a heading to sort by it, or search for an item, a SKU
+                or a supplier.
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[720px] text-left text-sm">
-                  <thead className="text-muted-foreground text-xs">
-                    <tr>
-                      <th className="py-2 pr-3 font-semibold">Item</th>
-                      <th className="py-2 pr-3 font-semibold">Supplier</th>
-                      <th className="py-2 pr-3 text-right font-semibold">Units</th>
-                      <th className="py-2 pr-3 text-right font-semibold">Orders</th>
-                      <th className="py-2 pr-3 font-semibold">Last ordered</th>
-                      <th className="py-2 text-right font-semibold">Spent</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-border divide-y tabular-nums">
-                    {data.bySku.slice(0, ITEM_LIMIT).map((s) => (
-                      <tr key={s.sku ?? `title:${s.title}`}>
-                        <td className="py-2 pr-3">
-                          <span className="font-read">{s.title}</span>
-                          {s.sku && (
-                            <span className="text-muted-foreground block text-xs">{s.sku}</span>
-                          )}
-                        </td>
-                        <td className="py-2 pr-3">{s.supplierName}</td>
-                        <td className="py-2 pr-3 text-right">{s.units.toLocaleString("en-US")}</td>
-                        <td className="py-2 pr-3 text-right">{s.poCount}</td>
-                        <td className="py-2 pr-3 whitespace-nowrap">{day(s.lastOrdered)}</td>
-                        <td className="py-2 text-right">{money(s.spend)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <SpendItemsTable
+                items={data.bySku.slice(0, ITEM_LIMIT).map((s) => ({
+                  sku: s.sku,
+                  title: s.title,
+                  supplierName: s.supplierName,
+                  units: s.units,
+                  spend: s.spend,
+                  poCount: s.poCount,
+                  lastOrdered: s.lastOrdered.slice(0, 10),
+                  lastOrderedText: day(s.lastOrdered),
+                }))}
+                currency={tenant.currency}
+                rangeLabel={active.key === "all" ? "all-time" : `${active.key}-months`}
+              />
             </CardContent>
           </Card>
         </>

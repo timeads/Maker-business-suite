@@ -18,6 +18,7 @@ import { requireUser } from "@/lib/auth";
 import { daysFromNow, formatTime, localDay } from "@/lib/bookings/slots";
 import { getEntitlements } from "@/lib/entitlements";
 import type { ModuleKey } from "@/lib/modules";
+import { loadStockHomeFacts, stockHomeLines } from "@/lib/stock/home-summary";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
 import { HomeCards } from "./home-cards";
@@ -37,6 +38,9 @@ type Row = {
 };
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/** "96 units due…" → "96 units due…": the first letter raised, for a line that starts a card. */
+const sentence = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
 /**
  * Home is the day's to-do list: one line per tool, the ones that need
@@ -215,6 +219,13 @@ export default async function WorkspaceHomePage({ params }: { params: Promise<{ 
   }
   if (has("stock")) {
     const n = onOrder.count ?? 0;
+    // A line or two of good news from Stock. Never allowed to cost the page.
+    let stockLines: string[] = [];
+    try {
+      stockLines = stockHomeLines(await loadStockHomeFacts(supabase, tenant));
+    } catch {
+      stockLines = [];
+    }
     rows.push({
       key: "stock",
       icon: Boxes,
@@ -222,6 +233,7 @@ export default async function WorkspaceHomePage({ params }: { params: Promise<{ 
       headline: n
         ? `${plural(n, "order", "orders")} on the way from suppliers`
         : "See what needs reordering",
+      detail: stockLines.length > 0 ? sentence(stockLines.slice(0, 3).join(" · ")) : undefined,
       waiting: false,
       href: `${base}/stock`,
     });

@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { localDay } from "@/lib/bookings/slots";
 import { formatMoney } from "@/lib/dashboard/format";
 import { inboundDomain, supportAddress } from "@/lib/helpdesk/addresses";
+import { loadStockForBought, type BoughtItemStock, type BoughtLine } from "@/lib/stock/restock";
 import {
   HELPDESK_MODULE,
   TEMPLATES_KEY,
@@ -201,7 +202,7 @@ export default async function HelpdeskPage({
           ? supabase
               .from("orders")
               .select(
-                "id, name, processed_at, total, currency, financial_status, fulfillment_status, order_lines(title, quantity)",
+                "id, name, processed_at, total, currency, financial_status, fulfillment_status, order_lines(title, quantity, sku, variant_title, product_external_id)",
               )
               .eq("tenant_id", tenant.id)
               .eq("email", contact.email)
@@ -231,6 +232,24 @@ export default async function HelpdeskPage({
     : [null, null, null, null, null, null];
 
   const latestOrder = (orders?.data ?? [])[0];
+  // "When is this back?": for what they bought, what is on the shelf and what
+  // is on its way. Read straight from Stock as this member, only where the
+  // workspace has Stock; trouble reading it never costs the conversation.
+  let boughtStock: BoughtItemStock[] = [];
+  if (ticket && entitlements.can("module.stock") && (orders?.data ?? []).length > 0) {
+    try {
+      boughtStock = (
+        await loadStockForBought(
+          supabase,
+          tenant,
+          (orders?.data ?? []).flatMap((order) => (order.order_lines as BoughtLine[] | null) ?? []),
+          localDay(new Date(), tenant.timezone),
+        )
+      ).filter((item) => item.onHand <= 0 || item.incoming !== null);
+    } catch {
+      boughtStock = [];
+    }
+  }
   const templates = parseTemplates(templateConfig?.data?.body).templates.map((template) => ({
     ...template,
     body: fillTemplate(template.body, {
@@ -649,6 +668,32 @@ export default async function HelpdeskPage({
             </ul>
           )}
         </section>
+
+        {boughtStock.length > 0 && (
+          <section className="flex flex-col gap-2">
+            <h3 className={heading}>Back in stock?</h3>
+            <ul className="flex flex-col gap-1.5 text-sm">
+              {boughtStock.slice(0, 8).map((item) => (
+                <li key={item.itemId}>
+                  <Link
+                    href={`/w/${tenant.slug}/stock/items/${item.itemId}`}
+                    className="font-read hover:underline"
+                  >
+                    {item.name}
+                  </Link>
+                  <span
+                    className={`block text-xs ${item.incoming?.late ? "text-brick" : "text-muted-foreground"}`}
+                  >
+                    {item.words}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <p className="text-muted-foreground text-xs">
+              From Stock: things they bought that are sold out or have more on the way.
+            </p>
+          </section>
+        )}
 
         {(earlier?.data ?? []).length > 0 && (
           <section className="flex flex-col gap-2">

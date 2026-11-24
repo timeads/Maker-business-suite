@@ -4,7 +4,9 @@ import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/auth";
 import { formatMoney } from "@/lib/dashboard/format";
 import { getEntitlements } from "@/lib/entitlements";
+import { localDay } from "@/lib/bookings/slots";
 import { inboundDomain } from "@/lib/helpdesk/addresses";
+import { loadStockForBought, type BoughtLine } from "@/lib/stock/restock";
 import {
   HELPDESK_MODULE,
   PRIORITIES,
@@ -167,7 +169,7 @@ export async function draftTicketReply(
     ? await ctx.supabase
         .from("orders")
         .select(
-          "name, processed_at, total, currency, financial_status, fulfillment_status, order_lines(title, quantity)",
+          "name, processed_at, total, currency, financial_status, fulfillment_status, order_lines(title, quantity, sku, variant_title, product_external_id)",
         )
         .eq("tenant_id", ctx.tenant.id)
         .eq("email", contact.email)
@@ -175,8 +177,33 @@ export async function draftTicketReply(
         .limit(5)
     : { data: [] };
 
+  // What Stock says about the things they bought, read as this member. Left
+  // out where the workspace has no Stock, or if it can't be read just now.
+  let stock: string[] = [];
+  if (ctx.entitlements.can("module.stock") && (orders ?? []).length > 0) {
+    try {
+      const bought = (orders ?? []).flatMap(
+        (order) => (order.order_lines as BoughtLine[] | null) ?? [],
+      );
+      stock = (
+        await loadStockForBought(
+          ctx.supabase,
+          ctx.tenant,
+          bought,
+          localDay(new Date(), ctx.tenant.timezone),
+        )
+      )
+        .filter((item) => item.onHand <= 0 || item.incoming !== null)
+        .slice(0, 12)
+        .map((item) => `${item.name}: ${item.words}`);
+    } catch {
+      stock = [];
+    }
+  }
+
   try {
     const draft = await draftReply({
+      stock,
       workspaceName: ctx.tenant.name,
       customerName: contact?.name ?? null,
       subject: ticket.subject,

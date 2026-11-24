@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
@@ -11,6 +12,7 @@ import { canManage } from "@/lib/tenants";
 import { removeSeason } from "../actions";
 import { loadStock } from "../data";
 import { StockSettingsForm } from "../forms";
+import { SyncShopButton } from "../home-parts";
 import { SeasonForm } from "../season-forms";
 import { stockAccess } from "../gate";
 import { StockTabs } from "../tabs";
@@ -24,23 +26,69 @@ export default async function StockSettingsPage({ params }: { params: Promise<{ 
   if (!access.ok) return access.upsell;
   const { tenant, role, entitlements } = access;
   const supabase = await createClient();
-  const [{ settings, link, seasons, today }, { data: emailConfig }, { data: books }] =
-    await Promise.all([
-      loadStock(supabase, tenant),
-      supabase
-        .from("configs")
-        .select("body")
-        .eq("tenant_id", tenant.id)
-        .eq("module", STOCK_MODULE)
-        .eq("key", PO_EMAIL_KEY)
-        .maybeSingle(),
-      supabase
-        .from("connections")
-        .select("status")
-        .eq("tenant_id", tenant.id)
-        .eq("provider", "quickbooks")
-        .maybeSingle(),
-    ]);
+  const [
+    { settings, link, seasons, today },
+    { data: emailConfig },
+    { data: books },
+    { data: syncs },
+  ] = await Promise.all([
+    loadStock(supabase, tenant),
+    supabase
+      .from("configs")
+      .select("body")
+      .eq("tenant_id", tenant.id)
+      .eq("module", STOCK_MODULE)
+      .eq("key", PO_EMAIL_KEY)
+      .maybeSingle(),
+    supabase
+      .from("connections")
+      .select("status")
+      .eq("tenant_id", tenant.id)
+      .eq("provider", "quickbooks")
+      .maybeSingle(),
+    // The last ten reads of the shop (owners and admins can see the queue).
+    canManage(role)
+      ? supabase
+          .from("sync_jobs")
+          .select("id, type, status, attempts, error, started_at, finished_at, created_at")
+          .eq("tenant_id", tenant.id)
+          .eq("provider", "shopify")
+          .in("type", ["full", "incremental"])
+          .order("created_at", { ascending: false })
+          .limit(10)
+      : Promise.resolve({ data: [] }),
+  ]);
+  const runs = (syncs ?? []) as {
+    id: number;
+    type: string;
+    status: "queued" | "running" | "succeeded" | "failed";
+    attempts: number;
+    error: string | null;
+    started_at: string | null;
+    finished_at: string | null;
+    created_at: string;
+  }[];
+  const RUN_WORDS = {
+    queued: { label: "Waiting its turn", tone: "closed" },
+    running: { label: "Reading now", tone: "waiting" },
+    succeeded: { label: "Done", tone: "good" },
+    failed: { label: "Didn't finish", tone: "bad" },
+  } as const;
+  const clock = new Intl.DateTimeFormat("en-US", {
+    timeZone: tenant.timezone,
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  const took = (run: (typeof runs)[number]) => {
+    if (!run.started_at || !run.finished_at) return null;
+    const seconds = Math.max(
+      0,
+      Math.round((Date.parse(run.finished_at) - Date.parse(run.started_at)) / 1000),
+    );
+    return seconds < 90 ? `${seconds}s` : `${Math.round(seconds / 60)} min`;
+  };
   const emailTemplate = parsePoEmail(emailConfig?.body);
   const seasonDay = (value: string) =>
     new Intl.DateTimeFormat("en-US", {
@@ -88,6 +136,50 @@ export default async function StockSettingsPage({ params }: { params: Promise<{ 
           )}
         </CardContent>
       </Card>
+      {canManage(role) && link.connected && (
+        <Card>
+          <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
+            <div>
+              <CardTitle>Reads of your shop</CardTitle>
+              <CardDescription>
+                The last ten times your items, counts and sales were read. It happens about once an
+                hour by itself.
+              </CardDescription>
+            </div>
+            {entitlements.canWrite && <SyncShopButton slug={tenant.slug} />}
+          </CardHeader>
+          <CardContent>
+            {runs.length === 0 ? (
+              <p className="text-muted-foreground text-sm">Nothing has been read yet.</p>
+            ) : (
+              <ul className="divide-border flex flex-col divide-y text-sm">
+                {runs.map((run) => (
+                  <li key={run.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 py-2">
+                    <Badge tone={RUN_WORDS[run.status].tone}>{RUN_WORDS[run.status].label}</Badge>
+                    <span className="min-w-0 flex-1 basis-56">
+                      {run.type === "full" ? "Everything, from the start" : "What changed"}
+                      {took(run) && (
+                        <span className="text-muted-foreground"> · took {took(run)}</span>
+                      )}
+                      {run.attempts > 1 && (
+                        <span className="text-muted-foreground"> · tried {run.attempts} times</span>
+                      )}
+                      {run.status === "failed" && run.error && (
+                        <span className="text-brick font-read block text-xs">
+                          {run.error.slice(0, 240)}
+                        </span>
+                      )}
+                    </span>
+                    <span className="text-muted-foreground tabular-nums">
+                      {clock.format(new Date(run.started_at ?? run.created_at))}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
+      )}
       <Card>
         <CardHeader>
           <CardTitle>Seasons to plan ahead for</CardTitle>

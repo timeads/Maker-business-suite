@@ -321,6 +321,21 @@ describe("drafting a reply", () => {
     expect(buildDraftPrompt({ ...context, orders: [] })).toContain("No orders found");
   });
 
+  it("adds what Stock says as its own marked-off block, only when there is something to say", () => {
+    const plain = buildDraftPrompt(context);
+    expect(plain).not.toContain("<stock>");
+    expect(buildDraftPrompt({ ...context, stock: [] })).toBe(plain);
+    const prompt = buildDraftPrompt({
+      ...context,
+      stock: ["Wool Rug: none on the shelf; 10 more on order, due Dec 1"],
+    });
+    const block = prompt.slice(prompt.indexOf("<stock>"), prompt.indexOf("</stock>"));
+    expect(block).toContain("10 more on order, due Dec 1");
+    // It sits between the orders and the conversation, like the other data.
+    expect(prompt.indexOf("</orders>")).toBeLessThan(prompt.indexOf("<stock>"));
+    expect(prompt.indexOf("</stock>")).toBeLessThan(prompt.indexOf("<conversation>"));
+  });
+
   it("returns the draft text and counts the tokens used", async () => {
     const t = fakeClient({
       stop_reason: "end_turn",
