@@ -1,3 +1,4 @@
+import { COST_SOURCE_LABELS } from "./cost";
 import { caseLabel } from "./engine";
 import {
   HEALTH_LABELS,
@@ -142,6 +143,8 @@ export type GridRow = {
   sold30: number;
   monthly: string;
   cost: number | null;
+  /** Where the cost comes from, in words ("average of your deliveries"). */
+  costFrom: string;
   price: number | null;
   lead: number;
   minimum: number;
@@ -171,7 +174,8 @@ export function toGridRow(row: StockRow, today: string): GridRow {
     supplier: row.supplier?.name ?? null,
     sold30: row.plan.sales30d,
     monthly: row.plan.isDeadStock ? "–" : row.plan.velocityPerMonth.toFixed(1),
-    cost: row.item.unit_cost == null ? null : row.unitCost,
+    cost: row.cost.source === "none" ? null : row.unitCost,
+    costFrom: COST_SOURCE_LABELS[row.cost.source],
     price: row.price,
     lead: row.leadTimeDays,
     minimum: row.minimum,
@@ -202,7 +206,7 @@ export const CSV_VALUES: Record<ColumnKey, (row: StockRow) => string | number> =
   supplier: (row) => row.supplier?.name ?? "",
   sold30: (row) => row.plan.sales30d,
   monthly: (row) => row.plan.velocityPerMonth.toFixed(1),
-  cost: (row) => (row.item.unit_cost == null ? "" : row.unitCost.toFixed(2)),
+  cost: (row) => (row.cost.source === "none" ? "" : row.cost.cost.toFixed(2)),
   price: (row) => (row.price == null ? "" : row.price.toFixed(2)),
   lead: (row) => row.leadTimeDays,
   minimum: (row) => row.minimum,

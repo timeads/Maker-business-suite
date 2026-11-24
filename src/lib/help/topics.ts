@@ -428,6 +428,7 @@ export const HELP_TOPICS: HelpTopic[] = [
       "Items with no supplier, or whose supplier you no longer order from, are listed as left off, so nothing is dropped quietly.",
       "You can print the order or download it as a spreadsheet to send to your supplier.",
       "Lines stay editable until the order is closed, so it can match what really arrived.",
+      "Each line's cost starts from what the item costs you: your own figure if you've typed one on the item's page, else the average of what your checked-in deliveries cost, else the cost in your shop. Change it on the line whenever the supplier's price is different.",
     ],
   },
   {

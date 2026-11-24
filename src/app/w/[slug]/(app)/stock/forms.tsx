@@ -9,6 +9,7 @@ import { SubmitButton } from "@/components/ui/submit-button";
 import {
   receiveDelivery,
   retryShopCount,
+  saveItemCost,
   saveItemPlan,
   saveStockSettings,
   saveSupplier,
@@ -339,6 +340,49 @@ export function ItemPlanForm({
       <SubmitButton variant="outline" pendingText="Saving…" className="sm:w-fit">
         Save
       </SubmitButton>
+    </form>
+  );
+}
+
+/** Your own cost for one item. Empty means "use the usual figure". */
+export function ItemCostForm({
+  slug,
+  itemId,
+  ownCost,
+  usual,
+}: {
+  slug: string;
+  itemId: string;
+  /** "12.50", or null when no figure has been typed. */
+  ownCost: string | null;
+  /** What's used when the box is empty, as "12.50"; null when there's nothing. */
+  usual: string | null;
+}) {
+  const [state, action] = useActionState(saveItemCost.bind(null, slug, itemId), {});
+  return (
+    <form action={action} className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="own-cost">Your own cost for one</Label>
+          <Input
+            id="own-cost"
+            name="own_cost"
+            inputMode="decimal"
+            maxLength={14}
+            defaultValue={ownCost ?? ""}
+            placeholder={usual ?? "Not set"}
+            className="w-40"
+          />
+        </div>
+        <SubmitButton variant="outline" pendingText="Saving…">
+          Save
+        </SubmitButton>
+      </div>
+      <p className="text-muted-foreground text-xs">
+        Use this when you know better than the numbers do, say a new price your supplier has just
+        quoted. Leave it empty to go back to the usual figure.
+      </p>
+      <Result state={state} />
     </form>
   );
 }

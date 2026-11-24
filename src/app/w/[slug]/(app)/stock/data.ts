@@ -14,6 +14,7 @@ import {
   emptyDaysSince,
   itemName,
   type EmptyDayRow,
+  type ReceivedCostRow,
   type ItemRow,
   type OpenLine,
   type SaleRow,
@@ -51,13 +52,13 @@ export async function loadStock(
   tenant: { id: string; timezone: string },
 ) {
   const today = localDay(new Date(), tenant.timezone);
-  const [items, suppliers, sales, lines, emptyDays, { data: config }, { data: shop }] =
+  const [items, suppliers, sales, lines, emptyDays, received, { data: config }, { data: shop }] =
     await Promise.all([
       all<ItemRow & { synced_at: string }>((from, to) =>
         supabase
           .from("stock_items")
           .select(
-            "id, title, variant_title, sku, on_hand, unit_cost, tracked, product_status, supplier_id, lead_time_days, coverage_days, safety_stock, hidden, vendor, price, case_pack, moq, supplier_sku, synced_at",
+            "id, title, variant_title, sku, on_hand, unit_cost, tracked, product_status, supplier_id, lead_time_days, coverage_days, safety_stock, hidden, vendor, price, case_pack, moq, supplier_sku, own_cost, synced_at",
           )
           .eq("tenant_id", tenant.id)
           .order("title")
@@ -108,6 +109,13 @@ export async function loadStock(
           .order("stock_item_id")
           .range(from, to),
       ),
+      // What checked-in deliveries cost, summed per item, for the average cost.
+      all<ReceivedCostRow>((from, to) =>
+        supabase
+          .rpc("stock_received_costs", { p_tenant_id: tenant.id })
+          .order("stock_item_id")
+          .range(from, to),
+      ),
       supabase
         .from("configs")
         .select("body")
@@ -136,7 +144,16 @@ export async function loadStock(
     lastSyncedAt: (shop?.last_synced_at as string | null) ?? null,
   };
   return {
-    rows: buildStockRows({ items, suppliers, sales, openLines, emptyDays, settings, today }),
+    rows: buildStockRows({
+      items,
+      suppliers,
+      sales,
+      openLines,
+      emptyDays,
+      received,
+      settings,
+      today,
+    }),
     suppliers,
     settings,
     today,

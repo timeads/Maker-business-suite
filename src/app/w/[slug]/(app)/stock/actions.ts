@@ -173,6 +173,41 @@ export async function saveItemPlan(
   return { message: "Saved." };
 }
 
+/**
+ * The workspace's own cost for one item. Left empty, the figure is taken off
+ * and the cost goes back to the average of deliveries, or the shop's.
+ */
+export async function saveItemCost(
+  slug: string,
+  itemId: string,
+  _prev: StockState,
+  formData: FormData,
+): Promise<StockState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  if (!UUID.test(itemId)) return { error: OOPS };
+  const typed = text(formData, "own_cost");
+  const cost = typed === "" ? null : amount(typed);
+  if (typed !== "" && cost === null) {
+    return {
+      error: "Type the cost as an amount, like 12.50. Leave it empty to use the usual one.",
+    };
+  }
+  const { error } = await ctx.supabase.rpc("set_stock_item_own_cost", {
+    p_tenant_id: ctx.tenant.id,
+    p_item_id: itemId,
+    p_cost: cost,
+  });
+  if (error) return { error: OOPS };
+  done(slug);
+  return {
+    message:
+      cost === null
+        ? "Taken off. We're back to what your deliveries and your shop say."
+        : "Saved. New suggestions and order lines use your figure.",
+  };
+}
+
 /** The "Don't reorder" switch on one item, on or off. */
 export async function setItemHidden(
   slug: string,

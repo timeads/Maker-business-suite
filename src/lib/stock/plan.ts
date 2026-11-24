@@ -1,4 +1,5 @@
 import type { StockSettings } from "./config";
+import { resolveCost, type ItemCost } from "./cost";
 import {
   caseLabel,
   casePackOf,
@@ -44,6 +45,14 @@ export type ItemRow = {
   case_pack?: number | null;
   moq?: number | null;
   supplier_sku?: string | null;
+  /** The workspace's own cost for a unit; wins over every other figure. */
+  own_cost?: number | string | null;
+};
+/** Units checked in for an item across all its orders, and what they cost in all. */
+export type ReceivedCostRow = {
+  stock_item_id: string;
+  units: number | string;
+  total: string | number;
 };
 export type SupplierRow = {
   id: string;
@@ -71,7 +80,10 @@ export type StockRow = {
   leadTimeDays: number;
   coverageDays: number;
   onOrder: number;
+  /** What a unit costs, as a plain number for showing and sorting (see `cost`). */
   unitCost: number;
+  /** The same figure in whole cents, where it came from, and the others beside it. */
+  cost: ItemCost;
   price: number | null;
   /** Units to a case, when it is bought by the case. */
   casePack: number | null;
@@ -137,6 +149,8 @@ export function buildStockRows(input: {
    * exactly as TuftStock does. Left out, every day counts.
    */
   emptyDays?: EmptyDayRow[];
+  /** What checked-in deliveries cost, per item, for the average cost. */
+  received?: ReceivedCostRow[];
   settings: StockSettings;
   /** The workspace's own "today", YYYY-MM-DD. */
   today: string;
@@ -159,6 +173,12 @@ export function buildStockRows(input: {
     if (list) list.push(date);
     else emptyByItem.set(row.stock_item_id, [date]);
   }
+  const receivedByItem = new Map(
+    (input.received ?? []).map((row) => [
+      row.stock_item_id,
+      { units: Number(row.units), total: String(row.total) },
+    ]),
+  );
   const linesByItem = new Map<string, OpenLine[]>();
   for (const line of input.openLines) {
     const list = linesByItem.get(line.stock_item_id);
@@ -224,6 +244,11 @@ export function buildStockRows(input: {
       effectiveCoverageDays: coverageDays,
       reviewBufferDays: input.settings.review_buffer_days,
     });
+    const cost = resolveCost({
+      ownCost: item.own_cost,
+      received: receivedByItem.get(item.id),
+      shopCost: item.unit_cost,
+    });
     const due =
       plan.suggestedQty > 0 &&
       plan.reorderDate !== null &&
@@ -235,7 +260,8 @@ export function buildStockRows(input: {
       leadTimeDays,
       coverageDays,
       onOrder,
-      unitCost: Number(item.unit_cost ?? 0) || 0,
+      unitCost: cost.cost.toNumber(),
+      cost,
       price: item.price == null ? null : Number(item.price) || 0,
       casePack,
       minimum: perItem ? moq : 1,
@@ -310,7 +336,7 @@ function buildDrafts(rows: StockRow[], today: string): DraftOrder[] {
         list.map((row) => ({
           variantId: row.item.id,
           suggestedQty: row.suggestedQty,
-          unitCost: row.unitCost.toFixed(2),
+          unitCost: row.cost.cost.toFixed(2),
           effectiveLeadTimeDays: row.leadTimeDays,
         })),
         supplier.moq,

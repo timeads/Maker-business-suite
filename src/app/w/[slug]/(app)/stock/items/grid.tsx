@@ -176,7 +176,7 @@ export function ItemsGrid({
       case "monthly":
         return row.monthly;
       case "cost":
-        return money(row.cost);
+        return <span title={row.cost === null ? undefined : row.costFrom}>{money(row.cost)}</span>;
       case "price":
         return money(row.price);
       case "lead":

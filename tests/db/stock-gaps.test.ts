@@ -454,3 +454,69 @@ describe("the daily count behind sold-out days", () => {
     expect(bobs.every((c) => c.stock_item_id !== rug && c.stock_item_id !== yarn)).toBe(true);
   });
 });
+
+describe("what an item costs", () => {
+  it("only owners and admins set a workspace's own cost, and a sync leaves it alone", async () => {
+    await expect(
+      as(carol, "select public.set_stock_item_own_cost($1, $2, 55.5)", [tenantA, yarn]),
+    ).rejects.toThrow(/Only owners and admins/);
+    // Another workspace can't, under its own name or under Alice's.
+    await expect(
+      as(bob, "select public.set_stock_item_own_cost($1, $2, 1)", [tenantB, yarn]),
+    ).rejects.toThrow(/Item not found/);
+    await expect(
+      as(bob, "select public.set_stock_item_own_cost($1, $2, 1)", [tenantA, yarn]),
+    ).rejects.toThrow(/Only owners and admins/);
+    await expect(
+      as(alice, "select public.set_stock_item_own_cost($1, $2, -1)", [tenantA, yarn]),
+    ).rejects.toThrow(/not valid/);
+    await expect(
+      as(alice, "update public.stock_items set own_cost = 1 where id = $1", [yarn]),
+    ).rejects.toThrow(/permission denied/);
+
+    await as(alice, "select public.set_stock_item_own_cost($1, $2, 7.255)", [tenantA, yarn]);
+    await sync(tenantA, items("a"));
+    const cost = () =>
+      one<{ own_cost: string | null; unit_cost: string }>(
+        "select own_cost, unit_cost from public.stock_items where id = $1",
+        [yarn],
+      );
+    expect(await cost()).toEqual({ own_cost: "7.26", unit_cost: "8.50" });
+    await as(alice, "select public.set_stock_item_own_cost($1, $2, null)", [tenantA, yarn]);
+    expect((await cost()).own_cost).toBeNull();
+  });
+
+  it("adds up what checked-in deliveries cost, for the workspace's own members only", async () => {
+    await sync(tenantA, [{ external_id: "a-wool", title: "Wool cone", on_hand: 0, unit_cost: 3 }]);
+    const wool = await itemId(tenantA, "a-wool");
+    const deliver = async (qty: number, unitCost: number, arrived: number, key: string) => {
+      const order = await sentOrder(alice, tenantA, supplierA, [
+        { stock_item_id: wool, qty, unit_cost: unitCost },
+      ]);
+      if (arrived > 0) {
+        await as(carol, "select * from public.receive_delivery($1, $2, $3::jsonb, false)", [
+          order.id,
+          key,
+          JSON.stringify([{ line_id: order.line[wool], quantity: arrived }]),
+        ]);
+      }
+    };
+    await deliver(10, 4, 10, "77777777-7777-4777-8777-777777777771");
+    await deliver(40, 5, 30, "77777777-7777-4777-8777-777777777772"); // part arrived
+    await deliver(99, 50, 0, "77777777-7777-4777-8777-777777777773"); // nothing here yet
+    const sums = (user: User, tenant: string) =>
+      as<{ stock_item_id: string; units: string; total: string }>(
+        user,
+        "select stock_item_id, units, total from public.stock_received_costs($1)",
+        [tenant],
+      );
+    const mine = (await sums(carol, tenantA)).find((r) => r.stock_item_id === wool)!;
+    // 10 at 4.00 and 30 at 5.00; the order with nothing checked in doesn't count.
+    expect([Number(mine.units), Number(mine.total)]).toEqual([40, 190]);
+    expect(await sums(bob, tenantA)).toEqual([]);
+    expect((await sums(bob, tenantB)).some((r) => r.stock_item_id === wool)).toBe(false);
+    await expect(
+      asAnon(db, (tx) => tx.query("select * from public.stock_received_costs($1)", [tenantA])),
+    ).rejects.toThrow(/permission denied/);
+  });
+});

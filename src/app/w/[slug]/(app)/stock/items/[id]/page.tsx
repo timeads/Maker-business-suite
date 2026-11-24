@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { formatMoney } from "@/lib/dashboard/format";
+import { COST_SOURCE_LABELS } from "@/lib/stock/cost";
 import { caseLabel } from "@/lib/stock/engine";
 import {
   HEALTH_LABELS,
@@ -15,7 +16,7 @@ import {
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
 import { loadStock } from "../../data";
-import { ItemPlanForm, ReorderSwitch } from "../../forms";
+import { ItemCostForm, ItemPlanForm, ReorderSwitch } from "../../forms";
 import { stockAccess } from "../../gate";
 
 export const metadata: Metadata = { title: "Stock item" };
@@ -53,12 +54,26 @@ export default async function StockItemPage({
     ["Order by", relativeDay(plan.reorderDate, today)],
     [
       "Costs you",
-      item.unit_cost == null ? "not set in your shop" : formatMoney(row.unitCost, tenant.currency),
+      row.cost.source === "none"
+        ? "not set"
+        : `${formatMoney(row.unitCost, tenant.currency)} (${COST_SOURCE_LABELS[row.cost.source]})`,
     ],
     ["Sells for", row.price == null ? "–" : formatMoney(row.price, tenant.currency)],
     ["Comes in", row.casePack ? `cases of ${row.casePack}` : "single units"],
     ["Smallest order", row.minimum > 1 ? String(row.minimum) : "no minimum"],
     ["Supplier's code", item.supplier_sku ?? "–"],
+  ];
+
+  const figure = (value: { toNumber(): number } | null, none: string) =>
+    value ? formatMoney(value.toNumber(), tenant.currency) : none;
+  const costs: [string, string, boolean][] = [
+    ["Your own figure", figure(row.cost.own, "none typed"), row.cost.source === "own"],
+    [
+      "Average of your deliveries",
+      figure(row.cost.average, "nothing checked in yet"),
+      row.cost.source === "average",
+    ],
+    ["In your shop", figure(row.cost.shop, "not set"), row.cost.source === "shop"],
   ];
 
   return (
@@ -141,6 +156,37 @@ export default async function StockItemPage({
           </CardHeader>
         </Card>
       )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>What it costs you</CardTitle>
+          <CardDescription>
+            We use your own figure if you&apos;ve typed one, then the average of what your
+            checked-in deliveries cost, then the cost in your shop. Suggested orders and new order
+            lines start from it.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <dl className="grid grid-cols-3 gap-x-6 gap-y-3">
+            {costs.map(([label, value, used]) => (
+              <div key={label}>
+                <dt className="text-muted-foreground text-xs font-semibold">{label}</dt>
+                <dd className="text-sm tabular-nums">
+                  {value} {used && <Badge tone="good">Used</Badge>}
+                </dd>
+              </div>
+            ))}
+          </dl>
+          {manager && (
+            <ItemCostForm
+              slug={tenant.slug}
+              itemId={item.id}
+              ownCost={row.cost.own?.toFixed(2) ?? null}
+              usual={(row.cost.average ?? row.cost.shop)?.toFixed(2) ?? null}
+            />
+          )}
+        </CardContent>
+      </Card>
 
       {manager && (
         <Card>

@@ -166,7 +166,11 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   counted item's count once a day (`stock_daily_counts`, the last look of the
   day, kept 200 days); `loadStock()` reads only the empty days and hands them
   to the engine as `outOfStockDates`, so sold-out days are left out of the
-  sales rate. Only the count is stored, never "was sold out". Suppliers and orders are
+  sales rate. Only the count is stored, never "was sold out". An
+  item's cost is `resolveCost()` in `lib/stock/cost.ts`, on whole cents: the
+  workspace's own figure (`stock_items.own_cost`, a planning column), else
+  the average of checked-in deliveries (summed by `stock_received_costs`,
+  divided in the app), else the shop's cost; the average is never stored. Suppliers and orders are
   manager-only; anyone on the team can check a delivery in. Supabase returns 1,000 rows at most, so `loadStock()`
   pages. The shop's vendor on a product becomes a supplier, and items
   with no supplier are filed under it; a supplier chosen by hand is never

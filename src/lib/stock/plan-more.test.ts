@@ -376,3 +376,54 @@ describe("sold-out days", () => {
     expect(emptyDaysSince("2026-11-20")).toBe("2026-05-24");
   });
 });
+
+describe("costs on stock rows", () => {
+  const build = () =>
+    buildStockRows({
+      items: [
+        item("own", { own_cost: "9.00", unit_cost: "12.50" }),
+        item("avg", { unit_cost: "12.50" }),
+        item("shop", { unit_cost: "12.50" }),
+        item("none", { unit_cost: null }),
+      ],
+      suppliers: [mill],
+      sales: ["own", "avg", "shop", "none"].flatMap((id) => steady(id, 90)),
+      openLines: [],
+      received: [
+        { stock_item_id: "own", units: 10, total: "200.00" },
+        { stock_item_id: "avg", units: "3", total: "20.00" },
+      ],
+      settings,
+      today: TODAY,
+    });
+
+  it("takes your own figure, then the average of deliveries, then the shop's", () => {
+    const rows = build();
+    expect(rows.map((r) => [r.cost.source, r.cost.cost.toFixed(2), r.unitCost])).toEqual([
+      ["own", "9.00", 9],
+      ["average", "6.67", 6.67],
+      ["shop", "12.50", 12.5],
+      ["none", "0.00", 0],
+    ]);
+    const grid = rows.map((r) => toGridRow(r, TODAY));
+    expect(grid.map((g) => [g.cost, g.costFrom])).toEqual([
+      [9, "your own figure"],
+      [6.67, "average of your deliveries"],
+      [12.5, "from your shop"],
+      [null, "not set"],
+    ]);
+    expect(csvTable(rows, ["cost"]).map((line) => line[3])).toEqual([
+      "Costs you",
+      "9.00",
+      "6.67",
+      "12.50",
+      "",
+    ]);
+  });
+
+  it("suggested orders start each line from that cost", () => {
+    const [order] = draftOrders(build(), TODAY);
+    const cost = Object.fromEntries(order.lines.map((l) => [l.stock_item_id, l.unit_cost]));
+    expect(cost).toEqual({ own: 9, avg: 6.67, shop: 12.5, none: 0 });
+  });
+});
