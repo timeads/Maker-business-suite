@@ -1,5 +1,11 @@
 import { NextResponse } from "next/server";
 import { getEntitlements } from "@/lib/entitlements";
+import {
+  labelPageCsp,
+  labelPictureSize,
+  labelPrintPage,
+  liesSideways,
+} from "@/lib/shipping/label-page";
 import { createClient } from "@/lib/supabase/server";
 
 const TYPES: Record<string, string> = {
@@ -14,9 +20,13 @@ const TYPES: Record<string, string> = {
  * link (UPS, Redo). Read as the signed-in member, so row-level security
  * decides whether it is theirs to see; anyone else gets "Not found".
  *
- * A UPS label is a picture lying on its side, so by default it is shown on a
- * page that stands it up at 4 × 6 inches, ready to print. `?raw=1` is the
- * file itself.
+ * A label kept as a picture is shown, by default, on a page that prints it at
+ * exactly 4 × 6 inches with no margin (so the browser adds no header or
+ * footer and nothing is cut off or spread over two stickers), fitted whole
+ * and stood upright: a UPS GIF always lies on its side, and a PNG is turned
+ * only when its own header says it is wider than tall. `?raw=1` is the file
+ * itself. A PDF is always the file, shown by the browser's own viewer, which
+ * prints it at the page size the carrier drew it at.
  */
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -29,7 +39,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   if (!user) return missing();
   const { data } = await supabase
     .from("shipping_label_files")
-    .select("tenant_id, content_type, data, box")
+    .select("tenant_id, content_type, data, box, quote_id")
     .eq("id", id)
     .maybeSingle();
   const file = data as {
@@ -37,6 +47,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     content_type: string;
     data: string;
     box: number;
+    quote_id: string;
   } | null;
   if (!file || !TYPES[file.content_type]) return missing();
   if (!(await getEntitlements(file.tenant_id)).can("module.shipping")) return missing();
@@ -47,19 +58,30 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     "referrer-policy": "no-referrer",
   };
   const raw = new URL(request.url).searchParams.get("raw") === "1";
-  if (file.content_type === "image/gif" && !raw) {
+  const picture = file.content_type === "image/gif" || file.content_type === "image/png";
+  if (picture && !raw) {
+    // Redo's pictures can sit inside wide white margins; the page trims them before it prints.
+    const { data: quote } = await supabase
+      .from("shipping_label_quotes")
+      .select("provider")
+      .eq("id", file.quote_id)
+      .maybeSingle();
+    const gif = file.content_type === "image/gif";
+    const nonce = Buffer.from(crypto.getRandomValues(new Uint8Array(18))).toString("base64");
     // Nothing from the label goes into this page but its own address.
-    const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Label</title><style>
-@page { size: 4in 6in; margin: 0 }
-html, body { margin: 0; padding: 0; background: #fff }
-.label { width: 4in; height: 6in; position: relative; overflow: hidden }
-.label img { position: absolute; top: 0; left: 4in; width: 6in; height: 4in; transform-origin: top left; transform: rotate(90deg) }
-</style></head><body><div class="label"><img src="${id}?raw=1" alt="Postage label"></div></body></html>`;
+    const html = labelPrintPage({
+      id,
+      // A UPS GIF has always been turned; a PNG only when its header says it lies on its side.
+      sideways: gif || liesSideways(labelPictureSize(file.content_type, file.data)),
+      stretch: gif,
+      crop: (quote as { provider?: string } | null)?.provider === "redo",
+      nonce,
+    });
     return new NextResponse(html, {
       headers: {
         ...safe,
         "content-type": "text/html; charset=utf-8",
-        "content-security-policy": "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'",
+        "content-security-policy": labelPageCsp(nonce),
       },
     });
   }

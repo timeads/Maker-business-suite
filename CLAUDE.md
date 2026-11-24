@@ -285,7 +285,12 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   a second copy is warned about. A label kept as a picture or a PDF is drawn
   for the printer in the browser (`pdfjs-dist`, loaded only when a PDF label
   is printed). A print that fails never touches the
-  purchase: the label is already kept. Telling the shop a
+  purchase: the label is already kept. Through the browser, a label kept as
+  a picture opens on its own print page (`/api/shipping/label-file/[id]`,
+  built by `lib/shipping/label-page.ts`): a 4 × 6 inch sheet with no margin,
+  the picture fitted whole and turned only when its header says it is wider
+  than tall; its one script runs under a per-response nonce, so keep that
+  policy as tight as it is. `?raw=1` is the file. Telling the shop a
   parcel went (`shopify-fulfil.ts`) follows the same once-only queue as
   stock receipts. The to-ship queue's views (ready, pickup, priority,
   on hold, international) and "back from hold" are worked out on read by
