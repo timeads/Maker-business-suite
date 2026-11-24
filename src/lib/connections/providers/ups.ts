@@ -40,13 +40,14 @@ export function createUpsAdapter(
   return {
     key: "ups",
     name: "UPS (your own account)",
-    blurb: "Buy UPS labels in Shipping at your own account's prices, billed by UPS to your account",
+    blurb:
+      "Buy UPS labels in Shipping at your own account's prices, billed by UPS to your account, and have UPS parcels on incoming stock orders followed for you",
     connectFields: [
       {
         name: "client_id",
         label: "Client ID",
         placeholder: "Paste your Client ID",
-        help: "At developer.ups.com, sign in with your UPS login, open Apps and add an app for your shipper account with the Rating and Shipping products (and Address Validation, to have addresses checked). The app's page shows the Client ID and Client Secret.",
+        help: "At developer.ups.com, sign in with your UPS login, open Apps and add an app for your shipper account with the Rating and Shipping products (and Address Validation, to have addresses checked, and Tracking, to have incoming stock orders followed). The app's page shows the Client ID and Client Secret.",
         secret: true,
       },
       {

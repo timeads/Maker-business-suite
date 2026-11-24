@@ -190,6 +190,8 @@ export type GridRow = {
   /** Sent orders still owing some of it, and the oldest one's number. */
   comingOrders: number;
   comingOrder: number | null;
+  /** The oldest of those orders' parcels in a few words, for the chip's tooltip. */
+  comingNote: string | null;
   /** It will run out before a new order could arrive. */
   runsOutSoon: boolean;
   /** A supplier's closure moved the order-by date earlier: a few words, and the longer story. */
@@ -254,7 +256,12 @@ export const percent = (share: number) => `${(share * 100).toFixed(1)}%`;
 export function toGridRow(
   row: StockRow,
   today: string,
-  extra: { rank?: number | null; photo?: string | null } = {},
+  extra: {
+    rank?: number | null;
+    photo?: string | null;
+    /** Parcels in words, by order number (`loadOrderTracking`). */
+    tracking?: Map<number, string[]>;
+  } = {},
 ): GridRow {
   const reason = notPlannedReason(row);
   return {
@@ -271,6 +278,10 @@ export function toGridRow(
     pctRev: percent(row.revenueShare),
     comingOrders: row.openOrders.count,
     comingOrder: row.openOrders.firstNumber,
+    comingNote:
+      row.openOrders.firstNumber != null
+        ? (extra.tracking?.get(row.openOrders.firstNumber)?.join("; ") ?? null)
+        : null,
     runsOutSoon: runsOutBeforeArrival(row, today),
     closure: closureNote(row, today),
     monthly: row.plan.isDeadStock ? "–" : row.plan.velocityPerMonth.toFixed(1),

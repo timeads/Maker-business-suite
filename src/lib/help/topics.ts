@@ -473,6 +473,28 @@ export const HELP_TOPICS: HelpTopic[] = [
     ],
   },
   {
+    slug: "incoming-tracking",
+    group: "stock",
+    title: "Follow what's on its way from a supplier",
+    summary: "Add tracking numbers to an order; UPS ones update by themselves.",
+    steps: [
+      "Open an order you've sent, under Stock → Orders, and add the tracking number the supplier gave you under “On its way”. An order can have several.",
+      "If you've connected your own UPS account under Connections, UPS numbers (they start 1Z) are looked up for you every few hours: label made, on the way, out for delivery, delivered or held up, with the day UPS expects to deliver and where it was last scanned.",
+      "Press “Check now” on a parcel to have UPS asked straight away. It takes a minute, and can be pressed once every ten minutes for a parcel.",
+      "Open “Say what's in this parcel” to note which items, and how many, are in each one. It's a note for you: it doesn't check anything in.",
+    ],
+    notes: [
+      "The same status shows on the Stock front page under Incoming, and when you hover the green “on the way” chip on Stock → Everything.",
+      "UPS's date takes the place of one you typed once UPS gives one. Your own “It's here” always stands.",
+      "A delivered parcel still needs checking in: delivery doesn't change your counts.",
+      "We stop asking once a parcel is delivered, once you mark it as here, when the order is closed, or after 45 days.",
+      "“UPS doesn't know this number yet” is normal for a day or so after a label is made.",
+      "If it says UPS won't share tracking, open your app at developer.ups.com and add “Tracking” under Products.",
+      "A UPS connection set to practice labels isn't used for tracking: its answers are made up.",
+      "Other carriers aren't looked up. Their numbers link to the carrier's own page and show what you record.",
+    ],
+  },
+  {
     slug: "stock-import",
     group: "stock",
     title: "Bring your stock records in from spreadsheets",

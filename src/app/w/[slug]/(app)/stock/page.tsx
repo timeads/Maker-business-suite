@@ -15,6 +15,7 @@ import {
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
 import { startClosureOrder, startSuggestedOrder } from "./actions";
+import { CARRIER_WORDS, isCarrierStatus, type CarrierStatus } from "@/lib/stock/tracking";
 import { loadIncoming, loadStock } from "./data";
 import { StartOrderButton } from "./forms";
 import { stockAccess } from "./gate";
@@ -40,6 +41,17 @@ export default async function StockPage({ params }: { params: Promise<{ slug: st
       new Date(`${value}T12:00:00Z`),
     );
   const lateCount = incoming.filter((order) => order.late).length;
+  // Where UPS is asked, the furthest-along word for an order's travelling parcels
+  // (trouble first, since that is what needs a person).
+  const carrierSaid = (order: (typeof incoming)[number]) => {
+    const said = order.shipments
+      .filter((s) => !s.arrivedOn && isCarrierStatus(s.carrierStatus))
+      .map((s) => s.carrierStatus as CarrierStatus);
+    const first = (["problem", "out_for_delivery", "on_the_way", "label"] as const).find((status) =>
+      said.includes(status),
+    );
+    return first ? CARRIER_WORDS[first] : null;
+  };
   const planned = rows.filter(isPlanned);
   const due = planned.filter((row) => row.due);
   const everyOrder = draftOrders(rows, today);
@@ -339,7 +351,9 @@ export default async function StockPage({ params }: { params: Promise<{ slug: st
                             {order.daysLate} day{order.daysLate === 1 ? "" : "s"} late
                           </Badge>
                         ) : order.stage === "shipped" ? (
-                          <Badge tone="open">Shipped</Badge>
+                          <Badge tone={carrierSaid(order)?.tone ?? "open"}>
+                            {carrierSaid(order)?.label ?? "Shipped"}
+                          </Badge>
                         ) : (
                           <Badge tone="closed">Not shipped yet</Badge>
                         )}

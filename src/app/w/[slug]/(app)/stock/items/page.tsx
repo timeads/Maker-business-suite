@@ -17,7 +17,7 @@ import {
   viewRows,
 } from "@/lib/stock/views";
 import { canManage } from "@/lib/tenants";
-import { loadStock } from "../data";
+import { loadOrderTracking, loadStock } from "../data";
 import { stockAccess } from "../gate";
 import { StockTabs } from "../tabs";
 import { ItemsGrid } from "./grid";
@@ -48,7 +48,11 @@ export default async function StockItemsPage({
   const query = await searchParams;
   const base = `/w/${tenant.slug}/stock`;
 
-  const { rows, suppliers, today, savedViews } = await loadStock(await createClient(), tenant);
+  const supabase = await createClient();
+  const [{ rows, suppliers, today, savedViews }, tracking] = await Promise.all([
+    loadStock(supabase, tenant),
+    loadOrderTracking(supabase, tenant),
+  ]);
 
   // A saved view fills in whatever the address doesn't say for itself. With
   // nothing in the address at all, the list opens on the view marked for that.
@@ -102,6 +106,7 @@ export default async function StockItemsPage({
           toGridRow(row, today, {
             rank: ranks.get(row.item.id) ?? null,
             photo: shopPhotoAddress(row.photo, 96),
+            tracking,
           }),
         )}
         total={shown.length}

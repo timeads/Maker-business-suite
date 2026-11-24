@@ -780,6 +780,64 @@ export async function updateShipment(
   return {};
 }
 
+/** "Check now": asks the worker to look one UPS parcel up at its next turn. */
+export async function checkShipmentNow(
+  slug: string,
+  shipmentId: string,
+  _prev: StockState,
+  _formData: FormData,
+): Promise<StockState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const { error } = await ctx.supabase.rpc("request_po_shipment_check", {
+    p_shipment_id: shipmentId,
+  });
+  if (error) {
+    const why = error.message;
+    return {
+      error: why.includes("too_soon")
+        ? "We asked UPS about this one a few minutes ago. Give it a little while."
+        : why.includes("no_ups")
+          ? "Connect your own UPS account under Connections first."
+          : why.includes("not_ups")
+            ? "Only UPS numbers can be checked for you."
+            : OOPS,
+    };
+  }
+  done(slug);
+  return { message: "Asking UPS now. Refresh in a minute to see what it says." };
+}
+
+/** Says which of the order's lines are in a parcel, and how many of each. */
+export async function saveShipmentItems(
+  slug: string,
+  shipmentId: string,
+  _prev: StockState,
+  formData: FormData,
+): Promise<StockState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const items: { line_id: string; quantity: number }[] = [];
+  for (const [name, value] of formData.entries()) {
+    if (!name.startsWith("qty_")) continue;
+    const lineId = name.slice(4);
+    const typed = String(value).trim();
+    if (typed === "" || typed === "0") continue;
+    const quantity = Number.parseInt(typed, 10);
+    if (!UUID.test(lineId) || !/^\d{1,7}$/.test(typed) || quantity < 1 || quantity > 1_000_000) {
+      return { error: "Type how many of each are in this parcel, as whole numbers." };
+    }
+    items.push({ line_id: lineId, quantity });
+  }
+  const { error } = await ctx.supabase.rpc("set_po_shipment_items", {
+    p_shipment_id: shipmentId,
+    p_items: items,
+  });
+  if (error) return { error: OOPS };
+  done(slug);
+  return { message: items.length > 0 ? "Saved." : "Cleared." };
+}
+
 export async function setOrderStatus(
   slug: string,
   orderId: string,

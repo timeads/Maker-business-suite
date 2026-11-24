@@ -7,6 +7,7 @@
  *  - file inbound emails into help desk tickets
  *  - confirm booking payments and send booking reminders
  *  - publish scheduled social posts
+ *  - ask UPS where incoming stock orders are, a few parcels at a time
  *  - run sync jobs for connected accounts (first sync, webhooks, scheduled pulls)
  *  - every few minutes, queue pulls for providers that don't push changes
  *  - once an hour, delete workspaces whose retention window has passed
@@ -32,6 +33,7 @@ import {
   createShopifyStockWriter,
 } from "../src/lib/connections/providers/shopify-stock";
 import { getProviderToken, vaultTokenStore, type TokenDeps } from "../src/lib/connections/tokens";
+import { ReconnectRequiredError } from "../src/lib/connections/types";
 import { sendEmail } from "../src/lib/email";
 import { inboundDomain } from "../src/lib/helpdesk/addresses";
 import { HELPDESK_MODULE, RULES_KEY, parseRules } from "../src/lib/helpdesk/config";
@@ -43,8 +45,12 @@ import {
 } from "../src/lib/helpdesk/inbound";
 import { postAlert } from "../src/lib/messages/alerts";
 import { moduleOpen } from "../src/lib/module-access";
+import { trackWithUps } from "../src/lib/shipping/label-access";
+import { SourceError } from "../src/lib/shipping/sources/types";
+import type { UpsTracking } from "../src/lib/shipping/sources/ups";
 import { publishPost } from "../src/lib/social/publish";
 import { publishDuePosts } from "../src/lib/social/worker";
+import { carrierResult } from "../src/lib/stock/tracking";
 import { getAdminClient, withTenant } from "../src/lib/supabase/admin";
 
 const POLL_MS = 5_000;
@@ -386,6 +392,56 @@ async function drainStockReceipts(): Promise<number> {
 }
 
 /**
+ * Asks UPS where incoming parcels are, for workspaces that have connected
+ * their own UPS account. The database decides which are due (every four
+ * hours until delivered, for 45 days, or when a manager presses "Check now")
+ * and hands out a few at a time; each is asked about once and what UPS said
+ * is written down with the time. A failure is noted on the parcel and waits
+ * its turn like any other: nothing here retries by itself.
+ */
+async function drainShipmentChecks(): Promise<number> {
+  const admin = getAdminClient();
+  const { data, error } = await admin.rpc("claim_po_shipment_checks", { p_limit: 10 });
+  if (error) throw new Error(`Could not claim parcel checks: ${error.message}`);
+  const parcels = (data ?? []) as { id: string; tenant_id: string; tracking: string }[];
+  // One number on two orders is asked about once in a pass.
+  const asked = new Map<string, Promise<UpsTracking>>();
+  for (const parcel of parcels) {
+    let result: Record<string, string | null>;
+    try {
+      if (!(await moduleOpen(parcel.tenant_id, "stock", admin))) {
+        throw new SourceError("Stock isn't part of this workspace's plan right now", null, false);
+      }
+      const key = `${parcel.tenant_id}:${parcel.tracking}`;
+      let pending = asked.get(key);
+      if (!pending) {
+        pending = trackWithUps(parcel.tenant_id, parcel.tracking);
+        asked.set(key, pending);
+      }
+      result = carrierResult(await pending);
+    } catch (err) {
+      // Only words written for people go on the parcel; anything else stays in the log.
+      const said =
+        err instanceof SourceError
+          ? err.message
+          : err instanceof ReconnectRequiredError
+            ? "Your UPS connection needs reconnecting, under Connections."
+            : "We couldn't reach UPS. We'll try again later.";
+      console.error(
+        `parcel check ${parcel.id} failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      result = { error: said };
+    }
+    const { error: finishError } = await admin.rpc("finish_po_shipment_check", {
+      p_id: parcel.id,
+      p_result: result,
+    });
+    if (finishError) console.error(`could not note parcel ${parcel.id}: ${finishError.message}`);
+  }
+  return parcels.length;
+}
+
+/**
  * Marks recorded parcels as sent in the shop, for workspaces that asked for
  * that. Tried once each, like stock receipts: a repeat could tell a customer
  * twice that their order has shipped.
@@ -710,7 +766,8 @@ async function main() {
       (await attempt(drainStockReceipts, 0)) +
       (await attempt(drainShipmentUndos, 0)) +
       (await attempt(drainShipments, 0)) +
-      (await attempt(drainPickupSteps, 0));
+      (await attempt(drainPickupSteps, 0)) +
+      (await attempt(drainShipmentChecks, 0));
 
     if (Date.now() - lastSchedule > SCHEDULE_EVERY_MS) {
       lastSchedule = Date.now();

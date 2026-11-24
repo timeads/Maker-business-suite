@@ -5,8 +5,9 @@ import { outstandingUnits } from "./po/totals";
  * with their tracking numbers and says how far along each is, when to expect
  * it, and whether it is late. After TuftStock's src/lib/incoming/summary.ts
  * (same stages, same "soonest date wins", same late rule), but one row per
- * order rather than per item, and the status is whatever a person recorded:
- * no carrier is asked.
+ * order rather than per item. The dates handed in are already the ones to go
+ * by: a person's own word, else what UPS said where it is asked
+ * (`parcelDates` in tracking.ts).
  */
 export interface IncomingOrderInput {
   id: string;
@@ -27,6 +28,8 @@ export interface IncomingShipment {
   tracking: string;
   expectedOn: string | null;
   arrivedOn: string | null;
+  /** What the carrier last said, when it has been asked (lib/stock/tracking.ts). */
+  carrierStatus?: string | null;
 }
 
 export type IncomingStage = "ordered" | "shipped" | "arrived";

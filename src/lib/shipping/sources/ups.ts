@@ -124,7 +124,7 @@ const PRACTICE_NOT_FOUND = /no shipment found/i;
 async function ups<T>(
   fetchImpl: Fetch,
   access: UpsAccess,
-  method: "POST" | "DELETE",
+  method: "GET" | "POST" | "DELETE",
   path: string,
   body?: unknown,
 ): Promise<T> {
@@ -648,4 +648,197 @@ export async function validateUpsAddress(
     },
   });
   return readUpsAddressCheck(to, json);
+}
+
+// ---------------------------------------------------------------------------
+// Tracking
+// ---------------------------------------------------------------------------
+
+/**
+ * Shown when UPS takes the keys but won't answer about a parcel: the app at
+ * developer.ups.com hasn't been given the Tracking product.
+ */
+export const UPS_TRACK_HELP =
+  "UPS accepted your keys but won't share tracking. At developer.ups.com, open your app and add “Tracking” under Products, then try again.";
+
+export type UpsTrackStatus = "label" | "on_the_way" | "out_for_delivery" | "delivered" | "problem";
+
+/** What UPS said about one parcel, or that it doesn't know the number. */
+export type UpsTracking =
+  | { found: false }
+  | {
+      found: true;
+      status: UpsTrackStatus;
+      /** UPS's own words for the latest scan. */
+      detail: string | null;
+      /** The day UPS means to deliver it, YYYY-MM-DD. */
+      expectedOn: string | null;
+      deliveredOn: string | null;
+      /** "Louisville, KY, US" */
+      scanPlace: string | null;
+      scanAt: string | null;
+    };
+
+type UpsStatus = {
+  type?: unknown;
+  description?: unknown;
+  simplifiedTextDescription?: unknown;
+};
+type UpsActivity = {
+  status?: UpsStatus;
+  date?: unknown;
+  time?: unknown;
+  gmtDate?: unknown;
+  gmtTime?: unknown;
+  gmtOffset?: unknown;
+  location?: { address?: { city?: unknown; stateProvince?: unknown; countryCode?: unknown } };
+};
+type UpsPackage = {
+  activity?: UpsActivity[] | UpsActivity;
+  currentStatus?: UpsStatus;
+  deliveryDate?: { type?: unknown; date?: unknown }[] | { type?: unknown; date?: unknown };
+};
+type UpsTrackResponse = {
+  trackResponse?: { shipment?: { package?: UpsPackage[] | UpsPackage }[] };
+};
+
+const words = (value: unknown) => (typeof value === "string" ? value.trim() : "");
+
+/** "20261117" → "2026-11-17", or null when it isn't a day. */
+function upsDay(value: unknown): string | null {
+  const text = words(value);
+  if (!/^\d{8}$/.test(text)) return null;
+  const day = `${text.slice(0, 4)}-${text.slice(4, 6)}-${text.slice(6, 8)}`;
+  return Number.isNaN(new Date(`${day}T00:00:00Z`).getTime()) ? null : day;
+}
+
+/**
+ * When a scan happened. UPS gives the day and time in Greenwich time beside
+ * the local ones (its time can come without leading zeros, like "74700");
+ * failing that, the local time and how far it is from Greenwich.
+ */
+function upsMoment(activity: UpsActivity): string | null {
+  const clock = (value: unknown) => {
+    const text = words(value).padStart(6, "0");
+    return /^\d{6}$/.test(text)
+      ? `${text.slice(0, 2)}:${text.slice(2, 4)}:${text.slice(4, 6)}`
+      : null;
+  };
+  const gmtDay = upsDay(activity.gmtDate);
+  const gmtClock = words(activity.gmtTime) ? clock(activity.gmtTime) : null;
+  const offset = words(activity.gmtOffset);
+  const localDay = upsDay(activity.date);
+  const localClock = words(activity.time) ? clock(activity.time) : null;
+  const text =
+    gmtDay && gmtClock
+      ? `${gmtDay}T${gmtClock}Z`
+      : localDay && localClock && /^[+-]\d{2}:\d{2}$/.test(offset)
+        ? `${localDay}T${localClock}${offset}`
+        : null;
+  if (!text) return null;
+  const date = new Date(text);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+/**
+ * How far along a parcel is, from UPS's status type and its words (after
+ * TuftStock's mapUpsStatus, plus the types UPS's appendix lists that it left
+ * out: O for out for delivery, RS for on its way back, MV for a voided label).
+ */
+export function upsStatus(type: unknown, description: unknown): UpsTrackStatus {
+  const kind = words(type).toUpperCase();
+  const said = words(description).toLowerCase();
+  if (kind === "D" || said.includes("delivered")) return "delivered";
+  if (kind === "O" || said.includes("out for delivery")) return "out_for_delivery";
+  if (kind === "X" || kind === "RS" || kind === "MV" || said.includes("exception"))
+    return "problem";
+  if (
+    kind === "M" ||
+    said.includes("order processed") ||
+    said.includes("label created") ||
+    said.includes("created a label")
+  ) {
+    return "label";
+  }
+  return "on_the_way";
+}
+
+/** Reads UPS's answer to a tracking question. Pure. */
+export function readUpsTracking(json: unknown): UpsTracking {
+  const shipment = asArray((json as UpsTrackResponse | null)?.trackResponse?.shipment)[0];
+  const pkg = asArray(shipment?.package)[0];
+  // UPS answers "we don't know it" with a shipment that has a warning and no parcel.
+  if (!pkg) return { found: false };
+  const activity = asArray(pkg.activity);
+  // The newest scan is first.
+  const latest = activity[0];
+  const current = pkg.currentStatus ?? latest?.status;
+  if (!current && !latest) return { found: false };
+  const detail =
+    words(latest?.status?.description) ||
+    words(current?.description) ||
+    words(current?.simplifiedTextDescription);
+  const status = upsStatus(
+    current?.type ?? latest?.status?.type,
+    words(current?.description) || detail,
+  );
+  const dates = asArray(pkg.deliveryDate);
+  const dated = (type: string) => upsDay(dates.find((d) => words(d?.type) === type)?.date);
+  const place = [
+    words(latest?.location?.address?.city),
+    words(latest?.location?.address?.stateProvince),
+    words(latest?.location?.address?.countryCode),
+  ]
+    .filter(Boolean)
+    .join(", ");
+  return {
+    found: true,
+    status,
+    detail: detail ? detail.replace(/\s+/g, " ").slice(0, 200) : null,
+    // A rescheduled date replaces the first one UPS gave.
+    expectedOn: dated("RDD") ?? dated("SDD"),
+    deliveredOn: status === "delivered" ? (dated("DEL") ?? upsDay(latest?.date)) : null,
+    scanPlace: place ? place.slice(0, 120) : null,
+    scanAt: latest ? upsMoment(latest) : null,
+  };
+}
+
+/** A UPS small-package number: 1Z and sixteen letters and digits. */
+export const isUpsTrackingNumber = (value: string) => /^1Z[0-9A-Z]{16}$/.test(value);
+
+const NOT_FOUND_WORDS =
+  /not\s+(be\s+)?found|no\s+tracking\s+information|invalid\s+(tracking|inquiry)/i;
+
+/**
+ * Asks UPS where a parcel is (the Track API: GET /api/track/v1/details/{number},
+ * which needs the Tracking product on the developer app). A number UPS
+ * doesn't know isn't an error: a label can exist for a day before its first
+ * scan, and the practice system only knows a few made-up numbers.
+ */
+export async function trackUps(
+  access: Pick<UpsAccess, "token" | "test">,
+  trackingNumber: string,
+  fetchImpl: Fetch = fetch,
+): Promise<UpsTracking> {
+  const number = trackingNumber.trim().toUpperCase();
+  if (!isUpsTrackingNumber(number)) return { found: false };
+  let json: unknown;
+  try {
+    json = await ups<unknown>(
+      fetchImpl,
+      { token: access.token, account: "", test: access.test },
+      "GET",
+      `/api/track/v1/details/${encodeURIComponent(number)}?locale=en_US&returnSignature=false`,
+    );
+  } catch (err) {
+    if (err instanceof SourceError) {
+      // The app has no Tracking product: say how to add it rather than "Rating and Shipping".
+      if (err.message === UPS_AUTH_HELP) throw new SourceError(UPS_TRACK_HELP, err.status, false);
+      if (err.status === 404 || (err.status === 400 && NOT_FOUND_WORDS.test(err.message))) {
+        return { found: false };
+      }
+    }
+    throw err;
+  }
+  return readUpsTracking(json);
 }

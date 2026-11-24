@@ -10,7 +10,7 @@ import {
   type LabelRequest,
   type LabelSourceKey,
 } from "./sources/types";
-import { UPS_AUTH_HELP } from "./sources/ups";
+import { UPS_AUTH_HELP, UPS_TRACK_HELP, trackUps, type UpsTracking } from "./sources/ups";
 
 /**
  * Where each label source's sign-in comes from: the workspace's own
@@ -82,6 +82,32 @@ export async function withLabelSource<K extends LabelSourceKey, T>(
   } catch (err) {
     // A token issued a moment ago and still refused: the app isn't set up for this request.
     if (err instanceof StaleTokenError) throw new SourceError(UPS_AUTH_HELP, 401, false);
+    throw err;
+  }
+}
+
+/**
+ * Asks UPS where an incoming parcel is, with the workspace's own UPS sign-in
+ * (read from Vault like every other use of it). A sign-in UPS says is out of
+ * date is renewed once; if the fresh one is refused too, the app at UPS
+ * hasn't been given Tracking.
+ */
+export async function trackWithUps(
+  tenantId: string,
+  trackingNumber: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<UpsTracking> {
+  const first = await getLabelAccess(tenantId, "ups");
+  try {
+    return await trackUps(first.access, trackingNumber, fetchImpl);
+  } catch (err) {
+    if (!(err instanceof StaleTokenError)) throw err;
+  }
+  const again = await getLabelAccess(tenantId, "ups", true);
+  try {
+    return await trackUps(again.access, trackingNumber, fetchImpl);
+  } catch (err) {
+    if (err instanceof StaleTokenError) throw new SourceError(UPS_TRACK_HELP, 401, false);
     throw err;
   }
 }

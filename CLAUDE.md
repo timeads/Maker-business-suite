@@ -190,8 +190,23 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   name words in settings. Drafting orders from ticked items goes through
   `draft_purchase_orders` with a request key, so a second press finds the
   first one's orders. Order totals (shipping, tax, adjustments) come from
-  `lib/stock/po/totals.ts`; tracking on incoming orders is what a person
-  records (`purchase_order_shipments`), never asked of a carrier.
+  `lib/stock/po/totals.ts`. Tracking on incoming orders
+  (`purchase_order_shipments`) is what a person records, plus, for UPS
+  numbers (1Z…) in a workspace that has connected its own UPS account for
+  real, what UPS says: the worker claims due parcels
+  (`claim_po_shipment_checks`: every four hours until delivered, marked as
+  here, the order closed or 45 days; sooner on a manager's "Check now",
+  `request_po_shipment_check`, once per ten minutes), asks UPS's Track API
+  (`trackUps` in `shipping/sources/ups.ts`, through `trackWithUps`, which
+  reads the keys from Vault like every other UPS call) and writes down the
+  answer with the time asked (`finish_po_shipment_check`, the `carrier_*`
+  columns). Those are observed facts kept apart from what a person typed;
+  which date to show and "arrived" are decided on read
+  (`lib/stock/tracking.ts`: a person's word first, then UPS's). No other
+  carrier is asked, a practice UPS connection is never used for tracking,
+  and without UPS nothing changes. What is in each parcel is
+  `purchase_order_shipment_items` (manager-only `set_po_shipment_items`); it
+  is a note and checks nothing in.
   The reorder list (Everything tab) follows TuftStock's: its column names,
   its five views first, dates in its words (`relativeDay`), and its rules for
   dead stock, top sellers and "% Rev" (`topSellerIds`, `isDeadStock`,

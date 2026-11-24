@@ -583,6 +583,16 @@ describe("the reorder list as TuftStock shows it", () => {
     expect(slow.onOrder).toBe(13);
     expect(slow.openOrders).toEqual({ count: 2, firstNumber: 7 });
     expect(toGridRow(slow, TODAY)).toMatchObject({ coming: 13, comingOrders: 2, comingOrder: 7 });
+    // The chip's tooltip carries the oldest order's parcels, when there are any.
+    expect(toGridRow(slow, TODAY).comingNote).toBeNull();
+    expect(
+      toGridRow(slow, TODAY, {
+        tracking: new Map([
+          [7, ["UPS …6784: out for delivery, due Nov 26", "Parcel PRO12: on its way"]],
+          [12, ["UPS …0001: on the way"]],
+        ]),
+      }).comingNote,
+    ).toBe("UPS …6784: out for delivery, due Nov 26; Parcel PRO12: on its way");
   });
 
   it("uses the option's own photo first, then the product's", () => {

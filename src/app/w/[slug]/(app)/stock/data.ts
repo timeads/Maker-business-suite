@@ -14,6 +14,7 @@ import {
   type ObservedLeadTime,
 } from "@/lib/stock/engine";
 import { summarizeIncoming, type IncomingOrder } from "@/lib/stock/incoming";
+import { isCarrierStatus, parcelDates, parcelWords } from "@/lib/stock/tracking";
 import type { SpendLineInput } from "@/lib/stock/spend";
 import {
   buildStockRows,
@@ -219,6 +220,54 @@ export async function loadStock(
   };
 }
 
+/**
+ * For each sent order that has tracking numbers, its parcels in a few words
+ * ("UPS …6784: out for delivery, due Nov 26"), keyed by the order's number.
+ * For the "on the way" chip in the reorder list.
+ */
+export async function loadOrderTracking(
+  supabase: SupabaseClient,
+  tenant: { id: string; timezone: string },
+): Promise<Map<number, string[]>> {
+  const { data } = await supabase
+    .from("purchase_order_shipments")
+    .select(
+      "carrier, tracking, expected_on, arrived_on, carrier_status, carrier_detail, carrier_expected_on, carrier_delivered_on, carrier_scan_place, carrier_scan_at, carrier_checked_at, carrier_error, purchase_orders!inner(number, status)",
+    )
+    .eq("tenant_id", tenant.id)
+    .is("removed_at", null)
+    .in("purchase_orders.status", ["ordered", "partial"])
+    .order("created_at")
+    .limit(1000);
+  const today = localDay(new Date(), tenant.timezone);
+  const words = new Map<number, string[]>();
+  for (const row of data ?? []) {
+    const order = (
+      Array.isArray(row.purchase_orders) ? row.purchase_orders[0] : row.purchase_orders
+    ) as { number: number } | undefined;
+    if (!order) continue;
+    const said = parcelWords(
+      {
+        carrier: row.carrier as string,
+        tracking: row.tracking as string,
+        expectedOn: row.expected_on as string | null,
+        arrivedOn: row.arrived_on as string | null,
+        carrierStatus: isCarrierStatus(row.carrier_status) ? row.carrier_status : null,
+        carrierDetail: row.carrier_detail as string | null,
+        carrierExpectedOn: row.carrier_expected_on as string | null,
+        carrierDeliveredOn: row.carrier_delivered_on as string | null,
+        carrierScanPlace: row.carrier_scan_place as string | null,
+        carrierScanAt: row.carrier_scan_at as string | null,
+        carrierCheckedAt: row.carrier_checked_at as string | null,
+        carrierError: row.carrier_error as string | null,
+      },
+      today,
+    );
+    words.set(order.number, [...(words.get(order.number) ?? []), said]);
+  }
+  return words;
+}
+
 /** The workspace's own "today", YYYY-MM-DD. */
 export const stockToday = (timezone: string) => localDay(new Date(), timezone);
 
@@ -243,6 +292,9 @@ type PlacedOrder = {
     expected_on: string | null;
     arrived_on: string | null;
     removed_at: string | null;
+    carrier_status: string | null;
+    carrier_expected_on: string | null;
+    carrier_delivered_on: string | null;
   }[];
 };
 
@@ -258,7 +310,7 @@ export async function loadIncoming(
   const { data } = await supabase
     .from("purchase_orders")
     .select(
-      "id, number, reference, status, ordered_at, expected_on, supplier_id, suppliers(name), purchase_order_lines(qty_ordered, qty_received, stock_receipts(created_at)), purchase_order_shipments(id, carrier, tracking, expected_on, arrived_on, removed_at)",
+      "id, number, reference, status, ordered_at, expected_on, supplier_id, suppliers(name), purchase_order_lines(qty_ordered, qty_received, stock_receipts(created_at)), purchase_order_shipments(id, carrier, tracking, expected_on, arrived_on, removed_at, carrier_status, carrier_expected_on, carrier_delivered_on)",
     )
     .eq("tenant_id", tenant.id)
     .in("status", ["ordered", "partial", "closed"])
@@ -282,13 +334,23 @@ export async function loadIncoming(
       })),
       shipments: (order.purchase_order_shipments ?? [])
         .filter((s) => !s.removed_at)
-        .map((s) => ({
-          id: s.id,
-          carrier: s.carrier,
-          tracking: s.tracking,
-          expectedOn: s.expected_on,
-          arrivedOn: s.arrived_on,
-        })),
+        .map((s) => {
+          const carrierStatus = isCarrierStatus(s.carrier_status) ? s.carrier_status : null;
+          return {
+            id: s.id,
+            carrier: s.carrier,
+            tracking: s.tracking,
+            // A person's own word first, then what UPS said.
+            ...parcelDates({
+              expectedOn: s.expected_on,
+              arrivedOn: s.arrived_on,
+              carrierStatus,
+              carrierExpectedOn: s.carrier_expected_on,
+              carrierDeliveredOn: s.carrier_delivered_on,
+            }),
+            carrierStatus,
+          };
+        }),
     })),
     today,
   );

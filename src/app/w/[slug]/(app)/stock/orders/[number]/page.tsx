@@ -12,6 +12,7 @@ import { trackingUrl } from "@/lib/shipping/carriers";
 import { caseLabel, casePackOf, startingQty } from "@/lib/stock/engine";
 import { ORDER_STATUS, explainSuggestion, isPlanned, itemName } from "@/lib/stock/plan";
 import { computePoTotals, parseAdjustments } from "@/lib/stock/po/totals";
+import { CARRIER_WORDS, canAskCarrier, isCarrierStatus, parcelDates } from "@/lib/stock/tracking";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
 import { loadStock } from "../../data";
@@ -97,7 +98,7 @@ export default async function StockOrderPage({
 
   // Suggestions come from the same engine as everywhere else, worked out now.
   const stock = await loadStock(supabase, tenant);
-  const [{ data: receipts }, { data: tracked }] = await Promise.all([
+  const [{ data: receipts }, { data: tracked }, { data: ups }] = await Promise.all([
     supabase
       .from("stock_receipts")
       .select(
@@ -112,12 +113,23 @@ export default async function StockOrderPage({
       .limit(50),
     supabase
       .from("purchase_order_shipments")
-      .select("id, carrier, tracking, expected_on, arrived_on, note")
+      .select(
+        "id, carrier, tracking, expected_on, arrived_on, note, carrier_status, carrier_detail, carrier_expected_on, carrier_delivered_on, carrier_scan_place, carrier_scan_at, carrier_checked_at, carrier_error, purchase_order_shipment_items(po_line_id, quantity)",
+      )
       .eq("tenant_id", tenant.id)
       .eq("po_id", order.id)
       .is("removed_at", null)
       .order("created_at"),
+    // Their own UPS account, connected for real: its numbers are followed for them.
+    supabase
+      .from("connections")
+      .select("status, metadata")
+      .eq("tenant_id", tenant.id)
+      .eq("provider", "ups")
+      .maybeSingle(),
   ]);
+  const upsFollows =
+    ups?.status === "active" && (ups.metadata as { mode?: string } | null)?.mode !== "test";
   const { settings, link, rows, today } = stock;
   const rowById = new Map(rows.map((row) => [row.item.id, row]));
   const editLines: EditLine[] = lines.map((line) => {
@@ -189,17 +201,58 @@ export default async function StockOrderPage({
       new Date(`${value}T12:00:00Z`),
     );
   const late = waiting && order.expected_on !== null && (order.expected_on as string) < today;
-  const shipments: ShipmentRow[] = (tracked ?? []).map((s) => ({
-    id: s.id as string,
-    carrier: s.carrier as string,
-    tracking: s.tracking as string,
-    expected: s.expected_on as string | null,
-    expectedText: s.expected_on ? day(s.expected_on as string) : null,
-    arrivedText: s.arrived_on ? day(s.arrived_on as string) : null,
-    late: !s.arrived_on && Boolean(s.expected_on) && (s.expected_on as string) < today,
-    note: s.note as string,
-    url: trackingUrl(s.carrier as string, s.tracking as string),
-  }));
+  const lineNames = new Map(lines.map((line) => [line.id, line.name]));
+  const shipments: ShipmentRow[] = (tracked ?? []).map((s) => {
+    const parcel = {
+      tracking: s.tracking as string,
+      expectedOn: s.expected_on as string | null,
+      arrivedOn: s.arrived_on as string | null,
+      carrierStatus: isCarrierStatus(s.carrier_status) ? s.carrier_status : null,
+      carrierExpectedOn: s.carrier_expected_on as string | null,
+      carrierDeliveredOn: s.carrier_delivered_on as string | null,
+    };
+    // A person's word first, then the carrier's (lib/stock/tracking.ts).
+    const dates = parcelDates(parcel);
+    const said = parcel.carrierStatus ? CARRIER_WORDS[parcel.carrierStatus] : null;
+    const checked = s.carrier_checked_at as string | null;
+    return {
+      id: s.id as string,
+      carrier: s.carrier as string,
+      tracking: parcel.tracking,
+      expected: s.expected_on as string | null,
+      expectedText: dates.expectedOn ? day(dates.expectedOn) : null,
+      arrivedText: dates.arrivedOn ? day(dates.arrivedOn) : null,
+      late: !dates.arrivedOn && Boolean(dates.expectedOn) && (dates.expectedOn as string) < today,
+      note: s.note as string,
+      url: trackingUrl(s.carrier as string, parcel.tracking),
+      carrier_said:
+        said || s.carrier_error
+          ? {
+              label: said?.label ?? "On its way",
+              tone: said?.tone ?? "open",
+              detail:
+                [
+                  s.carrier_detail as string | null,
+                  s.carrier_scan_place as string | null,
+                  s.carrier_scan_at ? when.format(new Date(s.carrier_scan_at as string)) : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ") || null,
+              checked: checked ? `UPS was asked ${when.format(new Date(checked))}` : null,
+              trouble: (s.carrier_error as string | null) ?? null,
+            }
+          : null,
+      canCheck: upsFollows && waiting && canAskCarrier(parcel),
+      items: ((s.purchase_order_shipment_items ?? []) as { po_line_id: string; quantity: number }[])
+        .filter((item) => lineNames.has(item.po_line_id))
+        .map((item) => ({
+          lineId: item.po_line_id,
+          name: lineNames.get(item.po_line_id) as string,
+          quantity: item.quantity,
+        })),
+    };
+  });
+  const hasUpsNumber = shipments.some((s) => /^1Z[0-9A-Z]{16}$/.test(s.tracking));
   const SHOP_NOTES: Record<string, string> = {
     pending: "waiting to be added to your shop",
     sending: "being added to your shop",
@@ -304,8 +357,24 @@ export default async function StockOrderPage({
                 slug={tenant.slug}
                 orderId={order.id}
                 shipments={shipments}
+                lines={lines
+                  .filter((line) => line.qty_ordered > 0)
+                  .map((line) => ({ id: line.id, name: line.name, ordered: line.qty_ordered }))}
                 canEdit={manager && waiting}
               />
+              {manager && waiting && !upsFollows && (
+                <p className="text-muted-foreground text-xs print:hidden">
+                  {hasUpsNumber ? "These UPS numbers" : "UPS numbers"} can update by themselves:
+                  connect your own UPS account under{" "}
+                  <Link href={`/w/${tenant.slug}/connections`} className="underline">
+                    Connections
+                  </Link>
+                  {ups?.status === "active"
+                    ? " for real labels (yours is set to practice labels)"
+                    : ""}
+                  . Until then, each number is as you record it.
+                </p>
+              )}
               {manager && waiting && <AddShipmentForm slug={tenant.slug} orderId={order.id} />}
             </CardContent>
           </Card>

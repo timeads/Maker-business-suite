@@ -515,7 +515,7 @@ export function ItemsGrid({
             {row.coming > 0 && (
               <Link
                 href={`${base}/orders${row.comingOrder ? `/${row.comingOrder}` : ""}`}
-                title={`${row.coming} on the way, on ${row.comingOrders || 1} order${row.comingOrders === 1 ? "" : "s"} you've sent`}
+                title={`${row.coming} on the way, on ${row.comingOrders || 1} order${row.comingOrders === 1 ? "" : "s"} you've sent${row.comingNote ? `. ${row.comingOrders > 1 ? "The oldest: " : ""}${row.comingNote}` : ""}`}
                 className="bg-teal-soft text-teal-soft-ink rounded-full px-1.5 py-0.5 text-xs whitespace-nowrap hover:underline"
               >
                 + {row.coming} ({row.comingOrders || 1}{" "}
