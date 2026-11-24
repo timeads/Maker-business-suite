@@ -412,6 +412,8 @@ export async function saveShippingSettings(
     mark_sent_in_shop: formData.get("mark_sent_in_shop") === "on",
     notify_customer: formData.get("notify_customer") === "on",
     signature_over: signatureOver,
+    // Set on its own form ("Remember how I pack"); carried along here.
+    remember_packing: before.remember_packing,
   });
   if (!parsed.success) {
     return { error: "Keep each address line under 120 characters, and the phone number under 30." };

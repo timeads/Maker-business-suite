@@ -42,6 +42,7 @@ import {
   shippingSettingsSchema,
   slipLayoutSchema,
 } from "../shipping/config";
+import { DEFAULT_SHIPPING_RULES, SHIPPING_RULES_KEY, shippingRulesSchema } from "../shipping/rules";
 import {
   DEFAULT_STOCK_SETTINGS,
   STOCK_MODULE,
@@ -131,9 +132,19 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
     feature: "shipping",
     name: "Shipping and packing slips",
     description:
-      "The address parcels are sent from (printed on packing slips and used as the return address on postage labels: name, street, town, state, postcode and phone), the country parcels leave from (anything going elsewhere counts as international), the usual carrier, and whether recording a parcel also marks the order as sent in the shop and emails the customer.",
+      "The address parcels are sent from (printed on packing slips and used as the return address on postage labels: name, street, town, state, postcode and phone), the country parcels leave from (anything going elsewhere counts as international), the usual carrier, whether recording a parcel also marks the order as sent in the shop and emails the customer, the order total from which a signature is asked for (signature_over), and whether packings are remembered for the same items or for the same products in other quantities (remember_packing).",
     schema: shippingSettingsSchema,
     defaultBody: () => DEFAULT_SHIPPING_SETTINGS,
+  },
+  {
+    module: SHIPPING_MODULE,
+    key: SHIPPING_RULES_KEY,
+    feature: "shipping",
+    name: "Shipping rules",
+    description:
+      "An ordered list of rules for orders waiting to ship. Each rule has an id, a name, enabled (on or off), conditions that must all match, and actions. A condition has a field (item_quantity, order_total, product_names, product_skus, destination_state, destination_country, shipping_service), an op (eq, gt, lt for the two numbers; includes_any, excludes, contains for the lists) and a value (a number, or names or codes with commas between). An action has a type and a value: set_package (a box's name exactly as in Shipping settings), require_signature (standard or adult), set_service (cheapest, fastest, or a service's name like UPS Ground), place_hold (a note saying why). For each kind of action the first matching rule from the top wins. A choice a person makes on an order always comes before a rule.",
+    schema: shippingRulesSchema,
+    defaultBody: () => DEFAULT_SHIPPING_RULES,
   },
   {
     module: SHIPPING_MODULE,

@@ -35,6 +35,12 @@ export type QueueFacts = {
   country_code: string | null;
   /** What the whole order came to, when the sale is known: the signature rule looks at it. */
   order_total?: number | string | null;
+  /**
+   * Worked out from the workspace's shipping rules, on the lists that have
+   * the whole order to hand. When set, it decides "Needs signature"; left
+   * out, only the older amount setting is looked at.
+   */
+  needs_signature?: boolean;
 };
 
 /** Today's date where the workspace is, as YYYY-MM-DD. */
@@ -111,9 +117,10 @@ export const isInternational = (country: string | null | undefined, home: string
  * worth at least `signatureOver`. Never without a rule or without a total.
  */
 export const needsSignature = (
-  order: Pick<QueueFacts, "order_total">,
+  order: Pick<QueueFacts, "order_total" | "needs_signature">,
   signatureOver: number | null | undefined,
 ) =>
+  order.needs_signature ??
   signatureByRule(
     order.order_total === null || order.order_total === undefined
       ? null

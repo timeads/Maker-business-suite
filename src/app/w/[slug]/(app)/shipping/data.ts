@@ -7,7 +7,17 @@ import {
   parseShippingSettings,
   parseSlipLayout,
 } from "@/lib/shipping/config";
+import { formatMoney } from "@/lib/dashboard/format";
 import type { SavedBox } from "@/lib/shipping/labels";
+import {
+  NO_MEMORY,
+  buildMemory,
+  itemsKey,
+  parseLearned,
+  productsKey,
+  type Learned,
+  type PackingMemory,
+} from "@/lib/shipping/memory";
 import {
   checkGroup,
   isApproved,
@@ -15,7 +25,20 @@ import {
   type GroupCheck,
   type StoredGroup,
 } from "@/lib/shipping/merge";
-import { PLAN_FIELDS, type StoredPlan } from "@/lib/shipping/plan";
+import {
+  PLAN_FIELDS,
+  memoryItems,
+  ruleOrder,
+  type PlanOrder,
+  type PlanSetup,
+  type StoredPlan,
+} from "@/lib/shipping/plan";
+import {
+  SHIPPING_RULES_KEY,
+  evaluateRules,
+  parseShippingRules,
+  signatureOverName,
+} from "@/lib/shipping/rules";
 import type { QueueFacts } from "@/lib/shipping/queue";
 import { LABEL_SOURCES, type LabelSourceKey } from "@/lib/shipping/sources/types";
 
@@ -62,12 +85,16 @@ export type ShippingOrder = {
   pickup_ready_at: string | null;
   picked_up_at: string | null;
   slip_printed_at: string | null;
-  /** What the whole order came to, on the lists that ask for it (the signature rule looks at it). */
+  /** A rule has held this order, or a person has released it: no rule holds it again. */
+  rule_hold_settled_at?: string | null;
+  /** What the whole order came to, on the lists that ask for it (rules look at it). */
   order_total?: number | null;
+  /** A rule asks for a signature on it, on the lists that work that out. */
+  needs_signature?: boolean;
 };
 
 export const ORDER_FIELDS =
-  "id, name, placed_at, recipient, company, address1, address2, city, region, postal_code, country_code, phone, email, shipping_method, note, items, units_left, cancelled, paid, on_hold, hold_reason, hold_until, shipping_paid, weight_grams, pickup, pickup_ready_at, picked_up_at, slip_printed_at";
+  "id, name, placed_at, recipient, company, address1, address2, city, region, postal_code, country_code, phone, email, shipping_method, note, items, units_left, cancelled, paid, on_hold, hold_reason, hold_until, shipping_paid, weight_grams, pickup, pickup_ready_at, picked_up_at, slip_printed_at, rule_hold_settled_at";
 
 /** The workspace's shipping settings and what its shop will let us do. */
 export async function loadShippingSetup(supabase: SupabaseClient, tenantId: string) {
@@ -77,7 +104,7 @@ export async function loadShippingSetup(supabase: SupabaseClient, tenantId: stri
       .select("key, body")
       .eq("tenant_id", tenantId)
       .eq("module", SHIPPING_MODULE)
-      .in("key", [SHIPPING_SETTINGS_KEY, SLIP_LAYOUT_KEY]),
+      .in("key", [SHIPPING_SETTINGS_KEY, SLIP_LAYOUT_KEY, SHIPPING_RULES_KEY]),
     supabase
       .from("connections")
       .select("status, scopes")
@@ -91,6 +118,8 @@ export async function loadShippingSetup(supabase: SupabaseClient, tenantId: stri
   return {
     settings,
     slip: parseSlipLayout(body(SLIP_LAYOUT_KEY), settings),
+    /** The workspace's shipping rules, top to bottom. */
+    rules: parseShippingRules(body(SHIPPING_RULES_KEY)),
     connected,
     canSend: connected && canSendInShopify(shop.scopes),
   };
@@ -433,4 +462,155 @@ export async function loadKnownGroup(
     ids: found,
     names: found.map((id) => orders.find((order) => order.id === id)?.name ?? "Order"),
   };
+}
+
+/** A remembered packing, as the settings page lists it. */
+export type RememberedPacking = {
+  id: string;
+  label: string;
+  boxes: Learned["boxes"];
+  uses: number;
+  updated_at: string;
+};
+
+const PACKING_FIELDS = "id, item_key, products_key, label, boxes, uses, updated_at";
+/** Up to this many remembered packings are simply read whole; past it, they are looked up by key. */
+const MEMORY_PAGE = 1000;
+
+/**
+ * What the workspace remembers about packing these orders: by their exact
+ * items, and by their products in any quantities. Allowed to fail: planning
+ * goes on without memory.
+ */
+export async function loadPackingMemory(
+  supabase: SupabaseClient,
+  tenantId: string,
+  orders: Pick<PlanOrder, "items">[],
+): Promise<PackingMemory> {
+  if (orders.length === 0) return NO_MEMORY;
+  type Row = { item_key: string; products_key: string | null; boxes: unknown; updated_at: string };
+  const learned = (rows: Row[]) =>
+    rows.map(parseLearned).filter((row): row is Learned => row !== null);
+  const { data, error } = await supabase
+    .from("shipping_packings")
+    .select(PACKING_FIELDS)
+    .eq("tenant_id", tenantId)
+    .order("updated_at", { ascending: false })
+    .limit(MEMORY_PAGE);
+  if (error || !data) return NO_MEMORY;
+  // Oldest first, so the latest packing of a set of products is the one kept.
+  if (data.length < MEMORY_PAGE) return buildMemory(learned((data as Row[]).reverse()));
+
+  // A long memory: only what these orders could match.
+  const items = orders.map(memoryItems).filter((lines) => lines.length > 0);
+  const found: Row[] = [];
+  const lookUp = async (column: "item_key" | "products_key", keys: string[]) => {
+    for (let from = 0; from < keys.length; from += 50) {
+      const { data: rows } = await supabase
+        .from("shipping_packings")
+        .select(PACKING_FIELDS)
+        .eq("tenant_id", tenantId)
+        .in(column, keys.slice(from, from + 50))
+        .order("updated_at")
+        .limit(MEMORY_PAGE);
+      found.push(...((rows ?? []) as Row[]));
+    }
+  };
+  await lookUp("products_key", [...new Set(items.map(productsKey))]);
+  await lookUp("item_key", [...new Set(items.map(itemsKey))]);
+  return buildMemory(learned(found));
+}
+
+/** The latest remembered packings, for the settings page. */
+export async function loadRememberedPackings(
+  supabase: SupabaseClient,
+  tenantId: string,
+): Promise<RememberedPacking[]> {
+  const { data } = await supabase
+    .from("shipping_packings")
+    .select(PACKING_FIELDS)
+    .eq("tenant_id", tenantId)
+    .order("updated_at", { ascending: false })
+    .limit(200);
+  return ((data ?? []) as (RememberedPacking & { item_key: string; products_key: string | null })[])
+    .map((row) => {
+      const parsed = parseLearned(row);
+      return parsed ? { ...row, boxes: parsed.boxes } : null;
+    })
+    .filter((row): row is NonNullable<typeof row> => row !== null);
+}
+
+/** Everything planning an order needs: boxes, accounts, settings, rules and memory. */
+export function planSetupOf(
+  parts: {
+    shipping: Awaited<ReturnType<typeof loadShippingSetup>>;
+    boxes: SavedBox[];
+    postage: LabelConnections;
+    memory: PackingMemory;
+  },
+  currency: string,
+): PlanSetup {
+  const over = parts.shipping.settings.signature_over;
+  return {
+    boxes: parts.boxes,
+    sources: parts.postage.active,
+    settings: parts.shipping.settings,
+    rules: parts.shipping.rules,
+    memory: parts.memory,
+    signatureName:
+      over === null
+        ? undefined
+        : signatureOverName(over, (amount) => formatMoney(amount, currency)),
+  };
+}
+
+/**
+ * The orders with a label being bought, or bought and not yet a parcel: on
+ * their own, or riding along on another order's. A bulk run leaves them be.
+ */
+export async function loadOpenLabelOrders(
+  supabase: SupabaseClient,
+  tenantId: string,
+): Promise<Set<string>> {
+  const { data } = await supabase
+    .from("shipping_label_quotes")
+    .select("shipping_order_id, rider_ids")
+    .eq("tenant_id", tenantId)
+    .in("status", ["buying", "bought"])
+    .limit(1000);
+  const ids = new Set<string>();
+  for (const row of (data ?? []) as { shipping_order_id: string; rider_ids: string[] | null }[]) {
+    ids.add(row.shipping_order_id);
+    for (const rider of row.rider_ids ?? []) ids.add(rider);
+  }
+  return ids;
+}
+
+/**
+ * The open orders as the rules see them: whether a signature is asked for,
+ * and any hold a rule calls for laid over the order, so the list is right
+ * the moment it is read. `holds` are those rule holds that still have to be
+ * written down (`hold_shipping_orders_by_rule`); an order a rule has held
+ * before, or a person has released, is never held again.
+ */
+export function withRuleFacts(
+  orders: ShippingOrder[],
+  setup: Pick<PlanSetup, "rules" | "settings" | "signatureName">,
+): { orders: ShippingOrder[]; holds: { id: string; note: string }[] } {
+  const holds: { id: string; note: string }[] = [];
+  const home = setup.settings.ship_from_country;
+  const seen = orders.map((order) => {
+    const ruled = evaluateRules(ruleOrder(order, order.order_total, home), setup.rules ?? [], {
+      signatureOver: setup.settings.signature_over,
+      name: setup.signatureName,
+    });
+    const hold = ruled.hold !== null && !order.on_hold && !order.rule_hold_settled_at;
+    if (hold) holds.push({ id: order.id, note: ruled.hold!.slice(0, 300) });
+    return {
+      ...order,
+      needs_signature: ruled.signature !== null,
+      ...(hold ? { on_hold: true, hold_reason: ruled.hold!.slice(0, 300), hold_until: null } : {}),
+    };
+  });
+  return { orders: seen, holds };
 }

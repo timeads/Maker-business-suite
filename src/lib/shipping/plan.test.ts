@@ -294,6 +294,8 @@ describe("when a stored price still stands", () => {
     expect(planCell(plan, whole, show)).toEqual({
       box: "Medium box",
       boxNote: null,
+      signature: "none",
+      rules: [],
       weight: "4 lb 8 oz",
       quote: {
         state: "ok",
@@ -301,6 +303,9 @@ describe("when a stored price still stands", () => {
         service: "UPS Ground",
         source: "UPS",
         price: "$9.43",
+        cents: 943,
+        currency: "USD",
+        byRule: false,
         margin: { text: "+$4.57 margin", short: false },
       },
       address: "found",

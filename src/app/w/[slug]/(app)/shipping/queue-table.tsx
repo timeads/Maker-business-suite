@@ -8,8 +8,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { FormMessage } from "@/components/ui/form-message";
 import { Input, Label } from "@/components/ui/input";
+import { formatMoney } from "@/lib/dashboard/format";
+import { BULK_LIMIT, bulkEstimate, cellRefusal } from "@/lib/shipping/bulk";
 import type { PlanCell } from "@/lib/shipping/list";
 import { holdOrders, markPickupReady, releaseOrders, type ShippingState } from "./actions";
+import { useLabelRun } from "./bulk-run";
 import { CarrierMark } from "./carrier-mark";
 import { HoldPicker, type HoldChoice } from "./hold-picker";
 import { planNextOrders } from "./plan-actions";
@@ -47,8 +50,14 @@ export type QueueRow = {
   pickupReady: boolean;
   partSent: boolean;
   slipPrinted: boolean;
-  /** The workspace's rule asks for a signature on this one. */
+  /** A rule (or the person who set it up) asks for a signature on this one. */
   signature: boolean;
+  /** ...and it's an adult's. */
+  adultSignature: boolean;
+  /** It is on hold because a rule said so. */
+  heldByRule: boolean;
+  /** Why a bulk run would leave this order out, from the order itself. Null: nothing against it. */
+  bulkWhy: string | null;
   /** The box, best price and address check the list has for it. */
   plan: PlanCell;
 };
@@ -81,6 +90,8 @@ export function QueueTable({
   choices,
   view,
   fill,
+  currency,
+  canBuy = false,
 }: {
   slug: string;
   rows: QueueRow[];
@@ -94,6 +105,10 @@ export function QueueTable({
    * in the background once the list is on screen. Left out: nothing is asked.
    */
   fill?: string;
+  /** The workspace's currency, for what a run of labels would cost. */
+  currency: string;
+  /** Labels can be bought here: a postage account is connected and the workspace can write. */
+  canBuy?: boolean;
 }) {
   const base = `/w/${slug}/shipping`;
   const router = useRouter();
@@ -152,6 +167,28 @@ export function QueueTable({
     picked.length >= 2 &&
     picked.length <= 10 &&
     picked.every((row) => !row.pickup && row.hold !== "held");
+
+  // Labels for everything ticked, in one go: what it would cost, and which orders would be left out.
+  const labelRun = useLabelRun(slug);
+  const [confirming, setConfirming] = useState(false);
+  const estimate = bulkEstimate(
+    picked.map((row) => {
+      const plan = planOf(row);
+      return {
+        id: row.id,
+        name: row.name,
+        refusal: row.bulkWhy ?? cellRefusal(plan),
+        cents: plan.quote.state === "ok" ? plan.quote.cents : null,
+        currency: plan.quote.state === "ok" ? plan.quote.currency : null,
+      };
+    }),
+  );
+  const offerBuy = canBuy && canWrite && picked.length >= 2;
+  const about =
+    estimate.cents !== null && estimate.currency
+      ? ` · about ${formatMoney(estimate.cents / 100, estimate.currency || currency)}`
+      : "";
+  const buyWords = `Buy ${estimate.buy.length} ${estimate.buy.length === 1 ? "label" : "labels"}${about}`;
 
   const toggle = (id: string) =>
     setTicked((before) => {
@@ -230,10 +267,87 @@ export function QueueTable({
                 {together.pending ? "Opening…" : "Ship together"}
               </Button>
             )}
-            <Button asChild size="sm">
+            <Button asChild size="sm" variant={offerBuy ? "outline" : "default"}>
               <Link href={`${base}/slips?ids=${ids.slice(0, 150).join(",")}`}>Packing slips</Link>
             </Button>
+            {offerBuy && (
+              <Button
+                size="sm"
+                aria-expanded={confirming}
+                disabled={estimate.buy.length === 0 || labelRun.busy}
+                title={
+                  estimate.buy.length === 0
+                    ? "None of the ticked orders can have a label bought this way. Open one to see why."
+                    : "Buy a label for each ticked order, using its box, weight and best quote from the list"
+                }
+                onClick={() => setConfirming((open) => !open)}
+              >
+                {estimate.buy.length === 0 ? "Buy labels" : buyWords}
+              </Button>
+            )}
           </div>
+          {offerBuy && (confirming || estimate.buy.length === 0) && (
+            <div className="border-border flex flex-col gap-2 border-t pt-3 text-sm">
+              {estimate.buy.length > 0 && (
+                <p>
+                  A label is bought for{" "}
+                  {estimate.buy.length === 1 ? "1 order" : `each of ${estimate.buy.length} orders`},
+                  one at a time, with the box, weight, signature and service the list shows for it.
+                  {about &&
+                    " The total is the list's best quotes added up; each price is checked again as it's bought."}{" "}
+                  Marking orders fulfilled in your shop and emailing tracking follow your Shipping
+                  settings.
+                </p>
+              )}
+              {estimate.leftOut.length > 0 && (
+                <div>
+                  <p className="font-semibold">
+                    {estimate.buy.length === 0
+                      ? "None of these can be bought this way:"
+                      : `Left out (${estimate.leftOut.length}):`}
+                  </p>
+                  <ul className="text-muted-foreground mt-1 flex flex-col gap-0.5">
+                    {estimate.leftOut.slice(0, 12).map((order) => (
+                      <li key={order.id}>
+                        <span className="text-foreground font-semibold tabular-nums">
+                          {order.name}
+                        </span>{" "}
+                        {order.why}
+                      </li>
+                    ))}
+                    {estimate.leftOut.length > 12 && (
+                      <li>…and {estimate.leftOut.length - 12} more.</li>
+                    )}
+                  </ul>
+                </div>
+              )}
+              {estimate.buy.length > 0 && confirming && (
+                <div className="flex gap-2">
+                  <Button
+                    variant="dark"
+                    size="sm"
+                    disabled={labelRun.busy}
+                    onClick={() => {
+                      const buying = estimate.buy.map((row) => row.id);
+                      setConfirming(false);
+                      setTicked(new Set());
+                      void labelRun.start(buying);
+                    }}
+                  >
+                    Yes, {buyWords.replace(/^Buy/, "buy")}
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>
+                    Never mind
+                  </Button>
+                </div>
+              )}
+              {picked.length > BULK_LIMIT && (
+                <p className="text-muted-foreground text-xs">
+                  One run buys up to {BULK_LIMIT} labels.
+                </p>
+              )}
+            </div>
+          )}
           {holding && toHold && (
             <div className="border-border flex flex-col gap-3 border-t pt-3">
               <div className="flex flex-col gap-1.5">
@@ -275,6 +389,7 @@ export function QueueTable({
       <FormMessage>{result.error ?? together.error}</FormMessage>
       <FormMessage kind="success">{result.message}</FormMessage>
       {together.dialog}
+      {labelRun.panel}
 
       {working && (
         <p role="status" className="text-muted-foreground text-xs">
@@ -367,7 +482,14 @@ export function QueueTable({
                           {plan.box}
                         </span>
                         {plan.boxNote && (
-                          <span className="text-muted-foreground block text-xs">
+                          <span
+                            className="text-muted-foreground block text-xs"
+                            title={
+                              plan.rules && plan.rules.length > 0
+                                ? `Rules applied: ${plan.rules.join(", ")}`
+                                : undefined
+                            }
+                          >
                             {plan.boxNote}
                           </span>
                         )}
@@ -396,13 +518,23 @@ export function QueueTable({
                           </span>
                           <b className="whitespace-nowrap tabular-nums">{quote.price}</b>
                         </span>
-                        {quote.margin && (
-                          <span
-                            className={`block text-xs font-semibold tabular-nums ${quote.margin.short ? "text-brick" : "text-mint-ink"}`}
-                          >
-                            {quote.margin.text}
-                          </span>
-                        )}
+                        <span className="flex flex-wrap items-center gap-x-2">
+                          {quote.margin && (
+                            <span
+                              className={`text-xs font-semibold tabular-nums ${quote.margin.short ? "text-brick" : "text-mint-ink"}`}
+                            >
+                              {quote.margin.text}
+                            </span>
+                          )}
+                          {quote.byRule && (
+                            <span
+                              className="text-muted-foreground text-xs"
+                              title="This is the service a rule (or your saved choice) asks for, not simply the cheapest."
+                            >
+                              By rule
+                            </span>
+                          )}
+                        </span>
                       </>
                     ) : quote.state === "waiting" ? (
                       working ? (
@@ -446,7 +578,11 @@ export function QueueTable({
                       {row.status && <Badge>{row.status}</Badge>}
                       {row.hold === "held" && (
                         <Badge tone="bad">
-                          {row.holdUntil ? `Hold · until ${row.holdUntil}` : "On hold"}
+                          {row.holdUntil
+                            ? `Hold · until ${row.holdUntil}`
+                            : row.heldByRule
+                              ? "On hold · by rule"
+                              : "On hold"}
                         </Badge>
                       )}
                       {row.hold === "back" && <Badge tone="good">Back from hold</Badge>}
@@ -461,7 +597,9 @@ export function QueueTable({
                       {row.needsAddress && <Badge tone="bad">Needs an address</Badge>}
                       {row.partSent && <Badge tone="waiting">Part sent</Badge>}
                       {row.slipPrinted && row.open && <Badge>Slip printed</Badge>}
-                      {row.signature && <Badge>Signature</Badge>}
+                      {row.signature && (
+                        <Badge>{row.adultSignature ? "Adult signature" : "Signature"}</Badge>
+                      )}
                     </span>
                     {row.hold === "held" && row.holdNote && (
                       <span className="text-muted-foreground font-read mt-1 block text-right text-xs">

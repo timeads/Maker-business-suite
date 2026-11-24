@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { priceToCents, verifyAddress, type LabelAddress } from "./easypost";
 import { getLabelAccess, withLabelSource, type Held } from "./label-access";
 import { addressChecker } from "./plan";
+import { pickService } from "./rules";
 import { labelSource } from "./sources";
 import { mergeRates } from "./sources/rates";
 import type { LabelRequest, LabelSourceKey, SourceRate } from "./sources/types";
@@ -38,24 +39,33 @@ export type ListQuote =
       service: string;
       cents: number;
       currency: string;
+      /** It is the service the plan asked for (a rule's, or one a person saved), not simply the cheapest. */
+      by_rule?: boolean;
     }
   | { status: "none" };
 
-/** The cheapest of the merged list, as the few words the list keeps. */
-export function bestListQuote(rates: SourceRate[]): ListQuote {
-  for (const rate of mergeRates(rates)) {
+/**
+ * The price a plan would be bought at, as the few words the list keeps: the
+ * service the plan asks for when a carrier offers it, else the cheapest of
+ * the merged list.
+ */
+export function bestListQuote(rates: SourceRate[], policy?: string | null): ListQuote {
+  const priced = mergeRates(rates).filter((rate) => {
     const cents = priceToCents(rate.price);
-    if (cents === null || cents > BigInt(100_000_000)) continue;
-    return {
-      status: "ok",
-      source: rate.source,
-      carrier: rate.carrier,
-      service: rate.name,
-      cents: Number(cents),
-      currency: rate.currency,
-    };
-  }
-  return { status: "none" };
+    return cents !== null && cents <= BigInt(100_000_000);
+  });
+  const picked = pickService(priced, policy);
+  if (!picked) return { status: "none" };
+  const { rate, matched } = picked;
+  return {
+    status: "ok",
+    source: rate.source,
+    carrier: rate.carrier,
+    service: rate.name,
+    cents: Number(priceToCents(rate.price)),
+    currency: rate.currency,
+    ...(matched && policy ? { by_rule: true } : {}),
+  };
 }
 
 /** One account's prices, or none when it errors, is slow or needs reconnecting. */
@@ -67,6 +77,8 @@ async function ask<K extends LabelSourceKey>(
 ): Promise<SourceRate[]> {
   try {
     const source = labelSource(key);
+    // More boxes than this account takes in one purchase: it has no price for the plan.
+    if (request.parcels.length > source.maxBoxes) return [];
     const held = await getLabelAccess(tenantId, key);
     const quote = await within(
       LIST_QUOTE_MS,
@@ -86,11 +98,13 @@ export async function listQuote(
   tenantId: string,
   sources: LabelSourceKey[],
   request: LabelRequest,
+  /** The service the plan asks for: "cheapest", "fastest" or a name. */
+  policy?: string | null,
 ): Promise<ListQuote> {
   // Ours, and thrown away: it only keeps the sources' rate ids apart while they're merged.
   const ref = `list_${randomUUID().replace(/-/g, "")}`;
   const answers = await Promise.all(sources.map((key) => ask(tenantId, key, request, ref)));
-  return bestListQuote(answers.flat());
+  return bestListQuote(answers.flat(), policy);
 }
 
 export type ListAddress = {

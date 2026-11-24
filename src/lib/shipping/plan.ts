@@ -1,17 +1,36 @@
 import { createHash, randomBytes } from "node:crypto";
+import { parseSavedChoice, type SavedChoice } from "./choices";
 import type { ShippingSettings } from "./config";
-import { gramsToTenthOz, type LabelParcel } from "./easypost";
+import { gramsToTenthOz, type LabelParcel, type Signature } from "./easypost";
 import {
   MAX_TENTH_OZ,
+  boxSize,
   boxTenthOz,
   missingShipFrom,
   missingShipTo,
-  signatureByRule,
   type LabelOrder,
   type SavedBox,
 } from "./labels";
-import { listService, marginOf, marginText, type PlanCell } from "./list";
+import {
+  NO_QUOTE_WORDS,
+  listService,
+  marginOf,
+  marginText,
+  type NoQuote,
+  type PlanCell,
+} from "./list";
+
+export { NO_QUOTE_WORDS, type NoQuote };
+import {
+  allocFromMemory,
+  itemsKey,
+  productsKey,
+  type MemoryItem,
+  type PackingMemory,
+} from "./memory";
 import { carrierMark } from "./order-page";
+import type { Alloc } from "./packing";
+import { evaluateRules, type RuleOrder, type ShippingRule } from "./rules";
 import { formatWeight, isInternational } from "./queue";
 import { SOURCE_NAMES, isLabelSource, type LabelSourceKey } from "./sources/types";
 import { upsChecksAddress } from "./sources/ups";
@@ -49,10 +68,20 @@ export type StoredPlan = {
   address_status: string | null;
   address_residential: boolean | null;
   address_checked_at: string | null;
+  /** The price is for the service a rule (or a saved choice) asked for, not simply the cheapest. */
+  quote_by_rule?: boolean | null;
+  /** What a person set up for this order on its page (see `choices.ts`). */
+  saved_choice?: unknown;
 };
 
 export const PLAN_FIELDS =
-  "shipping_order_id, chosen_box_id, plan_key, quote_status, quote_source, quote_carrier, quote_service, quote_cents, quote_currency, quoted_at, address_key, address_status, address_residential, address_checked_at";
+  "shipping_order_id, chosen_box_id, plan_key, quote_status, quote_source, quote_carrier, quote_service, quote_cents, quote_currency, quoted_at, address_key, address_status, address_residential, address_checked_at, quote_by_rule, saved_choice";
+
+/** What a person decided for an order, from its stored plan. */
+export const choiceOf = (stored: StoredPlan | null | undefined): PlanChoice => ({
+  boxId: stored?.chosen_box_id ?? null,
+  saved: parseSavedChoice(stored?.saved_choice),
+});
 
 // ---------------------------------------------------------------------------
 // Fingerprints: how a stored answer is tied to the order it was for, without
@@ -93,10 +122,23 @@ export function sameFingerprint(stored: unknown, facts: unknown): boolean {
 // The plan
 // ---------------------------------------------------------------------------
 
+export type PlanItem = {
+  line_id: string;
+  left: number;
+  qty?: number;
+  title?: string | null;
+  variant?: string | null;
+  sku?: string | null;
+  /** One unit's weight in grams, when the shop gave one. */
+  grams?: number | null;
+};
+
 export type PlanOrder = LabelOrder & {
-  items: { line_id: string; left: number }[];
+  items: PlanItem[];
   weight_grams: number | null;
   pickup: boolean;
+  /** The option picked at checkout: rules can look at it. */
+  shipping_method?: string | null;
 };
 
 export type PlanSetup = {
@@ -105,31 +147,70 @@ export type PlanSetup = {
   /** The connected postage accounts. */
   sources: LabelSourceKey[];
   settings: ShippingSettings;
+  /** The workspace's shipping rules, top to bottom. */
+  rules?: readonly ShippingRule[];
+  /** What the workspace remembers about how it packs. */
+  memory?: PackingMemory;
+  /** How the older signature setting is named among the rules ("Signature on orders of $250.00 or more"). */
+  signatureName?: string;
 };
 
-/** Why no price is asked for an order. */
-export type NoQuote =
-  "pickup" | "abroad" | "address" | "source" | "ship_from" | "box" | "weight" | "heavy";
+/** What a person decided for this one order. */
+export type PlanChoice = {
+  /** The one box picked for it (the older, smaller memory). */
+  boxId?: string | null;
+  /** Everything set up on its page: boxes, weights, split, signature, service. */
+  saved?: SavedChoice | null;
+};
 
-export const NO_QUOTE_WORDS: Record<NoQuote, string> = {
-  pickup: "No label needed: this one is being collected.",
-  abroad: "International labels aren't quoted here yet.",
-  address: "This order needs a full address first.",
-  source: "Connect a postage account to see prices here.",
-  ship_from: "Finish your ship-from address in Shipping settings to see prices here.",
-  box: "Add a box in Shipping settings to see prices here.",
-  weight: "The shop hasn't given a weight for these items.",
-  heavy: "Over 150 lb, which is more than one box takes.",
+/**
+ * Where the boxes came from, strongest first: what a person saved for this
+ * order ("saved", or the one box they picked: "person"), a rule's box, the
+ * packing used last time for exactly these items ("learned"), the box used
+ * for the same products in other quantities ("learned-similar"), else the
+ * workspace's usual box.
+ */
+export type BoxSource = "default" | "person" | "rule" | "learned" | "learned-similar" | "saved";
+
+/** One box of a plan. */
+export type PlanBox = {
+  /** The saved box, when it is one (and still on the list). */
+  box: SavedBox | null;
+  /** Inches. */
+  length: number;
+  width: number;
+  height: number;
+  /** Packed, in tenths of an ounce. Null when it can't be worked out. */
+  weightTenthOz: number | null;
+  /** A weight a person typed or the scale gave last time, not one worked out from the shop's figures. */
+  weighed: boolean;
+  /** Units of each line in this box, by line id. */
+  items: Alloc;
 };
 
 export type OrderPlan = {
+  /** The first box, when it is a saved one. */
   box: SavedBox | null;
-  /** 'person': someone picked this box for this order. */
-  boxSource: "default" | "person";
-  /** Items plus the box, in tenths of an ounce. Null when either isn't known. */
+  boxSource: BoxSource;
+  /** Every box, in order. Empty when the workspace has no box to start from. */
+  boxes: PlanBox[];
+  /** All the boxes together, in tenths of an ounce. Null when any isn't known. */
   weightTenthOz: number | null;
-  /** The workspace's rule asks for a signature on this order. */
+  /** A signature is asked for on this order. */
   signature: boolean;
+  /** Which kind. */
+  signatureKind: Signature;
+  /** Who decided the signature: a rule, or the person who saved a choice. Null: nobody, so none. */
+  signatureFrom: "rule" | "saved" | null;
+  /** The rule that asked for the signature, even when a saved choice overrode it. */
+  signatureRule: string | null;
+  /** "cheapest", "fastest" or a service's name. Null: the cheapest. */
+  service: string | null;
+  serviceFrom: "rule" | "saved" | null;
+  /** The note, when a rule says to hold this order. */
+  ruleHold: string | null;
+  /** Every rule that did something for this order, in order. */
+  rules: string[];
   /** Why no price is asked; null when one can be. */
   noQuote: NoQuote | null;
   /** Whether the carriers' address book can be asked about this address. */
@@ -162,79 +243,254 @@ export function addressChecker(
   return sources.includes("ups") && upsChecksAddress(country) ? "ups" : null;
 }
 
+/** An order as a rule sees it. */
+export const ruleOrder = (
+  order: PlanOrder,
+  orderTotal: number | string | null | undefined,
+  home: string,
+): RuleOrder => ({
+  items: order.items.map((item) => ({
+    title: item.title ?? "",
+    sku: item.sku ?? null,
+    qty: item.qty ?? item.left,
+  })),
+  total:
+    orderTotal === null || orderTotal === undefined || !Number.isFinite(Number(orderTotal))
+      ? null
+      : Number(orderTotal),
+  region: order.region,
+  country: order.country_code || home,
+  shippingMethod: order.shipping_method ?? null,
+});
+
+/** The lines still to go, as packing memory keys them. */
+export const memoryItems = (order: Pick<PlanOrder, "items">): MemoryItem[] =>
+  order.items
+    .filter((item) => item.left > 0)
+    .map((item) => ({
+      line_id: item.line_id,
+      title: item.title,
+      variant: item.variant,
+      sku: item.sku,
+      qty: item.left,
+    }));
+
+/** Nothing of this order has gone yet: what is left is what was ordered. */
+export const isWholeOrder = (order: Pick<PlanOrder, "items">) =>
+  order.items.every((item) => item.qty === undefined || item.left >= item.qty);
+
+const sized = (box: SavedBox) => ({
+  length: Number(box.length_in),
+  width: Number(box.width_in),
+  height: Number(box.height_in),
+});
+
 /**
- * The box, weight and signature an order would be quoted with, and whether
- * it can be quoted at all. The box is the one a person picked for this order
- * while it is still on the list, else the workspace's usual box.
+ * The boxes, weights, signature and service an order would be quoted and
+ * bought with, and whether it can be quoted at all. Strongest first:
+ * what a person saved for this order → a rule's box → the packing used last
+ * time for exactly these items (every box, the split, the weights) → the box
+ * used for the same products in other quantities → the usual box.
+ *
+ * `chosen` is the box a person picked (an id, as before), or everything they
+ * decided for this order.
  */
 export function planFor(
   order: PlanOrder,
-  chosenBoxId: string | null | undefined,
+  chosen: string | null | undefined | PlanChoice,
   orderTotal: number | string | null | undefined,
   setup: PlanSetup,
 ): OrderPlan {
   const home = setup.settings.ship_from_country;
-  const chosen = chosenBoxId ? setup.boxes.find((box) => box.id === chosenBoxId) : undefined;
-  const box = chosen ?? setup.boxes[0] ?? null;
-  const boxSource = chosen && chosen.id !== setup.boxes[0]?.id ? "person" : "default";
-  const contents =
+  const choice: PlanChoice =
+    chosen && typeof chosen === "object" ? chosen : { boxId: chosen ?? null };
+  const saved = choice.saved ?? null;
+  const usual = setup.boxes[0] ?? null;
+  const byId = new Map(setup.boxes.map((box) => [box.id, box]));
+  const lines = order.items.filter((item) => item.left > 0);
+  const everything: Alloc = Object.fromEntries(lines.map((item) => [item.line_id, item.left]));
+  const picked = choice.boxId ? byId.get(choice.boxId) : undefined;
+  const learning = setup.settings.remember_packing ?? { exact: true, similar: true };
+
+  const ruled = evaluateRules(ruleOrder(order, orderTotal, home), setup.rules ?? [], {
+    signatureOver: setup.settings.signature_over,
+    name: setup.signatureName,
+  });
+  const ruleBox = ruled.packageName
+    ? setup.boxes.find((box) => box.name.trim().toLowerCase() === ruled.packageName!.toLowerCase())
+    : undefined;
+  const items = memoryItems(order);
+  const remembered =
+    learning.exact && setup.memory && items.length > 0
+      ? setup.memory.exact.get(itemsKey(items))
+      : undefined;
+  const near =
+    learning.similar && !remembered && setup.memory && items.length > 0
+      ? setup.memory.similar.get(productsKey(items))
+      : undefined;
+
+  const one = (box: SavedBox | null): PlanBox[] =>
+    box ? [{ box, ...sized(box), weightTenthOz: null, weighed: false, items: everything }] : [];
+  let boxes: PlanBox[];
+  let boxSource: BoxSource = "default";
+  if (saved) {
+    boxSource = "saved";
+    const left = new Map(lines.map((item) => [item.line_id, item.left]));
+    boxes = saved.boxes.map((box) => {
+      const inside: Alloc = {};
+      for (const item of lines) {
+        const take = Math.min(box.items[item.line_id] ?? 0, left.get(item.line_id) ?? 0);
+        inside[item.line_id] = take;
+        left.set(item.line_id, (left.get(item.line_id) ?? 0) - take);
+      }
+      return {
+        box: box.box_id ? (byId.get(box.box_id) ?? null) : null,
+        length: box.length,
+        width: box.width,
+        height: box.height,
+        weightTenthOz: box.weight_tenth_oz,
+        weighed: box.weight_tenth_oz !== null,
+        items: inside,
+      };
+    });
+    // Lines added to the order since it was saved go in the first box.
+    for (const [lineId, count] of left) {
+      if (count > 0) boxes[0].items[lineId] = (boxes[0].items[lineId] ?? 0) + count;
+    }
+  } else if (picked && picked.id !== usual?.id) {
+    boxSource = "person";
+    boxes = one(picked);
+  } else if (ruleBox) {
+    boxSource = "rule";
+    boxes = one(ruleBox);
+  } else if (remembered) {
+    // Same items as before: same boxes, same split, same weights.
+    boxSource = "learned";
+    const allocs = allocFromMemory(remembered, items);
+    boxes = remembered.boxes.map((box, index) => ({
+      box: box.box_id ? (byId.get(box.box_id) ?? null) : null,
+      length: box.length,
+      width: box.width,
+      height: box.height,
+      weightTenthOz: box.weight_tenth_oz > 0 ? box.weight_tenth_oz : null,
+      weighed: box.weight_tenth_oz > 0,
+      items: allocs[index],
+    }));
+  } else if (near && near.boxes.length === 1) {
+    // Same products in other quantities: that box again; the weight comes from the shop's figures.
+    boxSource = "learned-similar";
+    const box = near.boxes[0];
+    boxes = [
+      {
+        box: box.box_id ? (byId.get(box.box_id) ?? null) : null,
+        length: box.length,
+        width: box.width,
+        height: box.height,
+        weightTenthOz: null,
+        weighed: false,
+        items: everything,
+      },
+    ];
+  } else {
+    boxes = one(usual);
+  }
+
+  // Weights nobody weighed come from the shop: the order's own figure when one box holds it
+  // all, else each item's.
+  const whole =
     order.weight_grams && Number(order.weight_grams) > 0
       ? gramsToTenthOz(Number(order.weight_grams))
       : null;
-  const weightTenthOz = contents !== null && box ? contents + boxTenthOz(box) : null;
-  const signature = signatureByRule(
-    orderTotal === null || orderTotal === undefined ? null : Number(orderTotal),
-    setup.settings.signature_over,
+  const unit = new Map(
+    lines.map((item) => [
+      item.line_id,
+      item.grams && Number(item.grams) > 0 ? gramsToTenthOz(Number(item.grams)) : null,
+    ]),
   );
+  boxes = boxes.map((box) => {
+    if (box.weightTenthOz !== null) return box;
+    const empty = box.box ? boxTenthOz(box.box) : 0;
+    if (boxes.length === 1 && whole !== null) return { ...box, weightTenthOz: whole + empty };
+    let contents = 0;
+    for (const [lineId, count] of Object.entries(box.items)) {
+      if (count <= 0) continue;
+      const each = unit.get(lineId);
+      if (each === null || each === undefined) return box;
+      contents += each * count;
+    }
+    return boxes.length === 1 && contents === 0
+      ? box
+      : { ...box, weightTenthOz: Math.max(1, contents + empty) };
+  });
+  const weightTenthOz =
+    boxes.length > 0 && boxes.every((box) => box.weightTenthOz !== null)
+      ? boxes.reduce((sum, box) => sum + box.weightTenthOz!, 0)
+      : null;
+
+  // A person's own choice always wins over a rule, "no signature" included.
+  const ruleSignature: Signature =
+    ruled.signature === "adult" ? "adult" : ruled.signature === "standard" ? "signature" : "none";
+  const signatureKind: Signature = saved?.signature ?? ruleSignature;
+  const signatureFrom = saved?.signature ? "saved" : ruled.signature ? "rule" : null;
+  const service = saved?.service ?? ruled.service;
+  const serviceFrom = saved?.service ? "saved" : ruled.service ? "rule" : null;
+
   const abroad = isInternational(order.country_code, home);
-  const whole = missingShipTo(order).length === 0;
+  const full = missingShipTo(order).length === 0;
   const country = (order.country_code || home).toUpperCase();
 
   const noQuote: NoQuote | null = order.pickup
     ? "pickup"
     : abroad
       ? "abroad"
-      : !whole
+      : !full
         ? "address"
         : setup.sources.length === 0
           ? "source"
           : missingShipFrom(setup.settings).length > 0
             ? "ship_from"
-            : !box
+            : boxes.length === 0
               ? "box"
               : weightTenthOz === null
                 ? "weight"
-                : weightTenthOz > MAX_TENTH_OZ
+                : weightTenthOz > MAX_TENTH_OZ ||
+                    boxes.some((box) => box.weightTenthOz! > MAX_TENTH_OZ)
                   ? "heavy"
                   : null;
 
   const to = addressFacts(order, home);
   const from = setup.settings.ship_from;
   return {
-    box,
+    box: boxes[0]?.box ?? null,
     boxSource,
+    boxes,
     weightTenthOz,
-    signature,
+    signature: signatureKind !== "none",
+    signatureKind,
+    signatureFrom,
+    signatureRule: ruled.signatureRule,
+    service,
+    serviceFrom,
+    ruleHold: ruled.hold,
+    rules: ruled.matched,
     noQuote,
-    canCheck: !order.pickup && !abroad && whole && addressChecker(setup.sources, country) !== null,
+    canCheck: !order.pickup && !abroad && full && addressChecker(setup.sources, country) !== null,
     quoteFacts: {
-      v: 1,
+      v: 2,
       to,
-      items: order.items
-        .filter((item) => item.left > 0)
+      items: lines
         .map((item) => [item.line_id, item.left])
         .sort(([a], [b]) => (String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0)),
       grams: order.weight_grams === null ? null : Number(order.weight_grams),
-      box: box
-        ? [
-            box.id,
-            Number(box.length_in),
-            Number(box.width_in),
-            Number(box.height_in),
-            boxTenthOz(box),
-          ]
-        : null,
-      signature,
+      boxes: boxes.map((box) => [
+        box.box?.id ?? null,
+        box.length,
+        box.width,
+        box.height,
+        box.weightTenthOz,
+      ]),
+      signature: signatureKind,
+      service: service ? service.trim().toLowerCase() : null,
       from: [
         tidy(from.address1),
         tidy(from.city),
@@ -248,13 +504,17 @@ export function planFor(
   };
 }
 
-/** The one box a plan is quoted with. Call only when `noQuote` is null. */
-export const planParcel = (plan: OrderPlan): LabelParcel => ({
-  length: Number(plan.box!.length_in),
-  width: Number(plan.box!.width_in),
-  height: Number(plan.box!.height_in),
-  weightTenthOz: plan.weightTenthOz!,
-});
+/** Every box a plan is quoted with. Call only when `noQuote` is null. */
+export const planParcels = (plan: OrderPlan): LabelParcel[] =>
+  plan.boxes.map((box) => ({
+    length: box.length,
+    width: box.width,
+    height: box.height,
+    weightTenthOz: box.weightTenthOz!,
+  }));
+
+/** The first box a plan is quoted with. Call only when `noQuote` is null. */
+export const planParcel = (plan: OrderPlan): LabelParcel => planParcels(plan)[0];
 
 const age = (at: string | null, now: Date) => {
   const when = at ? Date.parse(at) : Number.NaN;
@@ -295,6 +555,16 @@ export const needsPlanning = (stored: StoredPlan | null | undefined, plan: Order
 export const formatPlanWeight = (tenths: number, imperial: boolean) =>
   formatWeight(Math.max(1, Math.round(tenths * 2.8349523125)), imperial);
 
+/** The small word under a box's name saying why it is that box. */
+export const BOX_NOTES: Record<BoxSource, string | null> = {
+  default: null,
+  person: "your choice",
+  saved: "your choice",
+  rule: "by rule",
+  learned: "remembered",
+  "learned-similar": "remembered · similar order",
+};
+
 /**
  * What the list shows for one order. `willFill`: the page is about to ask
  * for whatever is missing, so a gap reads as "working it out" instead of "–".
@@ -332,6 +602,9 @@ export function planCell(
         service: listService(stored.quote_carrier, stored.quote_service ?? ""),
         source: SOURCE_NAMES[stored.quote_source],
         price: show.money(stored.quote_cents / 100, currency),
+        cents: stored.quote_cents,
+        currency,
+        byRule: Boolean(stored.quote_by_rule) && plan.serviceFrom !== null,
         margin: margin
           ? {
               text: marginText(margin, (amount) => show.money(amount, currency)),
@@ -362,9 +635,18 @@ export function planCell(
     }
   }
 
+  const first = plan.boxes[0];
+  const boxName = (box: PlanBox) =>
+    box.box?.name ?? boxSize({ length_in: box.length, width_in: box.width, height_in: box.height });
   return {
-    box: plan.box?.name ?? null,
-    boxNote: plan.box && plan.boxSource === "person" ? "your choice" : null,
+    box: !first
+      ? null
+      : plan.boxes.length === 1
+        ? boxName(first)
+        : `${plan.boxes.length} boxes: ${plan.boxes.map(boxName).join(" + ")}`,
+    boxNote: first ? BOX_NOTES[plan.boxSource] : null,
+    signature: plan.signatureKind,
+    rules: plan.rules,
     weight:
       plan.weightTenthOz === null ? null : formatPlanWeight(plan.weightTenthOz, show.imperial),
     quote,

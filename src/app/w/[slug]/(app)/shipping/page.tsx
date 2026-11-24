@@ -6,9 +6,11 @@ import { PageHeader } from "@/components/ui/page-header";
 import { daysFromNow } from "@/lib/bookings/slots";
 import { formatMoney } from "@/lib/dashboard/format";
 import { countryName, hasAddress } from "@/lib/shipping/carriers";
+import { orderRefusal } from "@/lib/shipping/bulk";
 import { MOST_SHOWN, NO_PLAN, orderAge } from "@/lib/shipping/list";
+import { NO_MEMORY } from "@/lib/shipping/memory";
 import { dismissedKeys, liveSavedGroups, mergeSuggestions } from "@/lib/shipping/merge";
-import { planCell, planFor, type PlanSetup } from "@/lib/shipping/plan";
+import { choiceOf, planCell, planFor } from "@/lib/shipping/plan";
 import {
   QUEUE_VIEWS,
   cleanSearch,
@@ -17,6 +19,7 @@ import {
   holdChoices,
   holdState,
   inQueueView,
+  isInternational,
   isOpen,
   isPriority,
   isQueueView,
@@ -33,14 +36,18 @@ import {
   loadBoxes,
   loadGroups,
   loadLabelConnections,
+  loadOpenLabelOrders,
   loadOpenOrders,
+  loadPackingMemory,
   loadPlans,
   loadShippingSetup,
   placeOf,
+  planSetupOf,
+  withRuleFacts,
   type ShippingOrder,
 } from "./data";
 import { shippingAccess } from "./gate";
-import { ListFreshness, PrintingChip } from "./list-tools";
+import { ListFreshness, PrintingChip, RuleHolds } from "./list-tools";
 import { QueueTable, type QueueRow } from "./queue-table";
 import { ShippingTabs } from "./tabs";
 import { TogetherBanners, type TogetherGroup } from "./together-ui";
@@ -79,12 +86,13 @@ export default async function ShippingPage({
   const q = cleanSearch(query.q);
 
   const supabase = await createClient();
-  const [open, setup, groups, boxes, postage, found] = await Promise.all([
+  const [loaded, setup, groups, boxes, postage, labelOpen, found] = await Promise.all([
     loadOpenOrders(supabase, tenant.id),
     loadShippingSetup(supabase, tenant.id),
     loadGroups(supabase, tenant.id),
     loadBoxes(supabase, tenant.id),
     loadLabelConnections(supabase, tenant.id),
+    loadOpenLabelOrders(supabase, tenant.id),
     q
       ? supabase
           .from("shipping_orders")
@@ -99,26 +107,33 @@ export default async function ShippingPage({
   const today = todayIn(tenant.timezone, now);
   const home = setup.settings.ship_from_country;
   const signatureOver = setup.settings.signature_over;
+  const bare = planSetupOf({ shipping: setup, boxes, postage, memory: NO_MEMORY }, tenant.currency);
+  // The rules have their say first: who needs a signature, and which orders they hold.
+  // A hold shows here straight away; `RuleHolds` below writes it down for every other screen.
+  const ruled = withRuleFacts(loaded, bare);
+  const open = ruled.orders;
   const counts = queueCounts(open, today, home, signatureOver);
-  // A search can turn up orders that aren't open; the open ones bring their sale's total along.
-  const totals = new Map(open.map((order) => [order.id, order.order_total ?? null]));
+  // A search can turn up orders that aren't open; the open ones come as the list has them.
+  const openById = new Map(open.map((order) => [order.id, order]));
   const matching = found
-    ? ((found.data ?? []) as unknown as ShippingOrder[]).map((order) => ({
-        ...order,
-        order_total: totals.get(order.id) ?? null,
-      }))
+    ? ((found.data ?? []) as unknown as ShippingOrder[]).map(
+        (order) => openById.get(order.id) ?? { ...order, order_total: null },
+      )
     : open.filter((order) => inQueueView(order, view, today, home, signatureOver));
   const shown = matching.slice(0, MOST_SHOWN);
   const unprinted = open.filter(
     (order) => inQueueView(order, "ready", today, home) && !order.slip_printed_at,
   );
   // What the list already knows about each order shown: its box, best price and address check.
-  const plans = await loadPlans(
-    supabase,
-    tenant.id,
-    shown.filter(isOpen).map((order) => order.id),
-  );
-  const planSetup: PlanSetup = { boxes, sources: postage.active, settings: setup.settings };
+  const [plans, memory] = await Promise.all([
+    loadPlans(
+      supabase,
+      tenant.id,
+      shown.filter(isOpen).map((order) => order.id),
+    ),
+    loadPackingMemory(supabase, tenant.id, shown.filter(isOpen)),
+  ]);
+  const planSetup = { ...bare, memory };
   // Whatever is missing is worked out once the list is on screen, a few orders at a time.
   const willFill = entitlements.canWrite && !q;
 
@@ -149,11 +164,26 @@ export default async function ShippingPage({
         (group) => !savedKeys.has(group.key),
       )
     : [];
+  // Orders that are waiting to go in one parcel, or could: a bulk run leaves those for their own page.
+  const partners = new Map<string, string[]>();
+  for (const group of [
+    ...liveSavedGroups(groups, open, today),
+    ...mergeSuggestions(open, dismissedKeys(groups), today),
+  ]) {
+    group.orderIds.forEach((orderId, index) => {
+      const others = group.names.filter((_, at) => at !== index);
+      partners.set(
+        orderId,
+        [...new Set([...(partners.get(orderId) ?? []), ...others])].slice(0, 3),
+      );
+    });
+  }
+  const ruleHeld = new Set(ruled.holds.map((held) => held.id));
   const rows: QueueRow[] = shown.map((order) => {
     const stillOpen = isOpen(order);
     const hold = stillOpen ? holdState(order, today) : "none";
     const plan = stillOpen
-      ? planFor(order, plans.get(order.id)?.chosen_box_id, order.order_total, planSetup)
+      ? planFor(order, choiceOf(plans.get(order.id)), order.order_total, planSetup)
       : null;
     return {
       id: order.id,
@@ -188,6 +218,23 @@ export default async function ShippingPage({
       partSent: stillOpen && order.items.some((item) => item.left < item.qty),
       slipPrinted: Boolean(order.slip_printed_at),
       signature: Boolean(plan?.signature) && !order.pickup,
+      adultSignature: plan?.signatureKind === "adult" && !order.pickup,
+      heldByRule: ruleHeld.has(order.id),
+      bulkWhy: stillOpen
+        ? orderRefusal({
+            cancelled: order.cancelled,
+            unitsLeft: order.units_left,
+            pickedUp: Boolean(order.picked_up_at),
+            hold,
+            ruleHold: null,
+            paid: order.paid,
+            pickup: order.pickup,
+            abroad: isInternational(order.country_code, home),
+            partSent: order.items.some((item) => item.left < item.qty),
+            labelOpen: labelOpen.has(order.id),
+            togetherWith: partners.get(order.id) ?? [],
+          })
+        : "Everything on it has already gone.",
       plan: plan
         ? planCell(plan, plans.get(order.id), {
             now,
@@ -277,6 +324,10 @@ export default async function ShippingPage({
         </p>
       )}
 
+      {entitlements.canWrite && ruled.holds.length > 0 && (
+        <RuleHolds slug={tenant.slug} count={ruled.holds.length} />
+      )}
+
       {(savedTogether.length > 0 || suggested.length > 0) && (
         <TogetherBanners
           slug={tenant.slug}
@@ -303,6 +354,8 @@ export default async function ShippingPage({
           choices={holdChoices(today)}
           view={found ? "all" : view}
           fill={willFill ? view : undefined}
+          currency={tenant.currency}
+          canBuy={entitlements.canWrite && postage.active.length > 0}
         />
       )}
       {matching.length > shown.length && (

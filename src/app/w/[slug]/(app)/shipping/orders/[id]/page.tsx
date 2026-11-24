@@ -17,8 +17,8 @@ import {
   missingShipFrom,
   shipToEdit,
   shownBoxes,
-  signatureByRule,
 } from "@/lib/shipping/labels";
+import { choiceOf, planFor, type OrderPlan } from "@/lib/shipping/plan";
 import { combineOrders, groupHref, groupKey, parseWith, sumAmounts } from "@/lib/shipping/merge";
 import {
   formatHoldDate,
@@ -44,7 +44,9 @@ import {
   loadKnownGroup,
   loadLabelConnections,
   loadOrderExtras,
+  loadPackingMemory,
   loadPlans,
+  planSetupOf,
   loadQueueSteps,
   loadShippingSetup,
   loadUnfinishedLabels,
@@ -55,7 +57,7 @@ import {
 import { HoldForm, ParcelForm, PickupForm, SeenBackFromHold, VoidButton } from "../../forms";
 import { shippingAccess } from "../../gate";
 import { ClearUnsureLabelButton, FinishLabelButton } from "../../label-card";
-import { LabelDesk } from "../../label-desk";
+import { LabelDesk, type DeskStart } from "../../label-desk";
 import { OrderRailActions } from "../../order-rail";
 import { OrderSteps } from "../../order-steps";
 import { LabelPrint } from "../../print-ui";
@@ -63,6 +65,34 @@ import { TogetherNote } from "../../together-ui";
 
 const saleOf = (order: OrderWithSale): Sale | null =>
   (Array.isArray(order.sale) ? order.sale[0] : order.sale) ?? null;
+
+/** An order's plan, as the bench lays it out to start with. */
+const deskStart = (plan: OrderPlan): DeskStart => ({
+  boxes: plan.boxes.map((box) => ({
+    boxId: box.box?.id ?? "",
+    length: String(box.length),
+    width: String(box.width),
+    height: String(box.height),
+    tenthOz: box.weightTenthOz,
+    weighed: box.weighed,
+    alloc: box.items,
+  })),
+  source: plan.boxSource,
+  signature: plan.signatureKind,
+  signatureNote:
+    plan.signatureFrom === "rule" && plan.signatureRule
+      ? `Rule: ${plan.signatureRule}`
+      : plan.signatureFrom === "saved"
+        ? plan.signatureRule
+          ? `Your saved choice. The rule “${plan.signatureRule}” would ask for one.`
+          : "Your saved choice"
+        : null,
+  service: plan.service,
+  serviceFrom: plan.serviceFrom,
+  rules: plan.rules,
+  savedSignature: plan.signatureFrom === "saved" ? plan.signatureKind : null,
+  savedService: plan.serviceFrom === "saved" ? plan.service : null,
+});
 
 const INTERNATIONAL_NOTE =
   "International labels need a customs form, which isn't built yet. Buy this one elsewhere and record the parcel by hand.";
@@ -382,11 +412,24 @@ export default async function ShippingOrderPage({
       : Number(order.shipping_paid) === 0
         ? "Free shipping"
         : money(order.shipping_paid);
-  const over = setup.settings.signature_over;
-  const rule =
-    over !== null && signatureByRule(sale ? Number(sale.total) : null, over)
-      ? `signature on orders of ${money(over)} or more`
-      : null;
+  // The plan the bench starts from: what a person saved for this order, else a rule's box,
+  // the packing remembered for these items, or the usual box. Several orders in one parcel
+  // are planned as one, with nothing saved.
+  const planSetup = planSetupOf(
+    {
+      shipping: setup,
+      boxes,
+      postage,
+      memory: await loadPackingMemory(supabase, tenant.id, todo ? [order] : []),
+    },
+    tenant.currency,
+  );
+  const total = sale ? Number(sale.total) : null;
+  const choice = group ? {} : choiceOf(plans.get(order.id));
+  const plan = planFor(order, choice, total, planSetup);
+  // Where "Reset" goes back to: the plan with nothing saved, and the usual box.
+  const planOnly = choice.saved || choice.boxId ? planFor(order, {}, total, planSetup) : plan;
+  const usual = planFor(order, {}, total, { ...planSetup, rules: [], memory: undefined });
   const itemCount = order.items.reduce((sum, item) => sum + item.qty, 0);
   const itemsList = (
     <ul className="grid gap-x-5 sm:grid-cols-2 xl:grid-cols-3">
@@ -787,7 +830,16 @@ export default async function ShippingOrderPage({
               width: String(Number(box.width_in)),
               height: String(Number(box.height_in)),
             }))}
-            startBoxId={group ? null : (plans.get(order.id)?.chosen_box_id ?? null)}
+            start={deskStart(plan)}
+            resets={
+              group
+                ? undefined
+                : {
+                    plan: deskStart(planOnly),
+                    // Only the boxes go back to the usual one; the rules still have their say.
+                    usual: { ...deskStart(planOnly), boxes: deskStart(usual).boxes },
+                  }
+            }
             contentsTenthOz={order.weight_grams ? gramsToTenthOz(Number(order.weight_grams)) : null}
             paid={{
               cents:
@@ -796,7 +848,6 @@ export default async function ShippingOrderPage({
               amount: order.shipping_paid === null ? null : money(order.shipping_paid),
               method: order.shipping_method,
             }}
-            rule={rule}
             shop={{
               offered: setup.canSend,
               markSent: setup.settings.mark_sent_in_shop,

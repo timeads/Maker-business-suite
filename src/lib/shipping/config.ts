@@ -61,6 +61,15 @@ export const shippingSettingsSchema = z.object({
    * delivery. Null: never ask unless the person choosing the label does.
    */
   signature_over: z.number().min(0).max(1_000_000).nullable().default(null),
+  /**
+   * "Remember how I pack": after a label is bought for a whole order, the
+   * boxes it went in are remembered for those items. `exact`: an order with
+   * the very same items starts in the same boxes, split and weights.
+   * `similar`: the same products in other quantities start in the same box.
+   */
+  remember_packing: z
+    .object({ exact: z.boolean().default(true), similar: z.boolean().default(true) })
+    .default({ exact: true, similar: true }),
 });
 export type ShippingSettings = z.infer<typeof shippingSettingsSchema>;
 

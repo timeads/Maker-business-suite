@@ -211,6 +211,34 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   A list price is only words (no rate id) and never touches
   `shipping_label_quotes`, so it can't be bought: buying is the order page's
   own quote.
+  Rules are a config (`shipping` / `rules`, schema and the pure evaluator
+  in `lib/shipping/rules.ts`, ported from the help desk with its tests):
+  every condition of a rule must match, and for each kind of action (box,
+  signature, service, hold) the first matching rule wins. `signature_over`
+  still works exactly as before and counts as one more rule after the list.
+  One plan decides everything (`planFor` in `plan.ts`), strongest first: what
+  a person saved for the order → a rule's box → the packing remembered for
+  exactly those items → the box used for the same products in other
+  quantities → the usual box. The list, the order page and a bulk run all
+  start from it; a person's own choice always beats a rule. A rule's hold is
+  shown on read and written once by `hold_shipping_orders_by_rule`;
+  `rule_hold_settled_at` (also set by a trigger on any release) means no
+  rule holds that order again. Packing memory is `shipping_packings`
+  (`lib/shipping/memory.ts`: keys are item code × quantity, no shopper),
+  written only by `learn_shipping_packing` after a label for a whole order
+  is recorded, and only when the boxes the browser named are exactly what
+  was priced. Saved choices (boxes, weights, split, signature, service; never
+  an address) live in `shipping_order_plans.saved_choice`
+  (`lib/shipping/choices.ts`), saved as the order page changes and cleared
+  by "Reset". Buying in bulk (`bulk-actions.ts`, `lib/shipping/bulk.ts`):
+  the browser asks for one order at a time, and each goes through
+  `quoteRates` and `purchaseLabel` in `label-core.ts`, the same path a single
+  label takes (never add a second way to buy). The server re-checks every
+  order from what is stored, refuses anything that needs a person, and skips
+  an order whose fresh price is far above the list's. A run is recorded in
+  `shipping_label_batches` (the Label batches tab); `claim_label_batch_order`
+  gives each order one turn per run, and `claim_label_purchase` still refuses
+  a second label whatever a run does.
   Pickup steps are kept here, not sent to the shop. The packing slip's
   layout is a config (`slip_layout`); its barcode (`code128.ts`) is what
   Scan & pack reads. Packing details are asked of the shop ten orders at a

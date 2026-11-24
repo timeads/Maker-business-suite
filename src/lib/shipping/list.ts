@@ -84,12 +84,31 @@ export function listService(carrier: string, name: string): string {
     .replace(/^USPS Priority Mail$/i, "USPS Priority");
 }
 
+/** Why no price is asked for an order. */
+export type NoQuote =
+  "pickup" | "abroad" | "address" | "source" | "ship_from" | "box" | "weight" | "heavy";
+
+export const NO_QUOTE_WORDS: Record<NoQuote, string> = {
+  pickup: "No label needed: this one is being collected.",
+  abroad: "International labels aren't quoted here yet.",
+  address: "This order needs a full address first.",
+  source: "Connect a postage account to see prices here.",
+  ship_from: "Finish your ship-from address in Shipping settings to see prices here.",
+  box: "Add a box in Shipping settings to see prices here.",
+  weight: "The shop hasn't given a weight for these items.",
+  heavy: "Over 150 lb, which is more than one purchase takes.",
+};
+
 /** What one row of the list shows about its plan. Only words: nothing here can be bought. */
 export type PlanCell = {
   /** The box the order would go in, when the workspace has one. */
   box: string | null;
-  /** "your choice" when a person picked it. */
+  /** Why it's that box: "your choice", "by rule", "remembered". Nothing for the usual box. */
   boxNote: string | null;
+  /** The signature the plan asks for. */
+  signature?: "none" | "signature" | "adult";
+  /** The rules that did something for this order. */
+  rules?: string[];
   /** Items and box together ("4 lb 8 oz"), when both are known. */
   weight: string | null;
   quote:
@@ -101,6 +120,11 @@ export type PlanCell = {
         /** "UPS", "Redo", "EasyPost": whose account the price is from. */
         source: string;
         price: string;
+        /** The same price in whole cents, for adding up what several labels would cost. */
+        cents: number;
+        currency: string;
+        /** It's the service a rule or a saved choice asked for, not simply the cheapest. */
+        byRule: boolean;
         margin: { text: string; short: boolean } | null;
       }
     /** Being worked out now. */

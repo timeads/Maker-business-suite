@@ -1,19 +1,21 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/auth";
 import { formatMoney } from "@/lib/dashboard/format";
 import { getEntitlements } from "@/lib/entitlements";
+import { savedChoiceSchema } from "@/lib/shipping/choices";
 import { shipFromAddress, shipToAddress } from "@/lib/shipping/labels";
 import { MOST_SHOWN, PLAN_BATCH, type PlanCell } from "@/lib/shipping/list";
 import {
   addressSettled,
+  choiceOf,
   fingerprint,
   needsPlanning,
   planCell,
   planFor,
-  planParcel,
+  planParcels,
   quoteFresh,
-  type PlanSetup,
   type StoredPlan,
 } from "@/lib/shipping/plan";
 import { listAddressCheck, listQuote } from "@/lib/shipping/plan-quotes";
@@ -25,8 +27,11 @@ import {
   loadBoxes,
   loadLabelConnections,
   loadOpenOrders,
+  loadPackingMemory,
   loadPlans,
   loadShippingSetup,
+  planSetupOf,
+  withRuleFacts,
   type ShippingOrder,
 } from "./data";
 
@@ -54,8 +59,9 @@ async function context(slug: string) {
 /**
  * Works out the next few orders in a view that the list has no fresh note
  * for: checks each address (once per order and address, ever) and asks every
- * connected postage account for its best price for the usual box, or the box
- * a person picked. A handful per call, so the list is never kept waiting.
+ * connected postage account for its price for the order's plan: the boxes a
+ * person saved, a rule's box, the remembered packing, or the usual box. A
+ * handful per call, so the list is never kept waiting.
  *
  * What comes back is words for the list. Nothing here makes a quote that
  * could be bought, and `shipping_label_quotes` is never touched.
@@ -64,7 +70,7 @@ export async function planNextOrders(slug: string, view: string): Promise<PlanSt
   const ctx = await context(slug);
   if (!ctx || !isQueueView(view)) return NOTHING;
   const { tenant, supabase } = ctx;
-  const [open, shipping, boxes, postage] = await Promise.all([
+  const [loaded, shipping, boxes, postage] = await Promise.all([
     loadOpenOrders(supabase, tenant.id),
     loadShippingSetup(supabase, tenant.id),
     loadBoxes(supabase, tenant.id),
@@ -73,17 +79,25 @@ export async function planNextOrders(slug: string, view: string): Promise<PlanSt
   const now = new Date();
   const today = todayIn(tenant.timezone, now);
   const home = shipping.settings.ship_from_country;
-  const setup: PlanSetup = { boxes, sources: postage.active, settings: shipping.settings };
+  const bare = planSetupOf(
+    { shipping, boxes, postage, memory: { exact: new Map(), similar: new Map() } },
+    tenant.currency,
+  );
+  const open = withRuleFacts(loaded, bare).orders;
   const shown = open
     .filter((order) => inQueueView(order, view, today, home, shipping.settings.signature_over))
     .slice(0, MOST_SHOWN);
-  const stored = await loadPlans(
-    supabase,
-    tenant.id,
-    shown.map((order) => order.id),
-  );
+  const [stored, memory] = await Promise.all([
+    loadPlans(
+      supabase,
+      tenant.id,
+      shown.map((order) => order.id),
+    ),
+    loadPackingMemory(supabase, tenant.id, shown),
+  ]);
+  const setup = { ...bare, memory };
   const planOf = (order: ShippingOrder, row: StoredPlan | undefined) =>
-    planFor(order, row?.chosen_box_id, order.order_total, setup);
+    planFor(order, choiceOf(row), order.order_total, setup);
   const todo = shown.filter((order) =>
     needsPlanning(stored.get(order.id), planOf(order, stored.get(order.id)), now),
   );
@@ -152,22 +166,29 @@ export async function planNextOrders(slug: string, view: string): Promise<PlanSt
     let quote: Record<string, unknown> | null = null;
     if (!plan.noQuote && !quoteFresh(before, plan, now)) {
       const residential = addressSettled(after, plan, now) ? after.address_residential : null;
-      const best = await listQuote(tenant.id, postage.active, {
-        from: shipFromAddress(shipping.settings),
-        to: { ...to, residential: residential ?? true },
-        parcels: [planParcel(plan)],
-        reference: order.name ?? undefined,
-        signature: plan.signature ? "signature" : "none",
-      });
+      const best = await listQuote(
+        tenant.id,
+        postage.active,
+        {
+          from: shipFromAddress(shipping.settings),
+          to: { ...to, residential: residential ?? true },
+          parcels: planParcels(plan),
+          reference: order.name ?? undefined,
+          signature: plan.signatureKind,
+        },
+        plan.service,
+      );
       after.plan_key = fingerprint(plan.quoteFacts);
       after.quote_status = best.status;
       after.quoted_at = asked;
+      after.quote_by_rule = false;
       if (best.status === "ok") {
         after.quote_source = best.source;
         after.quote_carrier = best.carrier;
         after.quote_service = best.service;
         after.quote_cents = best.cents;
         after.quote_currency = best.currency;
+        after.quote_by_rule = best.by_rule === true;
       }
       quote = {
         box_id: plan.box?.id ?? null,
@@ -221,4 +242,60 @@ export async function rememberOrderBox(
     p_box_id: boxId,
   });
   return { ok: !error };
+}
+
+/**
+ * Keeps what a person set up for one order on its page (boxes, weights,
+ * which items go where, signature, service), so it can be bought later from
+ * the packing computer or in a bulk run. Passing nothing forgets it and the
+ * order goes back to its plan. Quiet, like the box above: nothing waits on it.
+ */
+export async function saveOrderChoice(
+  slug: string,
+  orderId: string,
+  choice: unknown,
+): Promise<{ ok: boolean }> {
+  const ctx = await context(slug);
+  if (!ctx || !UUID.test(orderId)) return { ok: false };
+  let body: unknown = null;
+  if (choice !== null && choice !== undefined) {
+    const parsed = savedChoiceSchema.safeParse(choice);
+    if (!parsed.success) return { ok: false };
+    body = parsed.data;
+  }
+  const { error } = await ctx.supabase.rpc("save_shipping_order_choice", {
+    p_shipping_order_id: orderId,
+    p_choice: body,
+  });
+  return { ok: !error };
+}
+
+/**
+ * Writes down the holds the workspace's rules call for, so every screen sees
+ * them. The rules are read and applied here, on the server: nothing is taken
+ * from the browser. Safe to run any number of times: an order a rule has
+ * held before, or a person has released, is left alone.
+ */
+export async function applyRuleHolds(slug: string): Promise<{ held: number }> {
+  const ctx = await context(slug);
+  if (!ctx) return { held: 0 };
+  const { tenant, supabase } = ctx;
+  const [loaded, shipping] = await Promise.all([
+    loadOpenOrders(supabase, tenant.id),
+    loadShippingSetup(supabase, tenant.id),
+  ]);
+  if (!shipping.rules.some((rule) => rule.enabled)) return { held: 0 };
+  const { holds } = withRuleFacts(loaded, { rules: shipping.rules, settings: shipping.settings });
+  if (holds.length === 0) return { held: 0 };
+  const { data, error } = await supabase.rpc("hold_shipping_orders_by_rule", {
+    p_tenant_id: tenant.id,
+    p_holds: holds.slice(0, 500),
+  });
+  if (error) {
+    console.error("could not hold orders by rule", error.message);
+    return { held: 0 };
+  }
+  const held = Number(data) || 0;
+  if (held > 0) revalidatePath(`/w/${slug}/shipping`, "layout");
+  return { held };
 }

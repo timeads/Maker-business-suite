@@ -4,10 +4,11 @@ import { PageHeader } from "@/components/ui/page-header";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
 import { BoxesForm } from "../box-forms";
-import { loadBoxes, loadShippingSetup, type ShippingOrder } from "../data";
+import { loadBoxes, loadRememberedPackings, loadShippingSetup, type ShippingOrder } from "../data";
 import { ShippingSettingsForm, SlipLayoutForm } from "../forms";
 import { shippingAccess } from "../gate";
 import { PrintingOnThisComputer } from "../print-ui";
+import { RememberPackingForm, RememberedPackings, ShippingRulesForm } from "../rules-form";
 import { PackingSlip } from "../slip";
 import { ShippingTabs } from "../tabs";
 
@@ -74,16 +75,23 @@ export default async function ShippingSettingsPage({
   if (!access.ok) return access.upsell;
   const { tenant, role, entitlements } = access;
   const supabase = await createClient();
-  const [setup, boxes] = await Promise.all([
+  const manager = canManage(role) && entitlements.canWrite;
+  const [setup, boxes, remembered] = await Promise.all([
     loadShippingSetup(supabase, tenant.id),
     loadBoxes(supabase, tenant.id),
+    manager ? loadRememberedPackings(supabase, tenant.id) : [],
   ]);
+  const day = new Intl.DateTimeFormat("en-US", {
+    timeZone: tenant.timezone,
+    month: "short",
+    day: "numeric",
+  });
 
   return (
     <>
       <PageHeader
         title="Shipping"
-        description="What your packing slips say, the boxes you pack in, and what happens when you record a parcel."
+        description="What your packing slips say, the boxes you pack in, your shipping rules, and what happens when you record a parcel."
       />
       <ShippingTabs slug={tenant.slug} />
       <Card>
@@ -98,7 +106,7 @@ export default async function ShippingSettingsPage({
           <PrintingOnThisComputer workspaceName={tenant.name} />
         </CardContent>
       </Card>
-      {canManage(role) && entitlements.canWrite ? (
+      {manager ? (
         <>
           <Card>
             <CardHeader>
@@ -133,6 +141,52 @@ export default async function ShippingSettingsPage({
                 settings={setup.settings}
                 canSend={setup.canSend}
               />
+            </CardContent>
+          </Card>
+          <Card id="rules">
+            <CardHeader>
+              <CardTitle>Rules</CardTitle>
+              <CardDescription>
+                Let the app decide the box, the signature, the service or a hold for orders that
+                look a certain way. Rules show on the To ship list and on each order, and they are
+                what makes buying labels for several orders at once safe.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ShippingRulesForm
+                slug={tenant.slug}
+                rules={setup.rules}
+                boxes={boxes.map((box) => box.name)}
+                signatureOver={setup.settings.signature_over}
+                currency={tenant.currency}
+              />
+            </CardContent>
+          </Card>
+          <Card id="memory">
+            <CardHeader>
+              <CardTitle>Remember how I pack</CardTitle>
+              <CardDescription>
+                Each time you buy a label for a whole order, the boxes it went in are remembered for
+                those items. A rule&apos;s box comes first; what you set on an order&apos;s own page
+                always wins.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-5">
+              <RememberPackingForm slug={tenant.slug} remember={setup.settings.remember_packing} />
+              <div className="flex flex-col gap-2">
+                <p className="text-sm font-semibold">What&apos;s been remembered</p>
+                <RememberedPackings
+                  slug={tenant.slug}
+                  rows={remembered.map((row) => ({
+                    id: row.id,
+                    label: row.label,
+                    boxes: row.boxes,
+                    uses: row.uses,
+                    when: day.format(new Date(row.updated_at)),
+                  }))}
+                  boxNames={Object.fromEntries(boxes.map((box) => [box.id, box.name]))}
+                />
+              </div>
             </CardContent>
           </Card>
           <Card>

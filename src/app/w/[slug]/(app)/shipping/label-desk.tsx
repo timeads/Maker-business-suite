@@ -15,7 +15,8 @@ import {
   type AddressCheck,
   type Signature,
 } from "@/lib/shipping/easypost";
-import { deliveryDays, type ShipToEdit } from "@/lib/shipping/labels";
+import { deliveryDays, parseInches, type ShipToEdit } from "@/lib/shipping/labels";
+import { listService } from "@/lib/shipping/list";
 import {
   carrierMark,
   poundsToTenthOz,
@@ -34,6 +35,7 @@ import {
   withoutBox,
   type Alloc,
 } from "@/lib/shipping/packing";
+import { pickService } from "@/lib/shipping/rules";
 import type { SourceRateChoice } from "@/lib/shipping/sources/rates";
 import {
   SOURCE_CHIPS,
@@ -44,7 +46,7 @@ import {
 import { printSettings, wantedLabelFormat } from "@/lib/shipping/zebra/settings";
 import { MARK_TONES } from "./carrier-mark";
 import { buyLabel, checkLabelAddress, getLabelRates, type RatesInput } from "./label-actions";
-import { rememberOrderBox } from "./plan-actions";
+import { saveOrderChoice } from "./plan-actions";
 import { PrintsToZebraNote } from "./print-ui";
 
 /** An item in the order, as the bench needs it for dividing between boxes. */
@@ -73,6 +75,37 @@ export type DeskBox = {
 };
 
 const CUSTOM = "";
+
+/** What an order opens with: its plan, as the bench lays it out. */
+export type DeskStart = {
+  /** Every box, in order. Empty when the workspace has no box to start from. */
+  boxes: {
+    /** A saved box's id, or empty for a size of its own. */
+    boxId: string;
+    length: string;
+    width: string;
+    height: string;
+    /** Packed, in tenths of an ounce, when it is known. */
+    tenthOz: number | null;
+    /** A weight from the scale (typed, or remembered), not one worked out from the shop's figures. */
+    weighed: boolean;
+    /** How many of each item are in it. */
+    alloc: Alloc;
+  }[];
+  /** Why these boxes: a saved choice, a rule, memory, or simply the usual box. */
+  source: "default" | "person" | "rule" | "learned" | "learned-similar" | "saved";
+  signature: Signature;
+  /** Said under the signature select: "Rule: Signature on orders of $250.00 or more". */
+  signatureNote: string | null;
+  /** "cheapest", "fastest" or a service's name, when a rule or a saved choice asks for one. */
+  service: string | null;
+  serviceFrom: "rule" | "saved" | null;
+  /** Every rule that did something for this order. */
+  rules: string[];
+  /** What a person saved for the signature and the service; null where they left it to the plan. */
+  savedSignature: Signature | null;
+  savedService: string | null;
+};
 
 /** One box on the bench: which saved box (or none), its size and what it weighs packed. */
 type Packed = {
@@ -201,10 +234,10 @@ export function LabelDesk({
   shipTo,
   country,
   boxes,
-  startBoxId = null,
+  start,
+  resets,
   contentsTenthOz,
   paid,
-  rule,
   shop,
   sources,
   testSources,
@@ -225,8 +258,17 @@ export function LabelDesk({
   country: string;
   /** The usual box first. */
   boxes: DeskBox[];
-  /** The box someone picked for this order before, when it's still on the list: the order starts in it. */
-  startBoxId?: string | null;
+  /**
+   * What the order opens with: what a person saved for it, else a rule's box,
+   * the packing remembered for these items, or the usual box.
+   */
+  start: DeskStart;
+  /**
+   * Where "Reset" goes back to. `plan`: the plan without what a person saved
+   * for this order. `usual`: the usual box, offered when memory decided.
+   * Left out for several orders in one parcel, where nothing is saved.
+   */
+  resets?: { plan?: DeskStart; usual?: DeskStart };
   /** What the shop says the items weigh, in tenths of an ounce. */
   contentsTenthOz: number | null;
   /** What the shopper paid for shipping and the option they picked. */
@@ -237,8 +279,6 @@ export function LabelDesk({
     amount: string | null;
     method: string | null;
   };
-  /** The workspace's signature rule, when this order is worth enough for it: "signature on orders of $250.00 or more". */
-  rule: string | null;
   shop: { offered: boolean; markSent: boolean; notify: boolean };
   /** The connected places to buy postage: every one is asked for its prices. */
   sources: LabelSourceKey[];
@@ -279,24 +319,60 @@ export function LabelDesk({
   const [to, setTo] = useState(shipTo);
   const [checked, setChecked] = useState<Checked>({ state: "idle" });
   const [residential, setResidential] = useState(true);
-  const [signature, setSignature] = useState<Signature>(rule ? "signature" : "none");
+  const [signature, setSignature] = useState<Signature>(start.signature);
   const sizeOf = (box: DeskBox | undefined) => ({
     length: box?.length ?? "",
     width: box?.width ?? "",
     height: box?.height ?? "",
   });
-  // The order starts in one box: the one picked for it before, else the usual one, at the weight the shop gave.
-  const startBox = boxes.find((box) => box.id === startBoxId) ?? boxes[0];
-  const [packed, setPacked] = useState<Packed[]>(() => [
-    {
-      key: 0,
-      boxId: startBox?.id ?? CUSTOM,
-      size: sizeOf(startBox),
-      ...startWeight(startBox),
-      weightTyped: false,
-      alloc: fullAlloc(lines),
-    },
-  ]);
+  // The order starts as its plan has it: the boxes a person saved, a rule's box, the packing
+  // remembered for these items, or the usual box at the weight the shop gave.
+  const laidOut = (from: DeskStart): Packed[] =>
+    from.boxes.length > 0
+      ? from.boxes.map((box, index) => ({
+          key: index,
+          boxId: boxes.some((saved) => saved.id === box.boxId) ? box.boxId : CUSTOM,
+          size: { length: box.length, width: box.width, height: box.height },
+          ...(box.weighed && box.tenthOz !== null
+            ? { weight: tenthOzToPounds(box.tenthOz), exact: null }
+            : worked(box.tenthOz)),
+          weightTyped: box.weighed && box.tenthOz !== null,
+          alloc: { ...box.alloc },
+        }))
+      : [
+          {
+            key: 0,
+            boxId: CUSTOM,
+            size: sizeOf(undefined),
+            ...startWeight(undefined),
+            weightTyped: false,
+            alloc: fullAlloc(lines),
+          },
+        ];
+  const [packed, setPacked] = useState<Packed[]>(() => laidOut(start));
+  /** The service a rule or a saved choice asks for; a person picking another replaces it. */
+  const [policy, setPolicy] = useState<{ service: string | null; from: DeskStart["serviceFrom"] }>({
+    service: start.service,
+    from: start.serviceFrom,
+  });
+  const policyNow = useRef(policy.service);
+  /** Whose set-up is on the bench: the plan's, or one a person saved for this order. */
+  const [mode, setMode] = useState<"plan" | "saved">(
+    start.source === "saved" || start.source === "person" ? "saved" : "plan",
+  );
+  /** What a person has decided about the signature and the service here; null leaves it to the plan. */
+  const chose = useRef<{ signature: Signature | null; service: string | null }>({
+    signature: start.savedSignature,
+    service: start.savedService,
+  });
+  /** Counts a person's own changes to boxes, weights, split, signature or service: each is saved. */
+  const [edits, setEdits] = useState(0);
+  const canSave = !off && !withIds?.length;
+  const touched = () => {
+    if (!canSave) return;
+    setMode("saved");
+    setEdits((count) => count + 1);
+  };
   // With a weight for every item, each box's weight follows what's put in it.
   const known = weightsKnown(lines);
   const reweigh = (list: Packed[]): Packed[] =>
@@ -313,7 +389,7 @@ export function LabelDesk({
               },
         )
       : list;
-  const nextKey = useRef(1);
+  const nextKey = useRef(Math.max(1, start.boxes.length));
   const [rates, setRates] = useState<SourceRateChoice[] | null>(null);
   /** A word on each connected account that couldn't be asked this time. */
   const [notes, setNotes] = useState<string[]>([]);
@@ -353,7 +429,7 @@ export function LabelDesk({
   const together = useMemo(() => (withKey ? withKey.split(",") : undefined), [withKey]);
   type Ask = { to: ShipToEdit; residential: boolean; signature: Signature };
   const quote = useCallback(
-    (ask: Ask, parcels: (Pick<Packed, "boxId" | "size"> & { tenths: number | null })[]) =>
+    (ask: Ask, parcels: (Pick<Packed, "boxId" | "size" | "alloc"> & { tenths: number | null })[]) =>
       startQuote(async () => {
         const mine = ++asking.current;
         setError(null);
@@ -365,6 +441,8 @@ export function LabelDesk({
               ...parcel.size,
               weightLb: weight.lb,
               weightOz: weight.oz,
+              // Not for the carriers: only so the packing can be remembered afterwards.
+              alloc: parcel.alloc,
             };
           }),
           shipTo: ask.to,
@@ -387,14 +465,22 @@ export function LabelDesk({
         setAsked(input);
         setNotes(result.notes ?? []);
         setRates(result.rates);
-        setChosen(result.rates[0]?.id ?? "");
+        // The service a rule or a saved choice asks for when it's offered, else the cheapest.
+        setChosen(
+          pickService(result.rates, policyNow.current)?.rate.id ?? result.rates[0]?.id ?? "",
+        );
       }),
     [slug, orderId, together],
   );
   const quoteNow = () =>
     quote(
       { to, residential, signature },
-      packed.map((box) => ({ boxId: box.boxId, size: box.size, tenths: tenthsOf(box) })),
+      packed.map((box) => ({
+        boxId: box.boxId,
+        size: box.size,
+        alloc: box.alloc,
+        tenths: tenthsOf(box),
+      })),
     );
 
   const check = useCallback(
@@ -424,24 +510,31 @@ export function LabelDesk({
     [slug, orderId],
   );
 
-  // On opening: check the address, then ask for prices if the box and weight are known,
-  // so the next order is ready to buy by the time it's on screen. Only ever for the one
-  // box an order starts in; more boxes are asked for by hand.
+  // On opening: check the address, then ask for prices if every box and its weight are
+  // known, so the next order is ready to buy by the time it's on screen.
   useEffect(() => {
     if (opened.current || off) return;
     opened.current = true;
     void (async () => {
       const found = await check(shipTo);
-      const first = startBox;
-      const starting = startTenths(first);
-      if (setup || !first || !starting) return;
+      const opening = laidOut(start).map((box) => ({
+        boxId: box.boxId,
+        size: box.size,
+        alloc: box.alloc,
+        tenths: tenthsOf(box),
+      }));
+      const ready = opening.every(
+        (box) =>
+          box.tenths !== null &&
+          box.tenths > 0 &&
+          box.size.length &&
+          box.size.width &&
+          box.size.height,
+      );
+      if (setup || start.boxes.length === 0 || !ready) return;
       quote(
-        {
-          to: shipTo,
-          residential: found?.residential ?? true,
-          signature: rule ? "signature" : "none",
-        },
-        [{ boxId: first.id, size: sizeOf(first), tenths: starting }],
+        { to: shipTo, residential: found?.residential ?? true, signature: start.signature },
+        opening,
       );
     })();
     // Runs once for the order on screen; the page remounts this for the next one.
@@ -473,6 +566,7 @@ export function LabelDesk({
   const change = (key: number, edit: (box: Packed) => Packed) => {
     setPacked((before) => reweigh(before.map((box) => (box.key === key ? edit(box) : box))));
     stale();
+    touched();
   };
   const repack = (edit: (allocs: Alloc[]) => Alloc[]) => {
     setPacked((before) => {
@@ -487,16 +581,10 @@ export function LabelDesk({
       );
     });
     stale();
+    touched();
   };
   const pickBox = (key: number, id: string) => {
     const saved = boxes.find((box) => box.id === id);
-    // One order in one box: the choice is remembered for the list and for next time
-    // (the usual box is simply "no choice"). Nothing waits on it.
-    if (saved && !together && packed.length === 1) {
-      void rememberOrderBox(slug, orderId, saved.id === boxes[0]?.id ? null : saved.id).catch(
-        () => undefined,
-      );
-    }
     change(key, (box) => ({
       ...box,
       boxId: id,
@@ -530,6 +618,7 @@ export function LabelDesk({
       ]);
     });
     stale();
+    touched();
   };
   const removeBox = (key: number) => {
     setPacked((before) => {
@@ -550,9 +639,81 @@ export function LabelDesk({
       return reweigh(kept);
     });
     stale();
+    touched();
+  };
+
+  // What a person set up here is kept with the order as they go, so it can be bought later
+  // from the packing computer or in a bulk run. Quiet: nothing on the page waits for it.
+  const saveLatest = useRef<() => void>(() => {});
+  useEffect(() => {
+    saveLatest.current = () => {
+      const kept = packed.map((box) => {
+        const length = parseInches(box.size.length);
+        const width = parseInches(box.size.width);
+        const height = parseInches(box.size.height);
+        const tenths = box.weightTyped ? tenthsOf(box) : null;
+        return length && width && height
+          ? {
+              box_id: box.boxId || null,
+              length,
+              width,
+              height,
+              weight_tenth_oz: tenths !== null && tenths > 0 && tenths <= 24_000 ? tenths : null,
+              items: box.alloc,
+            }
+          : null;
+      });
+      // A box still being typed isn't a set-up yet; the next change saves it.
+      if (kept.some((box) => box === null)) return;
+      void saveOrderChoice(slug, orderId, {
+        v: 1,
+        boxes: kept,
+        signature: chose.current.signature,
+        service: chose.current.service,
+      }).catch(() => undefined);
+    };
+  });
+  useEffect(() => {
+    if (edits === 0) return;
+    const timer = setTimeout(() => saveLatest.current(), 700);
+    return () => clearTimeout(timer);
+  }, [edits]);
+
+  /** Back to a plan: the order's own (forgetting what was saved), or the usual box. */
+  const resetTo = (target: DeskStart, forget: boolean) => {
+    setPacked(laidOut(target));
+    nextKey.current = Math.max(1, target.boxes.length);
+    setSignature(target.signature);
+    policyNow.current = target.service;
+    setPolicy({ service: target.service, from: target.serviceFrom });
+    stale();
+    if (forget) {
+      chose.current = { signature: null, service: null };
+      setMode("plan");
+      setEdits(0);
+      void saveOrderChoice(slug, orderId, null).catch(() => undefined);
+    } else {
+      // Choosing the usual box over what was remembered is a choice, and is kept.
+      touched();
+    }
+  };
+  const pickRate = (item: SourceRateChoice) => {
+    setChosen(item.id);
+    if (!canSave) return;
+    const name = listService(item.carrier, item.name);
+    chose.current = { ...chose.current, service: name };
+    policyNow.current = name;
+    setPolicy({ service: name, from: "saved" });
+    touched();
   };
 
   const rate = rates?.find((item) => item.id === chosen) ?? null;
+  // The service a rule asked for, when a carrier offers it: marked in the list.
+  const ruled =
+    rates && start.serviceFrom === "rule" && policy.from === "rule"
+      ? pickService(rates, start.service)
+      : null;
+  const ruleRateId = ruled?.matched ? ruled.rate.id : null;
   const busy = quoting || buying;
 
   // Prices follow the page: once a change settles (the weight, the box, the signature, or an
@@ -843,11 +1004,15 @@ export function LabelDesk({
         </p>
       )}
 
-      {!off && rule && signature !== "none" && (
+      {!off && start.rules.length > 0 && (
         <p className="bg-note border-note-border flex items-center gap-2 rounded-lg border px-4 py-2.5 text-sm">
           <Sparkles className="text-ochre-text size-4 shrink-0" aria-hidden />
           <span>
-            Rules applied: <span className="font-semibold">{sentence(rule)}</span>
+            Rules applied:{" "}
+            <span className="font-semibold">{start.rules.map(sentence).join(" · ")}</span>
+            {mode === "saved" && (
+              <span className="text-muted-foreground"> · your own choices here come first</span>
+            )}
           </span>
         </p>
       )}
@@ -919,8 +1084,11 @@ export function LabelDesk({
                   value={signature}
                   disabled={frozen}
                   onChange={(event) => {
-                    setSignature(event.target.value as Signature);
+                    const next = event.target.value as Signature;
+                    setSignature(next);
+                    chose.current = { ...chose.current, signature: next };
                     stale();
+                    touched();
                   }}
                 >
                   {(Object.keys(SIGNATURE_WORDS) as Signature[]).map((key) => (
@@ -929,7 +1097,11 @@ export function LabelDesk({
                     </option>
                   ))}
                 </Select>
-                {rule && <span className="text-muted-foreground text-xs">Rule: {rule}</span>}
+                {start.signatureNote && (
+                  <span className="text-muted-foreground max-w-64 text-xs">
+                    {start.signatureNote}
+                  </span>
+                )}
               </div>
             </div>
           )}
@@ -944,6 +1116,46 @@ export function LabelDesk({
               {itemCount === 1 ? "item" : "items"}
             </CardTitle>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+              {canSave && showBoxes && mode === "saved" ? (
+                <span className="text-muted-foreground text-xs">
+                  Your saved choices
+                  {resets?.plan && (
+                    <>
+                      {" · "}
+                      <button
+                        type="button"
+                        disabled={frozen}
+                        title="Forget what was set up for this order and go back to its plan"
+                        className="text-ochre-text font-semibold hover:underline disabled:opacity-50"
+                        onClick={() => resetTo(resets.plan!, true)}
+                      >
+                        Reset
+                      </button>
+                    </>
+                  )}
+                </span>
+              ) : canSave && showBoxes && start.source.startsWith("learned") ? (
+                <span className="text-muted-foreground text-xs">
+                  {start.source === "learned"
+                    ? "Packed the way you packed these items last time"
+                    : "In the box you used for these products before"}
+                  {resets?.usual && (
+                    <>
+                      {" · "}
+                      <button
+                        type="button"
+                        disabled={frozen}
+                        className="text-ochre-text font-semibold hover:underline disabled:opacity-50"
+                        onClick={() => resetTo(resets.usual!, false)}
+                      >
+                        Use the usual box
+                      </button>
+                    </>
+                  )}
+                </span>
+              ) : showBoxes && !off && start.source === "rule" ? (
+                <span className="text-muted-foreground text-xs">Box chosen by a rule</span>
+              ) : null}
               {total !== null && total > 0 && (
                 <span className="text-muted-foreground text-xs">
                   {several ? `${packed.length} boxes · ` : ""}Total{" "}
@@ -1256,7 +1468,7 @@ export function LabelDesk({
                             name="label-rate"
                             value={item.id}
                             checked={on}
-                            onChange={() => setChosen(item.id)}
+                            onChange={() => pickRate(item)}
                             className="accent-ochre size-[18px] shrink-0"
                           />
                           <span
@@ -1280,6 +1492,7 @@ export function LabelDesk({
                                 ? `Est. ${deliveryDays(item.days)}`
                                 : "Transit time varies"}
                               {index === 0 && <Badge>Cheapest</Badge>}
+                              {item.id === ruleRateId && <Badge tone="open">By rule</Badge>}
                               {sameService(paid.method, item.carrier, item.name) && (
                                 <Badge>Customer&apos;s choice</Badge>
                               )}

@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Printer, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { updatedAgo } from "@/lib/shipping/list";
 import { usePrintSettings } from "@/lib/shipping/zebra/use-print-settings";
+import { applyRuleHolds } from "./plan-actions";
 
 /**
  * How this computer prints, as a quiet chip that leads to where it's set.
@@ -58,5 +59,30 @@ export function ListFreshness({ readAt }: { readAt: number }) {
         Refresh
       </Button>
     </>
+  );
+}
+
+/**
+ * A rule says some of these orders should be on hold. The list already shows
+ * them held; this writes it down once, so the order's own page and everyone
+ * else's list agree. The server works out which orders again for itself.
+ */
+export function RuleHolds({ slug, count }: { slug: string; count: number }) {
+  const router = useRouter();
+  const asked = useRef(false);
+  useEffect(() => {
+    if (asked.current) return;
+    asked.current = true;
+    void applyRuleHolds(slug)
+      .then((result) => {
+        if (result.held > 0) router.refresh();
+      })
+      .catch(() => undefined);
+  }, [slug, router]);
+  return (
+    <p role="status" className="text-muted-foreground text-xs">
+      {count === 1 ? "A rule put 1 order on hold." : `Your rules put ${count} orders on hold.`} See
+      them under On hold.
+    </p>
   );
 }
