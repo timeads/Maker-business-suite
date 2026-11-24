@@ -1,9 +1,18 @@
 import Link from "next/link";
-import { Check, ChevronsUpDown, Plus } from "lucide-react";
+import { Check, ChevronsUpDown, Plus, Wrench } from "lucide-react";
 import type { Tenant } from "@/lib/tenants";
 
 /** The business's name set as the wordmark, doubling as the workspace menu. */
-export function WorkspaceSwitcher({ current, tenants }: { current: Tenant; tenants: Tenant[] }) {
+export function WorkspaceSwitcher({
+  current,
+  tenants,
+  platformAdmin = false,
+}: {
+  current: Tenant;
+  tenants: Tenant[];
+  /** Only the people who run the suite see the way into the admin area. */
+  platformAdmin?: boolean;
+}) {
   return (
     <details className="group relative">
       <summary className="text-on-teal hover:bg-teal-2 focus-visible:ring-ochre flex cursor-pointer list-none items-center justify-between gap-2 rounded-sm px-2.5 py-2 outline-none focus-visible:ring-2 [&::-webkit-details-marker]:hidden">
@@ -35,6 +44,15 @@ export function WorkspaceSwitcher({ current, tenants }: { current: Tenant; tenan
             <Plus className="size-4" aria-hidden />
             New workspace
           </Link>
+          {platformAdmin && (
+            <Link
+              href="/admin"
+              className="text-muted-foreground hover:bg-hover hover:text-foreground flex items-center gap-2 rounded-sm px-2 py-1.5 text-sm"
+            >
+              <Wrench className="size-4" aria-hidden />
+              Admin
+            </Link>
+          )}
         </div>
       </div>
     </details>

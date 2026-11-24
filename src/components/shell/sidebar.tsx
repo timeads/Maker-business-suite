@@ -55,7 +55,10 @@ export function Sidebar({
   userEmail,
   entitlements,
   attention = {},
+  platformAdmin = false,
 }: {
+  /** Shows the "Admin" link; true only for the people who run the suite. */
+  platformAdmin?: boolean;
   /** How many things are waiting in each tool. */
   attention?: Attention;
   tenant: Tenant;
@@ -70,7 +73,12 @@ export function Sidebar({
   return (
     <>
       <aside className="rail-texture sticky top-0 hidden h-dvh w-[228px] shrink-0 flex-col p-3 md:flex print:hidden">
-        <WorkspaceSwitcher key={tenant.id} current={tenant} tenants={tenants} />
+        <WorkspaceSwitcher
+          key={tenant.id}
+          current={tenant}
+          tenants={tenants}
+          platformAdmin={platformAdmin}
+        />
 
         <nav aria-label="Workspace" className="mt-3 flex flex-col gap-0.5 overflow-y-auto">
           <NavLink href={base} exact>
@@ -180,6 +188,7 @@ export function Sidebar({
               { href: `${base}/settings`, label: "Settings" },
               { href: "/help", label: "Help" },
               { href: "/app", label: "Switch workspace" },
+              ...(platformAdmin ? [{ href: "/admin", label: "Admin" }] : []),
             ].map((item) => (
               <a
                 key={item.href}

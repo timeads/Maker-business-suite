@@ -332,6 +332,20 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   `lib/social/product-photos.ts`); a person copies those into Assets from
   the Assets page, once per product (`source_ref`). Nothing a person types
   is ever fetched. Not built yet: live link checking.
+- Platform admin: `/admin` is for the people who run the suite, apart from
+  any workspace role (docs/admin.md). Who is one is a hand-kept list
+  (`private.platform_admins`; no screen adds to it). The pages call
+  `admin_*` database functions with the admin's own session, never the
+  service role; each checks `private.is_platform_admin()` itself, and the
+  pages answer "not found" to anyone else. Those functions return how a
+  workspace is running (plan, connections, jobs, counts) and never what its
+  customers wrote or bought; `tests/db/platform-admin.test.ts` pins the
+  field list, so widen it on purpose. The only writes are an internal plan
+  and "sync again", each leaving a `private.admin_audit` row. An internal
+  plan (`plan_grants`, no client access) sits in front of Stripe while it
+  runs: `resolveEntitlements(subscription, grant)` is still the one place
+  that decides, members read their grant through `workspace_plan_grant()`,
+  and nothing ever writes `subscriptions` for it.
 - Schema changes are new files in `supabase/migrations`; never edit an
   applied migration.
 - Look: the "Tuft Life" house style (see the tuft-ui repo's DESIGN.md). Teal

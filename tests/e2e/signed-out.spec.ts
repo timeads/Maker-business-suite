@@ -32,6 +32,8 @@ for (const path of [
   "/w/some-workspace/assistant",
   "/w/some-workspace/messages",
   "/invite/abc",
+  "/admin",
+  "/admin/3f0e8a52-6f0b-4c53-9d0e-0a8b1a9d2c11",
 ]) {
   test(`signed-out visitors to ${path} are sent to sign in, then back`, async ({ page }) => {
     await page.goto(path);

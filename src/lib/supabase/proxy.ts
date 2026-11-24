@@ -2,7 +2,10 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { env } from "@/lib/env";
 
-const PROTECTED_PREFIXES = ["/app", "/w/", "/onboarding", "/invite/"];
+const PROTECTED_PREFIXES = ["/app", "/w/", "/onboarding", "/invite/", "/admin/"];
+// Matched whole, so a made-up address that merely starts the same way isn't
+// treated as part of the area.
+const PROTECTED_PATHS = ["/admin"];
 
 /** Refreshes the auth session cookie and keeps signed-out visitors out of the app. */
 export async function updateSession(request: NextRequest) {
@@ -31,7 +34,9 @@ export async function updateSession(request: NextRequest) {
   const signedIn = Boolean(data?.claims);
 
   const { pathname, search } = request.nextUrl;
-  const isProtected = PROTECTED_PREFIXES.some((p) => pathname === p || pathname.startsWith(p));
+  const isProtected =
+    PROTECTED_PATHS.includes(pathname) ||
+    PROTECTED_PREFIXES.some((p) => pathname === p || pathname.startsWith(p));
   if (!signedIn && isProtected) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";

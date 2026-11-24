@@ -1,5 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { resolveEntitlements } from "./entitlements";
+import {
+  GRANT_COLUMNS,
+  SUMMARY_COLUMNS,
+  resolveEntitlements,
+  type PlanGrant,
+} from "./entitlements";
 import type { ModuleKey } from "./modules";
 import { getAdminClient, withTenant } from "./supabase/admin";
 
@@ -17,13 +22,14 @@ export async function moduleOpen(
   return withTenant(
     tenantId,
     async (scope) => {
-      const { data } = await scope
-        .select(
-          "subscriptions",
-          "tenant_id, plan, status, trial_end, current_period_end, cancel_at_period_end, ended_at, purge_after, selected_modules",
-        )
-        .maybeSingle();
-      const entitlements = resolveEntitlements(data as never);
+      const [{ data }, grant] = await Promise.all([
+        scope.select("subscriptions", SUMMARY_COLUMNS).maybeSingle(),
+        scope.select("plan_grants", GRANT_COLUMNS).maybeSingle(),
+      ]);
+      const entitlements = resolveEntitlements(
+        data as never,
+        grant.error ? null : (grant.data as PlanGrant | null),
+      );
       return entitlements.canWrite && entitlements.can(`module.${module}`);
     },
     admin,

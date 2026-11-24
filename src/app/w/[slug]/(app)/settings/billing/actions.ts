@@ -38,6 +38,11 @@ export async function startCheckout(
   if (!billingConfigured()) return { error: NOT_READY };
   const planKey = formData.get("plan");
   if (!isPlanKey(planKey)) return { error: "Pick a plan to continue." };
+  if ((await getEntitlements(ctx.tenant.id)).internal) {
+    return {
+      error: "This workspace is on an internal plan, set up by us. There's nothing to pay.",
+    };
+  }
 
   let url: string | null = null;
   try {

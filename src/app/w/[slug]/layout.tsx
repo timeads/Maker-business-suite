@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { BillingBanner } from "@/components/shell/billing-banner";
 import { Sidebar } from "@/components/shell/sidebar";
+import { isPlatformAdmin } from "@/lib/admin/platform";
 import { loadAttention } from "@/lib/attention";
 import { requireUser } from "@/lib/auth";
 import { daysFromNow } from "@/lib/bookings/slots";
@@ -28,8 +29,9 @@ export default async function WorkspaceLayout({
   // Not a member looks exactly like "doesn't exist".
   if (!ctx) notFound();
   const supabase = await createClient();
-  const [tenants, entitlements, { data: brandRows }] = await Promise.all([
+  const [tenants, platformAdmin, entitlements, { data: brandRows }] = await Promise.all([
     listMyTenants(),
+    isPlatformAdmin(),
     getEntitlements(ctx.tenant.id),
     supabase
       .from("configs")
@@ -64,6 +66,7 @@ export default async function WorkspaceLayout({
         userEmail={user.email}
         entitlements={entitlements}
         attention={attention}
+        platformAdmin={platformAdmin}
       />
       <div className="flex min-w-0 flex-1 flex-col">
         <BillingBanner

@@ -30,6 +30,11 @@ export type Entitlements = {
   purgeAfter: string | null;
   /** The optional tools this workspace picked, on plans that include a choice. */
   chosenModules: ModuleKey[];
+  /**
+   * Set while the workspace is on a plan we gave it ourselves, outside
+   * Stripe. `endsAt` is null when it has no end date.
+   */
+  internal: { endsAt: string | null } | null;
   can(feature: Feature): boolean;
   limit(name: Limit): number;
 };
@@ -45,13 +50,41 @@ const ACCESS_BY_STATUS: Record<SubscriptionStatus, Access> = {
   incomplete_expired: "read_only",
 };
 
-export function resolveEntitlements(subscription: SubscriptionSummary | null): Entitlements {
-  const access: Access = subscription ? ACCESS_BY_STATUS[subscription.status] : "none";
-  const usable = access === "trialing" || access === "active" || access === "past_due";
-  const plan = subscription && usable ? PLANS[subscription.plan as PlanKey] : null;
-  const chosen = new Set(
-    plan ? (subscription?.selected_modules ?? []).slice(0, plan.moduleChoices) : [],
-  );
+/** A plan given to a workspace without Stripe (`plan_grants`). */
+export type PlanGrant = {
+  plan: PlanKey;
+  ends_at: string | null;
+  selected_modules: string[];
+};
+
+function grantRunning(grant: PlanGrant | null | undefined, now: Date): grant is PlanGrant {
+  if (!grant || !(grant.plan in PLANS)) return false;
+  return grant.ends_at === null || new Date(grant.ends_at).getTime() > now.getTime();
+}
+
+/**
+ * Stripe's subscription decides, unless the workspace has a running internal
+ * grant: then it behaves as the granted plan, writable, whatever Stripe says.
+ * When the grant ends the subscription's answer applies again.
+ */
+export function resolveEntitlements(
+  subscription: SubscriptionSummary | null,
+  grant: PlanGrant | null = null,
+  now: Date = new Date(),
+): Entitlements {
+  const granted = grantRunning(grant, now) ? grant : null;
+  const stripeAccess: Access = subscription ? ACCESS_BY_STATUS[subscription.status] : "none";
+  const access: Access = granted ? "active" : stripeAccess;
+  // Dates and cancellation come from Stripe, so they only count when Stripe decides.
+  const usable =
+    !granted && (access === "trialing" || access === "active" || access === "past_due");
+  const plan = granted
+    ? PLANS[granted.plan]
+    : subscription && usable
+      ? PLANS[subscription.plan as PlanKey]
+      : null;
+  const picked = granted ? granted.selected_modules : (subscription?.selected_modules ?? []);
+  const chosen = new Set(plan ? picked.slice(0, plan.moduleChoices) : []);
 
   return {
     access,
@@ -62,6 +95,7 @@ export function resolveEntitlements(subscription: SubscriptionSummary | null): E
     cancelsAtPeriodEnd: Boolean(usable && subscription?.cancel_at_period_end),
     purgeAfter: access === "read_only" ? (subscription?.purge_after ?? null) : null,
     chosenModules: [...chosen] as ModuleKey[],
+    internal: granted ? { endsAt: granted.ends_at } : null,
     can(feature) {
       if (!plan) return false;
       if (feature === "mcp") return plan.mcp;
@@ -75,18 +109,20 @@ export function resolveEntitlements(subscription: SubscriptionSummary | null): E
   };
 }
 
-const SUMMARY_COLUMNS =
+export const SUMMARY_COLUMNS =
   "tenant_id, plan, status, trial_end, current_period_end, cancel_at_period_end, ended_at, purge_after, selected_modules";
+export const GRANT_COLUMNS = "plan, ends_at, selected_modules";
 
 /** Entitlements for a workspace the signed-in user belongs to. */
 export const getEntitlements = cache(async (tenantId: string): Promise<Entitlements> => {
   const { createClient } = await import("@/lib/supabase/server");
   const supabase = await createClient();
-  const { data, error } = await supabase
-    .from("subscriptions")
-    .select(SUMMARY_COLUMNS)
-    .eq("tenant_id", tenantId)
-    .maybeSingle();
+  const [{ data, error }, grant] = await Promise.all([
+    supabase.from("subscriptions").select(SUMMARY_COLUMNS).eq("tenant_id", tenantId).maybeSingle(),
+    supabase.rpc("workspace_plan_grant", { p_tenant_id: tenantId }),
+  ]);
   if (error) throw new Error(`Could not load the workspace's plan: ${error.message}`);
-  return resolveEntitlements(data as SubscriptionSummary | null);
+  // If the grant can't be read, Stripe's answer stands: that is the safe side.
+  const grantRow = grant.error ? null : ((grant.data as PlanGrant[] | null)?.[0] ?? null);
+  return resolveEntitlements(data as SubscriptionSummary | null, grantRow);
 });
