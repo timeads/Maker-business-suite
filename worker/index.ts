@@ -9,6 +9,7 @@
  *  - publish scheduled social posts
  *  - ask UPS where incoming stock orders are, a few parcels at a time
  *  - look at Michaels for workspaces that sell there (reads only: nothing is sent)
+ *  - read supplier emails into supplier balances (Gmail looks, and bills forwarded in)
  *  - run sync jobs for connected accounts (first sync, webhooks, scheduled pulls)
  *  - every few minutes, queue pulls for providers that don't push changes
  *  - once an hour, delete workspaces whose retention window has passed
@@ -52,6 +53,13 @@ import { SourceError } from "../src/lib/shipping/sources/types";
 import type { UpsTracking } from "../src/lib/shipping/sources/ups";
 import { publishPost } from "../src/lib/social/publish";
 import { publishDuePosts } from "../src/lib/social/worker";
+import {
+  billsTokenOf,
+  processForwardedBill,
+  type ForwardedPayload,
+} from "../src/lib/stock/mail/forward";
+import { runClaimedRead, type ClaimedRead } from "../src/lib/stock/mail/gmail-run";
+import { readMail } from "../src/lib/stock/mail/reader";
 import { carrierResult } from "../src/lib/stock/tracking";
 import { getAdminClient, withTenant } from "../src/lib/supabase/admin";
 
@@ -196,7 +204,10 @@ async function drainSyncJobs(): Promise<number> {
   return jobs.length;
 }
 
-/** Files queued inbound emails into help desk tickets. */
+/**
+ * Files queued inbound emails: into help desk tickets, or, for mail sent to
+ * a workspace's bills address, through the bills reader (never a ticket).
+ */
 async function drainInboundEmails(): Promise<number> {
   const domain = inboundDomain();
   if (!domain) return 0;
@@ -264,11 +275,34 @@ async function drainInboundEmails(): Promise<number> {
   for (const email of emails) {
     let failure: string | null = null;
     try {
-      const result = await processInboundEmail(email.payload, domain, deps);
-      console.log(`inbound email ${email.id}: ${result}`);
+      const billsToken = billsTokenOf(email.payload as ForwardedPayload, domain);
+      if (billsToken) {
+        // The token is a secret: it is never logged.
+        const result = await processForwardedBill(email.payload as ForwardedPayload, billsToken, {
+          admin,
+          read: (message, hint) => readMail(message, hint),
+          now: () => new Date(),
+          async tenantFor(token) {
+            const { data: tenantId, error: lookupError } = await admin.rpc("receive_bills_mail", {
+              p_token: token,
+            });
+            if (lookupError) throw new Error("could not look up a bills address");
+            return (tenantId as string | null) ?? null;
+          },
+        });
+        console.log(`inbound email ${email.id}: bills ${result}`);
+      } else {
+        const result = await processInboundEmail(email.payload, domain, deps);
+        console.log(`inbound email ${email.id}: ${result}`);
+      }
     } catch (err) {
       failure = err instanceof Error ? err.message : String(err);
       console.error(`inbound email ${email.id} failed (attempt ${email.attempts}): ${failure}`);
+      // A bill is never kept waiting in the queue with its text and files: after
+      // the last try it is let go, and the person forwards it again.
+      if (email.attempts >= 8 && billsTokenOf(email.payload as ForwardedPayload, domain)) {
+        failure = null;
+      }
     }
     const { error: completeError } = await admin.rpc("complete_inbound_email", {
       p_id: email.id,
@@ -703,6 +737,38 @@ async function drainMichaelsLooks(): Promise<number> {
   return looks.length;
 }
 
+/**
+ * Reads supplier emails for workspaces that switched it on and gave Gmail
+ * the permission to read: once a day each at the hour they chose, or when a
+ * manager presses "Read now". The database decides who is due and hands each
+ * look to one worker; a look that never finishes is marked failed, not run
+ * again. Only mail matching the workspace's own sources is looked at.
+ */
+async function drainEmailReads(): Promise<number> {
+  const admin = getAdminClient();
+  const { data, error } = await admin.rpc("claim_stock_email_reads", { p_limit: 2 });
+  if (error) throw new Error(`Could not claim email reads: ${error.message}`);
+  const reads = (data ?? []) as ClaimedRead[];
+  if (reads.length === 0) return 0;
+  const tokenDeps: TokenDeps = {
+    store: vaultTokenStore(admin),
+    adapter: getAdapter,
+    now: Date.now,
+    wait: sleep,
+    onNeedsReconnect: notifyNeedsReconnect,
+  };
+  for (const read of reads) {
+    const outcome = await runClaimedRead(read, {
+      admin,
+      tokenDeps,
+      read: (message, hint) => readMail(message, hint),
+      now: () => new Date(),
+    });
+    console.log(`email read ${read.id} (${read.source}): ${outcome}`);
+  }
+  return reads.length;
+}
+
 /** Sends scheduled social posts whose time has come. */
 async function drainSocialPosts(): Promise<number> {
   const admin = getAdminClient();
@@ -798,7 +864,8 @@ async function main() {
       (await attempt(drainShipments, 0)) +
       (await attempt(drainPickupSteps, 0)) +
       (await attempt(drainShipmentChecks, 0)) +
-      (await attempt(drainMichaelsLooks, 0));
+      (await attempt(drainMichaelsLooks, 0)) +
+      (await attempt(drainEmailReads, 0));
 
     if (Date.now() - lastSchedule > SCHEDULE_EVERY_MS) {
       lastSchedule = Date.now();

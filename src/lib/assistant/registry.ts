@@ -64,6 +64,11 @@ import {
   seasonsSchema,
   stockSettingsSchema,
 } from "../stock/config";
+import {
+  DEFAULT_EMAIL_SOURCES,
+  STOCK_EMAIL_SOURCES_KEY,
+  emailSourcesSchema,
+} from "../stock/mail/config";
 import { DEFAULT_PO_EMAIL, PO_EMAIL_KEY, poEmailSchema } from "../stock/po/email";
 
 /**
@@ -181,6 +186,16 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
       "The subject and message an order's email to a supplier starts from when it is sent from the business's own Gmail, whether a copy to the sender is ticked to begin with (cc_me), and the name suppliers see it from (from_name; empty uses the workspace's name). The subject and body may use {{po_reference}}, {{supplier_name}}, {{contact_name}}, {{month}} and {{sender_name}}. This only changes the starting words: a person still looks each email over and presses send themselves.",
     schema: poEmailSchema,
     defaultBody: () => DEFAULT_PO_EMAIL,
+  },
+  {
+    module: STOCK_MODULE,
+    key: STOCK_EMAIL_SOURCES_KEY,
+    feature: "stock",
+    name: "Supplier emails read for balances",
+    description:
+      "Which emails Stock reads to keep supplier balances up to date, once the business's Gmail has given permission to read: whether reading is on (enabled), the hour of the daily read on the workspace's clock (read_hour), and the sources. Each supplier source names a supplier (supplier_id), who the mail is from (from: an address or a domain), an optional Gmail label and subject words, what the mail is (kind: mixed, invoice, statement or payment), where the figures are (reads: both, attachments or message), words in a file's name that mean it is never read (skip_file_words) and whether everything from it is marked to check (always_check). Each bank source names the bank's sender and, per supplier, the words that show a payment notice is for them (payees: supplier_id, words, and optionally quiet_days to be told when payments stop). Only mail matching a source is ever looked at. Each source needs a short id of lowercase letters and digits.",
+    schema: emailSourcesSchema,
+    defaultBody: () => DEFAULT_EMAIL_SOURCES,
   },
   {
     module: MICHAELS_MODULE,

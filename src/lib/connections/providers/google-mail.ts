@@ -13,7 +13,9 @@ import {
  * A business's own Gmail, for one thing only: sending a purchase order to a
  * supplier when a person presses Send. The permission asked for is
  * `gmail.send`, which can send and cannot read a single message; `openid`
- * and `email` are there so we can show which mailbox is connected.
+ * and `email` are there so we can show which mailbox is connected. (A
+ * workspace can choose to add read-only access as well: see
+ * `GMAIL_READ_SCOPE`.)
  *
  * Google gives a short-lived access token and a long-lived refresh token.
  * Both live in Vault as the connection's token and are read only through
@@ -21,6 +23,16 @@ import {
  * lock. Neither is logged or returned to a browser.
  */
 export const GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send";
+/**
+ * The optional extra: read-only access to the mailbox, asked for only when a
+ * person chooses "…and read emails from the senders you list" while
+ * connecting. Without it nothing is ever read. With it, Stock looks only at
+ * mail matching the workspace's own sources (lib/stock/mail). What Google
+ * granted is recorded in the connection's `scopes`, and every read checks it.
+ */
+export const GMAIL_READ_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
+/** The connect form's choice that asks for it. */
+export const GMAIL_WITH_READING = "read";
 const SCOPES = ["openid", "email", GMAIL_SEND_SCOPE];
 const AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -58,8 +70,22 @@ export function createGoogleMailAdapter(
     key: "google_mail",
     name: "Gmail (to email orders)",
     blurb:
-      "Email purchase orders to your suppliers from your own Gmail, with the PDF attached. It can send; it can't read your mail.",
-    connectFields: [],
+      "Email purchase orders to your suppliers from your own Gmail, with the PDF attached. It can send; it can't read your mail unless you choose to let Stock read your suppliers' bills.",
+    connectFields: [
+      {
+        name: "access",
+        label: "What it may do",
+        placeholder: "",
+        help: "Reading is only for supplier balances: Stock looks at mail from the senders you list there and nothing else. You can also forward bills to your bills address instead, which needs no reading at all.",
+        options: [
+          { value: "send", label: "Send purchase orders only" },
+          {
+            value: GMAIL_WITH_READING,
+            label: "Send orders, and read emails from the suppliers I list",
+          },
+        ],
+      },
+    ],
     // Only offered where this deployment has a Google app of its own.
     optional: true,
     // Nothing is ever pulled from Gmail.
@@ -67,12 +93,15 @@ export function createGoogleMailAdapter(
     pollEveryHours: null,
     configured: googleMailConfigured,
 
-    beginConnect({ state, redirectUri }) {
+    beginConnect({ state, redirectUri, input }) {
       const url = new URL(AUTHORIZE_URL);
       url.searchParams.set("client_id", requiredEnv("GOOGLE_MAIL_CLIENT_ID"));
       url.searchParams.set("redirect_uri", redirectUri);
       url.searchParams.set("response_type", "code");
-      url.searchParams.set("scope", SCOPES.join(" "));
+      url.searchParams.set(
+        "scope",
+        (input.access === GMAIL_WITH_READING ? [...SCOPES, GMAIL_READ_SCOPE] : SCOPES).join(" "),
+      );
       // "offline" is what makes Google hand over a refresh token; "consent"
       // makes it do so every time, not only the first.
       url.searchParams.set("access_type", "offline");
@@ -126,7 +155,8 @@ export function createGoogleMailAdapter(
         // The same mailbox may serve more than one workspace, each with its own permission.
         externalAccountId: `gmail-${randomUUID()}`,
         displayName: email,
-        scopes: SCOPES,
+        // What Google really granted: reading only if it was asked for and left ticked.
+        scopes: granted.includes(GMAIL_READ_SCOPE) ? [...SCOPES, GMAIL_READ_SCOPE] : SCOPES,
         token: {
           access_token: response.access_token,
           refresh_token: response.refresh_token,
