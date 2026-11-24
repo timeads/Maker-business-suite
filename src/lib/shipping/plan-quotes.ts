@@ -5,7 +5,7 @@ import { addressChecker } from "./plan";
 import { pickService } from "./rules";
 import { labelSource } from "./sources";
 import { mergeRates } from "./sources/rates";
-import type { LabelRequest, LabelSourceKey, SourceRate } from "./sources/types";
+import type { LabelRequest, LabelSourceKey, MergedRate, SourceRate } from "./sources/types";
 import { validateUpsAddress } from "./sources/ups";
 
 /**
@@ -105,6 +105,21 @@ export async function listQuote(
   const ref = `list_${randomUUID().replace(/-/g, "")}`;
   const answers = await Promise.all(sources.map((key) => ask(tenantId, key, request, ref)));
   return bestListQuote(answers.flat(), policy);
+}
+
+/**
+ * Every connected account's prices for one parcel, merged into one list, for
+ * the rate calculator. Looking only: the caller shows words and throws the
+ * rates' ids away, and nothing is kept as a quote. Never throws.
+ */
+export async function listRates(
+  tenantId: string,
+  sources: LabelSourceKey[],
+  request: LabelRequest,
+): Promise<MergedRate[]> {
+  const ref = `calc_${randomUUID().replace(/-/g, "")}`;
+  const answers = await Promise.all(sources.map((key) => ask(tenantId, key, request, ref)));
+  return mergeRates(answers.flat());
 }
 
 export type ListAddress = {

@@ -9,8 +9,9 @@ export function ShippingTabs({ slug }: { slug: string }) {
         { href: base, name: "To ship", exact: true },
         { href: `${base}/all`, name: "All orders" },
         { href: `${base}/scan`, name: "Scan & pack" },
-        { href: `${base}/sent`, name: "Sent" },
         { href: `${base}/batches`, name: "Label batches" },
+        { href: `${base}/rates`, name: "Rate calculator" },
+        { href: `${base}/sent`, name: "Sent" },
         { href: `${base}/settings`, name: "Settings" },
       ]}
     />
