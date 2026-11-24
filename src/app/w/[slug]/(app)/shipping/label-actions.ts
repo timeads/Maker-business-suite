@@ -52,6 +52,7 @@ import {
   type SourceRate,
 } from "@/lib/shipping/sources/types";
 import { upsChecksAddress, validateUpsAddress } from "@/lib/shipping/sources/ups";
+import { filesForKeeping } from "@/lib/shipping/sources/files";
 import { getAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
@@ -676,7 +677,7 @@ async function keepLabel(
           p_label_mode: label.mode,
           p_price: label.price,
           p_parcels: parcels,
-          p_files: attempt < 2 ? label.files : [],
+          p_files: attempt < 2 ? filesForKeeping(label.files) : [],
         });
   const tries = label.source === "easypost" ? 2 : 3;
   for (let attempt = 0; attempt < tries; attempt++) {
@@ -703,7 +704,7 @@ async function keepEasyPostZpl(tenantId: string, quoteId: string, label: SourceL
     const { error } = await getAdminClient().rpc("keep_label_files", {
       p_tenant_id: tenantId,
       p_quote_id: quoteId,
-      p_files: files,
+      p_files: filesForKeeping(files),
     });
     if (error) console.error("could not keep label file", error.message);
   } catch (err) {
