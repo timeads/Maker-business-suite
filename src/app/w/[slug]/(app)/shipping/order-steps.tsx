@@ -6,7 +6,7 @@ import { useEffect } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 
 /**
- * "3 of 18", up and down to the neighbouring orders, and Close. K and J step
+ * "3 / 18", up and down to the neighbouring orders, and Close. K and J step
  * up and down and Esc closes, unless the person is typing in a field.
  */
 export function OrderSteps({
@@ -51,8 +51,11 @@ export function OrderSteps({
   const off = `${step} pointer-events-none opacity-40`;
   return (
     <nav aria-label="Orders in this list" className="flex items-center gap-2 text-sm">
-      <span className="text-muted-foreground tabular-nums">
-        {position ? `${position} of ${total}` : `${total} in ${listName}`}
+      <span
+        className="text-muted-foreground tabular-nums"
+        aria-label={position ? `Order ${position} of ${total} in ${listName}` : undefined}
+      >
+        {position ? `${position} / ${total}` : `${total} in ${listName}`}
       </span>
       {prev ? (
         <Link href={prev} className={step} aria-label="Previous order" title="Previous order (K)">

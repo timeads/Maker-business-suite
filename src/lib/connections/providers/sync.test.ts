@@ -93,6 +93,9 @@ describe("Shopify order mapping", () => {
       name: "#1001",
       customer_external_id: "77",
       net_sales: 250,
+      // The shop didn't give its discounts here, so neither figure is guessed.
+      gross_sales: null,
+      total_discounts: null,
       total_tax: 15,
       total_shipping: 10,
       total: 275,
@@ -121,6 +124,16 @@ describe("Shopify order mapping", () => {
       expect.objectContaining({ external_id: "77", email: "sam@example.com", first_name: "Sam" }),
     ]);
     expect(products).toEqual([expect.objectContaining({ external_id: "900", title: "Wool Rug" })]);
+  });
+
+  it("adds the shop's discounts back on for the products' total before them", () => {
+    const { orders } = mapShopifyOrders([
+      shopifyOrder("1002", {
+        currentSubtotalPriceSet: money("285.60"),
+        currentTotalDiscountsSet: money("50.40"),
+      }) as never,
+    ]);
+    expect(orders[0]).toMatchObject({ net_sales: 285.6, gross_sales: 336, total_discounts: 50.4 });
   });
 
   it("lists a repeat customer and product once per page", () => {
@@ -170,6 +183,7 @@ describe("Shopify sync", () => {
             note: null,
             currentTotalWeight: "1361",
             currentShippingPriceSet: money("8.50"),
+            tags: ["Returning_Customer", " "],
             ...(withDelivery
               ? {
                   fulfillmentOrders: {
@@ -205,6 +219,7 @@ describe("Shopify sync", () => {
                   unfulfilledQuantity: 1,
                   requiresShipping: true,
                   discountedUnitPriceAfterAllDiscountsSet: money("100.00"),
+                  image: { url: "https://cdn.shopify.com/s/files/1/rug-large.jpg?v=3&width=120" },
                   variant: {
                     barcode: " 0123456789012 ",
                     inventoryItem: { measurement: { weight: { unit: "POUNDS", value: 2 } } },
@@ -328,6 +343,7 @@ describe("Shopify sync", () => {
         weight_grams: 1361,
         pickup: false,
         paid: true,
+        tags: ["Returning_Customer"],
         items: [
           {
             line_id: "gid://shopify/LineItem/501",
@@ -338,6 +354,8 @@ describe("Shopify sync", () => {
             // Two pounds, kept in grams.
             grams: 907,
             price: 100,
+            // The picture of the option that was ordered, small.
+            image: "https://cdn.shopify.com/s/files/1/rug-large.jpg?v=3&width=120",
             qty: 2,
             left: 1,
           },

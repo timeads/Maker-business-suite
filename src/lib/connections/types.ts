@@ -81,6 +81,9 @@ export type OrderRow = {
   total_tax: number;
   total_shipping: number;
   total: number;
+  /** The products before discounts, and the discounts, when the shop gives them. */
+  gross_sales?: number | null;
+  total_discounts?: number | null;
   financial_status: string | null;
   fulfillment_status: string | null;
   channel: string;
@@ -141,6 +144,8 @@ export type ShippingOrderRow = {
   pickup: boolean;
   note: string | null;
   paid: boolean;
+  /** The shop's own tags on the order. */
+  tags?: string[] | null;
   items: {
     line_id: string;
     title: string;
@@ -149,6 +154,8 @@ export type ShippingOrderRow = {
     barcode: string | null;
     /** What one of them cost the shopper. */
     price: number | null;
+    /** A small picture of the option that was ordered, on the shop's image servers. */
+    image?: string | null;
     qty: number;
     left: number;
   }[];

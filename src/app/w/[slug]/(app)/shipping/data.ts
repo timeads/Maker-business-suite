@@ -47,6 +47,8 @@ export type ShippingOrder = {
     price?: number | null;
     /** One unit's weight in grams, on orders synced since the shop started sharing it. */
     grams?: number | null;
+    /** A small picture of the option that was ordered, on orders synced since it was kept. */
+    image?: string | null;
     qty: number;
     left: number;
   }[];
@@ -205,6 +207,53 @@ export type Sale = {
   total_shipping: number | string;
   total: number | string;
 };
+/**
+ * What the order page shows when the sync has it: the shop's tags on the
+ * order, and the products before discounts with the discounts themselves.
+ */
+export type OrderExtras = {
+  tags: string[];
+  gross_sales: number | null;
+  total_discounts: number | null;
+};
+
+/**
+ * Asked apart from the order itself and allowed to fail, so the page still
+ * opens for orders (or a database) from before these were kept.
+ */
+export async function loadOrderExtras(
+  supabase: SupabaseClient,
+  tenantId: string,
+  ids: string[],
+): Promise<Map<string, OrderExtras>> {
+  const found = new Map<string, OrderExtras>();
+  if (ids.length === 0) return found;
+  const { data, error } = await supabase
+    .from("shipping_orders")
+    .select("id, tags, sale:orders(gross_sales, total_discounts)")
+    .eq("tenant_id", tenantId)
+    .in("id", ids.slice(0, 20));
+  if (error || !data) return found;
+  type Figures = { gross_sales: number | string | null; total_discounts: number | string | null };
+  const amount = (value: number | string | null | undefined) =>
+    value === null || value === undefined || !Number.isFinite(Number(value)) ? null : Number(value);
+  for (const row of data as unknown as {
+    id: string;
+    tags: unknown;
+    sale: Figures | Figures[] | null;
+  }[]) {
+    const sale = (Array.isArray(row.sale) ? row.sale[0] : row.sale) ?? null;
+    found.set(row.id, {
+      tags: Array.isArray(row.tags)
+        ? row.tags.filter((tag): tag is string => typeof tag === "string" && tag.trim() !== "")
+        : [],
+      gross_sales: amount(sale?.gross_sales),
+      total_discounts: amount(sale?.total_discounts),
+    });
+  }
+  return found;
+}
+
 export type OrderWithSale = ShippingOrder & {
   sale?: Sale | Sale[] | null;
   external_id?: string;

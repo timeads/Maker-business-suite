@@ -463,9 +463,11 @@ export function ZebraSlipsButton({ slips }: { slips: SlipData[] }) {
 }
 
 /** A word under the Buy button about where the label will come out, on a computer with a Zebra. */
-export function PrintsToZebraNote() {
+export function PrintsToZebraNote({ fallback }: { fallback?: string }) {
   const [settings] = usePrintSettings();
-  if (settings.labels !== "zebra") return null;
+  if (settings.labels !== "zebra") {
+    return fallback ? <span className="text-muted-foreground text-xs">{fallback}</span> : null;
+  }
   return (
     <span className="text-muted-foreground text-xs">
       Prints on {settings.zebraName || "your Zebra"} as soon as it&apos;s bought.

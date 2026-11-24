@@ -8,8 +8,11 @@
 
 const PHOTO_HOSTS = new Set(["cdn.shopify.com"]);
 
-/** The address to fetch a product photo from, sized for the library, or null if it isn't one we fetch. */
-export function shopPhotoAddress(raw: string | null | undefined): string | null {
+/**
+ * The address of a product photo, sized for the library (or to `width`), or
+ * null if it isn't on the shop platform's own image servers.
+ */
+export function shopPhotoAddress(raw: string | null | undefined, width = 2048): string | null {
   if (!raw) return null;
   let url: URL;
   try {
@@ -20,7 +23,7 @@ export function shopPhotoAddress(raw: string | null | undefined): string | null 
   if (url.protocol !== "https:" || url.username || url.password || url.port) return null;
   if (!PHOTO_HOSTS.has(url.hostname.toLowerCase())) return null;
   // Big enough for a post, small enough to stay under the library's limit.
-  url.searchParams.set("width", "2048");
+  url.searchParams.set("width", String(width));
   return url.toString();
 }
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { Check, Plus, Printer, RefreshCw, TriangleAlert } from "lucide-react";
+import { Check, Plus, Printer, RefreshCw, Sparkles, TriangleAlert } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,12 +11,18 @@ import {
   MAX_BOXES,
   formatPrice,
   formatTenthOz,
-  lbOzToTenthOz,
   tenthOzToLbOz,
   type AddressCheck,
   type Signature,
 } from "@/lib/shipping/easypost";
 import { deliveryDays, type ShipToEdit } from "@/lib/shipping/labels";
+import {
+  carrierMark,
+  poundsToTenthOz,
+  sameService,
+  tenthOzToPounds,
+  type CarrierMarkKey,
+} from "@/lib/shipping/order-page";
 import {
   contentsTenthOz as boxContentsTenthOz,
   emptyAlloc,
@@ -73,18 +79,35 @@ type Packed = {
   key: number;
   boxId: string;
   size: { length: string; width: string; height: string };
-  weight: { lb: string; oz: string };
+  /** Pounds, as shown in the one weight box ("12.6"). */
+  weight: string;
+  /** The weight worked out from the shop's figures, to the tenth of an ounce; null once typed over. */
+  exact: number | null;
   /** The weight was typed by hand, so picking another box leaves it alone. */
   weightTyped: boolean;
   /** How many of each item are in this box. */
   alloc: Alloc;
 };
 
+/** A weight we worked out: shown rounded, kept exact so the label is quoted on the real figure. */
+const worked = (tenths: number | null): Pick<Packed, "weight" | "exact"> => ({
+  weight: tenths === null ? "" : tenthOzToPounds(tenths),
+  exact: tenths,
+});
+
+/** One box's weight in tenths of an ounce: what was typed, else what was worked out. */
+const tenthsOf = (box: Pick<Packed, "weight" | "exact" | "weightTyped">): number | null =>
+  box.weightTyped || box.exact === null ? poundsToTenthOz(box.weight) : box.exact;
+
+/** The weight as the server takes it: pounds and ounces that mean exactly the same. */
+const sentWeight = (tenths: number | null) =>
+  tenths === null ? { lb: "", oz: "" } : tenthOzToLbOz(tenths);
+
 /** What all the boxes weigh together, in tenths of an ounce; null while any isn't a number. */
 function totalTenthOz(packed: Packed[]): number | null {
   let total = 0;
   for (const box of packed) {
-    const tenths = lbOzToTenthOz(box.weight.lb, box.weight.oz);
+    const tenths = tenthsOf(box);
     if (tenths === null) return null;
     total += tenths;
   }
@@ -120,7 +143,7 @@ const addressKey = (orderId: string, address: ShipToEdit) =>
 /** The small tag saying where a label would be bought. */
 function SourceChip({ source }: { source: LabelSourceKey }) {
   return (
-    <span className="border-border text-muted-foreground rounded-full border px-2 py-0.5 text-xs font-medium whitespace-nowrap">
+    <span className="bg-sunken text-text-2 inline-flex h-[21px] items-center rounded-full px-2 text-xs font-semibold whitespace-nowrap">
       {SOURCE_CHIPS[source]}
     </span>
   );
@@ -142,16 +165,33 @@ const SIGNATURE_WORDS: Record<Signature, string> = {
   adult: "Adult signature required",
 };
 
+// Name | Company | Phone, then Address (wide) | Apt, then City (widest) | State | ZIP | Country.
 const FIELDS: { key: keyof ShipToEdit; label: string; span: string; max: number }[] = [
-  { key: "recipient", label: "Name", span: "sm:col-span-4", max: 120 },
+  { key: "recipient", label: "Name", span: "col-span-2 sm:col-span-4", max: 120 },
   { key: "company", label: "Company", span: "sm:col-span-4", max: 120 },
   { key: "phone", label: "Phone", span: "sm:col-span-4", max: 30 },
-  { key: "address1", label: "Address", span: "sm:col-span-8", max: 120 },
-  { key: "address2", label: "Apt / suite", span: "sm:col-span-4", max: 120 },
-  { key: "city", label: "City", span: "sm:col-span-5", max: 120 },
+  { key: "address1", label: "Address", span: "col-span-2 sm:col-span-8", max: 120 },
+  { key: "address2", label: "Apt / suite", span: "col-span-2 sm:col-span-4", max: 120 },
+  { key: "city", label: "City", span: "col-span-2 sm:col-span-5", max: 120 },
   { key: "region", label: "State", span: "sm:col-span-2", max: 60 },
   { key: "postal_code", label: "ZIP", span: "sm:col-span-3", max: 20 },
 ];
+
+/**
+ * The carriers' own colours for their small marks: the same on a light or a
+ * dark page, like the marks themselves. Anything else gets the plain tile.
+ */
+const MARK_TONES: Record<CarrierMarkKey, React.CSSProperties | undefined> = {
+  ups: { background: "#351c15", color: "#ffb500" },
+  usps: { background: "#333366", color: "#ffffff" },
+  fedex: { background: "#4d148c", color: "#ffffff" },
+  dhl: { background: "#ffcc00", color: "#d40511" },
+  ontrac: { background: "#0a3d7a", color: "#ffffff" },
+  canpost: { background: "#da291c", color: "#ffffff" },
+  other: undefined,
+};
+
+const sentence = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
 /** "$9.42" and whether the label costs more than the shopper paid. */
 function leftOver(paidCents: number | null, price: string, currency: string) {
@@ -182,6 +222,11 @@ export function LabelDesk({
   testSources,
   setup,
   lines,
+  itemCount,
+  toTitle = "Ship to",
+  record = null,
+  recordOpen = false,
+  off = null,
   children,
 }: {
   slug: string;
@@ -195,8 +240,14 @@ export function LabelDesk({
   /** What the shop says the items weigh, in tenths of an ounce. */
   contentsTenthOz: number | null;
   /** What the shopper paid for shipping and the option they picked. */
-  paid: { cents: number | null; words: string; method: string | null };
-  /** The workspace's signature rule, when this order is worth enough for it. */
+  paid: {
+    cents: number | null;
+    words: string;
+    /** "$33.00", when the amount is known, for "Margin = $33.00 paid − label". */
+    amount: string | null;
+    method: string | null;
+  };
+  /** The workspace's signature rule, when this order is worth enough for it: "signature on orders of $250.00 or more". */
   rule: string | null;
   shop: { offered: boolean; markSent: boolean; notify: boolean };
   /** The connected places to buy postage: every one is asked for its prices. */
@@ -207,13 +258,34 @@ export function LabelDesk({
   setup: { missing: string; href: string | null } | null;
   /** The items going in this purchase, for dividing between several boxes. */
   lines: DeskLine[];
+  /** How many things were ordered, for the card's title. */
+  itemCount: number;
+  toTitle?: string;
+  /** The form for recording a parcel by hand (part shipments, postage bought elsewhere). */
+  record?: React.ReactNode;
+  /** That form starts open: it's the way to send this order. */
+  recordOpen?: boolean;
+  /**
+   * No label can be bought here right now (nothing connected, a pickup, already
+   * sent…). The page keeps its shape: the same cards, read only, with a plain
+   * word on why. Nothing is asked of a carrier.
+   */
+  off?: {
+    /** Said where the Buy button would be; null leaves that card out. */
+    bar: React.ReactNode;
+    /** Said in the Service card; null leaves that card out. */
+    service: React.ReactNode;
+    /** Whether the boxes are shown (read only) with the items. */
+    boxes: boolean;
+    /** A warning about the address, where there is one. */
+    addressNote?: string | null;
+  } | null;
   /** The items in the order, shown under the box. */
   children: React.ReactNode;
 }) {
-  const startWeight = (box: DeskBox | undefined) =>
-    contentsTenthOz === null
-      ? { lb: "", oz: "" }
-      : tenthOzToLbOz(contentsTenthOz + (box?.emptyTenthOz ?? 0));
+  const startTenths = (box: DeskBox | undefined) =>
+    contentsTenthOz === null ? null : contentsTenthOz + (box?.emptyTenthOz ?? 0);
+  const startWeight = (box: DeskBox | undefined) => worked(startTenths(box));
   const [to, setTo] = useState(shipTo);
   const [checked, setChecked] = useState<Checked>({ state: "idle" });
   const [residential, setResidential] = useState(true);
@@ -229,7 +301,7 @@ export function LabelDesk({
       key: 0,
       boxId: boxes[0]?.id ?? CUSTOM,
       size: sizeOf(boxes[0]),
-      weight: startWeight(boxes[0]),
+      ...startWeight(boxes[0]),
       weightTyped: false,
       alloc: fullAlloc(lines),
     },
@@ -243,7 +315,7 @@ export function LabelDesk({
             ? box
             : {
                 ...box,
-                weight: tenthOzToLbOz(
+                ...worked(
                   (boxes.find((saved) => saved.id === box.boxId)?.emptyTenthOz ?? 0) +
                     boxContentsTenthOz(box.alloc, lines),
                 ),
@@ -262,6 +334,8 @@ export function LabelDesk({
   const [notify, setNotify] = useState(shop.notify);
   /** Money was spent (or may have been): never offer Buy again on this screen. */
   const [locked, setLocked] = useState(false);
+  const [recording, setRecording] = useState(recordOpen);
+  const recordRef = useRef<HTMLDivElement>(null);
   const [quoting, startQuote] = useTransition();
   const [buying, startBuy] = useTransition();
   const sent = useRef(false);
@@ -281,16 +355,19 @@ export function LabelDesk({
   const together = useMemo(() => (withKey ? withKey.split(",") : undefined), [withKey]);
   type Ask = { to: ShipToEdit; residential: boolean; signature: Signature };
   const quote = useCallback(
-    (ask: Ask, parcels: Pick<Packed, "boxId" | "size" | "weight">[]) =>
+    (ask: Ask, parcels: (Pick<Packed, "boxId" | "size"> & { tenths: number | null })[]) =>
       startQuote(async () => {
         setError(null);
         const input: RatesInput = {
-          boxes: parcels.map((parcel) => ({
-            boxId: parcel.boxId,
-            ...parcel.size,
-            weightLb: parcel.weight.lb,
-            weightOz: parcel.weight.oz,
-          })),
+          boxes: parcels.map((parcel) => {
+            const weight = sentWeight(parcel.tenths);
+            return {
+              boxId: parcel.boxId,
+              ...parcel.size,
+              weightLb: weight.lb,
+              weightOz: weight.oz,
+            };
+          }),
           shipTo: ask.to,
           residential: ask.residential,
           signature: ask.signature,
@@ -313,7 +390,11 @@ export function LabelDesk({
       }),
     [slug, orderId, together],
   );
-  const quoteNow = () => quote({ to, residential, signature }, packed);
+  const quoteNow = () =>
+    quote(
+      { to, residential, signature },
+      packed.map((box) => ({ boxId: box.boxId, size: box.size, tenths: tenthsOf(box) })),
+    );
 
   const check = useCallback(
     async (address: ShipToEdit, again = false): Promise<AddressCheck | null> => {
@@ -346,20 +427,20 @@ export function LabelDesk({
   // so the next order is ready to buy by the time it's on screen. Only ever for the one
   // box an order starts in; more boxes are asked for by hand.
   useEffect(() => {
-    if (opened.current) return;
+    if (opened.current || off) return;
     opened.current = true;
     void (async () => {
       const found = await check(shipTo);
       const first = boxes[0];
-      const starting = startWeight(first);
-      if (setup || !first || (!starting.lb && !starting.oz)) return;
+      const starting = startTenths(first);
+      if (setup || !first || !starting) return;
       quote(
         {
           to: shipTo,
           residential: found?.residential ?? true,
           signature: rule ? "signature" : "none",
         },
-        [{ boxId: first.id, size: sizeOf(first), weight: starting }],
+        [{ boxId: first.id, size: sizeOf(first), tenths: starting }],
       );
     })();
     // Runs once for the order on screen; the page remounts this for the next one.
@@ -412,18 +493,14 @@ export function LabelDesk({
       ...box,
       boxId: id,
       size: id === CUSTOM ? box.size : sizeOf(saved),
-      weight: box.weightTyped ? box.weight : startWeight(saved),
+      ...(box.weightTyped ? {} : startWeight(saved)),
     }));
   };
   const typeSize = (key: number, side: keyof Packed["size"], value: string) =>
     // A size typed by hand is its own box, not the saved one.
     change(key, (box) => ({ ...box, boxId: CUSTOM, size: { ...box.size, [side]: value } }));
-  const typeWeight = (key: number, part: "lb" | "oz", value: string) =>
-    change(key, (box) => ({
-      ...box,
-      weight: { ...box.weight, [part]: value },
-      weightTyped: true,
-    }));
+  const typeWeight = (key: number, value: string) =>
+    change(key, (box) => ({ ...box, weight: value, exact: null, weightTyped: true }));
   // Another box starts as a copy of the last one's size, waiting for its weight.
   const addBox = () => {
     const key = nextKey.current++;
@@ -437,7 +514,8 @@ export function LabelDesk({
           key,
           boxId: last.boxId,
           size: { ...last.size },
-          weight: { lb: "", oz: "" },
+          weight: "",
+          exact: null,
           weightTyped: !known,
           alloc: emptyAlloc(lines),
         },
@@ -459,7 +537,7 @@ export function LabelDesk({
         .map((box, at) => ({ ...box, alloc: allocs[at] }));
       if (kept.length === 1 && !kept[0].weightTyped) {
         const saved = boxes.find((item) => item.id === kept[0].boxId);
-        return [{ ...kept[0], weight: startWeight(saved) }];
+        return [{ ...kept[0], ...startWeight(saved) }];
       }
       return reweigh(kept);
     });
@@ -468,7 +546,7 @@ export function LabelDesk({
 
   const rate = rates?.find((item) => item.id === chosen) ?? null;
   const busy = quoting || buying;
-  const canBuy = Boolean(rate) && !busy && !locked;
+  const canBuy = Boolean(rate) && !busy && !locked && !off;
 
   const buy = useCallback(() => {
     // One press, one purchase: the ref closes the gap before the button greys out.
@@ -531,11 +609,14 @@ export function LabelDesk({
   const several = packed.length > 1;
   const first = packed[0];
   const picked = boxes.find((box) => box.id === first.boxId);
-  const total = totalTenthOz(packed);
+  const showBoxes = !off || off.boxes;
+  // Without boxes on show, the weight is the items' own, as the shop gave it.
+  const total = showBoxes ? totalTenthOz(packed) : contentsTenthOz;
   const margin = rate ? leftOver(paid.cents, rate.price, rate.currency) : null;
   // Said only where an account reports it, and only while it could be the one that's used.
-  const testNote =
-    rate && testSources.includes(rate.source)
+  const testNote = off
+    ? null
+    : rate && testSources.includes(rate.source)
       ? sources.length > 1
         ? `Test mode: ${SOURCE_NAMES[rate.source]} labels are not real`
         : "Test mode: labels are not real"
@@ -544,121 +625,171 @@ export function LabelDesk({
           ? "Test mode: labels are not real"
           : `Test mode: ${testSources.map((key) => SOURCE_NAMES[key]).join(" and ")} labels are not real`
         : null;
-  const stat = "flex flex-col gap-0.5";
-  const statLabel = "text-muted-foreground text-xs font-semibold";
+  const stat = "flex min-w-0 flex-col gap-0.5";
+  const statLabel = "text-muted-foreground text-xs font-semibold whitespace-nowrap";
+  const frozen = busy || locked || Boolean(off);
+  const openRecord = () => {
+    setRecording(true);
+    // Once it's on the page, bring it into view.
+    window.setTimeout(
+      () => recordRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }),
+      0,
+    );
+  };
 
   return (
     <>
-      <Card>
-        <CardContent className="flex flex-col gap-3 pt-5">
-          <div className="flex flex-wrap items-center gap-x-8 gap-y-3">
-            {rate ? (
-              <>
-                <div className={stat}>
-                  <span className={statLabel}>Service</span>
-                  <span className="flex flex-wrap items-center gap-2 font-semibold">
-                    {rate.name}
-                    <SourceChip source={rate.source} />
-                  </span>
-                  {rate.days !== null && (
-                    <span className="text-muted-foreground text-xs">
-                      Est. {deliveryDays(rate.days)}
-                    </span>
-                  )}
-                </div>
-                <div className={stat}>
-                  <span className={statLabel}>{several ? `${packed.length} labels` : "Label"}</span>
-                  <span className="font-semibold tabular-nums">
-                    {formatPrice(rate.price, rate.currency)}
-                  </span>
-                </div>
-                <div className={stat}>
-                  <span className={statLabel}>Customer paid</span>
-                  <span className="font-semibold tabular-nums">{paid.words}</span>
-                  {paid.method && (
-                    <span className="text-muted-foreground text-xs">{paid.method}</span>
-                  )}
-                </div>
-                {margin && (
-                  <div className={stat}>
-                    <span className={statLabel}>{margin.short ? "Short by" : "Left over"}</span>
-                    <span
-                      className={`font-semibold tabular-nums ${margin.short ? "text-brick" : "text-mint-ink"}`}
-                    >
-                      {margin.short ? "−" : "+"}
-                      {margin.amount}
-                    </span>
-                  </div>
+      {(!off || off.bar) && (
+        <Card>
+          <CardContent className="flex flex-col gap-3 p-4 sm:px-5">
+            {off ? (
+              <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+                <p className="min-w-0 flex-1 basis-64 text-sm">{off.bar}</p>
+                {record && !recording && (
+                  <Button type="button" variant="outline" onClick={openRecord}>
+                    Record a parcel by hand
+                  </Button>
                 )}
-              </>
+              </div>
             ) : (
-              <p className="text-sm">
-                {locked
-                  ? "This label is being sorted out. See the message below."
-                  : quoting
-                    ? "Asking the carriers what this would cost…"
-                    : several
-                      ? "Check the address and each box's size and weight, then get rates."
-                      : "Check the address, box and weight, then get rates."}
-              </p>
+              <>
+                <div className="flex flex-wrap items-center gap-x-8 gap-y-3">
+                  {rate ? (
+                    <>
+                      <div className={stat}>
+                        <span className={statLabel}>Service</span>
+                        <span className="flex flex-wrap items-center gap-x-2 text-[15px] font-bold">
+                          {rate.name}
+                          <span className="text-muted-foreground font-medium">
+                            · {SOURCE_NAMES[rate.source]}
+                          </span>
+                        </span>
+                        <span className="text-muted-foreground text-xs">
+                          {rate.days !== null
+                            ? `Est. ${deliveryDays(rate.days)}`
+                            : "Transit time varies"}
+                        </span>
+                      </div>
+                      <div className={stat}>
+                        <span className={statLabel}>
+                          {several ? `${packed.length} labels` : "Label"}
+                        </span>
+                        <span className="text-[15px] font-bold tabular-nums">
+                          {formatPrice(rate.price, rate.currency)}
+                        </span>
+                        <span className="text-xs" aria-hidden>
+                          &nbsp;
+                        </span>
+                      </div>
+                      <div className={stat}>
+                        <span className={statLabel}>Customer paid</span>
+                        <span className="text-[15px] font-bold tabular-nums">{paid.words}</span>
+                        <span className="text-muted-foreground max-w-48 truncate text-xs">
+                          {paid.method ?? " "}
+                        </span>
+                      </div>
+                      {margin && (
+                        <div className={stat}>
+                          <span className={statLabel}>Margin</span>
+                          <span
+                            className={`text-[15px] font-bold tabular-nums ${margin.short ? "text-brick" : "text-mint-ink"}`}
+                          >
+                            {margin.short ? "−" : "+"}
+                            {margin.amount}
+                          </span>
+                          <span className="text-xs" aria-hidden>
+                            &nbsp;
+                          </span>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <p className="min-w-0 flex-1 basis-64 text-sm">
+                      {locked
+                        ? "This label is being sorted out. See the message below."
+                        : quoting
+                          ? "Asking the carriers what this would cost…"
+                          : several
+                            ? "Check the address and each box's size and weight, then get rates."
+                            : "Check the address, box and weight, then get rates."}
+                    </p>
+                  )}
+                  <div className="flex w-full flex-wrap items-center gap-2 sm:ml-auto sm:w-auto">
+                    {testNote && <Badge tone="waiting">{testNote}</Badge>}
+                    {!locked &&
+                      (rates ? (
+                        <Button
+                          type="button"
+                          size="lg"
+                          onClick={buy}
+                          disabled={!canBuy}
+                          className="w-full sm:w-auto"
+                        >
+                          <Printer aria-hidden />
+                          {buying
+                            ? several
+                              ? "Buying your labels…"
+                              : "Buying your label…"
+                            : several
+                              ? `Buy & print ${packed.length} labels`
+                              : "Buy & print label"}
+                          <kbd className="hidden rounded-sm border border-current/30 px-1 font-sans text-[10px] opacity-80 sm:inline">
+                            Ctrl+P
+                          </kbd>
+                        </Button>
+                      ) : (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="lg"
+                          onClick={quoteNow}
+                          disabled={busy}
+                          className="w-full sm:w-auto"
+                        >
+                          {quoting ? "Asking the carriers…" : "Get rates"}
+                        </Button>
+                      ))}
+                  </div>
+                </div>
+                <div className="border-border flex flex-wrap items-center gap-x-6 gap-y-2 border-t pt-3 text-sm">
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={markSent}
+                      disabled={!shop.offered || busy || locked}
+                      onChange={(event) => setMarkSent(event.target.checked)}
+                    />
+                    {together
+                      ? "Mark every one of these orders fulfilled in my shop"
+                      : "Mark fulfilled in my shop"}
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={notify && markSent}
+                      disabled={!markSent || busy || locked}
+                      onChange={(event) => setNotify(event.target.checked)}
+                    />
+                    Email the customer their tracking
+                  </label>
+                  <span className="text-muted-foreground text-xs sm:ml-auto">
+                    <PrintsToZebraNote fallback="Opens the 4×6 label to print" />
+                  </span>
+                  {!shop.offered && (
+                    <span className="text-muted-foreground w-full text-xs">
+                      Your shop hasn&apos;t given permission to mark orders as sent, so do that
+                      there yourself.
+                    </span>
+                  )}
+                </div>
+              </>
             )}
-            <div className="ml-auto flex flex-wrap items-center gap-2">
-              {testNote && <Badge tone="waiting">{testNote}</Badge>}
-              {!locked &&
-                (rates ? (
-                  <Button type="button" size="lg" onClick={buy} disabled={!canBuy}>
-                    <Printer aria-hidden />
-                    {buying
-                      ? several
-                        ? "Buying your labels…"
-                        : "Buying your label…"
-                      : several
-                        ? `Buy & print ${packed.length} labels`
-                        : "Buy & print label"}
-                    <kbd className="rounded-sm border border-current/30 px-1 font-sans text-[10px] opacity-80">
-                      Ctrl+P
-                    </kbd>
-                  </Button>
-                ) : (
-                  <Button type="button" variant="outline" onClick={quoteNow} disabled={busy}>
-                    {quoting ? "Asking the carriers…" : "Get rates"}
-                  </Button>
-                ))}
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={markSent}
-                disabled={!shop.offered || busy || locked}
-                onChange={(event) => setMarkSent(event.target.checked)}
-              />
-              {together
-                ? "Mark every one of these orders as sent in my shop"
-                : "Mark the order as sent in my shop"}
-            </label>
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={notify && markSent}
-                disabled={!markSent || busy || locked}
-                onChange={(event) => setNotify(event.target.checked)}
-              />
-              Email the customer their tracking
-            </label>
-            <PrintsToZebraNote />
-            <span className="text-muted-foreground ml-auto text-xs">
-              {shop.offered
-                ? paidFrom(rate?.source ?? null, sources)
-                : "Your shop hasn't given permission to mark orders as sent, so do that there yourself."}
-            </span>
-          </div>
-          <FormMessage>{error}</FormMessage>
-        </CardContent>
-      </Card>
+            <FormMessage>{error}</FormMessage>
+          </CardContent>
+        </Card>
+      )}
 
-      {setup && (
+      {!off && setup && (
         <p className="bg-note border-note-border rounded-lg border px-4 py-2.5 text-sm">
           <span className="font-semibold">One thing before the carriers can quote:</span>{" "}
           {setup.missing}{" "}
@@ -672,29 +803,47 @@ export function LabelDesk({
         </p>
       )}
 
-      {rule && signature !== "none" && (
-        <p className="bg-note border-note-border rounded-lg border px-4 py-2.5 text-sm">
-          <span className="font-semibold">Rule applied:</span> {rule}
+      {!off && rule && signature !== "none" && (
+        <p className="bg-note border-note-border flex items-center gap-2 rounded-lg border px-4 py-2.5 text-sm">
+          <Sparkles className="text-ochre-text size-4 shrink-0" aria-hidden />
+          <span>
+            Rules applied: <span className="font-semibold">{sentence(rule)}</span>
+          </span>
         </p>
       )}
 
       <Card>
         <CardHeader>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <CardTitle>Ship to</CardTitle>
-            <span className="text-muted-foreground text-xs">Changes apply to this label only</span>
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <CardTitle>{toTitle}</CardTitle>
+            {!off && (
+              <span className="text-muted-foreground text-xs">
+                Changes apply to this label only
+              </span>
+            )}
           </div>
         </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          <AddressVerdict
-            checked={checked}
-            residential={residential}
-            onCheck={() => void check(to, true)}
-            onUse={takeSuggestion}
-          />
-          <fieldset disabled={busy || locked} className="grid gap-3 sm:grid-cols-12">
+        <CardContent className="flex flex-col gap-3">
+          {off ? (
+            off.addressNote && (
+              <p className="bg-brick-soft text-brick rounded-md px-3 py-2 text-sm">
+                {off.addressNote}
+              </p>
+            )
+          ) : (
+            <AddressVerdict
+              checked={checked}
+              residential={residential}
+              onCheck={() => void check(to, true)}
+              onUse={takeSuggestion}
+            />
+          )}
+          <fieldset
+            disabled={frozen}
+            className="grid grid-cols-2 gap-x-3 gap-y-2.5 sm:grid-cols-12"
+          >
             {FIELDS.map((field) => (
-              <div key={field.key} className={`flex flex-col gap-1.5 ${field.span}`}>
+              <div key={field.key} className={`flex min-w-0 flex-col gap-1.5 ${field.span}`}>
                 <Label htmlFor={`to-${field.key}`}>{field.label}</Label>
                 <Input
                   id={`to-${field.key}`}
@@ -704,355 +853,471 @@ export function LabelDesk({
                 />
               </div>
             ))}
-            <div className="flex flex-col gap-1.5 sm:col-span-2">
+            <div className="flex min-w-0 flex-col gap-1.5 sm:col-span-2">
               <Label htmlFor="to-country">Country</Label>
               <Input id="to-country" value={country} readOnly disabled />
             </div>
           </fieldset>
-          <div className="flex flex-wrap items-end justify-between gap-3">
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={residential}
-                disabled={busy || locked}
-                onChange={(event) => {
-                  setResidential(event.target.checked);
-                  stale();
-                }}
-              />
-              Residential address
-            </label>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="to-signature">Delivery signature</Label>
-              <Select
-                id="to-signature"
-                value={signature}
-                disabled={busy || locked}
-                onChange={(event) => {
-                  setSignature(event.target.value as Signature);
-                  stale();
-                }}
-              >
-                {(Object.keys(SIGNATURE_WORDS) as Signature[]).map((key) => (
-                  <option key={key} value={key}>
-                    {SIGNATURE_WORDS[key]}
-                  </option>
-                ))}
-              </Select>
+          {showBoxes && (
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <label className="flex items-center gap-2 pt-1 text-sm">
+                <input
+                  type="checkbox"
+                  checked={residential}
+                  disabled={frozen}
+                  onChange={(event) => {
+                    setResidential(event.target.checked);
+                    stale();
+                  }}
+                />
+                Residential address
+              </label>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="to-signature">Delivery signature</Label>
+                <Select
+                  id="to-signature"
+                  value={signature}
+                  disabled={frozen}
+                  onChange={(event) => {
+                    setSignature(event.target.value as Signature);
+                    stale();
+                  }}
+                >
+                  {(Object.keys(SIGNATURE_WORDS) as Signature[]).map((key) => (
+                    <option key={key} value={key}>
+                      {SIGNATURE_WORDS[key]}
+                    </option>
+                  ))}
+                </Select>
+                {rule && <span className="text-muted-foreground text-xs">Rule: {rule}</span>}
+              </div>
             </div>
-          </div>
+          )}
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <CardTitle>Items &amp; boxes</CardTitle>
-            {total !== null && total > 0 && (
-              <span className="text-muted-foreground text-xs">
-                {several ? `${packed.length} boxes · ` : ""}Total{" "}
-                <span className="text-foreground font-semibold tabular-nums">
-                  {formatTenthOz(total)}
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+            <CardTitle>
+              {showBoxes ? "Items & boxes" : "Items"} · {itemCount}{" "}
+              {itemCount === 1 ? "item" : "items"}
+            </CardTitle>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+              {total !== null && total > 0 && (
+                <span className="text-muted-foreground text-xs">
+                  {several ? `${packed.length} boxes · ` : ""}Total{" "}
+                  <span className="text-foreground font-semibold tabular-nums">
+                    {formatTenthOz(total)}
+                  </span>
                 </span>
-              </span>
-            )}
-          </div>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-5">
-          <fieldset disabled={busy || locked} className="grid gap-3 sm:grid-cols-2">
-            {packed.map((box, index) => {
-              const id = (field: string) => `box-${box.key}-${field}`;
-              return (
-                <div
-                  key={box.key}
-                  role="group"
-                  aria-label={`Box ${index + 1}`}
-                  className="border-border grid grid-cols-6 gap-x-2 gap-y-3 rounded-md border p-3"
-                >
-                  <div className="col-span-6 flex min-h-8 items-center justify-between gap-2">
-                    <span className="text-sm font-semibold">Box {index + 1}</span>
-                    {index > 0 && (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => removeBox(box.key)}
-                        aria-label={`Remove box ${index + 1}`}
-                      >
-                        Remove
-                      </Button>
-                    )}
-                  </div>
-                  <div className="col-span-6 flex min-w-0 flex-col gap-1.5">
-                    <Label htmlFor={id("box")}>Box</Label>
-                    <Select
-                      id={id("box")}
-                      value={box.boxId}
-                      onChange={(event) => pickBox(box.key, event.target.value)}
-                    >
-                      {boxes.map((saved) => (
-                        <option key={saved.id} value={saved.id}>
-                          {saved.name} ({saved.size})
-                        </option>
-                      ))}
-                      <option value={CUSTOM}>Another size…</option>
-                    </Select>
-                  </div>
-                  {(["length", "width", "height"] as const).map((side) => (
-                    <div key={side} className="col-span-2 flex min-w-0 flex-col gap-1.5">
-                      <Label htmlFor={id(side)}>{side[0].toUpperCase()} in</Label>
-                      <Input
-                        id={id(side)}
-                        inputMode="decimal"
-                        value={box.size[side]}
-                        onChange={(event) => typeSize(box.key, side, event.target.value)}
-                      />
-                    </div>
-                  ))}
-                  <div className="col-span-3 flex min-w-0 flex-col gap-1.5">
-                    <Label htmlFor={id("lb")}>Weight lb</Label>
-                    <Input
-                      id={id("lb")}
-                      inputMode="decimal"
-                      value={box.weight.lb}
-                      onChange={(event) => typeWeight(box.key, "lb", event.target.value)}
-                    />
-                  </div>
-                  <div className="col-span-3 flex min-w-0 flex-col gap-1.5">
-                    <Label htmlFor={id("oz")}>oz</Label>
-                    <Input
-                      id={id("oz")}
-                      inputMode="decimal"
-                      value={box.weight.oz}
-                      onChange={(event) => typeWeight(box.key, "oz", event.target.value)}
-                    />
-                  </div>
-                </div>
-              );
-            })}
-            {packed.length < MAX_BOXES && (
-              <button
-                type="button"
-                onClick={addBox}
-                className="border-border text-muted-foreground hover:bg-hover hover:text-foreground focus-visible:ring-ring flex min-h-24 items-center justify-center gap-2 rounded-md border border-dashed p-3 text-sm font-semibold outline-none focus-visible:ring-2 disabled:pointer-events-none disabled:opacity-50"
-              >
-                <Plus className="size-4" aria-hidden />
-                Add another box
-              </button>
-            )}
-          </fieldset>
-          <p className="text-muted-foreground -mt-2 text-xs">
-            {several
-              ? known
-                ? "Each box's weight follows what you put in it; type over it if the scale says otherwise. The boxes are bought together, with a label for each."
-                : "Weigh each packed box. They're bought together as one purchase, with a label for each box."
-              : contentsTenthOz === null
-                ? "Your shop didn't give a weight for this order, so pop it on the scale."
-                : picked && picked.emptyTenthOz > 0 && !first.weightTyped
-                  ? "The weight is what your shop says the items weigh, plus this box."
-                  : "The weight starts from what your shop says the items weigh."}
-          </p>
-          {several && lines.length > 0 ? (
-            <div className="flex flex-col gap-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-sm font-semibold">What goes in each box</p>
+              )}
+              {!off && several && lines.length > 0 && (
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
-                  disabled={busy || locked}
+                  disabled={frozen}
                   title="Spread the items so each box weighs about the same"
                   onClick={() => repack(() => splitEvenly(lines, packed.length))}
                 >
                   Split evenly
                 </Button>
-              </div>
-              <ul className="divide-border border-border flex flex-col divide-y rounded-md border">
-                {lines.map((line) => {
-                  const loose = notInBox(
-                    packed.map((box) => box.alloc),
-                    line,
-                  );
+              )}
+              {record && (
+                <Button
+                  type="button"
+                  variant={recording ? "dark" : "outline"}
+                  size="sm"
+                  aria-expanded={recording}
+                  aria-controls="record-by-hand"
+                  title="Some items not ready? Send what you have now; the rest stays on your to-send list."
+                  onClick={() => (recording ? setRecording(false) : openRecord())}
+                >
+                  Ship part of this order
+                </Button>
+              )}
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          {showBoxes && (
+            <>
+              <fieldset
+                disabled={frozen}
+                className="grid gap-3 sm:grid-cols-[repeat(auto-fill,minmax(17.5rem,1fr))]"
+              >
+                {packed.map((box, index) => {
+                  const id = (field: string) => `box-${box.key}-${field}`;
+                  const inside = unitsIn(box.alloc, lines);
                   return (
-                    <li
-                      key={line.id}
-                      className="flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-2.5 text-sm"
+                    <div
+                      key={box.key}
+                      role="group"
+                      aria-label={`Box ${index + 1}`}
+                      className="border-border bg-sunken flex min-w-0 flex-col gap-2 rounded-md border p-3"
                     >
-                      {line.photo ? (
-                        // eslint-disable-next-line @next/next/no-img-element -- the shop's own picture of the product, on the shop's image servers
-                        <img
-                          src={line.photo}
-                          alt=""
-                          loading="lazy"
-                          className="border-border size-10 shrink-0 rounded-md border object-cover"
-                        />
-                      ) : (
-                        <span className="bg-sunken size-10 shrink-0 rounded-md" aria-hidden />
-                      )}
-                      <span className="min-w-[10rem] flex-1">
-                        <span className="block font-semibold">{line.title}</span>
-                        <span className="text-muted-foreground block text-xs">
-                          {line.detail || "No item code"} · × {line.qty}
+                      <div className="flex min-h-[30px] items-center gap-2">
+                        <span className="text-sm font-bold whitespace-nowrap">
+                          {several ? `Box ${index + 1}` : "Box"}
                         </span>
-                      </span>
-                      {line.qty === 1 ? (
-                        <span
-                          role="radiogroup"
-                          aria-label={`Box for ${line.title}`}
-                          className="border-input flex overflow-hidden rounded-sm border"
-                        >
-                          {packed.map((box, index) => {
-                            const on = (box.alloc[line.id] ?? 0) > 0;
-                            return (
-                              <button
-                                key={box.key}
-                                type="button"
-                                role="radio"
-                                aria-checked={on}
-                                disabled={busy || locked}
-                                onClick={() => repack((allocs) => setQty(allocs, line, index, 1))}
-                                className={`h-[30px] px-2.5 text-xs font-semibold ${on ? "bg-teal text-on-teal" : "bg-card hover:bg-hover"}`}
-                              >
-                                Box {index + 1}
-                              </button>
-                            );
-                          })}
-                        </span>
-                      ) : (
-                        <span className="flex flex-wrap items-end gap-2">
-                          {packed.map((box, index) => (
-                            <label key={box.key} className="flex flex-col gap-1">
-                              <span className="text-muted-foreground text-xs">Box {index + 1}</span>
-                              <Input
-                                type="number"
-                                inputMode="numeric"
-                                min={0}
-                                max={line.qty}
-                                className="h-[30px] w-16"
-                                aria-label={`${line.title} in box ${index + 1}`}
-                                disabled={busy || locked}
-                                value={box.alloc[line.id] ?? 0}
-                                onChange={(event) =>
-                                  repack((allocs) =>
-                                    setQty(allocs, line, index, Number(event.target.value)),
-                                  )
-                                }
-                              />
-                            </label>
+                        {several &&
+                          lines.length > 0 &&
+                          (inside > 0 ? (
+                            <span className="text-muted-foreground text-xs">
+                              {inside} {inside === 1 ? "item" : "items"}
+                            </span>
+                          ) : (
+                            <span
+                              className="text-brick text-xs"
+                              title="Move items into this box below"
+                            >
+                              Empty
+                            </span>
                           ))}
-                        </span>
-                      )}
-                      {loose !== 0 && (
-                        <span className="text-brick w-full text-xs font-semibold sm:w-auto">
-                          {loose} not in a box
-                        </span>
-                      )}
-                    </li>
+                        {index > 0 && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="ml-auto"
+                            onClick={() => removeBox(box.key)}
+                            aria-label={`Remove box ${index + 1}`}
+                          >
+                            Remove
+                          </Button>
+                        )}
+                      </div>
+                      <Select
+                        id={id("box")}
+                        aria-label={`Box ${index + 1} size`}
+                        value={box.boxId}
+                        title={boxes.find((saved) => saved.id === box.boxId)?.size}
+                        onChange={(event) => pickBox(box.key, event.target.value)}
+                      >
+                        {boxes.map((saved) => (
+                          <option key={saved.id} value={saved.id}>
+                            {saved.name}
+                          </option>
+                        ))}
+                        <option value={CUSTOM}>Another size…</option>
+                      </Select>
+                      <div className="grid grid-cols-4 gap-2">
+                        {(["length", "width", "height"] as const).map((side) => (
+                          <div key={side} className="flex min-w-0 flex-col gap-1">
+                            <Label htmlFor={id(side)} className="text-[11.5px]">
+                              {side[0].toUpperCase()} in
+                            </Label>
+                            <Input
+                              id={id(side)}
+                              inputMode="decimal"
+                              className="px-2"
+                              value={box.size[side]}
+                              onChange={(event) => typeSize(box.key, side, event.target.value)}
+                            />
+                          </div>
+                        ))}
+                        <div className="flex min-w-0 flex-col gap-1">
+                          <Label htmlFor={id("weight")} className="text-[11.5px] whitespace-nowrap">
+                            Weight lb
+                          </Label>
+                          <Input
+                            id={id("weight")}
+                            inputMode="decimal"
+                            className="px-2"
+                            value={box.weight}
+                            title={
+                              box.weightTyped || box.exact === null
+                                ? undefined
+                                : `${formatTenthOz(box.exact)}: the items${several || (picked && picked.emptyTenthOz > 0) ? " plus the box" : ""}, from your shop's weights`
+                            }
+                            onChange={(event) => typeWeight(box.key, event.target.value)}
+                          />
+                        </div>
+                      </div>
+                    </div>
                   );
                 })}
-              </ul>
-            </div>
+                {!off && packed.length < MAX_BOXES && (
+                  <button
+                    type="button"
+                    onClick={addBox}
+                    title="Too much for one box? Each box gets its own label and tracking number."
+                    className="border-input text-text-2 hover:bg-sunken hover:text-foreground focus-visible:ring-ring flex min-h-12 items-center justify-center gap-2 rounded-md border-[1.5px] border-dashed p-3 text-[13px] font-semibold outline-none focus-visible:ring-2 disabled:pointer-events-none disabled:opacity-50 sm:flex-col sm:gap-1.5"
+                  >
+                    <Plus className="size-4" aria-hidden />
+                    Add another box
+                  </button>
+                )}
+              </fieldset>
+              {!off && (
+                <p className="text-muted-foreground -mt-1 text-xs">
+                  {several
+                    ? known
+                      ? "Each box's weight follows what you put in it; type over it if the scale says otherwise. The boxes are bought together, with a label for each."
+                      : "Weigh each packed box. They're bought together as one purchase, with a label for each box."
+                    : contentsTenthOz === null
+                      ? "Your shop didn't give a weight for this order, so pop it on the scale."
+                      : picked && picked.emptyTenthOz > 0 && !first.weightTyped
+                        ? "The weight is what your shop says the items weigh, plus this box."
+                        : "The weight starts from what your shop says the items weigh."}
+                </p>
+              )}
+            </>
+          )}
+          {!off && several && lines.length > 0 ? (
+            <ul className="grid gap-x-5 xl:grid-cols-2">
+              {lines.map((line) => {
+                const loose = notInBox(
+                  packed.map((box) => box.alloc),
+                  line,
+                );
+                return (
+                  <li
+                    key={line.id}
+                    className="border-border flex flex-wrap items-center gap-x-3 gap-y-2 border-t py-2 text-sm"
+                  >
+                    <ItemPhoto src={line.photo} />
+                    <span className="min-w-[9rem] flex-1">
+                      <span className="block leading-snug font-semibold">{line.title}</span>
+                      <span className="text-muted-foreground block text-xs">
+                        {line.detail || "No item code"} ·{" "}
+                        <span className="text-ochre-text font-bold">× {line.qty}</span>
+                      </span>
+                    </span>
+                    {line.qty === 1 ? (
+                      <span
+                        role="radiogroup"
+                        aria-label={`Box for ${line.title}`}
+                        className="border-input flex overflow-hidden rounded-sm border"
+                      >
+                        {packed.map((box, index) => {
+                          const on = (box.alloc[line.id] ?? 0) > 0;
+                          return (
+                            <button
+                              key={box.key}
+                              type="button"
+                              role="radio"
+                              aria-checked={on}
+                              disabled={frozen}
+                              onClick={() => repack((allocs) => setQty(allocs, line, index, 1))}
+                              className={`h-[30px] px-2.5 text-xs font-semibold ${on ? "bg-teal text-on-teal" : "bg-card hover:bg-hover"}`}
+                            >
+                              Box {index + 1}
+                            </button>
+                          );
+                        })}
+                      </span>
+                    ) : (
+                      <span className="flex flex-wrap items-end gap-2">
+                        {packed.map((box, index) => (
+                          <label key={box.key} className="flex flex-col gap-1">
+                            <span className="text-muted-foreground text-xs">Box {index + 1}</span>
+                            <Input
+                              type="number"
+                              inputMode="numeric"
+                              min={0}
+                              max={line.qty}
+                              className="h-[30px] w-14 px-2 text-center"
+                              aria-label={`${line.title} in box ${index + 1}`}
+                              disabled={frozen}
+                              value={box.alloc[line.id] ?? 0}
+                              onChange={(event) =>
+                                repack((allocs) =>
+                                  setQty(allocs, line, index, Number(event.target.value)),
+                                )
+                              }
+                            />
+                          </label>
+                        ))}
+                      </span>
+                    )}
+                    {loose !== 0 && (
+                      <span className="text-brick w-full text-xs font-semibold">
+                        {loose} not in a box
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
           ) : (
             children
+          )}
+          {record && recording && (
+            <div
+              id="record-by-hand"
+              ref={recordRef}
+              className="border-border flex scroll-mt-4 flex-col gap-3 border-t pt-4"
+            >
+              <div>
+                <p className="text-sm font-semibold">
+                  {off ? "Record the parcel by hand" : "Ship part of this order"}
+                </p>
+                <p className="text-muted-foreground text-sm">
+                  {off
+                    ? "Buy the postage wherever you usually do, then put the tracking number here. Lower a number to send part now."
+                    : "A part shipment is recorded by hand for now: lower a number to send part of the order, buy that postage wherever you usually do, and put the tracking number here. The rest stays on your to-send list. This is also the place for postage you bought somewhere else."}
+                </p>
+              </div>
+              {record}
+            </div>
           )}
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <CardTitle>Service</CardTitle>
-            {!locked && (
-              <Button type="button" variant="ghost" size="sm" onClick={quoteNow} disabled={busy}>
-                <RefreshCw aria-hidden />
-                {quoting ? "Checking…" : rates ? "Refresh rates" : "Get rates"}
-              </Button>
-            )}
-          </div>
-        </CardHeader>
-        <CardContent>
-          {rates && !locked ? (
-            <fieldset disabled={busy}>
-              <legend className="sr-only">Choose a service, cheapest first</legend>
-              <ul className="divide-border border-border flex flex-col divide-y rounded-md border">
-                {rates.map((item, index) => {
-                  const left = leftOver(paid.cents, item.price, item.currency);
-                  return (
-                    <li key={item.id}>
-                      <label
-                        className={`hover:bg-hover flex cursor-pointer items-center gap-3 px-3 py-2.5 text-sm ${chosen === item.id ? "bg-hover" : ""}`}
-                      >
-                        <input
-                          type="radio"
-                          name="label-rate"
-                          value={item.id}
-                          checked={chosen === item.id}
-                          onChange={() => setChosen(item.id)}
-                        />
-                        <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
-                          <span className="font-semibold">{item.name}</span>
-                          <SourceChip source={item.source} />
-                          {item.days !== null && (
-                            <span className="text-muted-foreground">
-                              Est. {deliveryDays(item.days)}
-                            </span>
-                          )}
-                          {index === 0 && <Badge tone="good">Cheapest</Badge>}
-                          {testSources.includes(item.source) && sources.length > 1 && (
-                            <Badge tone="waiting">Test label</Badge>
-                          )}
-                          {(item.others?.length || item.note) && (
-                            <span className="text-muted-foreground basis-full text-xs">
-                              {item.others?.length
-                                ? `Also ${item.others
-                                    .map(
-                                      (other) =>
-                                        `${SOURCE_NAMES[other.source]} ${formatPrice(other.price, item.currency)}`,
-                                    )
-                                    .join(" · ")}`
-                                : ""}
-                              {item.others?.length && item.note ? ". " : ""}
-                              {item.note ?? ""}
-                            </span>
-                          )}
-                        </span>
-                        <span className="text-right font-semibold tabular-nums">
-                          {formatPrice(item.price, item.currency)}
-                          {left && (
-                            <span
-                              className={`block text-xs font-medium ${left.short ? "text-brick" : "text-mint-ink"}`}
-                            >
-                              {left.short ? `${left.amount} short` : `${left.amount} left over`}
-                            </span>
-                          )}
-                        </span>
-                      </label>
-                    </li>
-                  );
-                })}
-              </ul>
-              {notes.length > 0 && (
-                <ul className="text-muted-foreground mt-3 flex flex-col gap-1 text-xs">
-                  {notes.map((note) => (
-                    <li key={note}>{note}</li>
-                  ))}
-                </ul>
+      {(!off || off.service) && (
+        <Card>
+          <CardHeader>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <CardTitle>Service</CardTitle>
+              {!off && (
+                <div className="flex items-center gap-2">
+                  {paid.amount && (
+                    <span className="text-muted-foreground text-xs">
+                      Margin = {paid.amount} paid − label
+                    </span>
+                  )}
+                  {!locked && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={quoteNow}
+                      disabled={busy}
+                      aria-label={rates ? "Refresh rates" : "Get rates"}
+                      title={rates ? "Refresh rates" : "Get rates"}
+                    >
+                      <RefreshCw className={quoting ? "animate-spin" : undefined} aria-hidden />
+                    </Button>
+                  )}
+                </div>
               )}
-            </fieldset>
-          ) : (
-            <p className="text-muted-foreground text-sm">
-              {locked
-                ? "No more rates on this screen: a label is already being sorted out."
-                : quoting
-                  ? "Asking the carriers…"
-                  : several
-                    ? "Rates appear here once the address and every box's size and weight are set. Each price covers all the boxes."
-                    : "Rates appear here once the address, box and weight are set."}
-            </p>
-          )}
-        </CardContent>
-      </Card>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {off ? (
+              <p className="text-muted-foreground text-sm">{off.service}</p>
+            ) : rates && !locked ? (
+              <fieldset disabled={busy}>
+                <legend className="sr-only">Choose a service, cheapest first</legend>
+                <ul className="flex flex-col gap-2">
+                  {rates.map((item, index) => {
+                    const left = leftOver(paid.cents, item.price, item.currency);
+                    const mark = carrierMark(item.carrier);
+                    const on = chosen === item.id;
+                    return (
+                      <li key={item.id}>
+                        <label
+                          className={`flex cursor-pointer items-center gap-3 rounded-md border px-3 py-2.5 text-sm ${on ? "border-ochre ring-ochre-soft ring-[3px]" : "border-border hover:border-input"}`}
+                        >
+                          <input
+                            type="radio"
+                            name="label-rate"
+                            value={item.id}
+                            checked={on}
+                            onChange={() => setChosen(item.id)}
+                            className="accent-ochre size-[18px] shrink-0"
+                          />
+                          <span
+                            aria-hidden
+                            title={item.carrier}
+                            className={`hidden h-[26px] min-w-[46px] shrink-0 place-items-center rounded-md px-1.5 text-[11px] leading-none font-extrabold tracking-wide sm:grid ${mark.key === "other" ? "bg-sunken text-text-2" : ""}`}
+                            style={MARK_TONES[mark.key]}
+                          >
+                            {mark.label}
+                          </span>
+                          <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                            <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                              <span className="font-bold">{item.name}</span>
+                              <SourceChip source={item.source} />
+                              {testSources.includes(item.source) && sources.length > 1 && (
+                                <Badge tone="waiting">Test label</Badge>
+                              )}
+                            </span>
+                            <span className="text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+                              {item.days !== null
+                                ? `Est. ${deliveryDays(item.days)}`
+                                : "Transit time varies"}
+                              {index === 0 && <Badge>Cheapest</Badge>}
+                              {sameService(paid.method, item.carrier, item.name) && (
+                                <Badge>Customer&apos;s choice</Badge>
+                              )}
+                            </span>
+                            {item.note && (
+                              <span className="text-muted-foreground text-xs">{item.note}</span>
+                            )}
+                            {item.others && item.others.length > 0 && (
+                              <span className="text-muted-foreground text-xs tabular-nums">
+                                Also{" "}
+                                {item.others
+                                  .map(
+                                    (other) =>
+                                      `${SOURCE_NAMES[other.source]} ${formatPrice(other.price, item.currency)}`,
+                                  )
+                                  .join(" · ")}
+                              </span>
+                            )}
+                          </span>
+                          <span className="text-right tabular-nums">
+                            <span className="block text-base font-extrabold">
+                              {formatPrice(item.price, item.currency)}
+                            </span>
+                            {left && (
+                              <span
+                                className={`block text-xs font-medium whitespace-nowrap ${left.short ? "text-brick" : "text-mint-ink"}`}
+                              >
+                                {left.short ? "−" : "+"}
+                                {left.amount} margin
+                              </span>
+                            )}
+                          </span>
+                        </label>
+                      </li>
+                    );
+                  })}
+                </ul>
+                {notes.length > 0 && (
+                  <ul className="text-muted-foreground mt-3 flex flex-col gap-1 text-xs">
+                    {notes.map((note) => (
+                      <li key={note}>{note}</li>
+                    ))}
+                  </ul>
+                )}
+                <p className="text-muted-foreground mt-3 text-xs">
+                  {paidFrom(rate?.source ?? null, sources)}
+                </p>
+              </fieldset>
+            ) : (
+              <p className="text-muted-foreground text-sm">
+                {locked
+                  ? "No more rates on this screen: a label is already being sorted out."
+                  : quoting
+                    ? "Asking the carriers…"
+                    : several
+                      ? "Rates appear here once the address and every box's size and weight are set. Each price covers all the boxes."
+                      : "Rates appear here once the address, box and weight are set."}
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
     </>
+  );
+}
+
+/** A square thumbnail of the item, or a quiet tile where the shop gave no picture. */
+function ItemPhoto({ src }: { src: string | null }) {
+  return src ? (
+    // eslint-disable-next-line @next/next/no-img-element -- the shop's own picture of the product, on the shop's image servers
+    <img
+      src={src}
+      alt=""
+      loading="lazy"
+      className="border-border size-12 shrink-0 rounded-md border bg-white object-cover"
+    />
+  ) : (
+    <span className="bg-sunken border-border size-12 shrink-0 rounded-md border" aria-hidden />
   );
 }
 
@@ -1107,7 +1372,7 @@ function AddressVerdict({
         <Check className="size-4 shrink-0" aria-hidden />
         <span>
           <span className="font-semibold">Address found</span> ·{" "}
-          {residential ? "a home address" : "a business address"}
+          {residential ? "residential address" : "business address"}
         </span>
       </p>
       {check.suggestion && (

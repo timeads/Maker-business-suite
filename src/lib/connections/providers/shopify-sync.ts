@@ -10,6 +10,7 @@ import type {
   SyncResult,
   TokenSet,
 } from "../types";
+import { shopPhotoAddress } from "../../social/product-photos";
 import { ReconnectRequiredError } from "../types";
 
 /** How far back the first sync reaches. */
@@ -41,6 +42,8 @@ export type ShopifyOrder = {
   sourceName: string | null;
   app: { name: string } | null;
   currentSubtotalPriceSet: Money;
+  /** Everything taken off by discounts, as the shop adds it up. */
+  currentTotalDiscountsSet?: Money;
   currentTotalTaxSet: Money;
   totalShippingPriceSet: Money;
   currentTotalPriceSet: Money;
@@ -78,6 +81,7 @@ const ORDER_FIELDS = `
   displayFinancialStatus displayFulfillmentStatus currencyCode sourceName
   app { name }
   currentSubtotalPriceSet { shopMoney { amount } }
+  currentTotalDiscountsSet { shopMoney { amount } }
   currentTotalTaxSet { shopMoney { amount } }
   totalShippingPriceSet { shopMoney { amount } }
   currentTotalPriceSet { shopMoney { amount } }
@@ -115,6 +119,23 @@ const money = (value: Money): number => {
   return Number.isFinite(amount) ? amount : 0;
 };
 
+/**
+ * What the products came to before discounts, and the discounts themselves:
+ * the shop's own total of discounts, added back onto the subtotal. Left out
+ * when the shop didn't say, so nothing is shown rather than a guess.
+ */
+function discountFigures(
+  order: Pick<ShopifyOrder, "currentSubtotalPriceSet" | "currentTotalDiscountsSet">,
+): { gross_sales: number | null; total_discounts: number | null } {
+  if (!order.currentTotalDiscountsSet || !order.currentSubtotalPriceSet) {
+    return { gross_sales: null, total_discounts: null };
+  }
+  const discounts = money(order.currentTotalDiscountsSet);
+  const cents =
+    Math.round(money(order.currentSubtotalPriceSet) * 100) + Math.round(discounts * 100);
+  return { gross_sales: cents / 100, total_discounts: discounts };
+}
+
 /** A plain name for where a sale happened. */
 export function channelName(sourceName: string | null, appName: string | null): string {
   if (sourceName && CHANNEL_NAMES[sourceName]) return CHANNEL_NAMES[sourceName];
@@ -151,6 +172,7 @@ export function mapShopifyOrders(orders: ShopifyOrder[]): {
       processed_at: order.processedAt,
       currency: order.currencyCode,
       net_sales: money(order.currentSubtotalPriceSet),
+      ...discountFigures(order),
       total_tax: money(order.currentTotalTaxSet),
       total_shipping: money(order.totalShippingPriceSet),
       total: money(order.currentTotalPriceSet),
@@ -195,6 +217,7 @@ type ShopifyShipping = {
   /** Grams, as a string (Shopify's UnsignedInt64). */
   currentTotalWeight?: string | number | null;
   currentShippingPriceSet?: Money | null;
+  tags?: string[] | null;
   shippingAddress: {
     name: string | null;
     company: string | null;
@@ -222,6 +245,8 @@ type ShopifyShipping = {
       unfulfilledQuantity: number;
       requiresShipping: boolean;
       discountedUnitPriceAfterAllDiscountsSet?: Money | null;
+      /** The picture of the option that was ordered (the shop falls back to the product's). */
+      image?: { url?: string | null } | null;
       variant?: {
         barcode: string | null;
         inventoryItem?: {
@@ -242,7 +267,7 @@ type ShopifyShipping = {
 const shippingQuery = (deliveryMethods: boolean) => `query Shipping($ids: [ID!]!) {
   nodes(ids: $ids) {
     ... on Order {
-      legacyResourceId displayFinancialStatus note currentTotalWeight
+      legacyResourceId displayFinancialStatus note currentTotalWeight tags
       currentShippingPriceSet { shopMoney { amount } }
       shippingAddress { name company address1 address2 city provinceCode zip countryCodeV2 phone }
       shippingLines(first: 1) { nodes { title } }
@@ -251,12 +276,16 @@ const shippingQuery = (deliveryMethods: boolean) => `query Shipping($ids: [ID!]!
         nodes {
           id title variantTitle sku currentQuantity unfulfilledQuantity requiresShipping
           discountedUnitPriceAfterAllDiscountsSet { shopMoney { amount } }
+          image { url(transform: { maxWidth: ${ITEM_PHOTO_WIDTH} }) }
           variant { barcode inventoryItem { measurement { weight { unit value } } } }
         }
       }
     }
   }
 }`;
+
+/** Item pictures are thumbnails on the order page, so a small one is asked for. */
+const ITEM_PHOTO_WIDTH = 120;
 
 const UNPAID = new Set(["PENDING", "AUTHORIZED", "PARTIALLY_PAID", "EXPIRED", "VOIDED"]);
 /** Without the shop's own word on it, the name of the checkout option is the best clue. */
@@ -305,6 +334,9 @@ export function mapShopifyShipping(orders: ShopifyShipping[]): ShippingOrderRow[
           : PICKUP_NAME.test(method ?? ""),
         note: order.note,
         paid: !UNPAID.has(order.displayFinancialStatus ?? ""),
+        tags: Array.isArray(order.tags)
+          ? order.tags.filter((tag) => typeof tag === "string" && tag.trim() !== "")
+          : null,
         // Only things that go in a box; a gift card or a class has nothing to send.
         items: order.lineItems.nodes
           .filter((line) => line.requiresShipping && line.currentQuantity > 0)
@@ -319,6 +351,8 @@ export function mapShopifyShipping(orders: ShopifyShipping[]): ShippingOrderRow[
             price: line.discountedUnitPriceAfterAllDiscountsSet
               ? money(line.discountedUnitPriceAfterAllDiscountsSet)
               : null,
+            // Only ever a picture on the shop platform's own image servers.
+            image: shopPhotoAddress(line.image?.url, ITEM_PHOTO_WIDTH),
             qty: line.currentQuantity,
             left: Math.max(0, Math.min(line.currentQuantity, line.unfulfilledQuantity)),
           })),

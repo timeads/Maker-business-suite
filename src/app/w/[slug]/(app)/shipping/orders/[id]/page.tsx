@@ -1,13 +1,14 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
+import { Mail, Truck } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { daysFromNow } from "@/lib/bookings/slots";
 import { formatMoney } from "@/lib/dashboard/format";
-import { addressLines, hasAddress } from "@/lib/shipping/carriers";
+import { hasAddress } from "@/lib/shipping/carriers";
 import { gramsToTenthOz } from "@/lib/shipping/easypost";
 import { SOURCE_NAMES, isLabelSource } from "@/lib/shipping/sources/types";
 import {
@@ -21,7 +22,6 @@ import {
 import { combineOrders, groupHref, groupKey, parseWith, sumAmounts } from "@/lib/shipping/merge";
 import {
   formatHoldDate,
-  formatWeight,
   holdChoices,
   holdState,
   inQueueView,
@@ -33,6 +33,7 @@ import {
   todayIn,
   type QueueView,
 } from "@/lib/shipping/queue";
+import { shopPhotoAddress } from "@/lib/social/product-photos";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
 import {
@@ -42,6 +43,7 @@ import {
   loadGroups,
   loadKnownGroup,
   loadLabelConnections,
+  loadOrderExtras,
   loadQueueSteps,
   loadShippingSetup,
   loadUnfinishedLabels,
@@ -53,6 +55,7 @@ import { HoldForm, ParcelForm, PickupForm, SeenBackFromHold, VoidButton } from "
 import { shippingAccess } from "../../gate";
 import { ClearUnsureLabelButton, FinishLabelButton } from "../../label-card";
 import { LabelDesk } from "../../label-desk";
+import { OrderRailActions } from "../../order-rail";
 import { OrderSteps } from "../../order-steps";
 import { LabelPrint } from "../../print-ui";
 import { TogetherNote } from "../../together-ui";
@@ -61,7 +64,10 @@ const saleOf = (order: OrderWithSale): Sale | null =>
   (Array.isArray(order.sale) ? order.sale[0] : order.sale) ?? null;
 
 const INTERNATIONAL_NOTE =
-  "International labels need a customs form, which isn't built yet. Buy this one elsewhere and record it below.";
+  "International labels need a customs form, which isn't built yet. Buy this one elsewhere and record the parcel by hand.";
+
+/** A thumbnail is all the page needs of an item's picture. */
+const THUMB_WIDTH = 120;
 
 export const metadata: Metadata = { title: "Send an order" };
 
@@ -154,6 +160,21 @@ export default async function ShippingOrderPage({
     : own;
   const cameFrom = new Map(combined?.items.map((item) => [item.line_id, item.order_name]));
   const sales = (group ?? [own]).map(saleOf).filter((each): each is Sale => each !== null);
+  // Tags and the figures before discounts: there for orders synced since they were kept.
+  const shown = group ?? [own];
+  const extras = await loadOrderExtras(
+    supabase,
+    tenant.id,
+    shown.map((each) => each.id),
+  );
+  const tags = [...new Set(shown.flatMap((each) => extras.get(each.id)?.tags ?? []))].slice(0, 20);
+  const figures = shown.map((each) => extras.get(each.id));
+  const allKnown = (key: "gross_sales" | "total_discounts") =>
+    figures.every((each) => each && each[key] !== null)
+      ? (sumAmounts(figures.map((each) => each![key])) ?? null)
+      : null;
+  const products = sales.length === shown.length ? allKnown("gross_sales") : null;
+  const discounts = products === null ? null : allKnown("total_discounts");
   const sale: Sale | null =
     sales.length === 0
       ? null
@@ -213,7 +234,9 @@ export default async function ShippingOrderPage({
     photos.set(`name:${row.title}|${row.variant_title ?? ""}`, row.image_url);
     if (!photos.has(`name:${row.title}`)) photos.set(`name:${row.title}`, row.image_url);
   }
+  // The picture of the very option that was ordered comes first; then the product's.
   const photoOf = (item: ShippingOrder["items"][number]) =>
+    shopPhotoAddress(item.image, THUMB_WIDTH) ??
     (item.sku ? photos.get(`sku:${item.sku}`) : undefined) ??
     photos.get(`name:${item.title}|${item.variant ?? ""}`) ??
     photos.get(`name:${item.title}`);
@@ -223,8 +246,9 @@ export default async function ShippingOrderPage({
   // Orders only open together when none of them is set aside.
   const hold = todo && !group ? holdState(order, today) : "none";
   const home = setup.settings.ship_from_country;
-  const parcelForm = (quiet: boolean) => (
+  const parcelForm = (quiet: boolean, key?: string) => (
     <ParcelForm
+      key={key}
       slug={tenant.slug}
       orderId={order.id}
       lines={left}
@@ -236,15 +260,6 @@ export default async function ShippingOrderPage({
       quiet={quiet}
     />
   );
-  const chose = [
-    order.shipping_method ? `chose ${order.shipping_method}` : null,
-    order.shipping_paid === null
-      ? null
-      : Number(order.shipping_paid) === 0
-        ? "free shipping"
-        : `paid ${formatMoney(Number(order.shipping_paid), tenant.currency)} for shipping`,
-    formatWeight(order.weight_grams, home === "US") || null,
-  ].filter(Boolean);
   // Up and down walk the list the person came from, oldest first, like the queue itself.
   const place = queuePlace(
     steps.filter((step) => inQueueView(step, view, today, home)),
@@ -257,6 +272,15 @@ export default async function ShippingOrderPage({
     timeZone: tenant.timezone,
     dateStyle: "medium",
     timeStyle: "short",
+  });
+  const day = new Intl.DateTimeFormat("en-US", { timeZone: tenant.timezone, dateStyle: "medium" });
+  // "Nov 20, 5:03 PM"
+  const placed = new Intl.DateTimeFormat("en-US", {
+    timeZone: tenant.timezone,
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
   });
   const sent = (parcels ?? []).filter((parcel) => !parcel.voided_at);
   const manager = canManage(role) && entitlements.canWrite;
@@ -349,28 +373,35 @@ export default async function ShippingOrderPage({
   const over = setup.settings.signature_over;
   const rule =
     over !== null && signatureByRule(sale ? Number(sale.total) : null, over)
-      ? `a signature is asked for on orders of ${money(over)} or more.`
+      ? `signature on orders of ${money(over)} or more`
       : null;
+  const itemCount = order.items.reduce((sum, item) => sum + item.qty, 0);
   const itemsList = (
-    <ul className="grid gap-x-6 gap-y-3 sm:grid-cols-2 xl:grid-cols-3">
+    <ul className="grid gap-x-5 sm:grid-cols-2 xl:grid-cols-3">
       {order.items.map((item) => {
         const photo = photoOf(item);
         return (
-          <li key={item.line_id} className="flex items-center gap-3 text-sm">
+          <li
+            key={item.line_id}
+            className="border-border flex items-start gap-3 border-t py-2 text-sm"
+          >
             {photo ? (
               // eslint-disable-next-line @next/next/no-img-element -- the shop's own picture of the product, on the shop's image servers
               <img
                 src={photo}
                 alt=""
                 loading="lazy"
-                className="border-border size-11 shrink-0 rounded-md border object-cover"
+                className="border-border size-12 shrink-0 rounded-md border bg-white object-cover"
               />
             ) : (
-              <span className="bg-sunken size-11 shrink-0 rounded-md" aria-hidden />
+              <span
+                className="bg-sunken border-border size-12 shrink-0 rounded-md border"
+                aria-hidden
+              />
             )}
             <span className="min-w-0 flex-1">
-              <span className="block truncate font-semibold">{item.title}</span>
-              <span className="text-muted-foreground block truncate text-xs">
+              <span className="block leading-snug font-semibold">{item.title}</span>
+              <span className="text-muted-foreground block text-xs break-words">
                 {cameFrom.has(item.line_id) && (
                   <span className="text-foreground font-semibold tabular-nums">
                     {cameFrom.get(item.line_id)} ·{" "}
@@ -380,7 +411,7 @@ export default async function ShippingOrderPage({
               </span>
             </span>
             <span className="text-right tabular-nums">
-              <span className="text-ochre-text block text-xs font-semibold">
+              <span className="text-ochre-text block font-extrabold whitespace-nowrap">
                 {item.left < item.qty ? `${item.left} of ${item.qty} left` : `× ${item.qty}`}
               </span>
               {item.price !== null && item.price !== undefined && (
@@ -394,15 +425,83 @@ export default async function ShippingOrderPage({
       })}
     </ul>
   );
-  const summaryRow =
-    "border-border flex items-baseline justify-between gap-4 border-b py-2 last:border-b-0";
+  // Why there's no Buy button here, when there isn't; the page keeps its shape either way.
+  const connections = `/w/${tenant.slug}/connections`;
+  const offReason: React.ReactNode = !posting ? null : labelCard === null ? (
+    <>
+      Connect EasyPost, your own UPS account or Redo and labels can be bought right here.{" "}
+      {manager ? (
+        <>
+          <Link href={connections} className={linkClass}>
+            Open Connections
+          </Link>{" "}
+          to add one.
+        </>
+      ) : (
+        "Ask an owner or admin to connect one."
+      )}{" "}
+      Until then, buy the postage wherever you usually do and record the parcel by hand.
+    </>
+  ) : labelCard === "reconnect" ? (
+    <>
+      {lapsed.join(" and ")} stopped accepting the saved {lapsed.length > 1 ? "keys" : "key"}, so
+      labels can&apos;t be bought right now.{" "}
+      {manager ? (
+        <Link href={connections} className={linkClass}>
+          Reconnect {lapsed.join(" and ")}
+        </Link>
+      ) : (
+        "Ask an owner or admin to reconnect it."
+      )}
+    </>
+  ) : labelCard === "abroad" ? (
+    INTERNATIONAL_NOTE
+  ) : labelCard === "unfinished" ? (
+    "A label for this order is waiting to be finished above. Finish that one rather than buying again."
+  ) : null;
+  const pickupCard = Boolean(order.pickup && !order.cancelled && (left.length > 0 || pickedUp));
+  const off = desk
+    ? null
+    : pickupCard
+      ? { bar: null, service: null, boxes: false }
+      : posting
+        ? {
+            bar: group ? (
+              <>
+                {offReason} Sending orders together works by buying one label here. To record a
+                parcel you bought elsewhere, open each order on its own and put the same tracking
+                number on each.
+              </>
+            ) : (
+              offReason
+            ),
+            service: offReason,
+            boxes: true,
+          }
+        : {
+            bar: order.cancelled
+              ? "This order was cancelled, so there's nothing to send."
+              : left.length === 0
+                ? "Everything on this order has been sent."
+                : "This workspace is read-only right now, so parcels can't be recorded.",
+            service: null,
+            boxes: false,
+          };
+  const stillToSend = left.reduce((sum, item) => sum + item.left, 0);
+  const summaryRow = "flex items-baseline justify-between gap-4 py-1";
 
   return (
-    <>
+    <div className="mx-auto flex w-full max-w-[1480px] flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <Link href={`${base}${carry}`} className="text-muted-foreground text-sm hover:underline">
-          ← {listName}
-        </Link>
+        <nav aria-label="Where you are" className="text-muted-foreground min-w-0 truncate text-sm">
+          <Link href={`${base}${carry}`} className="hover:underline" title={`Back to ${listName}`}>
+            Shipping
+          </Link>{" "}
+          /{" "}
+          <span className="text-foreground font-semibold tabular-nums">
+            {order.name ?? "Order"}
+          </span>
+        </nav>
         <OrderSteps
           position={place.position}
           total={place.total}
@@ -413,14 +512,31 @@ export default async function ShippingOrderPage({
         />
       </div>
       <PageHeader
-        title={`${order.name ?? "Order"} · ${order.recipient ?? "no name"}`}
-        description={[
-          group
-            ? `${group.length} orders, the oldest from ${when.format(new Date(order.placed_at))}`
-            : `Ordered ${when.format(new Date(order.placed_at))}`,
-          `${order.items.reduce((sum, item) => sum + item.qty, 0)} items`,
-          ...chose,
-        ].join(" · ")}
+        title={
+          <span className="text-[26px] font-extrabold tabular-nums">{order.name ?? "Order"}</span>
+        }
+        description={
+          <>
+            {group
+              ? `${group.length} orders, the oldest from ${day.format(new Date(order.placed_at))}`
+              : day.format(new Date(order.placed_at))}{" "}
+            · {itemCount} {itemCount === 1 ? "item" : "items"}
+            {sale ? ` · ${money(sale.total)}` : ""}
+            {order.shipping_method && (
+              <>
+                {" · "}
+                <span
+                  className="bg-sunken text-foreground inline-flex items-center gap-1 rounded-full px-2 py-px align-middle text-[13px] font-semibold"
+                  title="The shipping option picked at checkout"
+                >
+                  <Truck className="size-[13px]" aria-hidden />
+                  {order.shipping_method}
+                  {order.shipping_paid === null ? "" : ` · ${money(order.shipping_paid)}`}
+                </span>
+              </>
+            )}
+          </>
+        }
       >
         {order.cancelled && <Badge tone="bad">Cancelled</Badge>}
         {pickedUp && !order.cancelled && <Badge tone="good">Picked up</Badge>}
@@ -478,8 +594,8 @@ export default async function ShippingOrderPage({
         </p>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_24rem]">
-        <div className="flex min-w-0 flex-col gap-6">
+      <div className="grid items-start gap-[18px] lg:grid-cols-[minmax(0,1fr)_21.25rem]">
+        <div className="flex min-w-0 flex-col gap-3.5">
           {fresh && (
             <Card>
               <CardHeader>
@@ -610,7 +726,7 @@ export default async function ShippingOrderPage({
               </CardContent>
             </Card>
           )}
-          {order.pickup && !order.cancelled && (left.length > 0 || pickedUp) ? (
+          {pickupCard && (
             <Card>
               <CardHeader>
                 <CardTitle>In-store pickup</CardTitle>
@@ -622,16 +738,8 @@ export default async function ShippingOrderPage({
                       : "Nothing to post. Pack it, then mark it ready so the team knows it's waiting at the counter."}
                 </CardDescription>
               </CardHeader>
-              <CardContent className="flex flex-col gap-4">
-                <ul className="font-read flex flex-col gap-1 text-sm">
-                  {left.map((item) => (
-                    <li key={item.line_id}>
-                      <span className="font-semibold tabular-nums">{item.left} ×</span> {item.title}
-                      {item.variant ? ` (${item.variant})` : ""}
-                    </li>
-                  ))}
-                </ul>
-                {entitlements.canWrite && (
+              {entitlements.canWrite && (
+                <CardContent className="flex flex-col gap-4">
                   <PickupForm
                     slug={tenant.slug}
                     orderId={order.id}
@@ -639,173 +747,84 @@ export default async function ShippingOrderPage({
                     pickedUp={pickedUp}
                     canUndo={canManage(role)}
                   />
-                )}
-                {todo && entitlements.canWrite && (
-                  <details className="border-border border-t pt-3 text-sm">
-                    <summary className="text-muted-foreground cursor-pointer">
-                      Posting it after all? Record a parcel instead
-                    </summary>
-                    <div className="pt-4">{parcelForm(true)}</div>
-                  </details>
-                )}
-              </CardContent>
-            </Card>
-          ) : todo && entitlements.canWrite ? (
-            <>
-              {desk && (
-                <LabelDesk
-                  key={`${order.id}:${riders.join(",")}`}
-                  slug={tenant.slug}
-                  orderId={order.id}
-                  withIds={group ? group.slice(1).map((each) => each.id) : undefined}
-                  shipTo={shipToEdit(order)}
-                  country={(order.country_code || home).toUpperCase()}
-                  boxes={boxes.map((box) => ({
-                    id: box.id,
-                    name: box.name,
-                    size: boxSize(box),
-                    emptyTenthOz: boxTenthOz(box),
-                    length: String(Number(box.length_in)),
-                    width: String(Number(box.width_in)),
-                    height: String(Number(box.height_in)),
-                  }))}
-                  contentsTenthOz={
-                    order.weight_grams ? gramsToTenthOz(Number(order.weight_grams)) : null
-                  }
-                  paid={{
-                    cents:
-                      order.shipping_paid === null
-                        ? null
-                        : Math.round(Number(order.shipping_paid) * 100),
-                    words: paidWords,
-                    method: order.shipping_method,
-                  }}
-                  rule={rule}
-                  shop={{
-                    offered: setup.canSend,
-                    markSent: setup.settings.mark_sent_in_shop,
-                    notify: setup.settings.notify_customer,
-                  }}
-                  sources={postage.active}
-                  testSources={postage.testMode}
-                  lines={left.map((item) => ({
-                    id: item.line_id,
-                    title: item.title,
-                    detail: [cameFrom.get(item.line_id), item.variant, item.sku]
-                      .filter(Boolean)
-                      .join(" · "),
-                    qty: item.left,
-                    tenthOz: item.grams ? gramsToTenthOz(Number(item.grams)) : null,
-                    photo: photoOf(item) ?? null,
-                  }))}
-                  setup={
-                    fromGaps.length > 0
-                      ? {
-                          missing: `your ship-from address needs ${fromGaps.join(", ")}.`,
-                          href: manager ? `${base}/settings` : null,
-                        }
-                      : null
-                  }
-                >
-                  {itemsList}
-                </LabelDesk>
+                  {todo && (
+                    <details className="border-border border-t pt-3 text-sm">
+                      <summary className="text-muted-foreground cursor-pointer">
+                        Posting it after all? Record a parcel instead
+                      </summary>
+                      <div className="pt-4">{parcelForm(true, "pickup")}</div>
+                    </details>
+                  )}
+                </CardContent>
               )}
-              {labelCard && labelCard !== "unfinished" && !desk && (
-                <Card>
-                  <CardHeader>
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <CardTitle>Buy a label</CardTitle>
-                      {postage.testMode.length > 0 && (
-                        <Badge tone="waiting">Test mode: labels are not real</Badge>
-                      )}
-                    </div>
-                    <CardDescription>
-                      Postage is paid from your own postage account.
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    {labelCard === "abroad" && <p className="text-sm">{INTERNATIONAL_NOTE}</p>}
-                    {labelCard === "reconnect" && (
-                      <p className="text-sm">
-                        {lapsed.join(" and ")} stopped accepting the saved{" "}
-                        {lapsed.length > 1 ? "keys" : "key"}, so labels can&apos;t be bought right
-                        now.{" "}
-                        {manager ? (
-                          <Link
-                            href={`/w/${tenant.slug}/connections`}
-                            className="text-ochre-text font-medium hover:underline"
-                          >
-                            Reconnect {lapsed.join(" and ")}
-                          </Link>
-                        ) : (
-                          "Ask an owner or admin to reconnect it."
-                        )}
-                      </p>
-                    )}
-                  </CardContent>
-                </Card>
-              )}
-              {group ? (
-                // One label for the lot, or each order on its own page: a parcel
-                // typed in by hand belongs to a single order.
-                !desk &&
-                labelCard !== "unfinished" && (
-                  <Card>
-                    <CardContent className="pt-5">
-                      <p className="text-sm">
-                        Sending orders together works by buying one label here
-                        {labelCard === null ? ", which needs a postage account connected" : ""}. To
-                        record a parcel you bought elsewhere, open each order on its own and put the
-                        same tracking number on each.
-                      </p>
-                    </CardContent>
-                  </Card>
-                )
-              ) : desk ? (
-                <details className="bg-card border-border rounded-xl border px-5 py-4 text-sm">
-                  <summary className="cursor-pointer font-semibold">
-                    Bought the postage somewhere else, or sending part of this order?
-                  </summary>
-                  <p className="text-muted-foreground pt-2">
-                    Record the parcel by hand: put the tracking number here, and lower a number to
-                    send part now.
-                  </p>
-                  <div className="pt-4">{parcelForm(true)}</div>
-                </details>
-              ) : (
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Record the parcel</CardTitle>
-                    <CardDescription>
-                      Buy the postage wherever you usually do, then put the tracking number here.
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent>{parcelForm(false)}</CardContent>
-                </Card>
-              )}
-            </>
-          ) : (
-            <Card>
-              <CardContent className="pt-5">
-                <p className="text-sm">
-                  {order.cancelled
-                    ? "This order was cancelled, so there's nothing to send."
-                    : left.length === 0
-                      ? "Everything on this order has been sent."
-                      : "This workspace is read-only right now, so parcels can't be recorded."}
-                </p>
-              </CardContent>
             </Card>
           )}
-
-          {!desk && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Items</CardTitle>
-              </CardHeader>
-              <CardContent>{itemsList}</CardContent>
-            </Card>
-          )}
+          <LabelDesk
+            key={`${order.id}:${riders.join(",")}`}
+            slug={tenant.slug}
+            orderId={order.id}
+            withIds={group ? group.slice(1).map((each) => each.id) : undefined}
+            shipTo={shipToEdit(order)}
+            country={(order.country_code || home).toUpperCase()}
+            boxes={boxes.map((box) => ({
+              id: box.id,
+              name: box.name,
+              size: boxSize(box),
+              emptyTenthOz: boxTenthOz(box),
+              length: String(Number(box.length_in)),
+              width: String(Number(box.width_in)),
+              height: String(Number(box.height_in)),
+            }))}
+            contentsTenthOz={order.weight_grams ? gramsToTenthOz(Number(order.weight_grams)) : null}
+            paid={{
+              cents:
+                order.shipping_paid === null ? null : Math.round(Number(order.shipping_paid) * 100),
+              words: paidWords,
+              amount: order.shipping_paid === null ? null : money(order.shipping_paid),
+              method: order.shipping_method,
+            }}
+            rule={rule}
+            shop={{
+              offered: setup.canSend,
+              markSent: setup.settings.mark_sent_in_shop,
+              notify: setup.settings.notify_customer,
+            }}
+            sources={postage.active}
+            testSources={postage.testMode}
+            lines={left.map((item) => ({
+              id: item.line_id,
+              title: item.title,
+              detail: [cameFrom.get(item.line_id), item.variant, item.sku]
+                .filter(Boolean)
+                .join(" · "),
+              qty: item.left,
+              tenthOz: item.grams ? gramsToTenthOz(Number(item.grams)) : null,
+              photo: photoOf(item) ?? null,
+            }))}
+            itemCount={itemCount}
+            toTitle={order.pickup ? "Collecting" : "Ship to"}
+            record={posting && !group ? parcelForm(desk) : null}
+            recordOpen={!desk}
+            off={
+              off && {
+                ...off,
+                addressNote:
+                  !order.pickup && !hasAddress(order) && stillToSend > 0
+                    ? "There's no full address on this order. Check it in your shop before you pack."
+                    : null,
+              }
+            }
+            setup={
+              fromGaps.length > 0
+                ? {
+                    missing: `your ship-from address needs ${fromGaps.join(", ")}.`,
+                    href: manager ? `${base}/settings` : null,
+                  }
+                : null
+            }
+          >
+            {itemsList}
+          </LabelDesk>
 
           {sent.length > 0 && (
             <Card>
@@ -915,12 +934,12 @@ export default async function ShippingOrderPage({
           )}
         </div>
 
-        <aside className="flex flex-col gap-6">
+        <aside className="flex min-w-0 flex-col gap-3.5">
           <Card>
             <CardHeader>
               <CardTitle>Order summary</CardTitle>
             </CardHeader>
-            <CardContent className="flex flex-col text-sm">
+            <CardContent className="flex flex-col pt-2.5 text-sm">
               {group?.map((each) => (
                 <p key={each.id} className={summaryRow}>
                   <Link
@@ -931,7 +950,7 @@ export default async function ShippingOrderPage({
                     {each.name ?? "Order"}
                   </Link>
                   <span className="font-read min-w-0 truncate text-right">
-                    {when.format(new Date(each.placed_at))} ·{" "}
+                    {placed.format(new Date(each.placed_at))} ·{" "}
                     {each.items.reduce((sum, item) => sum + item.left, 0)} to send
                     {each.paid ? "" : " · payment pending"}
                   </span>
@@ -943,62 +962,85 @@ export default async function ShippingOrderPage({
                     ? []
                     : ([
                         ["Order", order.name ?? "–"],
-                        ["Placed", when.format(new Date(order.placed_at))],
+                        ["Placed", placed.format(new Date(order.placed_at))],
                       ] as const)),
                   ["Customer", order.recipient ?? "No name"],
                   ["Email", order.email ?? "–"],
                   ["Phone", order.phone ?? "–"],
                   ["Payment", order.paid ? "Paid" : "Pending"],
                   ["Customer chose", order.shipping_method ?? "–"],
-                  ["Weight", formatWeight(order.weight_grams, home === "US") || "–"],
                 ] as const
               ).map(([label, value]) => (
                 <p key={label} className={summaryRow}>
-                  <span className="text-muted-foreground">{label}</span>
-                  <span className="font-read min-w-0 truncate text-right font-medium">{value}</span>
+                  <span className="text-muted-foreground shrink-0">{label}</span>
+                  <span className="font-read min-w-0 truncate text-right font-medium" title={value}>
+                    {value}
+                  </span>
                 </p>
               ))}
+              {tags.length > 0 && (
+                <ul
+                  aria-label="Tags on this order in your shop"
+                  className="flex flex-wrap gap-1 pt-2"
+                >
+                  {tags.map((tag) => (
+                    <li key={tag}>
+                      <Badge className="max-w-full truncate">{tag}</Badge>
+                    </li>
+                  ))}
+                </ul>
+              )}
               {order.note && (
                 <p className="bg-note font-read mt-3 rounded-md px-3 py-2 whitespace-pre-wrap">
                   {order.note}
                 </p>
               )}
-              <div className="flex flex-wrap gap-2 pt-4">
-                {order.email && (
-                  <Button asChild variant="outline" size="sm">
-                    <a href={`mailto:${order.email}`}>Email customer</a>
-                  </Button>
-                )}
-                {todo && (
-                  <Button asChild variant="outline" size="sm">
-                    <Link
-                      href={
-                        group
-                          ? `${base}/slips?together=${group.map((each) => each.id).join(",")}`
-                          : `${base}/slips?order=${order.id}`
-                      }
-                    >
-                      {group ? "One packing slip" : "Packing slip"}
-                      {!group && order.slip_printed_at ? " (printed)" : ""}
-                    </Link>
-                  </Button>
-                )}
-                {shopLink && !group && (
-                  <Button asChild variant="ghost" size="sm">
-                    <a href={shopLink} target="_blank" rel="noopener noreferrer">
-                      Open in Shopify ↗
-                    </a>
-                  </Button>
-                )}
-                {todo && !group && (
-                  <Button asChild variant="outline" size="sm">
-                    <Link
-                      href={`${base}/scan?code=${encodeURIComponent((order.name ?? "").replace(/^#/, ""))}`}
-                    >
-                      Scan &amp; pack
-                    </Link>
-                  </Button>
-                )}
+              {order.email && (
+                <Button asChild variant="outline" size="sm" className="mt-2.5 w-full">
+                  <a href={`mailto:${order.email}`}>
+                    <Mail aria-hidden />
+                    Email customer
+                  </a>
+                </Button>
+              )}
+              <div className="pt-3 empty:hidden">
+                <OrderRailActions
+                  slip={
+                    todo
+                      ? {
+                          href: group
+                            ? `${base}/slips?together=${group.map((each) => each.id).join(",")}`
+                            : `${base}/slips?order=${order.id}`,
+                          label: group ? "One packing slip" : "Packing slip",
+                          printed: !group && Boolean(order.slip_printed_at),
+                        }
+                      : null
+                  }
+                  shopLink={group ? null : shopLink}
+                  hold={
+                    todo && entitlements.canWrite && !group
+                      ? {
+                          held: hold === "held",
+                          form: (
+                            <HoldForm
+                              slug={tenant.slug}
+                              orderId={order.id}
+                              hold={hold}
+                              reason={order.hold_reason}
+                              until={order.hold_until}
+                              today={today}
+                              choices={holdChoices(today)}
+                            />
+                          ),
+                        }
+                      : null
+                  }
+                  scanHref={
+                    todo && !group
+                      ? `${base}/scan?code=${encodeURIComponent((order.name ?? "").replace(/^#/, ""))}`
+                      : null
+                  }
+                />
               </div>
             </CardContent>
           </Card>
@@ -1011,10 +1053,23 @@ export default async function ShippingOrderPage({
                   <CardDescription>All {group.length} orders added together.</CardDescription>
                 )}
               </CardHeader>
-              <CardContent className="flex flex-col text-sm">
+              <CardContent className="flex flex-col pt-2.5 text-sm">
+                <p className={summaryRow}>
+                  <span className="text-muted-foreground">
+                    {products === null ? "Products, after discounts" : "Products"}
+                  </span>
+                  <span className="font-medium tabular-nums">
+                    {money(products ?? sale.net_sales)}
+                  </span>
+                </p>
+                {products !== null && discounts !== null && discounts > 0 && (
+                  <p className={summaryRow}>
+                    <span className="text-muted-foreground">Discounts</span>
+                    <span className="font-medium tabular-nums">−{money(discounts)}</span>
+                  </p>
+                )}
                 {(
                   [
-                    ["Items, after discounts", sale.net_sales],
                     ["Shipping paid", sale.total_shipping],
                     ["Tax", sale.total_tax],
                   ] as const
@@ -1025,73 +1080,14 @@ export default async function ShippingOrderPage({
                   </p>
                 ))}
                 <p className={summaryRow}>
-                  <span className="font-semibold">Total</span>
-                  <span className="font-semibold tabular-nums">{money(sale.total)}</span>
+                  <span className="font-bold">Total</span>
+                  <span className="font-bold tabular-nums">{money(sale.total)}</span>
                 </p>
-              </CardContent>
-            </Card>
-          )}
-
-          {!desk && (
-            <Card>
-              <CardHeader>
-                <CardTitle>{order.pickup ? "Collecting" : "Send to"}</CardTitle>
-              </CardHeader>
-              <CardContent className="flex flex-col gap-2 text-sm">
-                {order.pickup && !hasAddress(order) ? (
-                  <p className="font-read">{order.recipient ?? "No name on this order"}</p>
-                ) : hasAddress(order) ? (
-                  <address className="font-read not-italic">
-                    {addressLines(order, home).map((line, index) => (
-                      <span key={index} className="block">
-                        {line}
-                      </span>
-                    ))}
-                  </address>
-                ) : (
-                  <p className="text-brick">
-                    There&apos;s no full address on this order. Check it in your shop before you
-                    pack.
-                  </p>
-                )}
-                {order.phone && <p className="text-muted-foreground">{order.phone}</p>}
-                {order.email && (
-                  <a
-                    href={`mailto:${order.email}`}
-                    className="text-muted-foreground hover:underline"
-                  >
-                    {order.email}
-                  </a>
-                )}
-                {order.note && (
-                  <p className="bg-note font-read mt-1 rounded-md px-3 py-2 whitespace-pre-wrap">
-                    {order.note}
-                  </p>
-                )}
-              </CardContent>
-            </Card>
-          )}
-
-          {todo && entitlements.canWrite && !group && (
-            <Card>
-              <CardHeader>
-                <CardTitle>{hold === "held" ? "On hold" : "Not ready to send?"}</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <HoldForm
-                  slug={tenant.slug}
-                  orderId={order.id}
-                  hold={hold}
-                  reason={order.hold_reason}
-                  until={order.hold_until}
-                  today={today}
-                  choices={holdChoices(today)}
-                />
               </CardContent>
             </Card>
           )}
         </aside>
       </div>
-    </>
+    </div>
   );
 }
