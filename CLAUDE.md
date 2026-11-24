@@ -294,7 +294,28 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   ask for bill payments and purchases (`quickbooks-payments.ts`, read-only)
   and hand them to `import_book_payments`, which files a payment on the
   supplier of the same name, once (`external_key`), never one already typed
-  in, and never one a manager took off (`supplier_ledger_skips`). The help
+  in, and never one a manager took off (`supplier_ledger_skips`).
+  Bills by email (docs/bills-by-email.md; `lib/stock/mail`, pages under
+  `stock/balances/email` and `balances/mail-*`): invoices, statements and
+  payment notices are read into the ledger by ONE general reader. Never add
+  a parser or a code path for one supplier: who to recognise is a config
+  (`stock` / `email_sources`: senders, subject words, a bank's words per
+  supplier). Three ways in, one road (`intake.ts`): mail forwarded to the
+  workspace's bills address (`bills-<token>@INBOUND_EMAIL_DOMAIN`, the help
+  desk's queue; the worker routes it before the help desk and it is never a
+  ticket; the token is a secret, never logged), a daily look at Gmail (only
+  with the optional `gmail.readonly` scope, recorded in the connection's
+  `scopes` and checked on every read; only searches built by `query.ts`
+  from the sources, the sender re-checked per message), or an uploaded
+  file. Claude reads with structured output and no tools (`reader.ts`); the
+  email is marked as material and the answer is only ever data for
+  `tidyExtraction`. `plan.ts` (pure) decides skipped and "to check";
+  `file_email_entries` is the ONLY writer (same message once, one row per
+  invoice number, latest statement wins, removed stays removed). A "to
+  check" entry (`needs_review`) counts in the balance, as on TuftStock. A
+  message's text and files are never stored: ids, sender, subject and the
+  facts only. Everything is capped (`message.ts`) and counted against the
+  plan's AI allowance. The help
   desk reads Stock directly, as the member, for "when is this back?"
   (`lib/stock/restock.ts`); the workspace home card does the same for its
   facts (`lib/stock/home-summary.ts`, good news only).

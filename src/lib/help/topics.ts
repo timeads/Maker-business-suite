@@ -508,7 +508,8 @@ export const HELP_TOPICS: HelpTopic[] = [
       "Press the send button. For a draft it reads “Send & mark ordered”: the order goes and is marked as ordered in one step.",
     ],
     notes: [
-      "The permission is only to send. We can't read, search or delete anything in your mailbox, and nothing is ever sent without someone pressing the button.",
+      "Unless you choose otherwise, the permission is only to send: we can't read, search or delete anything in your mailbox, and nothing is ever sent without someone pressing the button.",
+      "Reading is a separate choice, for supplier balances only (see “Have bills file themselves from email”). If you never pick it, your mail is never read.",
       "Every send is noted on the order: when, who pressed, who it went to and from which mailbox.",
       "If you change an order after emailing it, the order says “Changed since you emailed it” and lists what changed. Sending again replies in the same conversation with the new PDF and says what's different.",
       "Pressing send twice sends once. If Gmail says no, nothing went and you can try again. If we never hear back from Gmail we say so and don't send again by ourselves: check your Sent folder first.",
@@ -667,8 +668,38 @@ export const HELP_TOPICS: HelpTopic[] = [
       "Narrow the bills and activity by supplier, type, dates or a search for an invoice number. The filters are in the page's address, so you can bookmark a view. Totals and cards always show everything.",
       "To fix an invoice's date or amount, open it and save a correction. Its number can't be changed: remove it and add it again.",
       "A payment dated in the few days before a statement may not be in that statement yet. We list it and don't take it off the balance, so nothing is counted twice; the supplier's next statement settles it.",
+      "Tired of typing bills in? See “Have bills file themselves from email”. Entries read that way say “From email”, and any that were unclear are listed as “to check”.",
       "Press “Hide” on a notice to put it away. It stays hidden for everyone, on every device, until something about it changes; “Show them” brings hidden notices back.",
       "“Put these due dates on my calendar” downloads a calendar file with one entry per supplier per pay day (a weekend's bills go on the Friday before). Add it to your calendar; download it again later and the same entries update.",
+    ],
+  },
+  {
+    slug: "bills-by-email",
+    group: "stock",
+    title: "Have bills file themselves from email",
+    summary:
+      "Forward a supplier's invoices and statements to your bills address and they're filed on their account.",
+    intro:
+      "Stock → Balances → Bills by email gives your workspace a private address. Forward a supplier's email to it and Claude reads it (and any PDF or picture attached) and files what it finds: an invoice, a statement's balance, a payment. Owners and admins set it up.",
+    steps: [
+      "Open Stock → Balances, then “Bills by email” (or “Set up Bills by email”). Press “Switch on and get my address” and copy the address.",
+      "Under “Who to recognise”, add each supplier's sender: pick the supplier and type the address (or just the domain) their bills come from. Save.",
+      "Forward a bill to your address to try it. A minute or two later it's on that supplier's account, marked “From email”.",
+      "To forward automatically from Gmail: add your bills address under Settings → Forwarding and POP/IMAP. Gmail sends a confirmation code to the address; it appears on the Bills by email page, and you type it into Gmail yourself. Then make a filter per supplier (From: their address → “Forward it to” your bills address).",
+      "Look at the Balances page now and then: “to check” lists anything that was unclear, “Whose is this?” lists forwarded mail from a sender you haven't listed, and “Left out” says what wasn't filed and why.",
+    ],
+    notes: [
+      "Any mail provider's forwarding works, and so does forwarding one email by hand.",
+      "An entry marked “to check” already counts in your balance. Press “Looks right” if it is, open the invoice to correct it, or remove it. Something you remove stays removed, even if the same bill is emailed again.",
+      "The same bill is only filed once, however many times it arrives. An invoice whose number is already on the account isn't added again; if the new copy has a different amount, the entry is marked to check.",
+      "The supplier's latest statement always wins: anything dated on or before it is already in their figure, so it isn't filed again.",
+      "What can't be read for certain is left out and listed with the reason (no total, no invoice number, an estimate, another currency), for you to type in.",
+      "Your bank's payment notices can be filed as payments: add the bank's sender and, for each supplier, words the notice always carries (their name as the bank writes it, or the end of their account number). A notice about anyone else is never read.",
+      "The email and its attachments aren't kept. We keep who sent it, when, its subject, and the figures read from it.",
+      "Treat the address like a password. “Make a new address” gives you a fresh one and the old one stops working straight away.",
+      "No address to hand? On a supplier's balance page, “+ Upload an invoice or statement” reads a PDF or picture the same way. The file isn't kept.",
+      "Optional, where it's offered: instead of forwarding, you can let us read your Gmail once a day for mail from the senders you listed, and nothing else. It needs a wider permission from Google, so it's off unless you connect Gmail “with reading” and tick the box. “Try it” shows what would be filed from a sender's latest mail without filing anything.",
+      "Up to 120 messages a day are read, with PDFs, PNGs and JPEGs up to 5 MB each. Reading uses your plan's monthly Claude allowance and pauses when that runs out.",
     ],
   },
   {

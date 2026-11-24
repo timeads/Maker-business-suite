@@ -7,7 +7,7 @@ For how a business uses it, see the help topic "Email an order to your supplier 
 ## What it does, and what it can't do
 
 - The connection is a provider like any other (`google_mail` in `src/lib/connections/providers/google-mail.ts`). The permission to send is kept in Supabase Vault and read only through `getProviderToken`.
-- It asks Google for three things: `openid` and `email` (to show which mailbox is connected) and `https://www.googleapis.com/auth/gmail.send`. That last one can send mail as the person. It cannot read, search, change or delete anything in the mailbox.
+- It asks Google for three things: `openid` and `email` (to show which mailbox is connected) and `https://www.googleapis.com/auth/gmail.send`. That last one can send mail as the person. It cannot read, search, change or delete anything in the mailbox. (A workspace can separately choose to add read-only access so Stock can read its suppliers' bills; that is off unless asked for, and is described in `docs/bills-by-email.md`.)
 - Nothing is sent by a timer or by the assistant. A send happens only when an owner or admin has looked the email over and pressed the send button.
 - Until the two environment variables below are set, the Gmail connection isn't shown at all and nothing else changes.
 
