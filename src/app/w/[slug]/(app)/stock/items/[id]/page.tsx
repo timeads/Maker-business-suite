@@ -6,6 +6,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { formatMoney } from "@/lib/dashboard/format";
 import { COST_SOURCE_LABELS } from "@/lib/stock/cost";
 import { caseLabel } from "@/lib/stock/engine";
+import { closureNote } from "@/lib/stock/views";
 import {
   HEALTH_LABELS,
   NOT_PLANNED_LABELS,
@@ -36,6 +37,8 @@ export default async function StockItemPage({
   const row = rows.find((r) => r.item.id === id);
   if (!row) notFound();
   const { plan, health, item } = row;
+  // A closure at the supplier moved the order-by date earlier: say why.
+  const closure = closureNote(row, today);
   const left = notPlannedReason(row);
   const cases = caseLabel(row.suggestedQty, row.casePack);
   const manager = canManage(role) && entitlements.canWrite;
@@ -113,6 +116,7 @@ export default async function StockItemPage({
           <CardDescription>
             {left ? `${NOT_PLANNED_LABELS[left]}. ` : ""}
             {health.reason}
+            {closure ? ` ${closure.why}` : ""}
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">

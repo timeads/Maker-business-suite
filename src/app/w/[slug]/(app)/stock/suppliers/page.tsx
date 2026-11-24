@@ -2,10 +2,13 @@ import type { Metadata } from "next";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
+import { Button } from "@/components/ui/button";
+import { closedOn, planBuildAhead, type Closure } from "@/lib/stock/engine/closures";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
 import { loadIncoming, loadStock } from "../data";
-import { SupplierForm } from "../forms";
+import { removeSupplierClosure } from "../actions";
+import { ClosureForm, SupplierForm } from "../forms";
 import { stockAccess } from "../gate";
 import { StockTabs } from "../tabs";
 
@@ -18,11 +21,41 @@ export default async function SuppliersPage({ params }: { params: Promise<{ slug
   const { tenant, role, entitlements } = access;
   const canEdit = canManage(role) && entitlements.canWrite;
   const supabase = await createClient();
-  const [{ suppliers, rows }, { leadTimes }] = await Promise.all([
+  const [{ suppliers, rows, closures, today }, { leadTimes }] = await Promise.all([
     loadStock(supabase, tenant),
     loadIncoming(supabase, tenant),
   ]);
   const itemCount = (id: string) => rows.filter((row) => row.item.supplier_id === id).length;
+  const closuresOf = (id: string): Closure[] =>
+    closures
+      .filter((c) => c.supplier_id === id)
+      .map((c) => ({ id: c.id, name: c.name, startsOn: c.starts_on, endsOn: c.ends_on }));
+  const day = (value: string) =>
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "UTC",
+      month: "short",
+      day: "numeric",
+      ...(value.slice(0, 4) === today.slice(0, 4) ? {} : { year: "numeric" }),
+    }).format(new Date(`${value}T12:00:00Z`));
+  /** What a supplier's closures mean for ordering, using their own days to arrive. */
+  const closureWords = (shut: Closure[], leadDays: number) => {
+    const now = closedOn(today, shut);
+    const ahead = planBuildAhead({ today, leadDays, closures: shut });
+    return {
+      now: now ? `Shut for ${now.name} until ${day(now.endsOn)}` : null,
+      ahead: ahead
+        ? ahead.missed
+          ? `Shut for ${ahead.closure.name} from ${day(ahead.closure.startsOn)}. The last day to order and have it before then was ${day(ahead.orderBefore)}.`
+          : `Shut for ${ahead.closure.name} from ${day(ahead.closure.startsOn)}. Order by ${day(ahead.orderBefore)} to have it before then.`
+        : null,
+      aheadShort: ahead
+        ? ahead.missed
+          ? `Shuts ${day(ahead.closure.startsOn)}`
+          : `Order by ${day(ahead.orderBefore)}, before ${ahead.closure.name}`
+        : null,
+      missed: ahead?.missed ?? false,
+    };
+  };
 
   return (
     <>
@@ -48,6 +81,23 @@ export default async function SuppliersPage({ params }: { params: Promise<{ slug
                         {s.moq > 1 &&
                           ` · smallest order ${s.moq}${s.moq_applies_to === "sku" ? " per item" : ""}`}
                       </span>
+                      {closureWords(closuresOf(s.id), s.lead_time_days).now ? (
+                        <Badge tone="bad">
+                          {closureWords(closuresOf(s.id), s.lead_time_days).now}
+                        </Badge>
+                      ) : (
+                        closureWords(closuresOf(s.id), s.lead_time_days).aheadShort && (
+                          <Badge
+                            tone={
+                              closureWords(closuresOf(s.id), s.lead_time_days).missed
+                                ? "bad"
+                                : "waiting"
+                            }
+                          >
+                            {closureWords(closuresOf(s.id), s.lead_time_days).aheadShort}
+                          </Badge>
+                        )
+                      )}
                       {leadTimes.has(s.id) && (
                         <Badge
                           tone={
@@ -69,6 +119,47 @@ export default async function SuppliersPage({ params }: { params: Promise<{ slug
                       </div>
                     ) : (
                       s.notes && <p className="font-read pt-2 text-sm">{s.notes}</p>
+                    )}
+                    {(canEdit || closuresOf(s.id).length > 0) && (
+                      <div className="border-border mt-4 flex flex-col gap-3 border-t pt-4">
+                        <div>
+                          <h3 className="text-sm font-semibold">When they&apos;re shut</h3>
+                          <p className="text-muted-foreground font-read text-sm">
+                            {closureWords(closuresOf(s.id), s.lead_time_days).ahead ??
+                              closureWords(closuresOf(s.id), s.lead_time_days).now ??
+                              "Holidays and shutdowns, when an order would just sit. We move the order-by dates for their items earlier, so each order arrives before they shut."}
+                          </p>
+                        </div>
+                        {closuresOf(s.id).length > 0 && (
+                          <ul className="divide-border flex flex-col divide-y text-sm">
+                            {closuresOf(s.id).map((c) => (
+                              <li
+                                key={c.id}
+                                className="flex flex-wrap items-center justify-between gap-2 py-1.5"
+                              >
+                                <span>
+                                  <span className="font-semibold">{c.name}</span>{" "}
+                                  <span className="text-muted-foreground">
+                                    {c.startsOn === c.endsOn
+                                      ? day(c.startsOn)
+                                      : `${day(c.startsOn)} to ${day(c.endsOn)}`}
+                                  </span>
+                                </span>
+                                {canEdit && (
+                                  <form
+                                    action={removeSupplierClosure.bind(null, tenant.slug, c.id!)}
+                                  >
+                                    <Button type="submit" variant="ghost" size="sm">
+                                      Take off
+                                    </Button>
+                                  </form>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        {canEdit && <ClosureForm slug={tenant.slug} supplierId={s.id} />}
+                      </div>
                     )}
                   </details>
                 </li>

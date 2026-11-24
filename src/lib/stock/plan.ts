@@ -13,6 +13,14 @@ import {
   roundUpToCase,
   type StockHealthResult,
 } from "./engine";
+import {
+  daysApart,
+  earliestArrival,
+  latestOrderDay,
+  planBuildAhead,
+  type BuildAhead,
+  type Closure,
+} from "./engine/closures";
 import { addDays } from "./engine/days";
 import { blendIndex, monthlyIndex } from "./engine/seasonality";
 import { SPARSE_WINDOW_DAYS } from "./engine/velocity";
@@ -68,6 +76,14 @@ export type SupplierRow = {
   moq_applies_to: "order" | "sku";
   archived_at?: string | null;
 };
+/** A stretch a supplier is shut, as stored (`supplier_closures`). */
+export type ClosureRow = {
+  id: string;
+  supplier_id: string;
+  name: string;
+  starts_on: string;
+  ends_on: string;
+};
 export type SaleRow = { stock_item_id: string; day: string; units: number | string };
 /** A day the shop's count for an item read zero or less (from the daily count). */
 export type EmptyDayRow = { stock_item_id: string; day: string };
@@ -108,6 +124,27 @@ export type StockRow = {
   due: boolean;
   /** A rule in Settings ("gift card"...) keeps this one out of planning. */
   skippedByRule: boolean;
+  /** The stretches its supplier is shut, today's and those to come. */
+  closures: Closure[];
+  /**
+   * Set when a closure moved the order-by date earlier, so the order lands
+   * before the supplier shuts (`plan.reorderDate` is already the moved date).
+   */
+  closure: {
+    name: string;
+    startsOn: string;
+    endsOn: string;
+    /** The order-by date the sums gave before the closure was counted. */
+    movedFrom: Date;
+    /** They are shut today. */
+    underWay: boolean;
+  } | null;
+  /**
+   * Ordering ahead of the supplier's next closure: the last day to order, and
+   * how many to order today so the shelf lasts until the first order after
+   * they reopen could arrive. Null when no closure is coming.
+   */
+  buildAhead: (BuildAhead & { qty: number }) | null;
   /** What it brought in over 90 days, and that as a share (0 to 1) of everything sold. */
   revenue90: number;
   revenueShare: number;
@@ -170,6 +207,11 @@ export function buildStockRows(input: {
   /** What checked-in deliveries cost, per item, for the average cost. */
   received?: ReceivedCostRow[];
   /**
+   * When suppliers are shut. An item's order-by date moves earlier so its
+   * order isn't in the works on a closed day (engine/closures.ts).
+   */
+  closures?: ClosureRow[];
+  /**
    * What each item brought in over the last 90 days, from the sales
    * themselves. Left out, it is estimated as units sold × today's price.
    */
@@ -218,6 +260,13 @@ export function buildStockRows(input: {
       };
     });
   const storeIndex = input.settings.seasonality ? monthlyIndex(forIndex(everything)) : null;
+  const closuresBySupplier = new Map<string, Closure[]>();
+  for (const row of input.closures ?? []) {
+    const closure = { id: row.id, name: row.name, startsOn: row.starts_on, endsOn: row.ends_on };
+    const list = closuresBySupplier.get(row.supplier_id);
+    if (list) list.push(closure);
+    else closuresBySupplier.set(row.supplier_id, [closure]);
+  }
   const revenueByItem = input.revenue
     ? new Map(input.revenue.map((row) => [row.stock_item_id, Number(row.revenue) || 0]))
     : null;
@@ -247,20 +296,82 @@ export function buildStockRows(input: {
     const moq = item.moq ?? supplier?.moq ?? 1;
     const casePack = casePackOf(item.case_pack);
     const empty = emptyByItem.get(item.id) ?? [];
-    const plan = computeReorder({
-      salesByDay: sales,
-      stockOnHand: item.on_hand,
-      onOrder,
-      effectiveLeadTimeDays: leadTimeDays,
-      effectiveCoverageDays: coverageDays,
-      safetyStockUnits: item.safety_stock,
-      moq,
-      moqAppliesTo: perItem ? "SKU" : "ORDER",
-      reviewBufferDays: input.settings.review_buffer_days,
-      today,
-      seasonalIndex,
-      outOfStockDates: empty,
-    });
+    const reorder = (cover: number) =>
+      computeReorder({
+        salesByDay: sales,
+        stockOnHand: item.on_hand,
+        onOrder,
+        effectiveLeadTimeDays: leadTimeDays,
+        effectiveCoverageDays: cover,
+        safetyStockUnits: item.safety_stock,
+        moq,
+        moqAppliesTo: perItem ? "SKU" : "ORDER",
+        reviewBufferDays: input.settings.review_buffer_days,
+        today,
+        seasonalIndex,
+        outOfStockDates: empty,
+      });
+    let plan = reorder(coverageDays);
+    let suggestedQty = roundUpToCase(plan.suggestedQty, casePack);
+
+    // Closures. The engine's dates and amounts above know nothing of them;
+    // what follows only ever moves the order-by date earlier and the amount up.
+    const shut = (supplier && closuresBySupplier.get(supplier.id)) || NO_CLOSURES;
+    let closure: StockRow["closure"] = null;
+    let buildAhead: StockRow["buildAhead"] = null;
+    if (shut.length > 0 && !plan.isDeadStock) {
+      const ahead = planBuildAhead({ today: input.today, leadDays: leadTimeDays, closures: shut });
+      if (ahead) {
+        // Enough to last until the first order after they reopen could arrive.
+        const cover = Math.max(coverageDays, ahead.daysToCover - leadTimeDays);
+        buildAhead = {
+          ...ahead,
+          qty: roundUpToCase(reorder(cover).suggestedQty, casePack),
+        };
+      }
+      if (plan.reorderDate) {
+        // The engine's order-by date is "arrive by this day, less the lead time".
+        const last = latestOrderDay({
+          needBy: isoDay(addDays(plan.reorderDate, leadTimeDays)),
+          leadDays: leadTimeDays,
+          closures: shut,
+        });
+        if (last.closure && last.daysEarlier > 0) {
+          const moved = dayToDate(last.orderBy);
+          closure = {
+            name: last.closure.name,
+            startsOn: last.closure.startsOn,
+            endsOn: last.closure.endsOn,
+            movedFrom: plan.reorderDate,
+            underWay:
+              daysApart(last.closure.startsOn, input.today) >= 0 &&
+              daysApart(input.today, last.closure.endsOn) >= 0,
+          };
+          plan = { ...plan, reorderDate: moved, isOverdue: moved.getTime() < today.getTime() };
+          // This is the order that has to sit the closure out: size it for that.
+          if (buildAhead && buildAhead.closure.startsOn === last.closure.startsOn) {
+            suggestedQty = Math.max(suggestedQty, buildAhead.qty);
+          }
+        }
+      }
+      // An order placed today that can't get going until they reopen has
+      // that much longer to cover.
+      const wait = daysApart(
+        input.today,
+        earliestArrival({ orderDay: input.today, leadDays: leadTimeDays, closures: shut }).startsOn,
+      );
+      if (wait > 0 && plan.suggestedQty > 0) {
+        suggestedQty = Math.max(
+          suggestedQty,
+          roundUpToCase(reorder(coverageDays + wait).suggestedQty, casePack),
+        );
+      }
+      // Too late to land before they shut: the card for that closure says
+      // what an order placed today would need to be.
+      if (buildAhead?.missed) {
+        buildAhead = { ...buildAhead, qty: Math.max(buildAhead.qty, suggestedQty) };
+      }
+    }
     const health = classifyStockHealth({
       stockOnHand: item.on_hand,
       onOrder,
@@ -276,7 +387,7 @@ export function buildStockRows(input: {
       shopCost: item.unit_cost,
     });
     const due =
-      plan.suggestedQty > 0 &&
+      suggestedQty > 0 &&
       plan.reorderDate !== null &&
       plan.reorderDate.getTime() <= addDays(today, DUE_WITHIN_DAYS).getTime();
     return {
@@ -294,7 +405,10 @@ export function buildStockRows(input: {
       plan,
       // The engine's own count of the days it dropped (a day with a sale never is).
       soldOutDays: empty.length > 0 ? computeVelocity(sales, today, empty).outOfStockDays : 0,
-      suggestedQty: roundUpToCase(plan.suggestedQty, casePack),
+      suggestedQty,
+      closures: shut,
+      closure,
+      buildAhead,
       health,
       due,
       skippedByRule: matchesSkipWords(item, input.settings.skip_words),
@@ -311,6 +425,8 @@ export function buildStockRows(input: {
   if (grand > 0) for (const row of built) row.revenueShare = row.revenue90 / grand;
   return built;
 }
+
+const NO_CLOSURES: Closure[] = [];
 
 /** Sent orders that still owe some of an item, oldest first. */
 function openOrdersOf(lines: OpenLine[]): StockRow["openOrders"] {
@@ -372,10 +488,14 @@ export type DraftOrder = {
  * the order scales the lines up to it (draft-po.ts); then every line is raised
  * to whole cases, so the total can only grow past the minimum.
  */
-function buildDrafts(rows: StockRow[], today: string): DraftOrder[] {
+function buildDrafts(
+  rows: StockRow[],
+  today: string,
+  qtyOf: (row: StockRow) => number = (row) => row.suggestedQty,
+): DraftOrder[] {
   const bySupplier = new Map<string, StockRow[]>();
   for (const row of rows) {
-    if (!row.supplier || row.suggestedQty <= 0) continue;
+    if (!row.supplier || qtyOf(row) <= 0) continue;
     bySupplier.set(row.supplier.id, [...(bySupplier.get(row.supplier.id) ?? []), row]);
   }
   return [...bySupplier.values()]
@@ -384,7 +504,7 @@ function buildDrafts(rows: StockRow[], today: string): DraftOrder[] {
       const draft = computeDraftPo(
         list.map((row) => ({
           variantId: row.item.id,
-          suggestedQty: row.suggestedQty,
+          suggestedQty: qtyOf(row),
           unitCost: row.cost.cost.toFixed(2),
           effectiveLeadTimeDays: row.leadTimeDays,
         })),
@@ -418,7 +538,12 @@ function buildDrafts(rows: StockRow[], today: string): DraftOrder[] {
           taxRatePct: 0,
           adjustments: [],
         }).subtotal.toNumber(),
-        expectedOn: isoDay(draft.estDeliveryDate),
+        // Counted from the day they reopen, if it would otherwise run through a closure.
+        expectedOn: earliestArrival({
+          orderDay: today,
+          leadDays: Math.max(0, ...list.map((row) => row.leadTimeDays)),
+          closures: list[0].closures,
+        }).arrives,
         bumpedToMinimum: draft.moqBumped,
       };
     })
@@ -441,6 +566,56 @@ export function draftOrders(rows: StockRow[], today: string): DraftOrder[] {
     rows.filter((row) => row.due && hasLiveSupplier(row) && isPlanned(row)),
     today,
   );
+}
+
+/** How far ahead a closure's order shows on the "To order" tab. */
+export const CLOSURE_CARD_DAYS = 60;
+
+export type ClosureOrder = DraftOrder & {
+  closure: { name: string; startsOn: string; endsOn: string };
+  /** The last day to place it (the earliest among its items, when they differ). */
+  orderBefore: string;
+  /** That day has gone by. */
+  missed: boolean;
+  /** When the first order placed after they reopen could arrive. */
+  nextArrival: string;
+  /** It needs placing within two weeks, so it stands in for the supplier's usual order. */
+  dueNow: boolean;
+};
+
+/**
+ * One order per supplier with a closure coming: everything of theirs that
+ * would run short before the first order after they reopen could arrive,
+ * sized to last until then. Shown from sixty days before its last order day.
+ */
+export function closureOrders(rows: StockRow[], today: string): ClosureOrder[] {
+  const affected = rows.filter(
+    (row) => isPlanned(row) && hasLiveSupplier(row) && (row.buildAhead?.qty ?? 0) > 0,
+  );
+  const out: ClosureOrder[] = [];
+  for (const draft of buildDrafts(affected, today, (row) => row.buildAhead?.qty ?? 0)) {
+    const lines = new Set(draft.lines.map((line) => line.stock_item_id));
+    const plans = affected
+      .filter((row) => lines.has(row.item.id) && row.supplier!.id === draft.supplier.id)
+      .map((row) => row.buildAhead!);
+    if (plans.length === 0) continue;
+    const orderBefore = plans.map((plan) => plan.orderBefore).sort()[0];
+    const until = daysApart(today, orderBefore);
+    if (until > CLOSURE_CARD_DAYS) continue;
+    const { closure } = plans[0];
+    out.push({
+      ...draft,
+      closure: { name: closure.name, startsOn: closure.startsOn, endsOn: closure.endsOn },
+      orderBefore,
+      missed: until < 0,
+      nextArrival: plans
+        .map((plan) => plan.nextArrival)
+        .sort()
+        .at(-1)!,
+      dueNow: until <= DUE_WITHIN_DAYS,
+    });
+  }
+  return out.sort((a, b) => a.orderBefore.localeCompare(b.orderBefore));
 }
 
 export type SelectionDraft = {
@@ -531,10 +706,20 @@ export function explainSuggestion(row: StockRow, today: string): string {
   const sells = `Sells about ${perMonth(row)} a month${
     out > 0 ? ` while it's in stock (${out} sold-out day${out === 1 ? "" : "s"} left out)` : ""
   }`;
+  const cases = caseLabel(row.suggestedQty, row.casePack);
+  const shut = row.closure ?? row.buildAhead?.closure ?? null;
+  const through = shut
+    ? `through ${shut.name}, when ${row.supplier?.name ?? "the supplier"} is shut`
+    : "until they reopen";
   if (plan.suggestedQty <= 0) {
-    return `${sells}. ${have}: enough for now${
-      plan.stockOutDate ? `, runs out ${relativeDay(plan.stockOutDate, today)}` : ""
-    }.`;
+    const runsOut = plan.stockOutDate ? `, runs out ${relativeDay(plan.stockOutDate, today)}` : "";
+    // Plenty by the usual sums, but not enough to sit out a closure.
+    if (row.suggestedQty > 0) {
+      return `${sells}. ${have}${runsOut}. That would do for now, but order ${row.suggestedQty}${
+        cases ? ` (${cases})` : ""
+      } to last ${through}.`;
+    }
+    return `${sells}. ${have}: enough for now${runsOut}.`;
   }
   let text = `${sells}. ${have}, runs out ${relativeDay(plan.stockOutDate, today)}. To last the ${
     row.leadTimeDays
@@ -542,12 +727,16 @@ export function explainSuggestion(row: StockRow, today: string): string {
   if (item.safety_stock > 0) text += `, keeping ${item.safety_stock} spare`;
   text += `, order ${plan.suggestedQty}`;
   if (plan.moqApplied) text += ` (raised to the smallest order of ${row.minimum})`;
-  const cases = caseLabel(row.suggestedQty, row.casePack);
-  if (cases) {
+  const plainQty = roundUpToCase(plan.suggestedQty, row.casePack);
+  const plainCases = caseLabel(plainQty, row.casePack);
+  if (plainCases) {
     text +=
-      row.suggestedQty === plan.suggestedQty
-        ? `: ${cases}`
-        : `, rounded up to ${cases} (${row.suggestedQty})`;
+      plainQty === plan.suggestedQty
+        ? `: ${plainCases}`
+        : `, rounded up to ${plainCases} (${plainQty})`;
+  }
+  if (row.suggestedQty > plainQty) {
+    text += `. Raised to ${row.suggestedQty}${cases ? ` (${cases})` : ""} to last ${through}`;
   }
   return `${text}.`;
 }

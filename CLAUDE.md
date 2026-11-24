@@ -192,6 +192,26 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   first one's orders. Order totals (shipping, tax, adjustments) come from
   `lib/stock/po/totals.ts`; tracking on incoming orders is what a person
   records (`purchase_order_shipments`), never asked of a carrier.
+  The reorder list (Everything tab) follows TuftStock's: its column names,
+  its five views first, dates in its words (`relativeDay`), and its rules for
+  dead stock, top sellers and "% Rev" (`topSellerIds`, `isDeadStock`,
+  `revenueShare`; revenue is summed on read by `stock_revenue_by_item`). An
+  item's photo is the option's own (`variant_image_url`, written only by the
+  sync through `set_variant_photos`; the sync asks without photos if the shop
+  refuses), else the product's, and is shown only from the shop platform's
+  image servers. Saved views are a config (`stock` / `saved_views`), shared by
+  the workspace. A purchase order's PDF is words first (`po/document.ts`,
+  pure) and then drawn (`po/pdf.tsx`, `@react-pdf/renderer`, server only,
+  built-in fonts); the route is manager-only, the address is Shipping's
+  ship-from, and the logo is the `logo` asset read from our own storage.
+  Supplier closures (`supplier_closures`, manager-only functions) are dated
+  stretches a supplier is shut. The rule lives in `engine/closures.ts` (pure,
+  plain calendar days): an order's lead time may not run through a closure,
+  so `buildStockRows()` moves an item's order-by date earlier
+  (`row.closure`), works out the order to place before the next closure
+  (`row.buildAhead`, sized to last until the first order after they reopen
+  could arrive) and `closureOrders()` turns those into the "Order before …"
+  cards. Only the dates are stored.
 - Shipping: `shipping_orders` holds what packing needs (address, what's left
   to send), kept apart from `orders` so the sales figures never carry an
   address. It is read from the shop in a separate query that is allowed to

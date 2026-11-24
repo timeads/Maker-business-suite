@@ -22,6 +22,7 @@ import {
   type EmptyDayRow,
   type ReceivedCostRow,
   type ItemRow,
+  type ClosureRow,
   type OpenLine,
   type RevenueRow,
   type SaleRow,
@@ -69,6 +70,7 @@ export async function loadStock(
     emptyDays,
     received,
     revenue,
+    closures,
     { data: configs },
     { data: shop },
   ] = await Promise.all([
@@ -150,6 +152,17 @@ export async function loadStock(
         .order("stock_item_id")
         .range(from, to),
     ),
+    // When suppliers are shut: today's closures and those still to come.
+    all<ClosureRow>((from, to) =>
+      supabase
+        .from("supplier_closures")
+        .select("id, supplier_id, name, starts_on, ends_on")
+        .eq("tenant_id", tenant.id)
+        .gte("ends_on", today)
+        .order("starts_on")
+        .order("id")
+        .range(from, to),
+    ),
     supabase
       .from("configs")
       .select("key, body")
@@ -193,9 +206,11 @@ export async function loadStock(
       emptyDays,
       received,
       revenue,
+      closures,
       settings,
       today,
     }),
+    closures,
     suppliers,
     settings,
     savedViews: parseSavedViews(config(STOCK_VIEWS_KEY)).views,

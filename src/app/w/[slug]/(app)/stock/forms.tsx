@@ -12,6 +12,7 @@ import {
   saveItemCost,
   saveItemPlan,
   saveStockSettings,
+  saveSupplierClosure,
   saveSupplier,
   setItemHidden,
   setOrderStatus,
@@ -87,6 +88,40 @@ export function ReorderSwitch({
         </p>
         <SubmitButton variant="outline" pendingText="Saving…">
           {hidden ? "Reorder this again" : "Don't reorder this"}
+        </SubmitButton>
+      </div>
+      <Result state={state} />
+    </form>
+  );
+}
+
+/** Adds a stretch when a supplier is shut. The form clears itself once it has saved. */
+export function ClosureForm({ slug, supplierId }: { slug: string; supplierId: string }) {
+  const [state, action] = useActionState(saveSupplierClosure.bind(null, slug, supplierId), {});
+  const id = `closure-${supplierId}`;
+  return (
+    <form action={action} className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="flex min-w-40 flex-1 flex-col gap-1.5">
+          <Label htmlFor={`${id}-name`}>They&apos;re shut for</Label>
+          <Input
+            id={`${id}-name`}
+            name="name"
+            maxLength={80}
+            placeholder="Spring Festival"
+            required
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor={`${id}-from`}>First day shut</Label>
+          <Input id={`${id}-from`} name="starts_on" type="date" required />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor={`${id}-to`}>Last day shut</Label>
+          <Input id={`${id}-to`} name="ends_on" type="date" required />
+        </div>
+        <SubmitButton variant="outline" pendingText="Saving…">
+          Add closure
         </SubmitButton>
       </div>
       <Result state={state} />
@@ -223,7 +258,7 @@ export function SupplierForm({ slug, supplier }: { slug: string; supplier?: Supp
           rows={2}
           maxLength={2000}
           defaultValue={supplier?.notes}
-          placeholder="Closed in August. Ask for Dana."
+          placeholder="Ask for Dana. Pays the freight on orders over 500."
           className={textarea}
         />
       </div>

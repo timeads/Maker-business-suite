@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_STOCK_SETTINGS, parseSavedViews, parseStockSettings } from "./config";
 import {
   buildStockRows,
+  closureOrders,
   draftOrders,
   draftOrdersForItems,
   emptyDaysSince,
@@ -14,7 +15,15 @@ import {
   type ItemRow,
   type SupplierRow,
 } from "./plan";
-import { csvTable, rankRows, searchRows, sortRows, toGridRow, viewRows } from "./views";
+import {
+  closureNote,
+  csvTable,
+  rankRows,
+  searchRows,
+  sortRows,
+  toGridRow,
+  viewRows,
+} from "./views";
 
 const TODAY = "2026-11-20";
 const item = (id: string, overrides: Partial<ItemRow> = {}): ItemRow => ({
@@ -631,5 +640,209 @@ describe("saved views", () => {
     });
     expect(parseSavedViews({ version: 1, views: [{ id: "BAD ID", name: "" }] }).views).toEqual([]);
     expect(parseSavedViews(null).views).toEqual([]);
+  });
+});
+
+describe("when a supplier is shut", () => {
+  // Today is Nov 20, 2026. Hill Mill takes 20 days, an order covers 30, and
+  // orders are looked at every 7. Everything here sells one a day.
+  const iso = (date: Date | null) =>
+    date
+      ? `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`
+      : null;
+  const shut = (name: string, from: string, to: string, supplier = "s1") => ({
+    id: `c-${name}`,
+    supplier_id: supplier,
+    name,
+    starts_on: from,
+    ends_on: to,
+  });
+  const rows = (
+    closures: ReturnType<typeof shut>[],
+    items = [item("a", { on_hand: 60 }), item("other", { on_hand: 60, supplier_id: "s2" })],
+  ) =>
+    buildStockRows({
+      items,
+      suppliers: [mill, dye],
+      sales: items.flatMap((i) => steady(i.id, 90)),
+      openLines: [],
+      closures,
+      settings,
+      today: TODAY,
+    });
+  const festival = shut("Spring Festival", "2027-01-05", "2027-02-01");
+
+  it("with no closure, the order-by date is the engine's own", () => {
+    const [a] = rows([]);
+    // 60 on the shelf runs out Jan 19; less 20 days to arrive and 7 to review.
+    expect(iso(a.plan.stockOutDate)).toBe("2027-01-19");
+    expect(iso(a.plan.reorderDate)).toBe("2026-12-23");
+    expect(a.closure).toBeNull();
+    expect(a.buildAhead).toBeNull();
+    expect(a.suggestedQty).toBe(0);
+  });
+
+  it("moves the order-by date earlier so the order lands before they shut", () => {
+    const [a, other] = rows([festival]);
+    // Ordered Dec 23 it would arrive Jan 12, a week into the closure. It has
+    // to arrive Jan 4 instead: order by Dec 15.
+    expect(iso(a.plan.reorderDate)).toBe("2026-12-15");
+    expect(a.plan.isOverdue).toBe(false);
+    expect(a.closure).toMatchObject({
+      name: "Spring Festival",
+      startsOn: "2027-01-05",
+      endsOn: "2027-02-01",
+      underWay: false,
+    });
+    expect(iso(a.closure!.movedFrom)).toBe("2026-12-23");
+    // The stock-out date is the shelf's own business and doesn't move.
+    expect(iso(a.plan.stockOutDate)).toBe("2027-01-19");
+    // Another supplier's item isn't touched by this one's closure.
+    expect(other.closure).toBeNull();
+    expect(iso(other.plan.reorderDate)).toBe("2026-12-23");
+    // The list says so on the row.
+    const note = closureNote(a, TODAY)!;
+    expect(note.label).toBe("Before Spring Festival");
+    expect(note.why).toBe(
+      "Hill Mill is shut for Spring Festival (Jan 5 to Feb 1). To arrive before they shut, order in 25 days rather than in about 1 month.",
+    );
+    expect(toGridRow(a, TODAY).closure).toEqual(note);
+    expect(toGridRow(other, TODAY).closure).toBeNull();
+  });
+
+  it("sizes that order to last until the first one after they reopen could arrive", () => {
+    const [a] = rows([festival]);
+    // They reopen Feb 2; an order then arrives Feb 22, 94 days from today.
+    // 94 days at one a day, less the 60 on the shelf.
+    expect(a.buildAhead).toMatchObject({
+      orderBefore: "2026-12-15",
+      missed: false,
+      nextArrival: "2027-02-22",
+      daysToCover: 94,
+      qty: 34,
+    });
+    // The usual sums (20 days + 30) would have asked for nothing.
+    expect(a.plan.suggestedQty).toBe(0);
+    expect(a.suggestedQty).toBe(34);
+    expect(explainSuggestion(a, TODAY)).toBe(
+      "Sells about 30 a month. 60 on the shelf, runs out in 2 months. That would do for now, but order 34 to last through Spring Festival, when Hill Mill is shut.",
+    );
+  });
+
+  it("an order that isn't in the closure's way keeps its date, but is still planned ahead for", () => {
+    // 20 on the shelf: runs out Dec 10, order by Nov 13, arriving Dec 3. Well clear.
+    const [soon] = rows([festival], [item("soon", { on_hand: 20 })]);
+    expect(soon.closure).toBeNull();
+    expect(iso(soon.plan.reorderDate)).toBe("2026-11-13");
+    // The usual order: 50 days less the 20 here.
+    expect(soon.suggestedQty).toBe(30);
+    // Before they shut it will need 94 days' worth less the 20.
+    expect(soon.buildAhead?.qty).toBe(74);
+  });
+
+  it("offers one order per supplier ahead of the closure, feeding the usual draft", () => {
+    const all = rows([festival]);
+    const cards = closureOrders(all, TODAY);
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({
+      closure: { name: "Spring Festival", startsOn: "2027-01-05", endsOn: "2027-02-01" },
+      orderBefore: "2026-12-15",
+      missed: false,
+      dueNow: false,
+      nextArrival: "2027-02-22",
+      totalUnits: 34,
+      // Placed today it is here in 20 days, long before they shut.
+      expectedOn: "2026-12-10",
+    });
+    expect(cards[0].supplier.id).toBe("s1");
+    expect(cards[0].lines).toEqual([
+      expect.objectContaining({ stock_item_id: "a", qty: 34, unit_cost: 12.5 }),
+    ]);
+    // Nothing of theirs is due in the next two weeks, so there is no usual order yet.
+    expect(draftOrders(all, TODAY)).toEqual([]);
+  });
+
+  it("leaves out hidden items, suppliers no longer used and closures too far off to act on", () => {
+    expect(
+      closureOrders(rows([festival], [item("a", { on_hand: 60, hidden: true })]), TODAY),
+    ).toEqual([]);
+    const retired = buildStockRows({
+      items: [item("a", { on_hand: 60 })],
+      suppliers: [{ ...mill, archived_at: "2026-01-01T00:00:00Z" }],
+      sales: steady("a", 90),
+      openLines: [],
+      closures: [festival],
+      settings,
+      today: TODAY,
+    });
+    expect(closureOrders(retired, TODAY)).toEqual([]);
+    // Shut in June: the last order day is May 11, more than sixty days away.
+    const far = rows([shut("Summer break", "2027-06-01", "2027-06-14")]);
+    expect(far[0].buildAhead?.orderBefore).toBe("2027-05-11");
+    expect(closureOrders(far, TODAY)).toEqual([]);
+  });
+
+  it("when the last order day has gone by, says so and sizes for an order placed now", () => {
+    // Shut from Dec 1: to land before, the order had to go by Nov 10.
+    const late = rows(
+      [shut("Stocktake", "2026-12-01", "2026-12-20")],
+      [item("low", { on_hand: 10 })],
+    );
+    const [low] = late;
+    // It was already due Nov 3 to arrive Nov 23, before they shut: the date stands.
+    expect(low.closure).toBeNull();
+    expect(iso(low.plan.reorderDate)).toBe("2026-11-03");
+    expect(low.buildAhead).toMatchObject({ orderBefore: "2026-11-10", missed: true });
+    // Placed today it can't get going until Dec 21 (31 days), arriving Jan 10:
+    // 20 + 30 + 31 days of sales, less the 10 here.
+    expect(low.suggestedQty).toBe(71);
+    expect(low.buildAhead?.qty).toBe(71);
+    const [card] = closureOrders(late, TODAY);
+    expect(card).toMatchObject({ missed: true, dueNow: true, expectedOn: "2027-01-10" });
+    expect(card.lines[0].qty).toBe(71);
+    // The usual order for that supplier says the same, date and all.
+    const [usual] = draftOrders(late, TODAY);
+    expect(usual.expectedOn).toBe("2027-01-10");
+    expect(usual.lines[0].qty).toBe(71);
+    expect(explainSuggestion(low, TODAY)).toMatch(
+      /order 40\. Raised to 71 to last through Stocktake, when Hill Mill is shut\.$/,
+    );
+  });
+
+  it("while they are shut, counts an order from the day they are back", () => {
+    const [low] = rows(
+      [shut("Stocktake", "2026-11-10", "2026-12-10")],
+      [item("low", { on_hand: 10 })],
+    );
+    // To have arrived Nov 23 it had to land before Nov 10: order by Oct 20.
+    expect(iso(low.plan.reorderDate)).toBe("2026-10-20");
+    expect(low.plan.isOverdue).toBe(true);
+    expect(low.closure).toMatchObject({ name: "Stocktake", underWay: true });
+    expect(closureNote(low, TODAY)!.label).toBe("Shut for Stocktake");
+    // No closure is *coming*, so there is nothing to order ahead of.
+    expect(low.buildAhead).toBeNull();
+    // Back Dec 11 (21 days): 20 + 30 + 21 days of sales, less the 10 here.
+    expect(low.suggestedQty).toBe(61);
+  });
+
+  it("goes before both closures when the gap between them is shorter than the lead time", () => {
+    const [a] = rows([festival, shut("Lantern week", "2027-02-10", "2027-02-14")]);
+    expect(iso(a.plan.reorderDate)).toBe("2026-12-15");
+    // The first order after the festival (Feb 2) would run into Lantern week:
+    // it is counted from Feb 15 instead, arriving Mar 7.
+    expect(a.buildAhead).toMatchObject({ nextArrival: "2027-03-07", daysToCover: 107, qty: 47 });
+  });
+
+  it("nothing is planned ahead for dead stock", () => {
+    const dead = buildStockRows({
+      items: [item("dead", { on_hand: 60 })],
+      suppliers: [mill],
+      sales: [],
+      openLines: [],
+      closures: [festival],
+      settings,
+      today: TODAY,
+    });
+    expect(dead[0]).toMatchObject({ closure: null, buildAhead: null, suggestedQty: 0 });
   });
 });

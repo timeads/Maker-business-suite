@@ -5,10 +5,16 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { formatMoney } from "@/lib/dashboard/format";
-import { draftOrders, hasLiveSupplier, isPlanned, relativeDay } from "@/lib/stock/plan";
+import {
+  closureOrders,
+  draftOrders,
+  hasLiveSupplier,
+  isPlanned,
+  relativeDay,
+} from "@/lib/stock/plan";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
-import { startSuggestedOrder } from "./actions";
+import { startClosureOrder, startSuggestedOrder } from "./actions";
 import { loadIncoming, loadStock } from "./data";
 import { StartOrderButton } from "./forms";
 import { stockAccess } from "./gate";
@@ -36,7 +42,20 @@ export default async function StockPage({ params }: { params: Promise<{ slug: st
   const lateCount = incoming.filter((order) => order.late).length;
   const planned = rows.filter(isPlanned);
   const due = planned.filter((row) => row.due);
-  const orders = draftOrders(rows, today);
+  const everyOrder = draftOrders(rows, today);
+  // Orders that must land before a supplier shuts. One that is due now takes
+  // the place of that supplier's usual order: it holds the same items and more.
+  const beforeClosures = closureOrders(rows, today);
+  const orders = everyOrder.filter(
+    (order) => !beforeClosures.some((c) => c.dueNow && c.supplier.id === order.supplier.id),
+  );
+  const longDay = (value: string) =>
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "UTC",
+      month: "short",
+      day: "numeric",
+      ...(value.slice(0, 4) === today.slice(0, 4) ? {} : { year: "numeric" }),
+    }).format(new Date(`${value}T12:00:00Z`));
   // No supplier, or one marked "we don't order from them any more".
   const unassigned = due.filter((row) => !hasLiveSupplier(row));
   const out = planned.filter((row) => row.health.health === "out" && !row.plan.isDeadStock);
@@ -46,7 +65,7 @@ export default async function StockPage({ params }: { params: Promise<{ slug: st
     { label: "To order", value: String(due.length), note: "items due in the next two weeks" },
     {
       label: "Worth",
-      value: money(orders.reduce((sum, order) => sum + order.totalCost, 0)),
+      value: money(everyOrder.reduce((sum, order) => sum + order.totalCost, 0)),
       note: "if you place every suggested order",
     },
     { label: "Sold out", value: String(out.length), note: "things people still want" },
@@ -110,15 +129,105 @@ export default async function StockPage({ params }: { params: Promise<{ slug: st
             </Card>
           )}
 
-          {orders.length === 0 && unassigned.length === 0 && suppliers.length > 0 && (
-            <Card>
-              <CardContent className="pt-5">
-                <p className="text-sm">
-                  Nothing needs ordering right now. We&apos;ll list it here when it does.
-                </p>
+          {beforeClosures.map((order) => (
+            <Card key={`closure-${order.supplier.id}`}>
+              <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0 flex-1 basis-80">
+                  <CardTitle className="flex flex-wrap items-center gap-2">
+                    Order before {order.closure.name}: {longDay(order.orderBefore)}
+                    {order.missed ? (
+                      <Badge tone="bad">That day has passed</Badge>
+                    ) : (
+                      <Badge tone={order.dueNow ? "waiting" : "open"}>
+                        {relativeDay(new Date(`${order.orderBefore}T00:00:00`), today)}
+                      </Badge>
+                    )}
+                  </CardTitle>
+                  <CardDescription>
+                    <span className="text-foreground font-semibold">{order.supplier.name}</span> is
+                    shut {longDay(order.closure.startsOn)} to {longDay(order.closure.endsOn)}.{" "}
+                    {order.missed
+                      ? `An order placed now may not get going until they're back, arriving about ${longDay(order.expectedOn)}.`
+                      : `Ordered by then, it arrives before they shut.`}{" "}
+                    {order.lines.length} item{order.lines.length === 1 ? "" : "s"} ·{" "}
+                    {order.totalUnits} units · {money(order.totalCost)}, enough to last until about{" "}
+                    {longDay(order.nextArrival)}, when the first order after they reopen could
+                    arrive
+                    {order.bumpedToMinimum &&
+                      ` · raised to their smallest order of ${order.supplier.moq}`}
+                    .
+                  </CardDescription>
+                </div>
+                {canEdit && (
+                  <form action={startClosureOrder.bind(null, tenant.slug, order.supplier.id)}>
+                    <StartOrderButton />
+                  </form>
+                )}
+              </CardHeader>
+              <CardContent>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[560px] text-left text-sm">
+                    <thead className="text-muted-foreground text-xs">
+                      <tr>
+                        <th className="py-2 pr-3 font-semibold">Item</th>
+                        <th className="py-2 pr-3 text-right font-semibold">Have</th>
+                        <th className="py-2 pr-3 text-right font-semibold">Coming</th>
+                        <th className="py-2 pr-3 font-semibold">Runs out</th>
+                        <th className="py-2 text-right font-semibold">Order</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-border divide-y">
+                      {order.lines.map((line) => {
+                        const row = rows.find((r) => r.item.id === line.stock_item_id)!;
+                        return (
+                          <tr key={line.stock_item_id}>
+                            <td className="py-2 pr-3">
+                              <Link
+                                href={`${base}/items/${row.item.id}`}
+                                className="font-read hover:underline"
+                              >
+                                {line.name}
+                              </Link>
+                            </td>
+                            <td className="py-2 pr-3 text-right tabular-nums">
+                              {row.item.on_hand}
+                            </td>
+                            <td className="py-2 pr-3 text-right tabular-nums">
+                              {row.onOrder || "–"}
+                            </td>
+                            <td className="py-2 pr-3">
+                              {relativeDay(row.plan.stockOutDate, today)}
+                            </td>
+                            <td className="py-2 text-right tabular-nums">
+                              <span className="font-semibold">{line.qty}</span>
+                              {line.cases && (
+                                <span className="text-muted-foreground block text-xs">
+                                  {line.cases}
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </CardContent>
             </Card>
-          )}
+          ))}
+
+          {orders.length === 0 &&
+            beforeClosures.length === 0 &&
+            unassigned.length === 0 &&
+            suppliers.length > 0 && (
+              <Card>
+                <CardContent className="pt-5">
+                  <p className="text-sm">
+                    Nothing needs ordering right now. We&apos;ll list it here when it does.
+                  </p>
+                </CardContent>
+              </Card>
+            )}
 
           {orders.map((order) => (
             <Card key={order.supplier.id}>

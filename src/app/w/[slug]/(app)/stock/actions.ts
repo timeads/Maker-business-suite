@@ -19,7 +19,14 @@ import {
 } from "@/lib/stock/config";
 import { isColumnKey, isViewKey } from "@/lib/stock/views";
 import { startingQty } from "@/lib/stock/engine";
-import { draftOrders, draftOrdersForItems, type DraftOrder, type StockRow } from "@/lib/stock/plan";
+import { dayNumber, daysApart } from "@/lib/stock/engine/closures";
+import {
+  closureOrders,
+  draftOrders,
+  draftOrdersForItems,
+  type DraftOrder,
+  type StockRow,
+} from "@/lib/stock/plan";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
 import { loadStock } from "./data";
@@ -492,6 +499,78 @@ export async function startSuggestedOrder(
   if (error || numbers.length === 0) return;
   done(slug);
   redirect(`/w/${slug}/stock/orders/${numbers[0]}?drafted=1`);
+}
+
+/**
+ * Starts the order that has to land before a supplier shuts: everything of
+ * theirs that would run short before they are back, sized to last until then.
+ * Worked out again here, on the server, like every other draft.
+ */
+export async function startClosureOrder(
+  slug: string,
+  supplierId: string,
+  formData: FormData,
+): Promise<void> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return;
+  const { rows, today } = await loadStock(ctx.supabase, ctx.tenant);
+  const draft = closureOrders(rows, today).find((order) => order.supplier.id === supplierId);
+  if (!draft) return;
+  const { data, error } = await ctx.supabase.rpc("draft_purchase_orders", {
+    p_tenant_id: ctx.tenant.id,
+    p_request_key: requestKey(formData),
+    p_orders: [orderPayload(draft)],
+  });
+  const numbers = (data as number[] | null) ?? [];
+  if (error || numbers.length === 0) return;
+  done(slug);
+  redirect(`/w/${slug}/stock/orders/${numbers[0]}?drafted=1`);
+}
+
+/** Writes down a stretch when a supplier is shut. */
+export async function saveSupplierClosure(
+  slug: string,
+  supplierId: string,
+  _prev: StockState,
+  formData: FormData,
+): Promise<StockState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  if (!UUID.test(supplierId)) return { error: OOPS };
+  const name = text(formData, "name").slice(0, 80);
+  const from = text(formData, "starts_on");
+  const to = text(formData, "ends_on");
+  if (!name) return { error: "Give it a name, like “Spring Festival”." };
+  if (dayNumber(from) === null || dayNumber(to) === null) {
+    return { error: "Pick the first and the last day they're shut." };
+  }
+  const length = daysApart(from, to);
+  if (length < 0) return { error: "The last day can't be before the first." };
+  if (length > 366) return { error: "That's more than a year. Check the dates." };
+  const { error } = await ctx.supabase.rpc("save_supplier_closure", {
+    p_tenant_id: ctx.tenant.id,
+    p_supplier_id: supplierId,
+    p_closure_id: null,
+    p_name: name,
+    p_starts_on: from,
+    p_ends_on: to,
+  });
+  if (error) {
+    return {
+      error: error.message.includes("too_many_closures")
+        ? "That's the most closures we keep for one supplier. Take an old one off first."
+        : OOPS,
+    };
+  }
+  done(slug);
+  return { message: "Saved. Order-by dates for their items now work around it." };
+}
+
+export async function removeSupplierClosure(slug: string, closureId: string): Promise<void> {
+  const ctx = await context(slug);
+  if ("error" in ctx || !UUID.test(closureId)) return;
+  const { error } = await ctx.supabase.rpc("remove_supplier_closure", { p_closure_id: closureId });
+  if (!error) done(slug);
 }
 
 /** Starts an empty draft for a supplier, to fill in by hand. */

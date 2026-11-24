@@ -475,6 +475,11 @@ export function ItemsGrid({
                   </span>
                 )}
                 {row.left && <Badge>{row.left}</Badge>}
+                {row.closure && (
+                  <span title={row.closure.why}>
+                    <Badge tone="waiting">{row.closure.label}</Badge>
+                  </span>
+                )}
               </span>
             </div>
           </div>

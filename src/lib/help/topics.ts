@@ -427,9 +427,71 @@ export const HELP_TOPICS: HelpTopic[] = [
     ],
     notes: [
       "Items with no supplier, or whose supplier you no longer order from, are listed as left off, so nothing is dropped quietly.",
-      "You can print the order or download it as a spreadsheet to send to your supplier.",
+      "Owners and admins can open the order as a PDF to send to the supplier. You can also print it or download it as a spreadsheet.",
       "Lines stay editable until the order is closed, so it can match what really arrived.",
       "Each line's cost starts from what the item costs you: your own figure if you've typed one on the item's page, else the average of what your checked-in deliveries cost, else the cost in your shop. Change it on the line whenever the supplier's price is different.",
+    ],
+  },
+  {
+    slug: "reorder-list",
+    group: "stock",
+    title: "Read the reorder list, and save your own views of it",
+    summary: "What each column on Stock → Everything means, and how to keep a view.",
+    intro: "Stock → Everything lists every item your shop counts, the soonest to reorder first.",
+    steps: [
+      "“30D Sales” is what sold in the last 30 days. “30D Forecast” is what we expect in the next 30, allowing for your busy months.",
+      "“Stock” is what's on the shelf. A green chip beside it, like “+ 30 (1 order)”, is what's on its way; press it to open the order.",
+      "“Stock Out” is when you'd sell the last one, and “Reorder” is when to order by. Red means it will run out before a new order could arrive, or that the order is already late.",
+      "“% Rev” is the item's share of everything your shop took in over the last 90 days.",
+      "The tabs across the top are views: All, On Order, Dead Stock (nothing sold in 90 days, some still on the shelf), Hidden, and At-risk Top Sellers (your top fifth by revenue that need ordering within a week).",
+      "Search by product, SKU or supplier. Press a column's name to sort by it. “Columns” shows or hides columns, including the suggested amount, cost and price.",
+      "To keep a view, set the list up how you like it and press “+ Save view”. Give it a name, and tick “Open the list on this view” if it should be the first thing you see.",
+    ],
+    notes: [
+      "Saved views are shared by the whole workspace. Owners and admins save them and take them off (the × beside the name); everyone can use them.",
+      "The # is the item's place when the soonest reorder comes first. It stays with the item when you sort another way.",
+      "“Export CSV” downloads the view with the columns on screen. Tick some rows first to export just those (up to 150 at a time).",
+      "Photos come from your shop: the photo of that exact option when it has one, otherwise the product's.",
+    ],
+  },
+  {
+    slug: "order-pdf",
+    group: "stock",
+    title: "Send a supplier a purchase order as a PDF",
+    summary: "A tidy document with your name, address and logo on it.",
+    steps: [
+      "Open the order under Stock → Orders and press “PDF”. It opens in a new tab; save it from there and attach it to your email.",
+      "It carries your business name and address, the supplier and who you deal with there, the dates, every line with its codes and smallest order, and the totals.",
+    ],
+    notes: [
+      "The PDF is for owners and admins, like placing the order itself.",
+      "Your address is the one parcels are sent from, in Shipping → Settings.",
+      "For your logo, upload it under Social → Assets and tag it “logo”. It needs to be a PNG or a JPEG.",
+      "Add the contact name and any extra email addresses on the supplier, under Stock → Suppliers.",
+      "Dates are shown on your own calendar, whatever timezone the supplier is in.",
+      "We don't email the order for you yet: you send the PDF yourself.",
+    ],
+  },
+  {
+    slug: "supplier-closures",
+    group: "stock",
+    title: "Plan around a supplier's holidays and shutdowns",
+    summary:
+      "Tell us when a supplier is shut and we'll move your order-by dates so orders arrive first.",
+    intro:
+      "Some suppliers shut for weeks at a time: a factory's month off at Spring Festival, a summer break. An order that would still be on its way when they shut needs placing earlier.",
+    steps: [
+      "Open Stock → Suppliers and press the supplier's name.",
+      "Under “When they're shut”, give the closure a name and its first and last day, and press “Add closure”. Add as many as you need.",
+      "From then on, the “Reorder” date of that supplier's items moves earlier whenever an order's days to arrive would run through a closure. The row is marked “Before Spring Festival” (hover it for the reason).",
+      "On Stock → To order you'll see “Order before Spring Festival” with the last day to order, the items and how many of each. Press “Start this order” to draft it.",
+    ],
+    notes: [
+      "That order is sized to last until the first order you could place after they reopen has arrived: the closure plus their days to arrive.",
+      "If the last day to order has already gone by, we say so, and count an order placed now from the day they're back.",
+      "Closures are dated, not yearly, because holidays like Spring Festival move. Add next year's when you know it.",
+      "Two closures that touch are treated as one. If the gap between two is shorter than the days an order takes, the order has to go before both.",
+      "Owners and admins add and remove closures; everyone on the team can see them.",
     ],
   },
   {
@@ -438,9 +500,9 @@ export const HELP_TOPICS: HelpTopic[] = [
     title: "Stop an item appearing in reorders",
     summary: "For gift cards, one-offs and anything you won't restock.",
     steps: [
-      "Tick the items on Stock → Everything and press “Don't reorder”, or flip the switch on an item's own page.",
+      "Press “Hide” at the end of an item's row on Stock → Everything. For several at once, tick them and press “Don't reorder”. The switch is also on each item's own page.",
       "They leave the suggestions and can't be added to draft orders.",
-      "Find them again under the “Not reordering” view, where you can bring them back.",
+      "Find them again under the “Hidden” view, where “Unhide” brings one back.",
     ],
     notes: [
       "In Stock → Settings you can list words that hide matching items automatically. It starts with “gift card”.",

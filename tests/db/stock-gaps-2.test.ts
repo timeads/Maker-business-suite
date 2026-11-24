@@ -4,7 +4,8 @@ import { asAnon, asService, asUser, createTestDb, createUser } from "./harness";
 
 /**
  * Stock, the second batch of gaps closed after the side-by-side with
- * TuftStock: the reorder list's photos and "% Rev", and saved views.
+ * TuftStock: the reorder list's photos and "% Rev", saved views, who an order
+ * is addressed to, and the stretches when a supplier is shut.
  */
 
 type User = { id: string; email: string };
@@ -273,5 +274,183 @@ describe("who an order is addressed to", () => {
     // Emptied, both go back to nothing.
     await as(alice, save, [tenantA, supplier, "", []]);
     expect(await read()).toEqual({ contact_name: null, more_emails: [] });
+  });
+});
+
+describe("when a supplier is shut", () => {
+  let mill: string;
+  let clay: string;
+  const supplier = (user: User, tenant: string, name: string) =>
+    as<{ id: string }>(
+      user,
+      "select public.save_supplier($1, null, $2, null, 30, 30, 1, 'order', '') as id",
+      [tenant, name],
+    ).then((rows) => rows[0].id);
+  const save = "select public.save_supplier_closure($1, $2, $3, $4, $5::date, $6::date) as id";
+  const closuresOf = (user: User, tenant: string) =>
+    as<{ name: string; starts_on: string; ends_on: string }>(
+      user,
+      "select name, starts_on::text, ends_on::text from public.supplier_closures where tenant_id = $1 order by starts_on",
+      [tenant],
+    );
+
+  beforeAll(async () => {
+    mill = await supplier(alice, tenantA, "Closing Mill");
+    clay = await supplier(bob, tenantB, "Closing Clay");
+  });
+
+  it("a manager writes down dated closures, several for one supplier, and can change one", async () => {
+    const [{ id }] = await as<{ id: string }>(alice, save, [
+      tenantA,
+      mill,
+      null,
+      "  Spring Festival ",
+      "2027-01-25",
+      "2027-02-21",
+    ]);
+    await as(alice, save, [tenantA, mill, null, "Summer break", "2027-08-01", "2027-08-14"]);
+    // A single day is a closure too.
+    await as(alice, save, [tenantA, mill, null, "Stocktake", "2027-05-05", "2027-05-05"]);
+    expect(await closuresOf(alice, tenantA)).toEqual([
+      { name: "Spring Festival", starts_on: "2027-01-25", ends_on: "2027-02-21" },
+      { name: "Stocktake", starts_on: "2027-05-05", ends_on: "2027-05-05" },
+      { name: "Summer break", starts_on: "2027-08-01", ends_on: "2027-08-14" },
+    ]);
+    // The festival moves: next year's dates replace this entry's.
+    await as(alice, save, [tenantA, mill, id, "Spring Festival", "2027-01-28", "2027-02-24"]);
+    expect((await closuresOf(alice, tenantA))[0]).toEqual({
+      name: "Spring Festival",
+      starts_on: "2027-01-28",
+      ends_on: "2027-02-24",
+    });
+    const row = await one<{ created_by: string; tenant_id: string }>(
+      "select created_by, tenant_id from public.supplier_closures where id = $1",
+      [id],
+    );
+    expect(row).toEqual({ created_by: alice.id, tenant_id: tenantA });
+  });
+
+  it("refuses dates that make no sense, an empty name and a supplier that isn't there", async () => {
+    await expect(
+      as(alice, save, [tenantA, mill, null, "Backwards", "2027-03-10", "2027-03-01"]),
+    ).rejects.toThrow(/Bad dates/);
+    await expect(
+      as(alice, save, [tenantA, mill, null, "Years", "2027-01-01", "2029-01-01"]),
+    ).rejects.toThrow(/Bad dates/);
+    await expect(
+      as(alice, save, [tenantA, mill, null, "No end", "2027-01-01", null]),
+    ).rejects.toThrow(/Bad dates/);
+    await expect(
+      as(alice, save, [tenantA, mill, null, "   ", "2027-03-01", "2027-03-02"]),
+    ).rejects.toThrow(/needs a name/);
+    await expect(
+      as(alice, save, [tenantA, tenantA, null, "Nobody", "2027-03-01", "2027-03-02"]),
+    ).rejects.toThrow(/Supplier not found/);
+    // Changing a closure under a different supplier's name finds nothing.
+    const [{ id }] = await as<{ id: string }>(
+      alice,
+      "select id from public.supplier_closures where tenant_id = $1 limit 1",
+      [tenantA],
+    );
+    const other = await supplier(alice, tenantA, "Other Mill");
+    await expect(
+      as(alice, save, [tenantA, other, id, "Moved", "2027-03-01", "2027-03-02"]),
+    ).rejects.toThrow(/Closure not found/);
+    expect(await closuresOf(alice, tenantA)).toHaveLength(3);
+  });
+
+  it("is for owners and admins: the team reads, and nobody writes the table directly", async () => {
+    await expect(
+      as(carol, save, [tenantA, mill, null, "Carol's", "2027-03-01", "2027-03-02"]),
+    ).rejects.toThrow(/Only owners and admins/);
+    // A plain member still sees when the supplier is shut.
+    expect(await closuresOf(carol, tenantA)).toHaveLength(3);
+    const [{ id }] = await as<{ id: string }>(
+      carol,
+      "select id from public.supplier_closures where tenant_id = $1 limit 1",
+      [tenantA],
+    );
+    await expect(as(carol, "select public.remove_supplier_closure($1)", [id])).rejects.toThrow(
+      /Only owners and admins/,
+    );
+    for (const sql of [
+      `insert into public.supplier_closures (tenant_id, supplier_id, name, starts_on, ends_on) values ('${tenantA}', '${mill}', 'Sneaky', '2027-04-01', '2027-04-02')`,
+      `update public.supplier_closures set name = 'Sneaky' where id = '${id}'`,
+      `delete from public.supplier_closures where id = '${id}'`,
+    ]) {
+      await expect(as(alice, sql)).rejects.toThrow(/permission denied/);
+    }
+    await expect(
+      asAnon(db, (tx) => tx.query("select * from public.supplier_closures")),
+    ).rejects.toThrow(/permission denied/);
+    await expect(
+      asAnon(db, (tx) => tx.query(save, [tenantA, mill, null, "Anon", "2027-03-01", "2027-03-02"])),
+    ).rejects.toThrow(/permission denied/);
+    expect(await closuresOf(alice, tenantA)).toHaveLength(3);
+  });
+
+  it("never crosses workspaces: not to read, add, change or take off", async () => {
+    await as(bob, save, [tenantB, clay, null, "Kiln rebuild", "2027-03-01", "2027-03-20"]);
+    // Each owner sees only their own.
+    expect((await closuresOf(bob, tenantB)).map((c) => c.name)).toEqual(["Kiln rebuild"]);
+    expect(await closuresOf(bob, tenantA)).toEqual([]);
+    expect(await as(bob, "select name from public.supplier_closures")).toEqual([
+      { name: "Kiln rebuild" },
+    ]);
+    expect(
+      (await as<{ name: string }>(alice, "select name from public.supplier_closures")).map(
+        (c) => c.name,
+      ),
+    ).not.toContain("Kiln rebuild");
+
+    const [{ id: alices }] = await db
+      .query<{ id: string }>(
+        "select id from public.supplier_closures where tenant_id = $1 order by starts_on limit 1",
+        [tenantA],
+      )
+      .then((r) => r.rows);
+    // Bob names Alice's workspace: not a manager there.
+    await expect(
+      as(bob, save, [tenantA, mill, null, "Bob's", "2027-03-01", "2027-03-02"]),
+    ).rejects.toThrow(/Only owners and admins/);
+    // Bob names his own workspace but Alice's supplier, or Alice's closure.
+    await expect(
+      as(bob, save, [tenantB, mill, null, "Bob's", "2027-03-01", "2027-03-02"]),
+    ).rejects.toThrow(/Supplier not found/);
+    await expect(
+      as(bob, save, [tenantB, clay, alices, "Bob's", "2027-03-01", "2027-03-02"]),
+    ).rejects.toThrow(/Closure not found/);
+    await expect(as(bob, "select public.remove_supplier_closure($1)", [alices])).rejects.toThrow(
+      /Closure not found/,
+    );
+    expect(await closuresOf(alice, tenantA)).toHaveLength(3);
+    expect((await closuresOf(alice, tenantA))[0].name).toBe("Spring Festival");
+  });
+
+  it("a manager takes one off, once", async () => {
+    const [{ id }] = await as<{ id: string }>(
+      alice,
+      "select id from public.supplier_closures where tenant_id = $1 and name = 'Stocktake'",
+      [tenantA],
+    );
+    await as(alice, "select public.remove_supplier_closure($1)", [id]);
+    expect((await closuresOf(alice, tenantA)).map((c) => c.name)).toEqual([
+      "Spring Festival",
+      "Summer break",
+    ]);
+    await expect(as(alice, "select public.remove_supplier_closure($1)", [id])).rejects.toThrow(
+      /Closure not found/,
+    );
+  });
+
+  it("keeps at most forty for one supplier", async () => {
+    const busy = await supplier(alice, tenantA, "Busy Mill");
+    for (let n = 0; n < 40; n++) {
+      const day = `2028-${String(1 + (n % 12)).padStart(2, "0")}-${String(1 + Math.floor(n / 12) * 3).padStart(2, "0")}`;
+      await as(alice, save, [tenantA, busy, null, `Day off ${n}`, day, day]);
+    }
+    await expect(
+      as(alice, save, [tenantA, busy, null, "One more", "2028-12-30", "2028-12-30"]),
+    ).rejects.toThrow(/too_many_closures/);
   });
 });

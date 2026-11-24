@@ -192,6 +192,8 @@ export type GridRow = {
   comingOrder: number | null;
   /** It will run out before a new order could arrive. */
   runsOutSoon: boolean;
+  /** A supplier's closure moved the order-by date earlier: a few words, and the longer story. */
+  closure: { label: string; why: string } | null;
   monthly: string;
   cost: number | null;
   /** Where the cost comes from, in words ("average of your deliveries"). */
@@ -224,6 +226,29 @@ export type GridRow = {
   why: string;
 };
 
+export const shortDay = (day: string) =>
+  new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short", day: "numeric" }).format(
+    new Date(`${day}T12:00:00Z`),
+  );
+
+/** What a closure did to a row's order-by date, in words. Null when it did nothing. */
+export function closureNote(row: StockRow, today: string): GridRow["closure"] {
+  const shut = row.closure;
+  if (!shut) return null;
+  const dates = `${shortDay(shut.startsOn)} to ${shortDay(shut.endsOn)}`;
+  const who = row.supplier?.name ?? "The supplier";
+  if (shut.underWay) {
+    return {
+      label: `Shut for ${shut.name}`,
+      why: `${who} is shut for ${shut.name} (${dates}). An order placed now only gets going when they're back, so to arrive in time it was due ${relativeDay(row.plan.reorderDate, today)}.`,
+    };
+  }
+  return {
+    label: `Before ${shut.name}`,
+    why: `${who} is shut for ${shut.name} (${dates}). To arrive before they shut, order ${relativeDay(row.plan.reorderDate, today)} rather than ${relativeDay(shut.movedFrom, today)}.`,
+  };
+}
+
 export const percent = (share: number) => `${(share * 100).toFixed(1)}%`;
 
 export function toGridRow(
@@ -247,6 +272,7 @@ export function toGridRow(
     comingOrders: row.openOrders.count,
     comingOrder: row.openOrders.firstNumber,
     runsOutSoon: runsOutBeforeArrival(row, today),
+    closure: closureNote(row, today),
     monthly: row.plan.isDeadStock ? "–" : row.plan.velocityPerMonth.toFixed(1),
     cost: row.cost.source === "none" ? null : row.unitCost,
     costFrom: COST_SOURCE_LABELS[row.cost.source],
