@@ -1,26 +1,19 @@
 "use client";
 
 import { useActionState, useEffect, useState } from "react";
-import { ArrowDown, ArrowUp, Printer } from "lucide-react";
+import { Printer } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FormMessage } from "@/components/ui/form-message";
-import { Input, Label, Select } from "@/components/ui/input";
+import { Input, Label } from "@/components/ui/input";
 import { SubmitButton } from "@/components/ui/submit-button";
 import { CARRIERS, guessCarrier } from "@/lib/shipping/carriers";
-import {
-  SLIP_SECTION_NAMES,
-  SLIP_TEXT_SIZES,
-  shipFromParts,
-  type SlipLayout,
-  type SlipSection,
-} from "@/lib/shipping/config";
+import { shipFromParts } from "@/lib/shipping/config";
 import { formatHoldDate } from "@/lib/shipping/queue";
 import {
   markPickedUp,
   markPickupReady,
   recordParcel,
   saveShippingSettings,
-  saveSlipLayout,
   seenBackFromHold,
   setHold,
   undoPickup,
@@ -28,9 +21,6 @@ import {
   type ShippingState,
 } from "./actions";
 import { HoldPickerField, type HoldChoice } from "./hold-picker";
-
-const textarea =
-  "border-input bg-card placeholder:text-muted-foreground focus-visible:border-ochre focus-visible:ring-ochre/25 w-full rounded-sm border px-[11px] py-2 text-sm outline-none focus-visible:ring-2";
 
 function Result({ state }: { state: ShippingState }) {
   return (
@@ -696,113 +686,6 @@ export function ShippingSettingsForm({
       <Result state={state} />
       <SubmitButton variant="outline" pendingText="Saving…" className="sm:w-fit">
         Save settings
-      </SubmitButton>
-    </form>
-  );
-}
-
-/** What a packing slip shows and in what order. The preview beside it is drawn by the page. */
-export function SlipLayoutForm({ slug, layout }: { slug: string; layout: SlipLayout }) {
-  const [state, action] = useActionState(saveSlipLayout.bind(null, slug), {});
-  const [order, setOrder] = useState<SlipSection[]>(layout.sections.map((section) => section.id));
-  const on = new Map(layout.sections.map((section) => [section.id, section.on]));
-  const move = (index: number, by: -1 | 1) =>
-    setOrder((before) => {
-      const next = [...before];
-      const to = index + by;
-      if (to < 0 || to >= next.length) return before;
-      [next[index], next[to]] = [next[to], next[index]];
-      return next;
-    });
-  return (
-    <form action={action} className="flex flex-col gap-5">
-      <input type="hidden" name="order" value={order.join(",")} />
-      <fieldset className="flex flex-col gap-1">
-        <legend className="mb-2 text-sm font-semibold">
-          What&apos;s on the slip, top to bottom
-        </legend>
-        <ul className="divide-border border-border flex flex-col divide-y rounded-md border">
-          {order.map((id, index) => (
-            <li key={id} className="flex items-center gap-2 px-3 py-1.5">
-              <label className="flex flex-1 items-center gap-2 text-sm">
-                <input type="checkbox" name={`on:${id}`} defaultChecked={on.get(id) ?? true} />
-                {SLIP_SECTION_NAMES[id]}
-              </label>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                disabled={index === 0}
-                aria-label={`Move ${SLIP_SECTION_NAMES[id]} up`}
-                onClick={() => move(index, -1)}
-              >
-                <ArrowUp />
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                disabled={index === order.length - 1}
-                aria-label={`Move ${SLIP_SECTION_NAMES[id]} down`}
-                onClick={() => move(index, 1)}
-              >
-                <ArrowDown />
-              </Button>
-            </li>
-          ))}
-        </ul>
-        <p className="text-muted-foreground mt-1 text-xs">
-          The barcode is what Scan &amp; pack reads to open an order.
-        </p>
-      </fieldset>
-
-      <fieldset className="flex flex-col gap-2">
-        <legend className="mb-2 text-sm font-semibold">Items</legend>
-        <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" name="show_sku" defaultChecked={layout.show_sku} />
-          Show item codes (SKU), for whoever is picking
-        </label>
-        <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" name="show_price" defaultChecked={layout.show_price} />
-          Show prices
-        </label>
-      </fieldset>
-
-      <div className="flex flex-col gap-1.5 sm:max-w-xs">
-        <Label htmlFor="slip-text-size">Text size</Label>
-        <Select id="slip-text-size" name="text_size" defaultValue={layout.text_size}>
-          {SLIP_TEXT_SIZES.map((size) => (
-            <option key={size} value={size}>
-              {size[0].toUpperCase() + size.slice(1)}
-            </option>
-          ))}
-        </Select>
-      </div>
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor="slip-message">Thank-you message</Label>
-        <textarea
-          id="slip-message"
-          name="message"
-          rows={3}
-          maxLength={600}
-          defaultValue={layout.message}
-          placeholder="Thank you for supporting a small studio! Care: shake out, don't machine wash."
-          className={`${textarea} font-read`}
-        />
-      </div>
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor="slip-footer">Footer</Label>
-        <Input
-          id="slip-footer"
-          name="footer"
-          maxLength={120}
-          defaultValue={layout.footer}
-          placeholder="Questions? hello@yourstudio.com"
-        />
-      </div>
-      <Result state={state} />
-      <SubmitButton pendingText="Saving…" className="sm:w-fit">
-        Save slip layout
       </SubmitButton>
     </form>
   );

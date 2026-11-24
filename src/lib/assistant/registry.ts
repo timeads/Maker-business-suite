@@ -176,7 +176,7 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
     feature: "shipping",
     name: "Packing slip layout",
     description:
-      "Which sections a packing slip shows and in what order (ship-to address, shipping method, items, order note, thank-you message, order barcode), whether items show their code and price, the text size, the thank-you message and the footer line.",
+      "How a packing slip looks, on paper and on a Zebra alike: the top (the workspace's logo and its size, centred or on the left, the store name and when it is written out, the ship-from address), which sections it shows and in what order (ship-to address, shipping method and box, items, order note, thank-you message, order barcode), what each item shows (SKU, product barcode, photo, price), the text size, the thank-you message and the footer line.",
     schema: slipLayoutSchema,
     defaultBody: () => DEFAULT_SLIP_LAYOUT,
   },
@@ -358,7 +358,24 @@ export function describeConfig(entry: ConfigEntry, body: unknown): string[] {
           .map((section) => SLIP_SECTION_NAMES[section.id] ?? section.id)
           .join(", ") || "nothing"
       }`,
-      `Items show: ${[value.show_sku ? "codes" : null, value.show_price ? "prices" : null].filter(Boolean).join(" and ") || "names only"}`,
+      `At the top: ${[
+        value.show_logo === false ? "no logo" : `the logo (${value.logo_size ?? "medium"})`,
+        value.align === "left" ? "on the left" : "centred",
+        value.store_name ? `named ${clip(value.store_name)}` : null,
+        value.show_return_address === false ? "no address" : "with the ship-from address",
+      ]
+        .filter(Boolean)
+        .join(", ")}`,
+      `Items show: ${
+        [
+          value.show_sku ? "SKUs" : null,
+          value.show_barcode ? "product barcodes" : null,
+          value.show_photo ? "photos" : null,
+          value.show_price ? "prices" : null,
+        ]
+          .filter(Boolean)
+          .join(", ") || "names only"
+      }`,
       `Text size: ${value.text_size}`,
       `Thank-you message: ${clip(value.message)}`,
       `Footer: ${clip(value.footer)}`,

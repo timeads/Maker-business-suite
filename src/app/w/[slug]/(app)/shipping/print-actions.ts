@@ -7,6 +7,7 @@ import { downloadEasyPostLabel, isEasyPostFileLink } from "@/lib/shipping/source
 import { printKind, type PrintLabel } from "@/lib/shipping/zebra/labels";
 import { createClient } from "@/lib/supabase/server";
 import { getTenantContext } from "@/lib/tenants";
+import { loadSlipLogoUrl } from "./data";
 import {
   loadSlipRun,
   slipsToPrint,
@@ -188,6 +189,8 @@ export type SlipPrintData = {
   slips?: SlipToPrint[];
   /** Orders among them whose slip was printed before. */
   printed?: SlipPrinted[];
+  /** The workspace's logo, in our own storage, when the layout shows one. */
+  logoUrl?: string | null;
 };
 
 /**
@@ -210,7 +213,10 @@ export async function getSlipPrintData(
     all: text(picked.all),
     parcel: text(picked.parcel),
   });
-  return slipsToPrint(run, ctx.tenant);
+  const logoUrl = run.setup.slip.show_logo
+    ? await loadSlipLogoUrl(ctx.supabase, ctx.tenant.id)
+    : null;
+  return { ...slipsToPrint(run, ctx.tenant), logoUrl };
 }
 
 /** Notes that these orders' slips went to a printer, so the next run leaves them out. */

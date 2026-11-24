@@ -40,7 +40,9 @@ import {
   signatureOverName,
 } from "@/lib/shipping/rules";
 import type { QueueFacts } from "@/lib/shipping/queue";
+import { pickLogoAsset } from "@/lib/social/photo-match";
 import { shopPhotoAddress } from "@/lib/social/product-photos";
+import { publicAssetUrl } from "@/lib/social/worker";
 import { LABEL_SOURCES, type LabelSourceKey } from "@/lib/shipping/sources/types";
 
 export type ShippingOrder = {
@@ -722,4 +724,40 @@ export async function loadItemPhotos(
         photos.get(`name:${item.title}`),
       width,
     );
+}
+
+/**
+ * Where the workspace's logo is, for the top of a packing slip: the picture
+ * tagged `logo` in its Assets, in our own storage (never an address a person
+ * typed). Null when there is none, or it isn't a PNG or JPEG.
+ */
+export async function loadSlipLogoUrl(
+  supabase: SupabaseClient,
+  tenantId: string,
+): Promise<string | null> {
+  try {
+    const { data } = await supabase
+      .from("social_assets")
+      .select("id, storage_path, title, tags, mime_type")
+      .eq("tenant_id", tenantId)
+      .eq("hidden", false)
+      .in("mime_type", ["image/png", "image/jpeg"])
+      .order("created_at", { ascending: false })
+      .limit(500);
+    const logo = pickLogoAsset(
+      (data ?? []).map((row) => ({
+        id: row.id as string,
+        title: (row.title as string) ?? "",
+        tags: (row.tags as string[] | null) ?? [],
+        mimeType: row.mime_type as string,
+        path: row.storage_path as string,
+      })),
+    );
+    // Files sit under the workspace's own id; anything else isn't ours to show.
+    if (!logo || !logo.path.startsWith(`${tenantId}/`) || /[?#\\]|\.\./.test(logo.path))
+      return null;
+    return publicAssetUrl(logo.path);
+  } catch {
+    return null;
+  }
 }

@@ -17,7 +17,6 @@ import {
 import { labelsToZpl } from "@/lib/shipping/zebra/labels";
 import { PdfLabelError } from "@/lib/shipping/zebra/pdf";
 import { reprintQuestion } from "@/lib/shipping/zebra/reprint";
-import { slipZpl } from "@/lib/shipping/zebra/slip";
 import { slipsGoToZebra } from "@/lib/shipping/zebra/settings";
 import { usePrintSettings } from "@/lib/shipping/zebra/use-print-settings";
 import { testLabelZpl } from "@/lib/shipping/zebra/zpl";
@@ -28,6 +27,7 @@ import {
   noteSlipsPrinted,
 } from "./print-actions";
 import type { SlipPrinted, SlipSelection, SlipToPrint } from "./slips-data";
+import { slipsForZebra } from "./slip-zebra";
 
 const linkClass = "text-ochre-text font-medium hover:underline";
 type Note = { kind: "error" | "success"; text: string } | null;
@@ -656,7 +656,8 @@ function ReprintDialog({ asking }: { asking: Asking | null }) {
 }
 
 /** The slips a press is about: already in hand (the slips page), or to be asked for by the link's own choice. */
-type SlipSource = { slips: SlipToPrint[]; printed: SlipPrinted[] } | SlipSelection;
+type SlipSource =
+  { slips: SlipToPrint[]; printed: SlipPrinted[]; logoUrl?: string | null } | SlipSelection;
 
 /**
  * Sends packing slips straight to this computer's Zebra: no window, no print
@@ -705,14 +706,19 @@ function useSlipPrinter(slug: string) {
         if (choice === "new") slips = question.fresh;
         if (slips.length === 0) return;
       }
-      const zpl = slips.map((slip) => slipZpl(slip.data, settings.zebraDpi)).join("\n");
-      const { device } = await zebraClient().send(zpl, settings.zebraName);
+      // Drawn from the same sheet the screen shows, one label at a time.
+      const drawn = await slipsForZebra(
+        slips.map((slip) => slip.data),
+        data.logoUrl,
+        settings.zebraDpi,
+      );
+      const { device } = await zebraClient().send(drawn.zpl.join("\n"), settings.zebraName);
       const marked = await noteSlipsPrinted(slug, [
         ...new Set(slips.flatMap((slip) => slip.orderIds)),
       ]).catch(() => ({ error: "They printed, but we couldn't note that here." }));
       setNote({
         kind: marked.error ? "error" : "success",
-        text: `${slips.length === 1 ? "Packing slip" : `${slips.length} packing slips`} sent to ${device.name}.${marked.error ? ` ${marked.error}` : ""}`,
+        text: `${slips.length === 1 ? "Packing slip" : `${slips.length} packing slips`} sent to ${device.name}.${drawn.plain > 0 ? " This browser couldn't draw the designed slip, so the plain one printed." : ""}${marked.error ? ` ${marked.error}` : ""}`,
       });
     } catch (err) {
       const partly = err instanceof ZebraError && err.printed > 0;
@@ -739,10 +745,12 @@ export function SlipsPagePrint({
   slug,
   slips,
   printed,
+  logoUrl = null,
 }: {
   slug: string;
   slips: SlipToPrint[];
   printed: SlipPrinted[];
+  logoUrl?: string | null;
 }) {
   const printer = useSlipPrinter(slug);
   if (slips.length === 0) return null;
@@ -755,7 +763,7 @@ export function SlipsPagePrint({
             type="button"
             size="sm"
             title="Sends straight to this computer's Zebra"
-            onClick={() => void printer.print({ slips, printed })}
+            onClick={() => void printer.print({ slips, printed, logoUrl })}
             disabled={printer.busy}
           >
             <Printer aria-hidden />

@@ -522,31 +522,36 @@ export async function saveShippingSettings(
   return { message: "Saved." };
 }
 
-/** What a packing slip shows, and in what order. */
-export async function saveSlipLayout(
-  slug: string,
-  _prev: ShippingState,
-  formData: FormData,
-): Promise<ShippingState> {
+/**
+ * What a packing slip shows, and in what order: the whole layout as the
+ * designer holds it, checked here against the schema before it is kept.
+ */
+export async function saveSlipLayout(slug: string, layout: unknown): Promise<ShippingState> {
   const ctx = await context(slug, true);
   if ("error" in ctx) return { error: ctx.error };
-  const known = (id: string): id is SlipSection =>
-    (SLIP_SECTIONS as readonly string[]).includes(id);
-  const order = [...new Set(text(formData, "order").split(",").filter(known))];
+  const asked = layout && typeof layout === "object" ? (layout as Record<string, unknown>) : {};
+  const known = (id: unknown): id is SlipSection =>
+    (SLIP_SECTIONS as readonly string[]).includes(String(id));
+  const listed = Array.isArray(asked.sections)
+    ? (asked.sections as { id?: unknown; on?: unknown }[])
+        .filter((section) => section && known(section.id))
+        .map((section) => ({ id: section.id as SlipSection, on: section.on !== false }))
+    : [];
+  const seen = new Set<SlipSection>();
+  const sections = listed.filter((section) => !seen.has(section.id) && seen.add(section.id));
   const parsed = slipLayoutSchema.safeParse({
+    ...asked,
     version: 1,
-    sections: [...order, ...SLIP_SECTIONS.filter((id) => !order.includes(id))].map((id) => ({
-      id,
-      on: formData.get(`on:${id}`) === "on",
-    })),
-    show_sku: formData.get("show_sku") === "on",
-    show_price: formData.get("show_price") === "on",
-    text_size: text(formData, "text_size") || "normal",
-    message: text(formData, "message"),
-    footer: text(formData, "footer"),
+    sections: [
+      ...sections,
+      ...SLIP_SECTIONS.filter((id) => !seen.has(id)).map((id) => ({ id, on: true })),
+    ],
   });
   if (!parsed.success) {
-    return { error: "Keep the thank-you message under 600 characters and the footer under 120." };
+    return {
+      error:
+        "Keep the store name under 60 characters, the thank-you message under 600 and the footer under 120.",
+    };
   }
   const { error } = await ctx.supabase.rpc("save_config", {
     p_tenant_id: ctx.tenant.id,

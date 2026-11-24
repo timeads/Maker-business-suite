@@ -127,19 +127,36 @@ export type SlipSection = (typeof SLIP_SECTIONS)[number];
 
 export const SLIP_SECTION_NAMES: Record<SlipSection, string> = {
   shipto: "Ship-to address",
-  method: "Shipping method",
+  method: "Shipping method & box",
   items: "Items",
   note: "Order note",
   message: "Thank-you message",
-  barcode: "Order barcode",
+  barcode: "Order barcode (for Scan & pack)",
 };
 
 export const SLIP_TEXT_SIZES = ["small", "normal", "large"] as const;
+export const SLIP_LOGO_SIZES = ["small", "medium", "large"] as const;
+export const SLIP_ALIGNS = ["left", "center"] as const;
+/** When the business's name is written out at the top: only when no logo prints, always, or never. */
+export const SLIP_NAME_RULES = ["without_logo", "always", "never"] as const;
 
 const ALL_SECTIONS = SLIP_SECTIONS.map((id) => ({ id, on: true }));
 
 export const slipLayoutSchema = z.object({
   version: z.literal(1),
+  /**
+   * The workspace's logo at the top: the picture tagged `logo` in its Assets.
+   * A workspace without one simply gets its name.
+   */
+  show_logo: z.boolean().default(true),
+  logo_size: z.enum(SLIP_LOGO_SIZES).default("medium"),
+  /** The header: logo and name centred over the order number, or on the left with the number on the right. */
+  align: z.enum(SLIP_ALIGNS).default("center"),
+  /** The name at the top. Empty: the ship-from name, else the workspace's. */
+  store_name: z.string().trim().max(60).default(""),
+  show_store_name: z.enum(SLIP_NAME_RULES).default("without_logo"),
+  /** The ship-from address in one line under the name. */
+  show_return_address: z.boolean().default(true),
   /** Top to bottom. A section left out of the list is added at the end, switched on. */
   sections: z
     .array(z.object({ id: z.enum(SLIP_SECTIONS), on: z.boolean().default(true) }))
@@ -149,11 +166,15 @@ export const slipLayoutSchema = z.object({
     })
     .default(ALL_SECTIONS),
   /** Item codes, for whoever is picking. */
-  show_sku: z.boolean().default(true),
+  show_sku: z.boolean().default(false),
+  /** The product's own barcode number under each item. */
+  show_barcode: z.boolean().default(false),
+  /** A small picture of each item. Printed on paper; a Zebra's slip goes without. */
+  show_photo: z.boolean().default(false),
   /** What the shopper paid for each line. Leave off for gifts. */
   show_price: z.boolean().default(false),
   text_size: z.enum(SLIP_TEXT_SIZES).default("normal"),
-  /** A thank-you, care notes: printed under the items. */
+  /** A thank-you, care notes: printed at the bottom, above the barcode. */
   message: z.string().trim().max(600).default(""),
   /** One small line at the very bottom: a web address, how to return. */
   footer: z.string().trim().max(120).default(""),
@@ -169,15 +190,11 @@ export function slipSections(layout: Pick<SlipLayout, "sections">): SlipLayout["
 }
 
 /**
- * The saved layout. A workspace that hasn't saved one yet keeps what its
- * older shipping settings said (the note at the bottom, item codes).
+ * The saved layout. A workspace that hasn't saved one yet gets the usual
+ * slip, with the note its older shipping settings carried at the bottom.
  */
 export function parseSlipLayout(body: unknown, settings?: ShippingSettings): SlipLayout {
   const parsed = slipLayoutSchema.safeParse(body);
   if (parsed.success) return { ...parsed.data, sections: slipSections(parsed.data) };
-  return {
-    ...DEFAULT_SLIP_LAYOUT,
-    message: settings?.slip_note ?? "",
-    show_sku: settings?.slip_show_sku ?? true,
-  };
+  return { ...DEFAULT_SLIP_LAYOUT, message: settings?.slip_note ?? "" };
 }

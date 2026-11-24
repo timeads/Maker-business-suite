@@ -75,7 +75,7 @@ describe("a packing slip's words", () => {
       fromName: "Tuft Studio",
       fromLines: ["1 Mill Lane", "Hudson, NY 12534"],
       orderName: "#1042",
-      placed: "November 18, 2026",
+      placed: "Nov 18, 2026",
       footer: "Questions? hello@tuft.example",
     });
     const kinds = slip.parts.map((part) => part.kind);
@@ -86,10 +86,10 @@ describe("a packing slip's words", () => {
     );
     expect(kinds).toEqual(expect.arrayContaining(["shipto", "method", "items", "note", "barcode"]));
     const shipto = slip.parts.find((part) => part.kind === "shipto");
-    expect(shipto).toMatchObject({ heading: "Send to", phone: "555-0100" });
+    expect(shipto).toMatchObject({ heading: "Ship to", phone: "555-0100" });
     expect(shipto?.kind === "shipto" && shipto.lines[0]).toBe("Zoë Shopper");
     const items = slip.parts.find((part) => part.kind === "items");
-    expect(items?.kind === "items" && items.rows).toEqual([
+    expect(items?.kind === "items" && items.rows).toMatchObject([
       { qty: 1, title: "Wool rug", details: ["Large"], sku: "RUG-L", price: "$120.00" },
       // Two of three still to go: the count and price are for what's in this box.
       {
@@ -149,7 +149,7 @@ describe("a packing slip as ZPL", () => {
     expect(zpl.match(/\^XA/g)).toHaveLength(1);
     expect(zpl.startsWith("^XA^CI28^PW812^LL1218^LH0,0")).toBe(true);
     expect(zpl.endsWith("^XZ")).toBe(true);
-    for (const words of ["Tuft Studio", "#1042", "SEND TO", "12 Mill Lane", "Wool rug", "RUG-L"]) {
+    for (const words of ["Tuft Studio", "#1042", "SHIP TO", "12 Mill Lane", "Wool rug", "RUG-L"]) {
       expect(zpl).toContain(`^FD${words}^FS`);
     }
     expect(zpl).toContain("^FD$120.00^FS");

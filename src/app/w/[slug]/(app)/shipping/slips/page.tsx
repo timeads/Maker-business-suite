@@ -2,10 +2,11 @@ import type { Metadata } from "next";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
 import { createClient } from "@/lib/supabase/server";
+import { loadSlipLogoUrl } from "../data";
 import { markPrinted } from "../actions";
 import { shippingAccess } from "../gate";
 import { BrowserPrintingHint, SlipsPagePrint } from "../print-ui";
-import { PackingSlip } from "../slip";
+import { SlipPages, SlipPaperChoice } from "../slip-pages";
 import { loadSlipRun, slipsToPrint, type SlipSelection } from "../slips-data";
 
 export const metadata: Metadata = { title: "Packing slips" };
@@ -28,6 +29,7 @@ export default async function PackingSlipsPage({
   const base = `/w/${tenant.slug}/shipping`;
   // The same slips as plain words, for a computer that sends them to its Zebra.
   const toPrint = slipsToPrint(run, tenant);
+  const logoUrl = setup.slip.show_logo ? await loadSlipLogoUrl(supabase, tenant.id) : null;
 
   return (
     <>
@@ -67,7 +69,13 @@ export default async function PackingSlipsPage({
               </Button>
             </form>
           )}
-          <SlipsPagePrint slug={tenant.slug} slips={toPrint.slips} printed={toPrint.printed} />
+          {entries.length > 0 && <SlipPaperChoice />}
+          <SlipsPagePrint
+            slug={tenant.slug}
+            slips={toPrint.slips}
+            printed={toPrint.printed}
+            logoUrl={logoUrl}
+          />
         </PageHeader>
         {entries.length > 0 && (
           <p className="mt-2 text-right empty:hidden">
@@ -87,23 +95,10 @@ export default async function PackingSlipsPage({
       {entries.length === 0 ? (
         <p className="text-muted-foreground text-sm">Nothing is waiting for a slip.</p>
       ) : (
-        <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 print:max-w-none print:gap-0">
-          {entries.map((entry) => (
-            <PackingSlip
-              key={entry.key}
-              order={entry.order}
-              code={entry.code}
-              from={entry.from}
-              box={entry.box}
-              boxNames={entry.boxNames}
-              settings={setup.settings}
-              layout={setup.slip}
-              workspaceName={tenant.name}
-              timeZone={tenant.timezone}
-              currency={tenant.currency}
-            />
-          ))}
-        </div>
+        <SlipPages
+          slips={toPrint.slips.map((slip) => ({ key: slip.key, data: slip.data }))}
+          logoUrl={logoUrl}
+        />
       )}
     </>
   );

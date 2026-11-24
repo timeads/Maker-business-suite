@@ -2,13 +2,17 @@ import { formatMoney } from "../../dashboard/format";
 import { addressLines, type ShipTo } from "../carriers";
 import { shipFromCityLine, type ShippingSettings, type SlipLayout } from "../config";
 import { barcodeSafe, boxLines, boxSlipCode, slipCode, type SlipBox } from "../slip-boxes";
+import { shopPhotoAddress } from "../../social/product-photos";
 import { wrapText, zplText } from "./zpl";
 
 /**
- * A packing slip for the Zebra: the same words, in the same order, as the
- * slip on screen (`slip.tsx`), written in the printer's own text and barcode
- * commands at 4 × 6 inches. Nothing is drawn as a picture, so it prints
- * quickly and sharply, and a long order runs onto more labels between lines.
+ * Everything a packing slip says, worked out once (`buildSlipData`) and shown
+ * the same way everywhere: on screen and on paper by `slip-sheet.tsx`, and on
+ * a Zebra as that same sheet drawn as a picture (`slip-draw.ts`).
+ *
+ * `slipZpl` is the older way onto a Zebra, kept as the way out when a
+ * picture can't be drawn: the same words in the printer's own text and
+ * barcode commands at 4 × 6 inches, plainer to look at but always there.
  */
 
 export type SlipOrder = ShipTo & {
@@ -23,6 +27,8 @@ export type SlipOrder = ShipTo & {
     title: string;
     variant: string | null;
     sku: string | null;
+    barcode?: string | null;
+    image?: string | null;
     price?: number | null;
     qty: number;
     left: number;
@@ -41,8 +47,21 @@ export type SlipPart =
   | {
       kind: "items";
       showSku: boolean;
+      /** The product's own barcode number under each item. */
+      showBarcode?: boolean;
+      /** A small picture of each item (paper only; a Zebra's slip goes without). */
+      showPhoto?: boolean;
       priced: boolean;
-      rows: { qty: number; title: string; details: string[]; sku: string; price: string }[];
+      rows: {
+        qty: number;
+        title: string;
+        details: string[];
+        sku: string;
+        barcode?: string;
+        /** Only ever an address on the shop platform's image servers. */
+        image?: string | null;
+        price: string;
+      }[];
     }
   | { kind: "note"; heading: string; text: string }
   | { kind: "message"; text: string }
@@ -58,6 +77,17 @@ export type SlipPart =
 export type SlipData = {
   fromName: string;
   fromLines: string[];
+  /** How the top of the sheet is laid out. Left out by older callers: the plain header. */
+  header?: {
+    /** Draw the workspace's logo, when it has one. */
+    logo: boolean;
+    logoSize: SlipLayout["logo_size"];
+    align: SlipLayout["align"];
+    /** When the name is written out: only without a logo, always, or never. */
+    name: SlipLayout["show_store_name"];
+    /** The ship-from address in one line ("12 Mill Lane · Hudson, NY 12534"); empty when it's off. */
+    address: string;
+  };
   orderName: string;
   /** "Box 2 of 3" on one box's slip of an order in several; else empty. */
   boxLabel: string;
@@ -112,7 +142,7 @@ export function buildSlipData(input: {
     if (section.id === "shipto") {
       parts.push({
         kind: "shipto",
-        heading: order.pickup ? "Pickup for" : "Send to",
+        heading: order.pickup ? "Pickup for" : "Ship to",
         lines: to.length === 0 ? ["No address on this order"] : order.pickup ? to.slice(0, 2) : to,
         phone: order.phone ?? "",
       });
@@ -129,6 +159,8 @@ export function buildSlipData(input: {
       parts.push({
         kind: "items",
         showSku: layout.show_sku,
+        showBarcode: layout.show_barcode,
+        showPhoto: layout.show_photo,
         priced,
         rows: items.map((item) => ({
           qty: item.left,
@@ -141,6 +173,8 @@ export function buildSlipData(input: {
               : []),
           ],
           sku: item.sku ?? "",
+          barcode: item.barcode ?? "",
+          image: layout.show_photo ? shopPhotoAddress(item.image, 120) : null,
           price:
             item.price == null
               ? ""
@@ -165,13 +199,25 @@ export function buildSlipData(input: {
     }
   }
   return {
-    fromName: from.name || input.workspaceName,
+    fromName: layout.store_name || from.name || input.workspaceName,
     fromLines: [from.address1, from.address2, shipFromCityLine(from), from.country].filter(Boolean),
+    header: {
+      logo: layout.show_logo,
+      logoSize: layout.logo_size,
+      align: layout.align,
+      name: layout.show_store_name,
+      address:
+        layout.show_return_address && from.address1
+          ? [from.address1, shipFromCityLine(from)].filter(Boolean).join(" · ")
+          : "",
+    },
     orderName: order.name ?? "Order",
     boxLabel,
     placed: new Intl.DateTimeFormat("en-US", {
       timeZone: input.timeZone,
-      dateStyle: "long",
+      month: "short",
+      day: "numeric",
+      year: "numeric",
     }).format(new Date(order.placed_at)),
     textSize: layout.text_size,
     parts,
