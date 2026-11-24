@@ -8,10 +8,18 @@ import { shopifyApiVersion } from "./shopify";
  */
 
 export class StockWriteError extends Error {}
+/**
+ * The shop was asked to add the units and we never heard a clear answer (the
+ * line dropped, or it answered with something we can't read). It may or may
+ * not have added them, so this one is never offered to the shop again.
+ */
+export class StockWriteUnsureError extends StockWriteError {}
 
 const LOCATIONS = `{ locations(first: 10) { nodes { id name isActive } } }`;
-const ADJUST = `mutation Adjust($input: InventoryAdjustQuantitiesInput!) {
-  inventoryAdjustQuantities(input: $input) {
+// The shop asks for a key with every change to a count (required since its
+// 2026-04 version): the same key sent twice is one change, not two.
+const ADJUST = `mutation Adjust($input: InventoryAdjustQuantitiesInput!, $key: String!) {
+  inventoryAdjustQuantities(input: $input) @idempotent(key: $key) {
     userErrors { field message }
     inventoryAdjustmentGroup { createdAt }
   }
@@ -49,11 +57,16 @@ export function createShopifyStockWriter(fetchImpl: Fetch = fetch) {
   }
 
   return {
-    /** Adds `delta` units to one inventory item at the shop's main location. */
+    /**
+     * Adds `delta` units to one inventory item at the shop's main location.
+     * `key` names this one try. Anything thrown before the shop is asked, and
+     * a plain "no" from the shop, is a StockWriteError (nothing was added);
+     * an unclear answer to the change itself is a StockWriteUnsureError.
+     */
     async add(
       shop: string,
       token: TokenSet,
-      change: { inventoryItemId: string; delta: number; reference: string },
+      change: { inventoryItemId: string; delta: number; reference: string; key: string },
     ): Promise<void> {
       if (!(change.delta > 0)) throw new StockWriteError("Only arrivals are added to the shop");
       const places = await graphql<{
@@ -67,22 +80,35 @@ export function createShopifyStockWriter(fetchImpl: Fetch = fetch) {
           "The shop keeps stock in more than one place, so add this delivery there by hand",
         );
       }
-      const result = await graphql<{
-        inventoryAdjustQuantities: { userErrors: { message: string }[] };
-      }>(shop, token, ADJUST, {
-        input: {
-          reason: "received",
-          name: "available",
-          referenceDocumentUri: change.reference,
-          changes: [
-            {
-              delta: change.delta,
-              inventoryItemId: change.inventoryItemId,
-              locationId: active[0].id,
-            },
-          ],
-        },
-      });
+      let result: { inventoryAdjustQuantities: { userErrors: { message: string }[] } | null };
+      try {
+        result = await graphql(shop, token, ADJUST, {
+          key: change.key,
+          input: {
+            reason: "received",
+            name: "available",
+            referenceDocumentUri: change.reference,
+            changes: [
+              {
+                delta: change.delta,
+                inventoryItemId: change.inventoryItemId,
+                locationId: active[0].id,
+              },
+            ],
+          },
+        });
+      } catch (err) {
+        // Signed out means the shop did nothing. Anything else: we can't know.
+        if (err instanceof ReconnectRequiredError) throw err;
+        throw new StockWriteUnsureError(
+          `We couldn't tell whether your shop added it (${
+            err instanceof Error ? err.message : "no answer"
+          })`.slice(0, 300),
+        );
+      }
+      if (!result.inventoryAdjustQuantities) {
+        throw new StockWriteUnsureError("We couldn't tell whether your shop added it");
+      }
       const errors = result.inventoryAdjustQuantities.userErrors;
       if (errors.length > 0) {
         throw new StockWriteError(

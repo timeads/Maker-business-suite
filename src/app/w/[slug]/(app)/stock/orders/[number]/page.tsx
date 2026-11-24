@@ -15,7 +15,13 @@ import { computePoTotals, parseAdjustments } from "@/lib/stock/po/totals";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
 import { loadStock } from "../../data";
-import { PrintButton, ReceiveForm, StatusButton, type OrderLine } from "../../forms";
+import {
+  PrintButton,
+  ReceiveForm,
+  RetryShopButton,
+  StatusButton,
+  type OrderLine,
+} from "../../forms";
 import { stockAccess } from "../../gate";
 import { OrderForm, type AddableItem, type EditLine } from "./order-form";
 import { AddShipmentForm, ShipmentList, type ShipmentRow } from "./shipments";
@@ -95,7 +101,7 @@ export default async function StockOrderPage({
     supabase
       .from("stock_receipts")
       .select(
-        "id, quantity, shop_status, shop_error, created_at, stock_items(title, variant_title)",
+        "id, quantity, shop_status, shop_error, shop_attempts, shop_can_retry, created_at, stock_items(title, variant_title)",
       )
       .eq("tenant_id", tenant.id)
       .in(
@@ -436,7 +442,22 @@ export default async function StockOrderPage({
                     {receipt.shop_status === "failed" && receipt.shop_error
                       ? ` (${receipt.shop_error})`
                       : ""}
+                    {(receipt.shop_attempts as number) > 1
+                      ? ` · asked ${receipt.shop_attempts} times`
+                      : ""}
                   </span>
+                  {receipt.shop_status === "failed" &&
+                    (receipt.shop_can_retry && manager && link.canPush ? (
+                      <RetryShopButton slug={tenant.slug} receiptId={receipt.id as string} />
+                    ) : (
+                      <span className="text-muted-foreground block text-xs">
+                        {receipt.shop_can_retry
+                          ? manager
+                            ? "Your shop isn't letting us add to its count right now, so add these there by hand."
+                            : "An owner or admin can ask the shop again from here."
+                          : "We won't send this one again, in case it did reach your shop. Check the count there and fix it by hand if it's short."}
+                      </span>
+                    ))}
                 </li>
               ))}
             </ul>

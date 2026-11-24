@@ -1,6 +1,6 @@
 # Stock: TuftStock vs. the suite, side by side
 
-Read-only audit, 24 Nov 2026. Nothing in either codebase was changed.
+Read-only audit, 24 Nov 2026. Nothing in either codebase was changed by the audit. Rows closed since then are marked **Matched** with the new file references, and the counts below are kept in step.
 
 **How to read the file references**
 
@@ -17,7 +17,7 @@ Read-only audit, 24 Nov 2026. Nothing in either codebase was changed.
 
 ## 1. Summary
 
-TuftStock has **130** capabilities that a person ordering stock or running the shop would notice. In the suite, **56 are matched**, **27 are partly matched** and **47 are missing**. Sixteen of the missing ones are the Michaels Marketplace connector, which the suite does not have at all; leaving that aside, the score for stock itself is **56 matched, 27 partly and 31 missing of 114**.
+TuftStock has **130** capabilities that a person ordering stock or running the shop would notice. In the suite, **59 are matched**, **26 are partly matched** and **45 are missing**. Sixteen of the missing ones are the Michaels Marketplace connector, which the suite does not have at all; leaving that aside, the score for stock itself is **59 matched, 26 partly and 29 missing of 114**.
 
 The heart of the tool came across whole. The reorder sums are the same code with the same tests (how fast something sells, when it runs out, when to order, how many, smallest orders, seasons of the year, the "how it's doing" labels). So are suggested orders by supplier, purchase orders with shipping, tax and adjustments, checking a delivery in and adding it to the shop's count, tracking numbers typed in by hand, the Spend page, and the supplier balances ledger with its "Paid" ticks and statement checks.
 
@@ -27,12 +27,12 @@ What the suite does not have yet is mostly what TuftStock does _by itself_ or _f
 | ------------------------------------------ | -----------: | ------: | -----: | ------: |
 | Home screen                                |            5 |       2 |      3 |       0 |
 | Reorder list, columns & views              |           17 |      10 |      3 |       4 |
-| Reorder sums & planning settings           |           11 |       8 |      1 |       2 |
+| Reorder sums & planning settings           |           11 |       9 |      0 |       2 |
 | Seasons & building ahead                   |            3 |       0 |      0 |       3 |
 | Items & planning fields                    |            9 |       3 |      6 |       0 |
 | Suppliers                                  |            7 |       3 |      3 |       1 |
 | Purchase orders                            |           20 |       8 |      7 |       5 |
-| Checking in & the shop's count             |            6 |       4 |      0 |       2 |
+| Checking in & the shop's count             |            6 |       6 |      0 |       0 |
 | Incoming shipments & tracking              |            6 |       2 |      1 |       3 |
 | Supplier balances                          |           16 |      10 |      0 |       6 |
 | Spend                                      |            2 |       1 |      1 |       0 |
@@ -41,7 +41,7 @@ What the suite does not have yet is mostly what TuftStock does _by itself_ or _f
 | Spreadsheet imports                        |            4 |       1 |      0 |       3 |
 | Sign-in & settings (not counted elsewhere) |            2 |       1 |      1 |       0 |
 | Michaels Marketplace connector             |           16 |       0 |      0 |      16 |
-| **Total**                                  |      **130** |  **56** | **27** |  **47** |
+| **Total**                                  |      **130** |  **59** | **26** |  **45** |
 
 TuftStock's screens and where each is covered below:
 
@@ -116,7 +116,7 @@ The sums are the product. The suite's `lib/engine/` was compared file by file wi
 | "How it's doing": Out, Understocked, Healthy, Overstocked, No sales, with days of cover and how much is too much      | `src/lib/engine/stock-health.ts`                                               | **Matched.** `lib/engine/stock-health.ts`, `lib/plan.ts:186-194`                         | Same code; worded Out of stock, Running low, Healthy, Too much, Not selling.                                                                                                 | –    |
 | "On order" counted from orders that have gone out, less what has arrived                                              | `src/lib/engine/on-order.ts`                                                   | **Matched.** `lib/engine/on-order.ts`, `stock/data.ts` (`loadStock`)                     | Same.                                                                                                                                                                        | –    |
 | An item's cost: your own figure if you typed one, else the average of what past deliveries cost, else the shop's cost | `src/lib/reorder-data.ts:322-338`                                              | **Missing.** `lib/plan.ts:206`                                                           | Always the shop's cost. Suggested-order values and new order lines start from that.                                                                                          | M    |
-| Suppliers you no longer use are left out of suggestions everywhere                                                    | `src/lib/reorder-data.ts:268-271`                                              | **Partly.** `lib/plan.ts:356` against `lib/plan.ts:323-328`                              | Left out when you tick items and draft. But the "To order" cards still suggest an order for a supplier marked "not used any more".                                           | S    |
+| Suppliers you no longer use are left out of suggestions everywhere                                                    | `src/lib/reorder-data.ts:268-271`                                              | **Matched.** `lib/plan.ts` (`hasLiveSupplier`, `draftOrders`), `stock/page.tsx`          | Left out of the "To order" cards and of ticked drafts alike. Their items that are running low are listed under "no supplier yet", with who it was.                           | –    |
 
 ### Seasons & building ahead
 
@@ -185,14 +185,14 @@ Suite-only here: the supplier's code and a note on each line of the spreadsheet;
 
 ### Checking in & the shop's count
 
-| Capability                                                                       | TuftStock                                                                           | New suite                                                                                                                        | What's different or missing                                                                                                                        | Size |
-| -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
-| Type what arrived on each line; "Fully" and "Fill all remaining"; a progress bar | `src/components/po/PoDetail.tsx:406-441`                                            | **Matched.** `stock/forms.tsx:414-466`                                                                                           | Suite starts each box at what's still to come. Progress is in words ("12 of 36 here so far").                                                      | –    |
-| Checking in also adds the units to the shop's count, and only ever adds          | `src/app/api/purchase-orders/[id]/receive/route.ts`, `src/lib/shopify/inventory.ts` | **Matched.** `mig/20261203000100_stock.sql:438-475`, `worker/index.ts:316-370`, `src/lib/connections/providers/shopify-stock.ts` | Old does it at once; suite queues it for the background worker (about a minute). A tick box per delivery, and a workspace setting for its default. | –    |
-| The same delivery is never added to the shop twice                               | `src/lib/po/service.ts:251-313`                                                     | **Matched.** `mig/20261203000100_stock.sql:148-180`                                                                              | Each check-in is its own row, sent once.                                                                                                           | –    |
-| A second press of the button can't count the delivery twice                      | `src/lib/po/service.ts:198-224` (stale check)                                       | **Missing.** `stock/actions.ts:552-592`                                                                                          | No such guard was found on check-in. Drafting orders has one; this does not.                                                                       | S    |
-| If the shop refused, press again to retry just the part that didn't go           | `src/app/api/purchase-orders/[id]/update-shopify/route.ts`                          | **Missing.** `stock/orders/[number]/page.tsx:191`, `:436`                                                                        | Tried once, then shown as "couldn't be added to your shop"; fix the count in the shop by hand.                                                     | S    |
-| A shop with more than one stock location is never guessed at                     | `src/lib/sync/location.ts`, `src/lib/po/service.ts:259`                             | **Matched.** `src/lib/connections/providers/shopify-stock.ts:62-69`                                                              | Both refuse. Neither has a screen to choose a location.                                                                                            | –    |
+| Capability                                                                       | TuftStock                                                                           | New suite                                                                                                                            | What's different or missing                                                                                                                                         | Size |
+| -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
+| Type what arrived on each line; "Fully" and "Fill all remaining"; a progress bar | `src/components/po/PoDetail.tsx:406-441`                                            | **Matched.** `stock/forms.tsx:414-466`                                                                                               | Suite starts each box at what's still to come. Progress is in words ("12 of 36 here so far").                                                                       | –    |
+| Checking in also adds the units to the shop's count, and only ever adds          | `src/app/api/purchase-orders/[id]/receive/route.ts`, `src/lib/shopify/inventory.ts` | **Matched.** `mig/20261203000100_stock.sql:438-475`, `worker/index.ts:316-370`, `src/lib/connections/providers/shopify-stock.ts`     | Old does it at once; suite queues it for the background worker (about a minute). A tick box per delivery, and a workspace setting for its default.                  | –    |
+| The same delivery is never added to the shop twice                               | `src/lib/po/service.ts:251-313`                                                     | **Matched.** `mig/20261203000100_stock.sql:148-180`                                                                                  | Each check-in is its own row, sent once.                                                                                                                            | –    |
+| A second press of the button can't count the delivery twice                      | `src/lib/po/service.ts:198-224` (stale check)                                       | **Matched.** `mig/20261227000100_stock_safety.sql` (`receive_delivery`), `stock/actions.ts` (`receiveDelivery`)                      | The whole delivery goes in one step under a key from the page; a second press finds the first. All of it or none of it.                                             | –    |
+| If the shop refused, press again to retry just the part that didn't go           | `src/app/api/purchase-orders/[id]/update-shopify/route.ts`                          | **Matched.** `mig/20261227000100_stock_safety.sql` (`retry_stock_receipt`), `stock/forms.tsx` (`RetryShopButton`), `worker/index.ts` | Owners and admins, one receipt at a time, and only when the shop certainly added nothing. When the answer was unclear the suite will not resend; the old app would. | –    |
+| A shop with more than one stock location is never guessed at                     | `src/lib/sync/location.ts`, `src/lib/po/service.ts:259`                             | **Matched.** `src/lib/connections/providers/shopify-stock.ts:62-69`                                                                  | Both refuse. Neither has a screen to choose a location.                                                                                                             | –    |
 
 ### Incoming shipments & tracking
 
@@ -355,7 +355,7 @@ Order of work on the day, once the pieces exist: connect the shop and let it syn
 Biggest day-to-day effect first. Nothing here needs code written for one customer.
 
 1. **Bring-across tools: suppliers, item planning, and purchase orders from a spreadsheet.** Without them the switch means retyping every supplier assignment and every open order, and part-received orders can't be brought in correctly at all (section 3). The order import must never touch a count. _May need a spreadsheet-reading package; none was found in the Stock code. Ask first._
-2. **The small things that make a number wrong or a button unsafe.** Leave "not used any more" suppliers out of the "To order" cards; stop a double press from checking a delivery in twice; offer "try the shop again" when adding to the shop's count failed. All S.
+2. _(Built, 24 Nov 2026.)_ **The small things that make a number wrong or a button unsafe.** Leave "not used any more" suppliers out of the "To order" cards; stop a double press from checking a delivery in twice; offer "try the shop again" when adding to the shop's count failed. All S.
 3. **Sold-out days left out of the sales rate.** A nightly count per item, and the sums already know what to do with it. Without it, items that sell out are under-ordered, which is the mistake this tool exists to prevent. Nothing new to buy; no new shop permission.
 4. **The order as a PDF, with the business's name, address and logo.** Suppliers get a proper document. The logo and colours can come from the brand kit. _A PDF-drawing package would be a new dependency (TuftStock uses one); ask first._ The print page is the stop-gap.
 5. **Email the order from the business's own mailbox, then "resend the changed order".** Today's routine is one press: send and mark ordered. _This is a new connection (a mail account with permission to send as the owner), kept in the vault like every other. The mail provider reviews apps that ask for that permission, which takes time and can carry a cost. Ask first._ Wording belongs in a config. Sent mail must be something a person pressed, never automatic.
@@ -431,8 +431,8 @@ Until it exists, the realistic plan is to leave TuftStock running for Michaels a
 
 **Things that were a surprise:**
 
-- **The suite's "To order" cards still suggest orders for suppliers marked "not used any more"**, while ticking the same items and pressing "draft" correctly leaves them out (`lib/plan.ts:323-328` against `:356`).
-- **Checking a delivery in has no double-press guard in the suite**, though drafting orders does (`stock/actions.ts:552-592`).
+- _(Since fixed.)_ **The suite's "To order" cards still suggest orders for suppliers marked "not used any more"**, while ticking the same items and pressing "draft" correctly leaves them out (`lib/plan.ts:323-328` against `:356`).
+- _(Since fixed.)_ **Checking a delivery in has no double-press guard in the suite**, though drafting orders does (`stock/actions.ts:552-592`).
 - **Two things are worked out in the suite but never shown**: the four late-money totals (`lib/balance/aging.ts`) and the "payment may not be in their statement yet" list (`lib/balance/balance.ts:66`). The database also has a bulk planning function no screen calls (`plan_stock_items`, `mig/20261203000100_stock.sql:267`).
 - **The suite's ledger already has a slot for imported entries** (`source` is `manual` or `import`), so the automatic imports have somewhere to land.
 - **In a few places the suite is ahead**: suggestions rounded to whole cases, a cover figure per supplier, a plain-words explanation and a page per item, team roles, hourly rather than nightly reads, and settings that keep their history.

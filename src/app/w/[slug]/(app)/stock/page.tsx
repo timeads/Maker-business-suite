@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { formatMoney } from "@/lib/dashboard/format";
-import { draftOrders, isPlanned, relativeDay } from "@/lib/stock/plan";
+import { draftOrders, hasLiveSupplier, isPlanned, relativeDay } from "@/lib/stock/plan";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
 import { startSuggestedOrder } from "./actions";
@@ -37,7 +37,8 @@ export default async function StockPage({ params }: { params: Promise<{ slug: st
   const planned = rows.filter(isPlanned);
   const due = planned.filter((row) => row.due);
   const orders = draftOrders(rows, today);
-  const unassigned = due.filter((row) => !row.supplier);
+  // No supplier, or one marked "we don't order from them any more".
+  const unassigned = due.filter((row) => !hasLiveSupplier(row));
   const out = planned.filter((row) => row.health.health === "out" && !row.plan.isDeadStock);
   const onItsWay = planned.reduce((n, row) => n + row.onOrder, 0);
   const money = (value: number) => formatMoney(value, tenant.currency);
@@ -253,7 +254,8 @@ export default async function StockPage({ params }: { params: Promise<{ slug: st
               <CardHeader>
                 <CardTitle>Running low, with no supplier yet</CardTitle>
                 <CardDescription>
-                  Give these a supplier and they&apos;ll join that supplier&apos;s next order.
+                  Give these a supplier you still order from and they&apos;ll join that
+                  supplier&apos;s next order.
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -270,6 +272,7 @@ export default async function StockPage({ params }: { params: Promise<{ slug: st
                         {row.name}
                       </Link>
                       <span className="text-muted-foreground tabular-nums">
+                        {row.supplier ? `was ${row.supplier.name} · ` : ""}
                         {row.item.on_hand} left · runs out{" "}
                         {relativeDay(row.plan.stockOutDate, today)}
                       </span>

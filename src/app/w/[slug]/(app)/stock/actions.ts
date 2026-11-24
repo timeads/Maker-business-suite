@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { getEntitlements } from "@/lib/entitlements";
 import { localDay } from "@/lib/bookings/slots";
+import { canWriteShopifyStock } from "@/lib/connections/providers/shopify-stock";
 import { guessCarrier, tidyTracking } from "@/lib/shipping/carriers";
 import { Money } from "@/lib/stock/balance/money";
 import { STOCK_MODULE, STOCK_SETTINGS_KEY, stockSettingsSchema } from "@/lib/stock/config";
@@ -548,7 +549,12 @@ export async function setOrderStatus(
   return {};
 }
 
-/** Checks in what arrived. Anyone on the team can; each line's box says how many. */
+/**
+ * Checks in what arrived. Anyone on the team can; each line's box says how
+ * many. The whole delivery goes in one step under the page's request key, so
+ * a second press of the button finds the first press's delivery instead of
+ * counting the boxes twice.
+ */
 export async function receiveDelivery(
   slug: string,
   orderId: string,
@@ -557,37 +563,87 @@ export async function receiveDelivery(
 ): Promise<StockState> {
   const ctx = await context(slug, false);
   if ("error" in ctx) return { error: ctx.error };
-  const { data: lines } = await ctx.supabase
-    .from("purchase_order_lines")
-    .select("id, qty_ordered, qty_received")
-    .eq("po_id", orderId)
-    .eq("tenant_id", ctx.tenant.id);
-  const push = formData.get("push") === "on";
-  let boxes = 0;
-  let units = 0;
-  for (const line of lines ?? []) {
-    const qty = whole(formData, `got_${line.id}`);
-    if (qty === null || qty === 0) continue;
-    if (!(qty >= 1 && qty <= 1_000_000)) return { error: "One of those amounts isn't right." };
-    const { error } = await ctx.supabase.rpc("receive_po_line", {
-      p_line_id: line.id,
-      p_quantity: qty,
-      p_push: push,
-    });
-    if (error) {
-      done(slug);
-      return {
-        error: `${units ? `${units} units were checked in, then something went wrong. ` : ""}Please look over the order and try the rest again.`,
-      };
+  if (!UUID.test(orderId)) return { error: OOPS };
+  const arrived: { line_id: string; quantity: number }[] = [];
+  for (const [key, value] of formData.entries()) {
+    if (!key.startsWith("got_")) continue;
+    const id = key.slice(4);
+    const raw = String(value).trim();
+    if (!UUID.test(id) || raw === "" || raw === "0") continue;
+    const qty = Number(raw);
+    if (!Number.isInteger(qty) || !(qty >= 1 && qty <= 1_000_000)) {
+      return { error: "One of those amounts isn't right." };
     }
-    boxes += 1;
-    units += qty;
+    arrived.push({ line_id: id, quantity: qty });
   }
-  if (boxes === 0) return { error: "Type how many arrived next to at least one item." };
+  if (arrived.length === 0) return { error: "Type how many arrived next to at least one item." };
+  const push = formData.get("push") === "on";
+  const { data, error } = await ctx.supabase.rpc("receive_delivery", {
+    p_po_id: orderId,
+    p_request_key: requestKey(formData),
+    p_lines: arrived,
+    p_push: push,
+  });
+  if (error) {
+    done(slug);
+    return {
+      error: error.message.includes("isn't waiting")
+        ? "This order isn't waiting on a delivery any more."
+        : "Nothing was checked in. Please look over the amounts and try again.",
+    };
+  }
+  const result = (data as { units: number; repeated: boolean }[] | null)?.[0];
+  const units = result?.units ?? 0;
   done(slug);
+  if (result?.repeated) {
+    return {
+      message: `That delivery is already checked in (${plural(units, "unit")}), so nothing was counted twice.`,
+    };
+  }
   return {
-    message: `${units} unit${units === 1 ? "" : "s"} checked in.${push ? " Your shop's count will update in a minute." : ""}`,
+    message: `${plural(units, "unit")} checked in.${push ? " Your shop's count will update in a minute." : ""}`,
   };
+}
+
+/**
+ * "Try the shop again" for a delivery the shop turned down. Owners and admins
+ * only. It queues one new try; the database refuses anything that is already
+ * waiting, already in the shop, or that we can't be sure the shop didn't take.
+ */
+export async function retryShopCount(
+  slug: string,
+  receiptId: string,
+  _prev: StockState,
+  _formData: FormData,
+): Promise<StockState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  if (!UUID.test(receiptId)) return { error: OOPS };
+  const { data: shop } = await ctx.supabase
+    .from("connections")
+    .select("status, scopes")
+    .eq("tenant_id", ctx.tenant.id)
+    .eq("provider", "shopify")
+    .maybeSingle();
+  if (shop?.status !== "active" || !canWriteShopifyStock(shop.scopes)) {
+    return {
+      error:
+        "Your shop isn't letting us add to its count right now. Check Connections, or add this delivery in your shop by hand.",
+    };
+  }
+  const { error } = await ctx.supabase.rpc("retry_stock_receipt", { p_receipt_id: receiptId });
+  if (error) {
+    done(slug);
+    return {
+      error: error.message.includes("can't tell")
+        ? "We can't tell whether your shop added this one, so we won't send it again. Check the count in your shop and fix it there."
+        : error.message.includes("another try")
+          ? "This one is already on its way to your shop, or already there."
+          : OOPS,
+    };
+  }
+  done(slug);
+  return { message: "We're asking your shop again. Give it a minute." };
 }
 
 export async function saveStockSettings(

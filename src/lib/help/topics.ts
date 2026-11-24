@@ -424,7 +424,7 @@ export const HELP_TOPICS: HelpTopic[] = [
       "Add shipping, tax or other amounts if you know them, then mark the order as sent when you place it.",
     ],
     notes: [
-      "Items with no supplier are listed as left off, so nothing is dropped quietly.",
+      "Items with no supplier, or whose supplier you no longer order from, are listed as left off, so nothing is dropped quietly.",
       "You can print the order or download it as a spreadsheet to send to your supplier.",
       "Lines stay editable until the order is closed, so it can match what really arrived.",
     ],
@@ -457,6 +457,8 @@ export const HELP_TOPICS: HelpTopic[] = [
     notes: [
       "The suite only ever adds what you checked in. It never lowers or overwrites your shop's count.",
       "Adding to the shop's count needs a shop with one stock location.",
+      "Pressed the button twice? The delivery is still counted once.",
+      "If your shop turns a delivery down, the order says why. Once that's sorted, an owner or admin can press “Try the shop again”. When we can't tell whether your shop took it, we don't send it again: check the count in your shop instead.",
       "Add tracking numbers to an order that's on its way and it shows under “Incoming”, with a flag if it's late.",
     ],
   },

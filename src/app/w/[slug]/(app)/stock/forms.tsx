@@ -8,6 +8,7 @@ import { Input, Label, Select } from "@/components/ui/input";
 import { SubmitButton } from "@/components/ui/submit-button";
 import {
   receiveDelivery,
+  retryShopCount,
   saveItemPlan,
   saveStockSettings,
   saveSupplier,
@@ -429,6 +430,9 @@ export function ReceiveForm({
   const waiting = lines.filter((line) => line.qty_received < line.qty_ordered);
   return (
     <form action={action} className="flex flex-col gap-3">
+      {/* One key per delivery: a second press finds the first, and a new key
+          is made once what's arrived has changed. */}
+      <RequestKey resetOn={lines.map((line) => `${line.id}:${line.qty_received}`).join(",")} />
       <ul className="divide-border flex flex-col divide-y">
         {waiting.map((line) => (
           <li key={line.id} className="flex flex-wrap items-center gap-x-4 gap-y-2 py-2">
@@ -463,6 +467,27 @@ export function ReceiveForm({
       <SubmitButton pendingText="Checking in…" className="sm:w-fit">
         Check these in
       </SubmitButton>
+    </form>
+  );
+}
+
+/** "Try the shop again" beside a delivery the shop turned down. */
+export function RetryShopButton({ slug, receiptId }: { slug: string; receiptId: string }) {
+  const [state, action] = useActionState(retryShopCount.bind(null, slug, receiptId), {});
+  return (
+    <form action={action} className="mt-1 flex flex-wrap items-center gap-2">
+      <SubmitButton variant="outline" size="sm" pendingText="Asking…">
+        Try the shop again
+      </SubmitButton>
+      <span className="text-xs" aria-live="polite">
+        {state.error ? (
+          <span className="text-brick">{state.error}</span>
+        ) : (
+          <span className="text-muted-foreground">
+            {state.message ?? "It only adds these units, and only once."}
+          </span>
+        )}
+      </span>
     </form>
   );
 }

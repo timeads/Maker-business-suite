@@ -27,7 +27,10 @@ import {
   ShopPermissionError,
   createShopifySender,
 } from "../src/lib/connections/providers/shopify-fulfil";
-import { createShopifyStockWriter } from "../src/lib/connections/providers/shopify-stock";
+import {
+  StockWriteUnsureError,
+  createShopifyStockWriter,
+} from "../src/lib/connections/providers/shopify-stock";
 import { getProviderToken, vaultTokenStore, type TokenDeps } from "../src/lib/connections/tokens";
 import { sendEmail } from "../src/lib/email";
 import { inboundDomain } from "../src/lib/helpdesk/addresses";
@@ -311,11 +314,13 @@ async function sendBookingReminders(): Promise<number> {
  * Adds deliveries that were checked in to the shop's own count, for
  * workspaces that asked for that. Each receipt is tried once; a failure is
  * recorded on it and told to the team rather than retried blindly, because a
- * repeat could add the same boxes twice.
+ * repeat could add the same boxes twice. When the shop certainly added
+ * nothing (it said no, or was never asked), an owner or admin may press "Try
+ * the shop again", which queues one new try; when we can't tell, they can't.
  */
 async function drainStockReceipts(): Promise<number> {
   const admin = getAdminClient();
-  const { data, error } = await admin.rpc("claim_stock_receipts", { p_limit: 20 });
+  const { data, error } = await admin.rpc("claim_stock_receipt_tries", { p_limit: 20 });
   if (error) throw new Error(`Could not claim stock receipts: ${error.message}`);
   const receipts = (data ?? []) as {
     id: string;
@@ -324,6 +329,8 @@ async function drainStockReceipts(): Promise<number> {
     provider: string;
     inventory_item_id: string | null;
     po_number: number;
+    attempt: number;
+    shop_key: string;
   }[];
   if (receipts.length === 0) return 0;
   const writer = createShopifyStockWriter();
@@ -336,6 +343,7 @@ async function drainStockReceipts(): Promise<number> {
   };
   for (const receipt of receipts) {
     let failure: string | null = null;
+    let unsure = false;
     try {
       if (receipt.provider !== "shopify" || !receipt.inventory_item_id) {
         throw new Error("This item isn't one the shop keeps a count of");
@@ -348,14 +356,17 @@ async function drainStockReceipts(): Promise<number> {
         inventoryItemId: receipt.inventory_item_id,
         delta: receipt.quantity,
         reference: `app://stock/receipt/${receipt.id}`,
+        key: receipt.shop_key,
       });
     } catch (err) {
       failure = err instanceof Error ? err.message : String(err);
-      console.error(`stock receipt ${receipt.id}: ${failure}`);
+      unsure = err instanceof StockWriteUnsureError;
+      console.error(`stock receipt ${receipt.id} (try ${receipt.attempt}): ${failure}`);
     }
-    const { error: finishError } = await admin.rpc("finish_stock_receipt", {
+    const { error: finishError } = await admin.rpc("finish_stock_receipt_try", {
       p_id: receipt.id,
       p_error: failure,
+      p_can_retry: failure !== null && !unsure,
     });
     if (finishError) console.error(`could not mark receipt ${receipt.id}: ${finishError.message}`);
     if (failure) {
@@ -363,7 +374,11 @@ async function drainStockReceipts(): Promise<number> {
         admin,
         receipt.tenant_id,
         "stock",
-        `A delivery on order ${receipt.po_number} (${receipt.quantity} units) couldn't be added to your shop's count: ${failure}. Add it in your shop by hand.`,
+        `A delivery on order ${receipt.po_number} (${receipt.quantity} units) couldn't be added to your shop's count: ${failure}. ${
+          unsure
+            ? "Check the count in your shop and add it there by hand if it's missing."
+            : "Once that's sorted, an owner or admin can press “Try the shop again” on the order, or add it in your shop by hand."
+        }`,
       );
     }
   }

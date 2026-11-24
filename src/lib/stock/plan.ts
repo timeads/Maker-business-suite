@@ -319,10 +319,20 @@ function buildDrafts(rows: StockRow[], today: string): DraftOrder[] {
     .sort((a, b) => b.totalCost - a.totalCost);
 }
 
-/** One suggested order per supplier, from everything of theirs that is due. */
+/**
+ * True when the item has someone to order it from: a supplier that is still
+ * used. One marked "we don't order from them any more" counts as none.
+ */
+export const hasLiveSupplier = (row: StockRow) =>
+  row.supplier !== null && !row.supplier.archived_at;
+
+/**
+ * One suggested order per supplier, from everything of theirs that is due.
+ * Suppliers no longer used get no order, here as when items are ticked.
+ */
 export function draftOrders(rows: StockRow[], today: string): DraftOrder[] {
   return buildDrafts(
-    rows.filter((row) => row.due && row.supplier && isPlanned(row)),
+    rows.filter((row) => row.due && hasLiveSupplier(row) && isPlanned(row)),
     today,
   );
 }
@@ -353,7 +363,7 @@ export function draftOrdersForItems(
   for (const row of rows) {
     if (!picked.has(row.item.id)) continue;
     if (!isPlanned(row)) out.notPlanned.push(row);
-    else if (!row.supplier || row.supplier.archived_at) out.noSupplier.push(row);
+    else if (!hasLiveSupplier(row)) out.noSupplier.push(row);
     else if (row.suggestedQty <= 0) out.nothingToOrder.push(row);
     else usable.push(row);
   }

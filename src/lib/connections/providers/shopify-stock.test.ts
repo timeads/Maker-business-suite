@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { Fetch } from "../types";
-import { StockWriteError, canWriteShopifyStock, createShopifyStockWriter } from "./shopify-stock";
+import {
+  StockWriteError,
+  StockWriteUnsureError,
+  canWriteShopifyStock,
+  createShopifyStockWriter,
+} from "./shopify-stock";
 
 const token = { access_token: "test-access", refresh_token: null, expires_at: null } as never;
 
@@ -26,6 +31,7 @@ const change = {
   inventoryItemId: "gid://shopify/InventoryItem/1",
   delta: 5,
   reference: "app://po/2",
+  key: "0b0e8a52-7c1f-4d55-9d0a-5d0f1c7b9a11",
 };
 
 describe("adding a delivery to the shop's count", () => {
@@ -35,7 +41,9 @@ describe("adding a delivery to the shop's count", () => {
       { id: "gid://shopify/Location/2", isActive: false },
     ]);
     await writer.add("wild-thread.myshopify.com", token, change);
+    expect(sent[1].query).toContain("@idempotent(key: $key)");
     expect(sent[1].variables).toEqual({
+      key: "0b0e8a52-7c1f-4d55-9d0a-5d0f1c7b9a11",
       input: {
         reason: "received",
         name: "available",
@@ -73,6 +81,36 @@ describe("adding a delivery to the shop's count", () => {
       [{ message: "Item is not stocked here" }],
     );
     await expect(writer.add("s.myshopify.com", token, change)).rejects.toThrow(/not stocked here/);
+  });
+
+  it("a plain no from the shop is a clean failure; an unclear answer is not", async () => {
+    const refused = shop([{ id: "a", isActive: true }], [{ message: "Not stocked here" }]);
+    const no = await refused.writer.add("s.myshopify.com", token, change).catch((e) => e);
+    expect(no).toBeInstanceOf(StockWriteError);
+    expect(no).not.toBeInstanceOf(StockWriteUnsureError);
+
+    // The line drops while the shop is being asked to add the units.
+    let calls = 0;
+    const dropped = createShopifyStockWriter((async () => {
+      calls += 1;
+      if (calls > 1) throw new Error("socket hang up");
+      return new Response(
+        JSON.stringify({
+          data: { locations: { nodes: [{ id: "a", name: "Studio", isActive: true }] } },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }) as unknown as Fetch);
+    await expect(dropped.add("s.myshopify.com", token, change)).rejects.toBeInstanceOf(
+      StockWriteUnsureError,
+    );
+
+    // Not being able to read the shop's locations happens before anything is asked.
+    const early = createShopifyStockWriter((async () => {
+      throw new Error("no route");
+    }) as unknown as Fetch);
+    const before = await early.add("s.myshopify.com", token, change).catch((e) => e);
+    expect(before).not.toBeInstanceOf(StockWriteUnsureError);
   });
 
   it("needs both permissions before it is offered", () => {

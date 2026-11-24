@@ -191,6 +191,14 @@ describe("drafting orders from ticked items", () => {
     ]);
   });
 
+  it("suggests no order for a supplier that isn't used any more", () => {
+    const all = rows();
+    expect(all.find((r) => r.item.id === "gone")!.due).toBe(true);
+    const suggested = draftOrders(all, TODAY);
+    expect(suggested.map((o) => o.supplier.name)).not.toContain("Old Mill");
+    expect(suggested.flatMap((o) => o.lines.map((l) => l.stock_item_id))).not.toContain("gone");
+  });
+
   it("hands back what couldn't go on an order, by reason, instead of dropping it", () => {
     const picked = draftOrdersForItems(rows(), ticked, TODAY);
     expect(picked.noSupplier.map((r) => r.item.id)).toEqual(["none", "gone"]);
