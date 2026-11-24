@@ -136,6 +136,81 @@ export async function addLedgerEntry(
   return { message: kind.saved };
 }
 
+/**
+ * Corrects an invoice or payment from its own page: a new date, amount or
+ * note under the same number. It goes through `save_ledger_entry`, which
+ * corrects the entry carrying that number rather than adding a second one,
+ * so the "Paid" tick and where the entry came from are left as they were.
+ */
+export async function correctLedgerEntry(
+  slug: string,
+  entryId: string,
+  _prev: StockState,
+  formData: FormData,
+): Promise<StockState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  if (!UUID.test(entryId)) return { error: OOPS };
+  const { data: entry } = await ctx.supabase
+    .from("supplier_ledger")
+    .select("id, supplier_id, type, reference, source")
+    .eq("tenant_id", ctx.tenant.id)
+    .eq("id", entryId)
+    .maybeSingle();
+  if (!entry) return { error: "That entry is already gone." };
+  const reference = ((entry.reference as string | null) ?? "").trim();
+  if ((entry.type !== "invoice" && entry.type !== "payment") || !reference) {
+    return { error: "This entry has no number to correct it by. Remove it and add it again." };
+  }
+  if (entry.source === "books") {
+    return { error: "This came from your books. Change it there and it follows here." };
+  }
+  // The same number on two entries would correct both: refuse rather than guess.
+  const { data: twins, error: twinsError } = await ctx.supabase
+    .from("supplier_ledger")
+    .select("id")
+    .eq("tenant_id", ctx.tenant.id)
+    .eq("supplier_id", entry.supplier_id)
+    .eq("type", entry.type)
+    .ilike("reference", reference.replace(/[\\%_]/g, "\\$&"))
+    .limit(3);
+  if (twinsError) return { error: OOPS };
+  if ((twins ?? []).length !== 1) {
+    return {
+      error: "Two entries share this number. Remove the one that's wrong and add it again.",
+    };
+  }
+  const date = text(formData, "date");
+  if (!realDay(date)) return { error: "Pick the date." };
+  const note = text(formData, "note");
+  if (note.length > 500) return { error: "That note is too long (500 characters at most)." };
+  const amount = parseAmount(text(formData, "amount"));
+  if (!amount) return { error: "Type the amount as a number, like 1250.00." };
+  if (amount.cents <= 0)
+    return { error: "The amount has to be more than zero, with no minus sign." };
+
+  const { data: saved, error } = await ctx.supabase.rpc("save_ledger_entry", {
+    p_tenant_id: ctx.tenant.id,
+    p_supplier_id: entry.supplier_id,
+    p_type: entry.type,
+    p_entry_date: date,
+    p_amount: amount.value,
+    p_stated_balance: null,
+    p_reference: reference,
+    p_description: note,
+  });
+  if (error) {
+    if (error.code === "22023") {
+      return { error: "Check the date: it can't be before 2000 or more than a year from now." };
+    }
+    if (error.code === "42501") return { error: NOT_ALLOWED };
+    return { error: OOPS };
+  }
+  if (saved !== entryId) return { error: OOPS };
+  done(slug);
+  return { message: "Saved." };
+}
+
 /** Takes an entry off the account, to undo a mistake. */
 export async function removeLedgerEntry(slug: string, entryId: string): Promise<StockState> {
   const ctx = await context(slug);

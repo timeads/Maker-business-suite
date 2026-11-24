@@ -114,7 +114,8 @@ export function combineSummaries(list: VendorSummary[]): CombinedSummary {
   };
 }
 
-export type VendorBill = OpenBill & { vendor: string };
+/** `supplierId` rides along when the caller has one, so a bill can link to its supplier. */
+export type VendorBill = OpenBill & { vendor: string; supplierId?: string };
 export type CombinedAging = Omit<AgingResult, "bills" | "termsDays"> & {
   bills: VendorBill[];
   /** The shared terms if every vendor has the same, else null. */
@@ -122,7 +123,9 @@ export type CombinedAging = Omit<AgingResult, "bills" | "termsDays"> & {
 };
 
 /** Every vendor's open bills in one list (oldest first), with the buckets added up. */
-export function combineAging(list: { vendor: string; aging: AgingResult }[]): CombinedAging {
+export function combineAging(
+  list: { vendor: string; supplierId?: string; aging: AgingResult }[],
+): CombinedAging {
   const keys: AgingBucket[] = ["notDue", "late1to30", "late31to60", "late60plus"];
   const buckets = Object.fromEntries(
     keys.map((k) => [
@@ -139,7 +142,13 @@ export function combineAging(list: { vendor: string; aging: AgingResult }[]): Co
     openTotal: list.reduce((s, v) => s.add(v.aging.openTotal), ZERO).toFixed(2),
     unattributed: list.reduce((s, v) => s.add(v.aging.unattributed), ZERO).toFixed(2),
     bills: list
-      .flatMap((v) => v.aging.bills.map((b) => ({ ...b, vendor: v.vendor })))
+      .flatMap((v) =>
+        v.aging.bills.map((b) => ({
+          ...b,
+          vendor: v.vendor,
+          ...(v.supplierId ? { supplierId: v.supplierId } : {}),
+        })),
+      )
       .sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.vendor.localeCompare(b.vendor)),
     buckets,
   };

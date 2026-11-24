@@ -184,7 +184,12 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   payments, the supplier's own statements, credits). The balance, ageing
   and "marked paid" states are worked out on read by `lib/stock/balance`
   (ported from TuftStock with its tests, on whole-cents `Money`); a
-  statement re-anchors the account, and nothing derived is stored. Items are
+  statement re-anchors the account, and nothing derived is stored. The tab is
+  laid out after TuftStock's page (cards, bills by the week due, confirmed
+  payments, activity with filters in the URL), with a page per supplier and
+  per invoice (`balances/invoice/[id]`); `balance/history.ts` explains the
+  ageing (balance after each entry, which payments cleared which bills) and
+  never overrules it. Items are
   ordered by the case and can have their own smallest order
   (`engine/case-pack.ts`); name words in settings leave items out as well
   (the two switches a person has are described further down). Drafting orders from ticked items goes through

@@ -9,8 +9,16 @@ import {
   type StatementAudit,
   type VendorBalanceResult,
 } from "@/lib/stock/balance/balance";
+import type { EntrySource } from "@/lib/stock/balance/activity";
+import { accountHistory, type AccountHistory } from "@/lib/stock/balance/history";
 import { Money } from "@/lib/stock/balance/money";
-import { STOCK_HIDDEN_NOTICES_KEY, STOCK_MODULE, parseHiddenNotices } from "@/lib/stock/config";
+import {
+  STOCK_HIDDEN_NOTICES_KEY,
+  STOCK_MODULE,
+  STOCK_SETTINGS_KEY,
+  parseHiddenNotices,
+  parseStockSettings,
+} from "@/lib/stock/config";
 import { paidMarks, type PaidMarks } from "@/lib/stock/balance/paid-marks";
 import {
   combineSummaries,
@@ -37,7 +45,8 @@ type DbLedgerRow = {
   description: string;
   payment_sent_at: string | null;
   created_at: string;
-  source: "manual" | "import" | "books";
+  created_by: string | null;
+  source: EntrySource;
 };
 
 /** One line of a supplier's account, ready to show. */
@@ -56,6 +65,12 @@ export type LedgerRow = {
   createdAt: string;
   /** Read from the connected books rather than typed in. */
   fromBooks: boolean;
+  /** Typed in, brought in from a spreadsheet, or read from the books. */
+  source: EntrySource;
+  /** The member who wrote it down, when that is known. */
+  createdBy: string | null;
+  /** Invoices: when someone ticked "Paid", or null. */
+  paymentSentAt: string | null;
 };
 
 /** A supplier's whole account: the entries and everything worked out from them. */
@@ -69,6 +84,10 @@ export type SupplierAccount = {
   paid: PaidMarks;
   audits: StatementAudit[];
   summary: VendorSummary;
+  /** The balance after each entry, and which payments cleared which bills. */
+  history: AccountHistory;
+  /** When the newest entry was written down (ISO), or null for an empty account. */
+  updatedAt: string | null;
   /** Newest first. */
   ledger: LedgerRow[];
 };
@@ -82,6 +101,8 @@ export type Balances = {
   today: string;
   /** Keys of the notices someone has hidden (lib/stock/balance/notices.ts). */
   hiddenNotices: string[];
+  /** The workspace has asked for payments to be read from its books. */
+  booksOn: boolean;
 };
 
 const PAGE = 1000;
@@ -155,6 +176,12 @@ function toAccount(
     balance,
     aging,
     paid,
+    // Rows come newest first; the history wants them as they were written down.
+    history: accountHistory([...inputs].reverse(), aging, asOf),
+    updatedAt: rows.reduce<string | null>(
+      (max, row) => (max === null || row.created_at > max ? row.created_at : max),
+      null,
+    ),
     audits: auditStatements(inputs),
     summary: summarizeVendor({
       supplierId: supplier.id,
@@ -178,6 +205,9 @@ function toAccount(
       description: row.description,
       createdAt: row.created_at,
       fromBooks: row.source === "books",
+      source: row.source ?? "manual",
+      createdBy: row.created_by ?? null,
+      paymentSentAt: row.payment_sent_at,
     })),
   };
 }
@@ -193,7 +223,7 @@ export async function loadBalances(
   /** Only this supplier's account. */
   supplierId?: string,
 ): Promise<Balances> {
-  const [suppliers, ledger, { data: hidden }] = await Promise.all([
+  const [suppliers, ledger, { data: configs }] = await Promise.all([
     all<SupplierRow>("suppliers", (from, to) => {
       const query = supabase
         .from("suppliers")
@@ -208,7 +238,7 @@ export async function loadBalances(
       const query = supabase
         .from("supplier_ledger")
         .select(
-          "id, supplier_id, type, entry_date, amount, stated_balance, reference, description, payment_sent_at, created_at, source",
+          "id, supplier_id, type, entry_date, amount, stated_balance, reference, description, payment_sent_at, created_at, created_by, source",
         )
         .eq("tenant_id", tenant.id);
       return (supplierId ? query.eq("supplier_id", supplierId) : query)
@@ -219,12 +249,13 @@ export async function loadBalances(
     }),
     supabase
       .from("configs")
-      .select("body")
+      .select("key, body")
       .eq("tenant_id", tenant.id)
       .eq("module", STOCK_MODULE)
-      .eq("key", STOCK_HIDDEN_NOTICES_KEY)
-      .maybeSingle(),
+      .in("key", [STOCK_HIDDEN_NOTICES_KEY, STOCK_SETTINGS_KEY]),
   ]);
+  const config = (key: string) =>
+    ((configs ?? []) as { key: string; body: unknown }[]).find((c) => c.key === key)?.body;
   const now = new Date();
   const today = localDay(now, tenant.timezone);
   const bySupplier = new Map<string, DbLedgerRow[]>();
@@ -238,6 +269,7 @@ export async function loadBalances(
     accounts,
     combined: combineSummaries(accounts.filter((a) => a.ledger.length > 0).map((a) => a.summary)),
     today,
-    hiddenNotices: parseHiddenNotices(hidden?.body).keys,
+    hiddenNotices: parseHiddenNotices(config(STOCK_HIDDEN_NOTICES_KEY)).keys,
+    booksOn: parseStockSettings(config(STOCK_SETTINGS_KEY)).payments_from_books,
   };
 }

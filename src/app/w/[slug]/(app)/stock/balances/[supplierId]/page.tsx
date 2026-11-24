@@ -1,11 +1,13 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
+import { localDay } from "@/lib/bookings/slots";
 import { describeAdjustment, describeBalance } from "@/lib/stock/balance/format";
 import { Money } from "@/lib/stock/balance/money";
 import { balanceNotices } from "@/lib/stock/balance/notices";
+import { arrivalWords, lastArrival, supplierCard } from "@/lib/stock/balance/words";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
 import { cn } from "@/lib/utils";
@@ -14,20 +16,21 @@ import { loadBalances } from "../data";
 import { EntryForm, TermsForm } from "../forms";
 import {
   AgingTiles,
-  HiddenNotices,
   BalanceValue,
-  DueWords,
+  HiddenNotices,
+  InvoiceLink,
   LedgerTable,
   ManagersOnly,
   Note,
-  PaidCell,
+  OpenBillsTable,
+  Panel,
   PaymentsConfirmed,
-  StillOwed,
+  SupplierCards,
   day,
   days,
+  label,
+  moment,
   moneyText,
-  td,
-  th,
 } from "../parts";
 
 export const metadata: Metadata = { title: "Supplier balance" };
@@ -35,7 +38,15 @@ export const metadata: Metadata = { title: "Supplier balance" };
 /** A statement older than this is worth asking the supplier to refresh. */
 const STALE_DAYS = 35;
 
-/** One supplier's account: the balance, open bills, the add-entry form and every entry. */
+const summaryButton =
+  "border-input bg-card hover:bg-hover inline-flex h-9 w-fit cursor-pointer items-center rounded-sm border px-3.5 text-sm font-semibold select-none";
+
+/**
+ * One supplier's account, laid out like the main Balances page narrowed to
+ * that supplier: the same cards on top, what's owed and what happened since
+ * their last statement, the open bills, then every entry with the balance
+ * after it, the statements, and which bills each payment cleared.
+ */
 export default async function SupplierBalancePage({
   params,
 }: {
@@ -45,27 +56,27 @@ export default async function SupplierBalancePage({
   const access = await stockAccess(slug, `/w/${slug}/stock/balances/${supplierId}`);
   if (!access.ok) return access.upsell;
   const { tenant, role, entitlements } = access;
-  const back = { href: `/w/${tenant.slug}/stock/balances`, label: "Supplier balances" };
+  const base = `/w/${tenant.slug}/stock/balances`;
+  const back = { href: base, label: "All suppliers & due dates" };
   if (!canManage(role)) {
     return (
       <>
-        <PageHeader back={back} title="Supplier balance" />
+        <PageHeader back={back} title="Supplier balances" />
         <ManagersOnly />
       </>
     );
   }
   if (!/^[0-9a-f-]{36}$/i.test(supplierId)) notFound();
 
-  const { accounts, today, hiddenNotices } = await loadBalances(
+  const { accounts, combined, today, hiddenNotices, booksOn } = await loadBalances(
     await createClient(),
     tenant,
-    supplierId,
   );
-  const account = accounts[0];
+  const account = accounts.find((a) => a.supplierId === supplierId.toLowerCase());
   if (!account) notFound();
   const money = moneyText(tenant.currency);
   const canEdit = entitlements.canWrite;
-  const { balance: b, aging, paid, audits, name } = account;
+  const { balance: b, aging, paid, audits, name, history } = account;
   const empty = account.ledger.length === 0;
   const owed = describeBalance(b.estimatedBalance);
   const drifted = audits.filter((a) => !new Money(a.delta).isZero()).reverse();
@@ -74,7 +85,7 @@ export default async function SupplierBalancePage({
   // when a newer statement or another payment changes them.
   const notices = balanceNotices(
     {
-      supplierId,
+      supplierId: account.supplierId,
       anchorDate: b.anchor?.date ?? null,
       stale,
       unreflectedIds: b.paymentsPossiblyUnreflected.map((p) => p.id),
@@ -99,21 +110,43 @@ export default async function SupplierBalancePage({
         : owed.direction === "settled"
           ? "Account settled"
           : `You owe ${name}`;
+  const started = accounts.filter((a) => a.ledger.length > 0 || a.supplierId === supplierId);
+  const running = new Map(history.rows.map((row) => [row.id, row]));
+  const statements = history.rows.filter((row) => row.anchor).reverse();
+  const stated = new Map(account.ledger.map((row) => [row.id, row.statedBalance]));
+  const payments = [...history.payments].reverse();
+  const lastBooks = lastArrival(account.ledger, "books");
+  const lastImport = lastArrival(account.ledger, "import");
 
   return (
     <>
-      <PageHeader
-        back={back}
-        title={name}
-        description={`What you owe ${name}. Each invoice is due ${days(account.termsDays)} after its date.`}
-      >
+      <PageHeader back={back} title="Supplier balances">
         {account.archived && <Badge>Not used any more</Badge>}
       </PageHeader>
+
+      <SupplierCards
+        base={base}
+        combined={combined}
+        cards={started.map((a) => supplierCard(a.summary))}
+        selectedId={account.supplierId}
+        money={money}
+      />
+
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <h2 className="text-lg leading-snug font-bold tracking-[-0.01em]">
+          {name} — account balance
+        </h2>
+        <p className="text-muted-foreground text-xs">
+          Net {account.termsDays} · {tenant.currency}
+          {account.updatedAt &&
+            ` · updated ${day(localDay(new Date(account.updatedAt), tenant.timezone), "full")}`}
+        </p>
+      </div>
 
       <div className="grid gap-4 md:grid-cols-3">
         <Card>
           <CardContent className="flex flex-col gap-1">
-            <p className="text-muted-foreground text-xs font-semibold">{heroLabel}</p>
+            <p className={label}>{heroLabel}</p>
             <p className="flex flex-wrap items-center gap-2">
               <span
                 className={cn(
@@ -131,15 +164,14 @@ export default async function SupplierBalancePage({
                 You&apos;ve paid more than you&apos;ve been billed. This much is in your favour.
               </p>
             )}
-            <p className="text-muted-foreground font-read text-xs">
+            <p className="text-muted-foreground font-read mt-1 text-xs">
               {empty ? (
                 "Add their open invoices, or the balance from their latest statement, below."
               ) : b.anchor ? (
                 <>
                   From {name}&apos;s statement of {day(b.anchor.date, "full")} (
-                  {money(b.anchor.statedBalance)}
-                  {describeBalance(b.anchor.statedBalance).direction === "credit" ? " credit" : ""}
-                  ), plus what&apos;s happened since.
+                  <BalanceWords value={b.anchor.statedBalance} money={money} />
+                  ), plus activity since.
                 </>
               ) : (
                 "No statement from them yet, so this is your invoices less your payments."
@@ -149,10 +181,8 @@ export default async function SupplierBalancePage({
         </Card>
 
         <Card className="md:col-span-2">
-          <CardHeader>
-            <CardTitle>Since the last statement</CardTitle>
-          </CardHeader>
           <CardContent className="flex flex-col gap-3">
+            <p className={label}>Since the last statement</p>
             <dl className="grid grid-cols-3 gap-4 text-sm">
               <div>
                 <dt className="text-muted-foreground text-xs">Last stated</dt>
@@ -162,7 +192,9 @@ export default async function SupplierBalancePage({
               </div>
               <div>
                 <dt className="text-muted-foreground text-xs">+ New invoices</dt>
-                <dd className="text-lg font-semibold tabular-nums">{money(b.invoicesSince)}</dd>
+                <dd className="text-ochre-text text-lg font-semibold tabular-nums">
+                  {money(b.invoicesSince)}
+                </dd>
               </div>
               <div>
                 <dt className="text-muted-foreground text-xs">− Payments sent</dt>
@@ -180,15 +212,13 @@ export default async function SupplierBalancePage({
             {b.daysSinceStatement !== null && (
               <p className="text-muted-foreground text-xs">
                 {b.daysSinceStatement === 0
-                  ? "The last statement is dated today."
-                  : `The last statement was ${days(b.daysSinceStatement)} ago.`}
+                  ? "Last statement is dated today."
+                  : `Last statement was ${days(b.daysSinceStatement)} ago.`}
               </p>
             )}
           </CardContent>
         </Card>
       </div>
-
-      {!empty && <AgingTiles buckets={aging.buckets} money={money} />}
 
       {shows("unreflected") && (
         <Note
@@ -217,88 +247,58 @@ export default async function SupplierBalancePage({
       )}
 
       {!empty && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Open bills</CardTitle>
-            <CardDescription>
-              {oldest ? (
-                <span className={oldest.daysPastDue > 0 ? "text-brick font-semibold" : undefined}>
-                  Oldest unpaid: {oldest.reference ?? "an invoice"}, invoiced {day(oldest.date)},{" "}
-                  {days(oldest.ageDays)} ago,{" "}
-                  {oldest.daysPastDue > 0
-                    ? `${days(oldest.daysPastDue)} past due`
-                    : `due ${day(oldest.dueDate)}`}
-                </span>
-              ) : new Money(aging.unattributed).gt(0) ? (
-                "No invoices on the account match what's owed."
-              ) : (
-                "Nothing owed: no open bills."
-              )}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3">
-            {aging.bills.length > 0 && (
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[640px] text-left text-sm">
-                  <thead className="text-muted-foreground text-xs">
-                    <tr>
-                      <th className={th}>Invoice</th>
-                      <th className={th}>Invoiced</th>
-                      <th className={cn(th, "text-right")}>Age</th>
-                      <th className={th}>Due</th>
-                      <th className={cn(th, "text-right")}>Still owed</th>
-                      <th className={th}>Paid?</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-border divide-y">
-                    {aging.bills.map((bill) => (
-                      <tr
-                        key={bill.id}
-                        className={bill.paymentSentAt ? "text-muted-foreground" : undefined}
-                      >
-                        <td className={cn(td, "font-read")}>{bill.reference ?? "—"}</td>
-                        <td className={cn(td, "whitespace-nowrap")}>{day(bill.date, "full")}</td>
-                        <td className={cn(td, "text-right whitespace-nowrap tabular-nums")}>
-                          {days(bill.ageDays)}
-                        </td>
-                        <td className={cn(td, "whitespace-nowrap")}>
-                          {bill.daysPastDue < 0 && `${day(bill.dueDate)} · `}
-                          <DueWords daysPastDue={bill.daysPastDue} />
-                        </td>
-                        <td className={cn(td, "text-right tabular-nums")}>
-                          <StillOwed bill={bill} money={money} />
-                        </td>
-                        <td className={td}>
-                          <PaidCell
-                            slug={tenant.slug}
-                            bill={bill}
-                            mark={marks[bill.id]}
-                            timezone={tenant.timezone}
-                            canEdit={canEdit}
-                          />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-            {new Money(aging.unattributed).gt(0) && (
-              <p className="text-ochre-text text-xs">
-                {money(aging.unattributed)} of the balance is older than any invoice written down
-                here, so we can&apos;t say how old it is.
-              </p>
-            )}
-            <p className="text-muted-foreground text-xs">
-              You pay against a running balance, so each payment counts against your oldest bills
-              first. What&apos;s still owed is your most recent invoices, each due{" "}
-              {days(aging.termsDays)} after the date on it.
+        <Panel
+          title={`Open bills · net ${aging.termsDays}`}
+          aside={
+            oldest ? (
+              <span className={oldest.daysPastDue > 0 ? "text-brick font-semibold" : "text-text-2"}>
+                Oldest unpaid: {oldest.reference ?? "an invoice"}, invoiced {day(oldest.date)},{" "}
+                {days(oldest.ageDays)} ago —{" "}
+                {oldest.daysPastDue > 0
+                  ? `${days(oldest.daysPastDue)} past due`
+                  : `due ${day(oldest.dueDate)}`}
+              </span>
+            ) : new Money(aging.unattributed).gt(0) ? (
+              <span className="text-muted-foreground">
+                No invoices on the account match what&apos;s owed.
+              </span>
+            ) : (
+              <span className="text-muted-foreground">Nothing owed: no open bills.</span>
+            )
+          }
+        >
+          <AgingTiles buckets={aging.buckets} money={money} />
+          {aging.bills.length > 0 && (
+            <OpenBillsTable
+              bills={aging.bills}
+              marks={marks}
+              money={money}
+              base={base}
+              slug={tenant.slug}
+              timezone={tenant.timezone}
+              canEdit={canEdit}
+            />
+          )}
+          {new Money(aging.unattributed).gt(0) && (
+            <p className="text-ochre-text text-xs">
+              {money(aging.unattributed)} of the balance is older than any invoice written down
+              here, so we can&apos;t say how old it is.
             </p>
-          </CardContent>
-        </Card>
+          )}
+          <p className="text-muted-foreground text-xs">
+            You pay against a running balance, so each payment is counted against your oldest bills
+            first: what&apos;s still owed is your most recent invoices. Each is due{" "}
+            {days(aging.termsDays)} after the date printed on the invoice.
+          </p>
+        </Panel>
       )}
 
-      <PaymentsConfirmed confirmed={paid.confirmed} money={money} timezone={tenant.timezone} />
+      <PaymentsConfirmed
+        confirmed={paid.confirmed}
+        money={money}
+        timezone={tenant.timezone}
+        base={base}
+      />
 
       {shows("stale") && (
         <Note title="Their statement is getting old" hide={notice("stale")}>
@@ -341,52 +341,156 @@ export default async function SupplierBalancePage({
         <HiddenNotices slug={tenant.slug} count={notices.filter((n) => n.hidden).length} />
       )}
 
-      {canEdit && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Add to {name}&apos;s account</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <EntryForm key={supplierId} slug={tenant.slug} supplierId={supplierId} today={today} />
-          </CardContent>
-        </Card>
-      )}
-
-      {canEdit && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Time to pay</CardTitle>
-            <CardDescription>
-              How long {name} gives you to pay an invoice. Due dates are worked out from this.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <TermsForm slug={tenant.slug} supplierId={supplierId} days={account.termsDays} />
-          </CardContent>
-        </Card>
-      )}
-
       <Card>
-        <CardHeader>
-          <CardTitle>Ledger</CardTitle>
-          <CardDescription>
-            Their latest statement is taken as the true balance on its date. Invoices and payments
-            dated after it are added and taken off, so an old slip can&apos;t linger: each new
-            statement sets the account straight.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {empty ? (
-            <p className="text-muted-foreground text-sm">No entries yet.</p>
-          ) : (
-            <LedgerTable
-              rows={account.ledger}
-              money={money}
-              remove={canEdit ? { slug: tenant.slug } : undefined}
-            />
-          )}
+        <CardContent className="flex flex-col gap-1.5 text-sm">
+          <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+            <h2 className="font-semibold">How entries get here</h2>
+            <p className="text-muted-foreground text-xs">
+              {[
+                lastBooks &&
+                  `Last filed from your books ${moment(lastBooks.at, tenant.timezone)} · ${lastBooks.count} new`,
+                lastImport &&
+                  `Last spreadsheet import ${moment(lastImport.at, tenant.timezone)} · ${lastImport.count} ${lastImport.count === 1 ? "entry" : "entries"}`,
+              ]
+                .filter(Boolean)
+                .join(" · ") || "Everything here so far was typed in"}
+            </p>
+          </div>
+          {arrivalWords(name, { booksOn, lastBooks, lastImport }).map((line) => (
+            <p key={line} className="font-read text-text-2">
+              {line}
+            </p>
+          ))}
         </CardContent>
       </Card>
+
+      {canEdit && (
+        <details open={empty} className="group flex flex-col">
+          <summary className={cn(summaryButton, "list-none [&::-webkit-details-marker]:hidden")}>
+            + Add invoice or payment
+          </summary>
+          <Card className="mt-3">
+            <CardContent className="flex flex-col gap-5">
+              <EntryForm
+                key={account.supplierId}
+                slug={tenant.slug}
+                supplierId={account.supplierId}
+                today={today}
+              />
+              <div className="border-border border-t pt-4">
+                <p className="text-muted-foreground mb-2 text-xs">
+                  How long {name} gives you to pay an invoice. Due dates are worked out from this.
+                </p>
+                <TermsForm
+                  slug={tenant.slug}
+                  supplierId={account.supplierId}
+                  days={account.termsDays}
+                />
+              </div>
+            </CardContent>
+          </Card>
+        </details>
+      )}
+
+      <Panel
+        title="Ledger"
+        aside={
+          <span className="text-muted-foreground text-xs">
+            {account.ledger.length} entr{account.ledger.length === 1 ? "y" : "ies"}, newest first
+          </span>
+        }
+      >
+        {empty ? (
+          <p className="text-muted-foreground text-sm">No entries yet.</p>
+        ) : (
+          <LedgerTable
+            rows={account.ledger}
+            money={money}
+            base={base}
+            running={running}
+            remove={canEdit ? { slug: tenant.slug } : undefined}
+          />
+        )}
+        <p className="text-muted-foreground text-xs">
+          How this works: {name}&apos;s most recent statement is taken as the true balance on its
+          date. Invoices and payments dated after it are added and taken off to get today&apos;s
+          figure, so an old slip can&apos;t linger: each new statement sets the whole account
+          straight. A balance marked <strong>credit</strong> is in your favour.
+          {history.rows.some((row) => row.counted && row.running === null) &&
+            " No balance is shown before their first statement, because the starting figure isn't known."}
+        </p>
+      </Panel>
+
+      {statements.length > 0 && (
+        <Panel title="Statements · where the account was set straight">
+          <ul className="divide-border flex flex-col divide-y text-sm">
+            {statements.map((row) => {
+              const delta = row.delta === null ? null : new Money(row.delta);
+              return (
+                <li key={row.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 py-2">
+                  <span className="font-semibold whitespace-nowrap">{day(row.date, "full")}</span>
+                  <span className="tabular-nums">
+                    {name} said{" "}
+                    <BalanceWords value={stated.get(row.id) ?? row.running ?? "0"} money={money} />
+                  </span>
+                  {row.current && <Badge tone="open">Today&apos;s balance starts here</Badge>}
+                  <span className="text-muted-foreground font-read basis-full text-xs">
+                    {delta === null
+                      ? "Nothing was written down between this and the statement before, so there was nothing to check it against."
+                      : delta.isZero()
+                        ? "It matches what was written down up to then."
+                        : `Your entries came to ${money(row.computedBefore ?? "0")}; their figure was ${money(row.delta ?? "0")} ${delta.gt(0) ? "higher" : "lower"}. The account carried on from their figure.`}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </Panel>
+      )}
+
+      {payments.length > 0 && (
+        <Panel title="Payments and credits · which bills each one cleared">
+          <ul className="divide-border flex flex-col divide-y text-sm">
+            {payments.map((p) => (
+              <li key={p.id} className="flex flex-col gap-0.5 py-2">
+                <span className="flex flex-wrap items-baseline gap-x-3">
+                  <span className="font-semibold whitespace-nowrap">{day(p.date, "full")}</span>
+                  <Badge tone={p.kind === "PAYMENT" ? "good" : "open"}>
+                    {p.kind === "PAYMENT" ? "Payment" : "Credit"}
+                  </Badge>
+                  <span className="text-mint-ink font-semibold tabular-nums">
+                    {money(p.amount)}
+                  </span>
+                  {p.reference && <span className="font-mono text-[13px]">{p.reference}</span>}
+                </span>
+                <span className="font-read text-text-2 text-xs">
+                  {p.cleared.length === 0 ? (
+                    "Not counted against an invoice written down here."
+                  ) : (
+                    <>
+                      Cleared{" "}
+                      {p.cleared.map((c, i) => (
+                        <span key={c.invoiceId}>
+                          {i > 0 && ", "}
+                          <InvoiceLink base={base} id={c.invoiceId} reference={c.reference} />{" "}
+                          {c.whole ? "in full" : `(${money(c.amount)} of it)`}
+                        </span>
+                      ))}
+                      .
+                    </>
+                  )}
+                  {new Money(p.rest).gt(0) &&
+                    ` ${money(p.rest)} went against what was owed before these invoices, or is in credit.`}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p className="text-muted-foreground text-xs">
+            Worked out oldest bill first, the way a running account is paid. Nothing here is stored:
+            add or correct an entry and it is worked out again.
+          </p>
+        </Panel>
+      )}
     </>
   );
 }

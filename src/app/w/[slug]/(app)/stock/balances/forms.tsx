@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useActionState, useOptimistic, useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { FormMessage } from "@/components/ui/form-message";
@@ -7,7 +8,13 @@ import { Input, Label } from "@/components/ui/input";
 import { SubmitButton } from "@/components/ui/submit-button";
 import { cn } from "@/lib/utils";
 import type { StockState } from "../actions";
-import { addLedgerEntry, markBillPaid, removeLedgerEntry, setSupplierTerms } from "./actions";
+import {
+  addLedgerEntry,
+  correctLedgerEntry,
+  markBillPaid,
+  removeLedgerEntry,
+  setSupplierTerms,
+} from "./actions";
 
 type Kind = "invoice" | "payment" | "statement" | "credit";
 
@@ -249,12 +256,16 @@ export function RemoveEntryButton({
   slug,
   entryId,
   what,
+  afterHref,
 }: {
   slug: string;
   entryId: string;
-  /** "the invoice KRD-104", for the question and the screen reader. */
+  /** "the invoice INV-104", for the question and the screen reader. */
   what: string;
+  /** Where to go once it's gone (the entry's own page would no longer exist). */
+  afterHref?: string;
 }) {
+  const router = useRouter();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string>();
   return (
@@ -270,6 +281,7 @@ export function RemoveEntryButton({
           start(async () => {
             const result = await removeLedgerEntry(slug, entryId);
             setError(result.error);
+            if (!result.error && afterHref) router.push(afterHref);
           });
         }}
       >
@@ -281,5 +293,57 @@ export function RemoveEntryButton({
         </span>
       )}
     </span>
+  );
+}
+
+/**
+ * Corrects an invoice or payment under its own number: the date, the amount
+ * or the note. The number itself is what ties the correction to the entry,
+ * so it isn't one of the boxes.
+ */
+export function CorrectEntryForm({
+  slug,
+  entryId,
+  date,
+  amount,
+  note,
+}: {
+  slug: string;
+  entryId: string;
+  date: string;
+  amount: string;
+  note: string;
+}) {
+  const [state, action] = useActionState(correctLedgerEntry.bind(null, slug, entryId), {});
+  return (
+    <form action={action} className="flex flex-col gap-3">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="correct-date">Date</Label>
+          <Input id="correct-date" name="date" type="date" defaultValue={date} required />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="correct-amount">Amount</Label>
+          <Input
+            id="correct-amount"
+            name="amount"
+            inputMode="decimal"
+            autoComplete="off"
+            maxLength={20}
+            defaultValue={amount}
+            required
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="correct-note">Note (optional)</Label>
+          <Input id="correct-note" name="note" maxLength={500} defaultValue={note} />
+        </div>
+      </div>
+      <FormMessage>{state.error}</FormMessage>
+      <FormMessage kind="success">{state.message}</FormMessage>
+      <SubmitButton variant="outline" pendingText="Saving…" className="sm:w-fit">
+        Save the correction
+      </SubmitButton>
+    </form>
   );
 }
