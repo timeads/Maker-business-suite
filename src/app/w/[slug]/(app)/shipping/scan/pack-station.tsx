@@ -3,15 +3,25 @@
 import { useCallback, useEffect, useEffectEvent, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Check, Package, Plus, Printer } from "lucide-react";
+import { Check, Package, Plus, Printer, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Label, Select } from "@/components/ui/input";
 import { formatPrice } from "@/lib/shipping/easypost";
 import {
+  BENCH_MAX_BOXES,
+  addSplitBox,
   allPacked,
   autoPrintNow,
+  benchSplitChoice,
+  keepScanned,
+  notBoxed,
+  removeSplitBox,
+  sameSplit,
+  setSplitQty,
+  splitEvenly,
+  type BenchSplitBox,
   benchMargin,
   boxPackLines,
   isItemCode,
@@ -30,7 +40,13 @@ import { cn } from "@/lib/utils";
 import { releaseOrders } from "../actions";
 import { ParcelForm, PickupForm } from "../forms";
 import { LabelPrint, SlipsButton } from "../print-ui";
-import { buyScanLabel, planScanLabel, type ScanBought, type ScanPlan } from "../scan-actions";
+import {
+  buyScanLabel,
+  planScanLabel,
+  saveBenchBoxes,
+  type ScanBought,
+  type ScanPlan,
+} from "../scan-actions";
 
 export type PackOrder = {
   id: string;
@@ -191,6 +207,8 @@ export function PackStation({
   const [autoBox, setAutoBox] = useState<number | null>(null);
   /** Counts the times this order was started afresh here (the rest of a part shipment). */
   const [round, setRound] = useState(0);
+  /** The split was changed here: the box slips printed before no longer match. */
+  const [resplit, setResplit] = useState(false);
 
   const focus = useCallback(() => {
     window.setTimeout(() => scanBox.current?.focus(), 0);
@@ -734,6 +752,21 @@ export function PackStation({
                 tellsShop={parcel.shopOffered && parcel.shopDefault}
                 emailsCustomer={parcel.shopOffered && parcel.shopDefault && parcel.notifyDefault}
                 refocus={focus}
+                lines={order.lines.filter((line) => line.left > 0)}
+                onBoxes={(now, splitChanged) => {
+                  // What was scanned stays, held to what now goes in each box.
+                  setPackedBy((before) =>
+                    keepScanned(
+                      before,
+                      now.map((each, index) => ({ n: index + 1, items: each.items })),
+                    ),
+                  );
+                  if (splitChanged) setResplit(true);
+                  say(true, "Boxes saved. The price is being asked again.");
+                  // The page reads the new boxes back: the box strip, and each box's slip code.
+                  router.refresh();
+                  focus();
+                }}
                 onBought={(bought, part) => {
                   beep(true);
                   if (box && boxes.length > 1 && bought.shipmentId && !part) {
@@ -753,6 +786,27 @@ export function PackStation({
                   focus();
                 }}
               />
+            )}
+            {resplit && !shipment && (
+              <p role="status" className={cn(notice, "bg-note flex flex-wrap items-center gap-3")}>
+                <span>
+                  The boxes changed, so slips printed before don&apos;t match any more. Print them
+                  again: each box&apos;s slip and barcode follow the new split.
+                </span>
+                <SlipsButton
+                  slug={slug}
+                  href={`${base}/slips?order=${order.id}`}
+                  selection={{ order: order.id }}
+                >
+                  Print the new slips
+                </SlipsButton>
+              </p>
+            )}
+            {shipment && boxes.length > 1 && (
+              <p className="text-muted-foreground text-xs">
+                The labels are bought, so the boxes are fixed now. To change them, void the parcel
+                from the label builder and start again.
+              </p>
             )}
             {order.hasLabel && !shipment && (
               <p className="text-muted-foreground text-xs">
@@ -965,6 +1019,8 @@ function BenchBuy({
   tellsShop,
   emailsCustomer,
   refocus,
+  lines,
+  onBoxes,
   onBought,
 }: {
   slug: string;
@@ -987,9 +1043,15 @@ function BenchBuy({
   tellsShop: boolean;
   emailsCustomer: boolean;
   refocus: () => void;
+  /** Everything still to send, for laying the boxes out again. */
+  lines: PackLine[];
+  /** The boxes were changed and saved here; `splitChanged` when what is in each is different. */
+  onBoxes: (boxes: BenchSplitBox[], splitChanged: boolean) => void;
   onBought: (bought: Bought, part: Finished["part"]) => void;
 }) {
   const [plan, setPlan] = useState<ScanPlan | null>(null);
+  /** "Change boxes" is open. */
+  const [editing, setEditing] = useState(false);
   /** The box row as it reads now; null until the plan says what it starts as. */
   const [row, setRow] = useState<BenchBox | null>(null);
   /** A person changed the box row: it goes with every question from then on. */
@@ -1254,12 +1316,24 @@ function BenchBuy({
               <span className="text-brick">{plan.why}</span>
             )}
           </span>
-          <Link
-            href={order.builderHref}
-            className="text-ochre-text font-medium underline-offset-2 hover:underline"
-          >
-            {one ? "More options" : "Change boxes"}
-          </Link>
+          <span className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
+            {!order.together && (plan?.boxes?.length ?? 0) > 0 && (
+              <button
+                type="button"
+                className="text-ochre-text font-medium underline-offset-2 hover:underline"
+                title="Add or remove a box, and say what goes in each. Until the label is bought."
+                onClick={() => setEditing(true)}
+              >
+                {one ? "Split into boxes" : "Change boxes"}
+              </button>
+            )}
+            <Link
+              href={order.builderHref}
+              className="text-ochre-text font-medium underline-offset-2 hover:underline"
+            >
+              More options
+            </Link>
+          </span>
         </div>
       </div>
 
@@ -1328,6 +1402,33 @@ function BenchBuy({
           </span>
         )}
       </div>
+
+      {editing && plan?.boxes && (
+        <BoxEditor
+          slug={slug}
+          orderId={order.id}
+          orderName={order.name}
+          start={plan.boxes}
+          lines={lines}
+          savedBoxes={savedBoxes}
+          onClose={() => {
+            setEditing(false);
+            refocus();
+          }}
+          onSaved={(now) => {
+            const before = plan.boxes ?? [];
+            setEditing(false);
+            // The saved boxes are the order's own from here: the row starts again from them.
+            setRow(null);
+            setChanged(false);
+            setWeighed(false);
+            setPlan(null);
+            setResult(null);
+            load(null, false);
+            onBoxes(now, !sameSplit(before, now));
+          }}
+        />
+      )}
 
       <dialog
         ref={dialog}
@@ -1411,3 +1512,271 @@ function BenchBuy({
 }
 
 type Ask = NonNullable<Parameters<typeof planScanLabel>[2]>;
+
+/**
+ * "Change boxes": the label builder's box list, at the bench. Add a box,
+ * remove one (its items go to the box before it), pick each box's size, and
+ * say how many of each item is in each. Saved as the order's own choice once
+ * every item has a box; nothing is priced or bought from here.
+ */
+function BoxEditor({
+  slug,
+  orderId,
+  orderName,
+  start,
+  lines,
+  savedBoxes,
+  onClose,
+  onSaved,
+}: {
+  slug: string;
+  orderId: string;
+  orderName: string;
+  start: BenchSplitBox[];
+  lines: PackLine[];
+  savedBoxes: BenchSavedBox[];
+  onClose: () => void;
+  onSaved: (boxes: BenchSplitBox[]) => void;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  const [boxes, setBoxes] = useState<BenchSplitBox[]>(start);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, startSave] = useTransition();
+  useEffect(() => {
+    const dialog = ref.current;
+    if (dialog && !dialog.open) dialog.showModal();
+    return () => {
+      if (dialog?.open) dialog.close();
+    };
+  }, []);
+  const change = (next: BenchSplitBox[]) => {
+    setBoxes(next);
+    setError(null);
+  };
+  const edit = (index: number, patch: Partial<BenchSplitBox>) =>
+    change(boxes.map((box, i) => (i === index ? { ...box, ...patch } : box)));
+  const split = boxes.length > 1;
+  const loose = lines.reduce((sum, line) => sum + Math.max(0, notBoxed(boxes, line)), 0);
+  const save = () => {
+    const checked = benchSplitChoice(boxes, lines);
+    if ("error" in checked) return setError(checked.error);
+    startSave(async () => {
+      const result = await saveBenchBoxes(slug, orderId, boxes).catch(() => ({
+        error: "That didn't save. Please try again.",
+      }));
+      if ("error" in result && result.error) return setError(result.error);
+      onSaved(boxes);
+    });
+  };
+  const small = "h-[30px] w-[4.5rem] px-2 text-xs";
+
+  return (
+    <dialog
+      ref={ref}
+      aria-labelledby="change-boxes-title"
+      className="fixed inset-0 m-0 grid h-full max-h-none w-full max-w-none place-items-center overflow-y-auto bg-transparent p-4 backdrop:bg-black/50"
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+    >
+      <div className="bg-card text-foreground border-border flex w-full max-w-[720px] flex-col gap-4 rounded-lg border p-5 text-left text-sm shadow-lg">
+        <div>
+          <p id="change-boxes-title" className="text-base font-bold">
+            Boxes for {orderName}
+          </p>
+          <p className="text-muted-foreground text-xs">
+            Change the boxes and what goes in each, until the label is bought. What you&apos;ve
+            scanned so far is kept. Leave a weight empty and it follows the items.
+          </p>
+        </div>
+        <ul className="grid gap-2">
+          {boxes.map((box, index) => (
+            <li
+              key={index}
+              className="bg-sunken border-border flex flex-wrap items-end gap-2 rounded-[10px] border p-2.5"
+            >
+              <span className="w-12 pb-1.5 text-xs font-bold">Box {index + 1}</span>
+              <label className="flex min-w-[150px] flex-1 flex-col gap-1 text-xs font-semibold">
+                Size
+                <Select
+                  aria-label={`Box ${index + 1}`}
+                  className="h-[30px] text-xs"
+                  value={box.boxId}
+                  onChange={(event) => {
+                    const picked = savedBoxes.find((each) => each.id === event.target.value);
+                    edit(
+                      index,
+                      picked
+                        ? {
+                            boxId: picked.id,
+                            length: picked.length,
+                            width: picked.width,
+                            height: picked.height,
+                          }
+                        : { boxId: "" },
+                    );
+                  }}
+                >
+                  <option value="">Custom size</option>
+                  {savedBoxes.map((each) => (
+                    <option key={each.id} value={each.id}>
+                      {each.name}
+                    </option>
+                  ))}
+                </Select>
+              </label>
+              {(
+                [
+                  ["length", "L in"],
+                  ["width", "W in"],
+                  ["height", "H in"],
+                  ["weightLb", "lb"],
+                  ["weightOz", "oz"],
+                ] as const
+              ).map(([name, label]) => (
+                <label key={name} className="flex flex-col gap-1 text-xs font-semibold">
+                  {label}
+                  <Input
+                    type="number"
+                    min="0"
+                    step={name === "weightOz" ? "0.1" : name === "weightLb" ? "1" : "0.5"}
+                    inputMode="decimal"
+                    aria-label={`Box ${index + 1} ${label}`}
+                    className={small}
+                    value={box[name]}
+                    onChange={(event) =>
+                      edit(index, {
+                        [name]: event.target.value,
+                        // A size typed in is no longer the saved box.
+                        ...(name.startsWith("weight") ? {} : { boxId: "" }),
+                      })
+                    }
+                  />
+                </label>
+              ))}
+              {split && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  aria-label={`Remove box ${index + 1}`}
+                  title="Remove this box (its items go to the box before it)"
+                  onClick={() => change(removeSplitBox(boxes, index))}
+                >
+                  <X />
+                </Button>
+              )}
+            </li>
+          ))}
+        </ul>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={boxes.length >= BENCH_MAX_BOXES}
+            title="Too much for one box? Each box gets its own label and tracking number."
+            onClick={() => change(addSplitBox(boxes))}
+          >
+            <Plus aria-hidden /> Add another box
+          </Button>
+          {split && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              title="Spread the items so each box weighs about the same"
+              onClick={() => change(splitEvenly(boxes, lines))}
+            >
+              Split evenly
+            </Button>
+          )}
+        </div>
+        {split && (
+          <ul className="divide-border border-border divide-y rounded-[10px] border">
+            {lines.map((line) => {
+              const out = notBoxed(boxes, line);
+              return (
+                <li key={line.line_id} className="flex flex-wrap items-center gap-3 px-3 py-2">
+                  <span className="min-w-[160px] flex-1">
+                    <span className="font-semibold">
+                      {line.left} × {line.title}
+                    </span>
+                    {line.variant && line.variant !== "Default Title" && (
+                      <span className="text-muted-foreground"> · {line.variant}</span>
+                    )}
+                    {out !== 0 && (
+                      <span className="text-brick block text-xs font-semibold">
+                        {out > 0 ? `${out} not in a box` : `${-out} too many boxed`}
+                      </span>
+                    )}
+                  </span>
+                  <span className="flex flex-wrap items-center gap-2">
+                    {boxes.map((box, index) =>
+                      line.left === 1 ? (
+                        <button
+                          key={index}
+                          type="button"
+                          role="radio"
+                          aria-checked={(box.items[line.line_id] ?? 0) > 0}
+                          aria-label={`${line.title} in box ${index + 1}`}
+                          onClick={() => change(setSplitQty(boxes, line, index, 1))}
+                          className={cn(
+                            "border-input h-[30px] rounded-sm border px-2.5 text-xs font-semibold",
+                            (box.items[line.line_id] ?? 0) > 0
+                              ? "bg-teal text-on-teal"
+                              : "bg-card hover:bg-hover",
+                          )}
+                        >
+                          Box {index + 1}
+                        </button>
+                      ) : (
+                        <label key={index} className="flex items-center gap-1 text-xs">
+                          <span className="text-muted-foreground">Box {index + 1}</span>
+                          <Input
+                            type="number"
+                            min="0"
+                            max={line.left}
+                            inputMode="numeric"
+                            aria-label={`${line.title} in box ${index + 1}`}
+                            className="h-[30px] w-14 px-2 text-xs"
+                            value={box.items[line.line_id] ?? 0}
+                            onChange={(event) =>
+                              change(setSplitQty(boxes, line, index, Number(event.target.value)))
+                            }
+                          />
+                        </label>
+                      ),
+                    )}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        {error && (
+          <p
+            role="alert"
+            className="border-brick/25 bg-brick-soft text-brick rounded-lg border px-3 py-2 text-sm"
+          >
+            {error}
+          </p>
+        )}
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" size="sm" disabled={saving || loose > 0} onClick={save}>
+            {saving ? "Saving…" : "Save boxes"}
+          </Button>
+          <Button type="button" size="sm" variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          {split && (
+            <span className="text-muted-foreground text-xs">
+              Each box gets its own slip, label and tracking number.
+            </span>
+          )}
+        </div>
+      </div>
+    </dialog>
+  );
+}

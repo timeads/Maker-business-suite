@@ -363,15 +363,36 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   `record_label_shipment` records exactly those and then holds what's left
   ("Part sent — waiting on: …") unless `hold_rest` was unticked; quantities
   are never taken from the browser at buying time, and packing isn't learned.
-  Scan & pack buys the planned label once every item is checked
-  (`scan-actions.ts`): `assess` and `planInput` in `planned.ts` are shared
-  with bulk runs, and the purchase is still `purchaseLabel`. The packing slip's
-  layout is a config (`slip_layout`); its barcode (`code128.ts`) is what
-  Scan & pack reads. Slip codes and boxes are `lib/shipping/slip-boxes.ts`
+  Scan & pack (`scan/pack-station.tsx`, laid out like the help desk's bench)
+  prices the planned label as the order opens and buys it from there
+  (`scan-actions.ts`): `benchAssess` in `planned.ts` builds the one request,
+  for the whole order, for only what was scanned (`part`, through
+  `save_part_label_quote`) or for orders going together (`withIds`), on top
+  of the `assess` and `planInput` bulk runs use, and the purchase is still
+  `purchaseLabel`. The bench's box row and "Change boxes" (add or remove a
+  box, move items; rules in `lib/shipping/scan.ts`, ported from the help
+  desk's label builder) are checked on the server against the stored order
+  and kept as the order's `saved_choice`; once labels are bought the boxes
+  are fixed. "Print the label as soon as every item is scanned" is that
+  computer's own tick (`autoPrint`, in its browser like the printer), and
+  only a real finishing scan sets it off (`autoPrintNow`). The rate
+  calculator (`rates/`, `lib/shipping/rate-calc.ts`) asks the sources through
+  `listRates`: words only, no rate id, nothing in `shipping_label_quotes`.
+  The packing slip's layout is a config (`slip_layout`) with a designer and
+  live preview (`slip-designer.tsx`); its barcode (`code128.ts`) is what
+  Scan & pack reads. A slip is laid out in one place only, `slip-sheet.tsx`
+  with its own stylesheet (`lib/shipping/slip-css.ts`: no Tailwind, no app
+  fonts, nothing fetched), from the words `buildSlipData` works out: the
+  screen and paper (4 × 6 or letter, per computer) show it, and a Zebra
+  prints that same sheet as a picture (`slip-zebra.tsx`,
+  `zebra/slip-draw.ts`, the arithmetic in `zebra/raster.ts`) with the
+  barcode laid down again at whole dots. `slipZpl` is only the way out when
+  a browser can't draw it. The logo is the `logo` asset from our own
+  storage; item photos print on paper only. Slip codes and boxes are `lib/shipping/slip-boxes.ts`
   (ported from the help desk with its tests): the code is the order's name
   without "#"; an order in two or more filled boxes gets one slip per box
   (`<code>/B<n>`, "Box n of m", only that box's items) on screen
-  (`slip.tsx`) and on the Zebra (`zebra/slip.ts`) alike; a group's one slip
+  and on the Zebra alike; a group's one slip
   carries the numbers joined with "+". Before buying, the boxes are the plan's
   (`plannedBoxes` in `slips-data.ts`, nothing stored); after, what went in
   each box is the note `shipments.box_items`, written only by the server

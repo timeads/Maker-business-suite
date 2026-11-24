@@ -128,6 +128,7 @@ export default async function ScanPage({
     left,
     image: photoOf(item),
     from: cameFrom.get(item.line_id) ?? null,
+    grams: item.grams ?? null,
   });
   const paid = combined ? combined.shipping_paid : (row?.shipping_paid ?? null);
 

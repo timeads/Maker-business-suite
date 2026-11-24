@@ -5,9 +5,12 @@ import { requireUser } from "@/lib/auth";
 import { getEntitlements } from "@/lib/entitlements";
 import { formatTenthOz, tenthOzToLbOz } from "@/lib/shipping/easypost";
 import { listService } from "@/lib/shipping/list";
+import { parseSavedChoice } from "@/lib/shipping/choices";
 import { pickService } from "@/lib/shipping/rules";
+import { benchSplitChoice, type BenchSplitBox } from "@/lib/shipping/scan";
 import { createClient } from "@/lib/supabase/server";
 import { getTenantContext } from "@/lib/tenants";
+import { ORDER_FIELDS, loadOpenLabelOrders, loadPlans, type ShippingOrder } from "./data";
 import { purchaseLabel, quoteRates } from "./label-core";
 import { benchAssess, boughtLabels, type BenchAsk } from "./planned";
 import type { OrderPlan } from "@/lib/shipping/plan";
@@ -71,10 +74,12 @@ export type ScanPlan = {
   box?: ScanBox | null;
   /** Each planned box by name, when there are several. */
   boxNames?: string[];
+  /** Every planned box with what is in it, for "Change boxes". A weight nobody typed is left blank. */
+  boxes?: BenchSplitBox[];
   signature?: boolean;
 };
 
-const boxOf = (plan: OrderPlan): Pick<ScanPlan, "box" | "boxNames" | "signature"> => {
+const boxOf = (plan: OrderPlan): Pick<ScanPlan, "box" | "boxNames" | "boxes" | "signature"> => {
   const [first] = plan.boxes;
   const weight =
     first && first.weightTenthOz !== null ? tenthOzToLbOz(first.weightTenthOz) : { lb: "", oz: "" };
@@ -91,6 +96,21 @@ const boxOf = (plan: OrderPlan): Pick<ScanPlan, "box" | "boxNames" | "signature"
           }
         : null,
     boxNames: plan.boxes.map((box) => box.box?.name ?? "custom size"),
+    boxes: plan.boxes.map((box) => {
+      const typed =
+        box.weighed && box.weightTenthOz !== null
+          ? tenthOzToLbOz(box.weightTenthOz)
+          : { lb: "", oz: "" };
+      return {
+        boxId: box.box?.id ?? "",
+        length: String(box.length),
+        width: String(box.width),
+        height: String(box.height),
+        weightLb: typed.lb,
+        weightOz: typed.oz,
+        items: box.items,
+      };
+    }),
     signature: plan.signature,
   };
 };
@@ -217,4 +237,52 @@ export async function buyScanLabel(
       ...printable,
     },
   };
+}
+
+/**
+ * "Change boxes" at the bench, before any label is bought: which boxes the
+ * order goes in and how many of each item is in each. Checked here against
+ * the order as it is stored (every unit still to send in exactly one box),
+ * then kept as the order's own saved choice, so the order page, the packing
+ * slips, the list and a bulk run all see the same boxes. Nothing is priced or
+ * bought here, and buying later rebuilds the boxes from what was stored.
+ */
+export async function saveBenchBoxes(
+  slug: string,
+  orderId: string,
+  boxes: unknown,
+): Promise<{ error?: string; ok?: boolean }> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: String(ctx.error) };
+  if (!UUID.test(orderId)) return { error: "We couldn't find that order." };
+  const [{ data }, labelOpen, plans] = await Promise.all([
+    ctx.supabase
+      .from("shipping_orders")
+      .select(ORDER_FIELDS)
+      .eq("tenant_id", ctx.tenant.id)
+      .eq("id", orderId)
+      .maybeSingle(),
+    loadOpenLabelOrders(ctx.supabase, ctx.tenant.id),
+    loadPlans(ctx.supabase, ctx.tenant.id, [orderId]),
+  ]);
+  const order = data as unknown as ShippingOrder | null;
+  if (!order || order.cancelled || order.picked_up_at || order.units_left <= 0) {
+    return { error: "It isn't waiting to ship any more, so its boxes can't change." };
+  }
+  if (labelOpen.has(orderId)) {
+    return { error: "Its label is already being bought, so its boxes are fixed." };
+  }
+  const built = benchSplitChoice(
+    boxes,
+    order.items,
+    parseSavedChoice(plans.get(orderId)?.saved_choice),
+  );
+  if ("error" in built) return { error: built.error };
+  const { error } = await ctx.supabase.rpc("save_shipping_order_choice", {
+    p_shipping_order_id: orderId,
+    p_choice: built.choice,
+  });
+  if (error) return { error: "That didn't save. Please try again." };
+  revalidatePath(`/w/${slug}/shipping`, "layout");
+  return { ok: true };
 }

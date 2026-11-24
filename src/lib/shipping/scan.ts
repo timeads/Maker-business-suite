@@ -17,6 +17,8 @@ export type PackLine = {
   image?: string | null;
   /** In a parcel of several orders: the order this line is from. */
   from?: string | null;
+  /** One unit's weight in grams, when the shop gave one: "Split evenly" goes by it. */
+  grams?: number | null;
 };
 
 const norm = (value: string | null | undefined) => (value ?? "").trim().toLowerCase();
@@ -189,3 +191,236 @@ export const autoPrintNow = (facts: {
   /** The order can't go as it stands (a hold, a label already, payment). */
   blocked: boolean;
 }) => facts.ticked && facts.verified && !facts.byHand && !facts.blocked;
+
+// ---------------------------------------------------------------------------
+// Changing the boxes at the bench, before the label is bought
+// ---------------------------------------------------------------------------
+
+/** One box on the bench's "Change boxes" sheet: its size and weight as typed, and what is in it. */
+export type BenchSplitBox = BenchBox & {
+  /** Units of each line in this box, by line id. */
+  items: Record<string, number>;
+};
+
+/** The most boxes one purchase takes. */
+export const BENCH_MAX_BOXES = 6;
+
+type SplitLine = { line_id: string; left: number };
+
+const units = (box: BenchSplitBox, lineId: string) =>
+  Math.max(0, Math.floor(box.items[lineId] ?? 0));
+
+/**
+ * Another box, as the label builder adds one: the same size as the last, its
+ * weight left to follow the items, and empty. The other boxes keep what's in
+ * them; items are moved in afterwards.
+ */
+export function addSplitBox(boxes: BenchSplitBox[]): BenchSplitBox[] {
+  if (boxes.length === 0 || boxes.length >= BENCH_MAX_BOXES) return boxes;
+  const last = boxes[boxes.length - 1];
+  return [...boxes, { ...last, weightLb: "", weightOz: "", items: {} }];
+}
+
+/** Takes a box away. What was in it goes to the box before it (the first box's go to the next). */
+export function removeSplitBox(boxes: BenchSplitBox[], index: number): BenchSplitBox[] {
+  if (boxes.length < 2 || index < 0 || index >= boxes.length) return boxes;
+  const gone = boxes[index];
+  const rest = boxes.filter((_, i) => i !== index);
+  const to = Math.max(0, index - 1);
+  return rest.map((box, i) => {
+    if (i !== to) return box;
+    const items = { ...box.items };
+    for (const [lineId, count] of Object.entries(gone.items)) {
+      if (count > 0) items[lineId] = units(box, lineId) + Math.floor(count);
+    }
+    // Its contents changed, so a weight typed for it no longer stands.
+    return { ...box, weightLb: "", weightOz: "", items };
+  });
+}
+
+/**
+ * Puts `count` of a line in one box. More than before: the difference is
+ * taken from whichever boxes hold the most of it. Fewer: what comes out goes
+ * to the next box, so nothing is left unpacked. A box whose contents change
+ * loses a weight typed for it (it follows the items again).
+ */
+export function setSplitQty(
+  boxes: BenchSplitBox[],
+  line: SplitLine,
+  index: number,
+  count: number,
+): BenchSplitBox[] {
+  if (index < 0 || index >= boxes.length) return boxes;
+  const wanted = Math.max(0, Math.min(line.left, Math.round(Number(count) || 0)));
+  const next = boxes.map((box) => ({ ...box, items: { ...box.items } }));
+  const touch = (i: number, value: number) => {
+    if (units(next[i], line.line_id) === value) return;
+    next[i].items[line.line_id] = value;
+    next[i].weightLb = "";
+    next[i].weightOz = "";
+  };
+  let diff = wanted - units(next[index], line.line_id);
+  touch(index, wanted);
+  const others = next.map((_, i) => i).filter((i) => i !== index);
+  if (diff > 0) {
+    for (const i of [...others].sort(
+      (a, b) => units(next[b], line.line_id) - units(next[a], line.line_id),
+    )) {
+      const take = Math.min(diff, units(next[i], line.line_id));
+      touch(i, units(next[i], line.line_id) - take);
+      diff -= take;
+      if (diff === 0) break;
+    }
+  } else if (diff < 0 && others.length > 0) {
+    const to = (index + 1) % next.length;
+    touch(to, units(next[to], line.line_id) - diff);
+  }
+  return next;
+}
+
+/** How many of a line aren't in any box yet. */
+export const notBoxed = (boxes: BenchSplitBox[], line: SplitLine) =>
+  line.left - boxes.reduce((sum, box) => sum + units(box, line.line_id), 0);
+
+/**
+ * Deals the units out so each box gets about the same weight, heaviest
+ * first (a unit with no weight on file counts as one).
+ */
+export function splitEvenly(
+  boxes: BenchSplitBox[],
+  lines: (SplitLine & { grams?: number | null })[],
+): BenchSplitBox[] {
+  if (boxes.length < 2) return boxes;
+  const next = boxes.map((box) => ({
+    ...box,
+    weightLb: "",
+    weightOz: "",
+    items: {} as Record<string, number>,
+  }));
+  const weight = (line: { grams?: number | null }) =>
+    line.grams && line.grams > 0 ? Number(line.grams) : 1;
+  const each = lines
+    .flatMap((line) => Array.from({ length: Math.max(0, line.left) }, () => line))
+    .sort((a, b) => weight(b) - weight(a));
+  const load = next.map(() => 0);
+  for (const unit of each) {
+    const i = load.indexOf(Math.min(...load));
+    next[i].items[unit.line_id] = (next[i].items[unit.line_id] ?? 0) + 1;
+    load[i] += weight(unit);
+  }
+  return next;
+}
+
+/**
+ * The boxes a person laid out at the bench as the order's saved choice,
+ * checked against what is left on the order: one to six boxes, every figure
+ * a real one, every unit still to send in exactly one box, and no box left
+ * empty. Run in the browser to say what's wrong, and again on the server
+ * against the stored order, which is the check that counts.
+ */
+export function benchSplitChoice(
+  input: unknown,
+  lines: SplitLine[],
+  saved?: Pick<SavedChoice, "signature" | "service"> | null,
+): { choice: SavedChoice } | { error: string } {
+  const asked = Array.isArray(input) ? (input as Partial<BenchSplitBox>[]) : [];
+  if (asked.length < 1) return { error: "Add a box first." };
+  if (asked.length > BENCH_MAX_BOXES) {
+    return { error: `One label purchase covers up to ${BENCH_MAX_BOXES} boxes.` };
+  }
+  const left = new Map(lines.filter((line) => line.left > 0).map((l) => [l.line_id, l.left]));
+  const placed = new Map<string, number>();
+  const boxes: SavedChoice["boxes"] = [];
+  for (const [index, box] of asked.entries()) {
+    const name = asked.length > 1 ? `Box ${index + 1}` : "The box";
+    if (!box || typeof box !== "object") return { error: `${name} isn't filled in.` };
+    const size = [box.length, box.width, box.height].map((v) => parseInches(String(v ?? "")));
+    if (size.some((value) => value === null)) {
+      return { error: `${name} needs its length, width and height in inches.` };
+    }
+    const lb = String(box.weightLb ?? "").trim();
+    const oz = String(box.weightOz ?? "").trim();
+    const weight = lb === "" && oz === "" ? null : lbOzToTenthOz(lb, oz);
+    if ((lb !== "" || oz !== "") && (weight === null || weight <= 0 || weight > 24_000)) {
+      return { error: `${name}'s weight should be numbers, like 2 lb 4 oz.` };
+    }
+    const items: Record<string, number> = {};
+    const raw = box.items && typeof box.items === "object" ? box.items : {};
+    for (const [lineId, value] of Object.entries(raw)) {
+      const count = Number(value);
+      if (!Number.isInteger(count) || count < 0) return { error: `${name} has an odd count.` };
+      if (count === 0) continue;
+      if (!left.has(lineId)) {
+        return { error: "What's left on this order has changed. Scan its slip again." };
+      }
+      items[lineId] = count;
+      placed.set(lineId, (placed.get(lineId) ?? 0) + count);
+    }
+    if (Object.keys(items).length === 0) {
+      return { error: `${name} is empty. Put something in it, or remove it.` };
+    }
+    boxes.push({
+      box_id: UUID.test(String(box.boxId ?? "")) ? String(box.boxId) : null,
+      length: size[0]!,
+      width: size[1]!,
+      height: size[2]!,
+      weight_tenth_oz: weight,
+      items,
+    });
+  }
+  for (const [lineId, count] of left) {
+    const inBoxes = placed.get(lineId) ?? 0;
+    if (inBoxes > count) return { error: "More of an item is boxed than is left to send." };
+    if (inBoxes < count) return { error: "Every item needs a box before this can be saved." };
+  }
+  const choice = parseSavedChoice({
+    v: 1,
+    boxes,
+    signature: saved?.signature ?? null,
+    service: saved?.service ?? null,
+  });
+  return choice ? { choice } : { error: "Those boxes don't add up. Check each one." };
+}
+
+/**
+ * What was scanned, held to a new split. The bench keeps its counts when the
+ * boxes change (as the reference does: they are kept box by box for as long
+ * as the same order is open) and shows them against the new amounts, so a
+ * count is never more than now goes in that box, and a box that is gone
+ * takes its counts with it.
+ */
+export function keepScanned(
+  packedBy: Record<number, Record<string, number>>,
+  boxes: { n: number; items: Record<string, number> }[],
+): Record<number, Record<string, number>> {
+  const kept: Record<number, Record<string, number>> = {};
+  // 0 is the order packed as a whole: a new split doesn't change what was scanned of it.
+  if (packedBy[0]) kept[0] = packedBy[0];
+  for (const box of boxes) {
+    const before = packedBy[box.n];
+    if (!before) continue;
+    const now: Record<string, number> = {};
+    for (const [lineId, count] of Object.entries(before)) {
+      const most = Math.max(0, Math.floor(box.items[lineId] ?? 0));
+      if (most > 0 && count > 0) now[lineId] = Math.min(count, most);
+    }
+    kept[box.n] = now;
+  }
+  return kept;
+}
+
+/** Whether two splits put the same things in the same boxes (sizes and weights aside). */
+export function sameSplit(
+  a: { items: Record<string, number> }[],
+  b: { items: Record<string, number> }[],
+): boolean {
+  const key = (boxes: { items: Record<string, number> }[]) =>
+    JSON.stringify(
+      boxes.map((box) =>
+        Object.entries(box.items)
+          .filter(([, count]) => count > 0)
+          .sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0)),
+      ),
+    );
+  return key(a) === key(b);
+}

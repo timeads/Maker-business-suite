@@ -1,10 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { parsePart } from "./part";
 import {
+  addSplitBox,
   allPacked,
   autoPrintNow,
   benchChoice,
   benchMargin,
+  benchSplitChoice,
+  keepScanned,
+  notBoxed,
+  removeSplitBox,
+  sameSplit,
+  setSplitQty,
+  splitEvenly,
+  type BenchSplitBox,
   boxPackLines,
   isItemCode,
   nextBox,
@@ -248,5 +257,151 @@ describe("matching an item by its SKU or the option's barcode", () => {
   it("refuses one scan too many, and a code that isn't on the order", () => {
     expect(scanItem(lines, { a: 1 }, "0012345")).toMatchObject({ ok: false, reason: "full" });
     expect(scanItem(lines, {}, "0099999")).toEqual({ ok: false, reason: "unknown" });
+  });
+});
+
+describe("changing the boxes at the bench", () => {
+  const BOX = "b0000000-0000-4000-8000-000000000001";
+  const lines = [
+    { line_id: "rug", left: 1, grams: 3600 },
+    { line_id: "yarn", left: 4, grams: 400 },
+  ];
+  const box = (
+    items: Record<string, number>,
+    over: Partial<BenchSplitBox> = {},
+  ): BenchSplitBox => ({
+    boxId: BOX,
+    length: "16",
+    width: "12",
+    height: "10",
+    weightLb: "9",
+    weightOz: "",
+    items,
+    ...over,
+  });
+  const one = [box({ rug: 1, yarn: 4 })];
+
+  it("adds an empty box the size of the last, and stops at six", () => {
+    const two = addSplitBox(one);
+    expect(two).toHaveLength(2);
+    expect(two[0]).toEqual(one[0]);
+    expect(two[1]).toMatchObject({ boxId: BOX, length: "16", weightLb: "", items: {} });
+    let many = one;
+    for (let i = 0; i < 9; i++) many = addSplitBox(many);
+    expect(many).toHaveLength(6);
+  });
+
+  it("moves units in from whichever box holds the most, and out to the next box", () => {
+    const start = [box({ rug: 1, yarn: 3 }), box({ yarn: 1 }), box({})];
+    // Three yarn into box 3: taken from box 1, which holds the most.
+    const moved = setSplitQty(start, lines[1], 2, 3);
+    expect(moved.map((each) => each.items.yarn ?? 0)).toEqual([0, 1, 3]);
+    // Contents changed, so a typed weight no longer stands; box 2 wasn't touched.
+    expect(moved.map((each) => each.weightLb)).toEqual(["", "9", ""]);
+    // One taken out of box 3 goes to the next box round (box 1): nothing is left unpacked.
+    const back = setSplitQty(moved, lines[1], 2, 2);
+    expect(back.map((each) => each.items.yarn ?? 0)).toEqual([1, 1, 2]);
+    expect(lines.every((line) => notBoxed(back, line) === 0)).toBe(true);
+    // Never more than the order has.
+    expect(setSplitQty(start, lines[1], 1, 99).map((each) => each.items.yarn ?? 0)).toEqual([
+      0, 4, 0,
+    ]);
+    // The first box isn't mutated.
+    expect(start[0].items).toEqual({ rug: 1, yarn: 3 });
+  });
+
+  it("removes a box into the one before it", () => {
+    const start = [box({ rug: 1 }), box({ yarn: 3 }), box({ yarn: 1 }, { weightLb: "1" })];
+    const without = removeSplitBox(start, 1);
+    expect(without.map((each) => each.items)).toEqual([{ rug: 1, yarn: 3 }, { yarn: 1 }]);
+    expect(without.map((each) => each.weightLb)).toEqual(["", "1"]);
+    expect(removeSplitBox(start, 0).map((each) => each.items)).toEqual([
+      { yarn: 3, rug: 1 },
+      { yarn: 1 },
+    ]);
+    // The last box can't be removed.
+    expect(removeSplitBox(one, 0)).toBe(one);
+  });
+
+  it("splits evenly by weight, heaviest first", () => {
+    const even = splitEvenly([box({ rug: 1, yarn: 4 }), box({})], lines);
+    expect(even.map((each) => each.items)).toEqual([{ rug: 1 }, { yarn: 4 }]);
+    expect(lines.every((line) => notBoxed(even, line) === 0)).toBe(true);
+  });
+
+  it("becomes the order's saved choice only when every unit is in exactly one box", () => {
+    const good = benchSplitChoice(
+      [
+        box({ rug: 1 }, { weightLb: "", weightOz: "" }),
+        box({ yarn: 4 }, { boxId: "", weightLb: "1", weightOz: "8" }),
+      ],
+      lines,
+      { signature: "adult", service: "UPS Ground" },
+    );
+    expect(good).toEqual({
+      choice: {
+        v: 1,
+        boxes: [
+          {
+            box_id: BOX,
+            length: 16,
+            width: 12,
+            height: 10,
+            weight_tenth_oz: null,
+            items: { rug: 1 },
+          },
+          {
+            box_id: null,
+            length: 16,
+            width: 12,
+            height: 10,
+            weight_tenth_oz: 240,
+            items: { yarn: 4 },
+          },
+        ],
+        signature: "adult",
+        service: "UPS Ground",
+      },
+    });
+    const error = (boxes: unknown) => {
+      const result = benchSplitChoice(boxes, lines);
+      return "error" in result ? result.error : "";
+    };
+    expect(error([box({ rug: 1, yarn: 3 })])).toContain("Every item needs a box");
+    expect(error([box({ rug: 1, yarn: 4 }), box({ yarn: 1 })])).toContain("More of an item");
+    expect(error([box({ rug: 1, yarn: 4 }), box({})])).toContain("Box 2 is empty");
+    expect(error([box({ rug: 1, yarn: 4, ghost: 1 })])).toContain("has changed");
+    expect(error([box({ rug: 1, yarn: 4 }, { length: "0" })])).toContain(
+      "length, width and height",
+    );
+    expect(error([box({ rug: 1, yarn: 4 }, { weightLb: "x" })])).toContain("weight");
+    expect(error([box({ rug: 1.5, yarn: 4 })])).toContain("odd count");
+    expect(error([])).toContain("Add a box");
+    expect(error(Array.from({ length: 7 }, () => box({ yarn: 1 })))).toContain("up to 6");
+    expect(error("nonsense")).toContain("Add a box");
+  });
+
+  it("keeps what was scanned, held to the new split", () => {
+    const scanned = { 0: { rug: 1 }, 1: { rug: 1, yarn: 3 }, 2: { yarn: 1 }, 3: { yarn: 1 } };
+    const kept = keepScanned(scanned, [
+      { n: 1, items: { rug: 1, yarn: 1 } },
+      { n: 2, items: { yarn: 3 } },
+    ]);
+    expect(kept).toEqual({
+      // Packed as a whole: untouched.
+      0: { rug: 1 },
+      // Box 1 now takes one yarn, so two of the three scanned no longer count there.
+      1: { rug: 1, yarn: 1 },
+      2: { yarn: 1 },
+      // Box 3 is gone, and its counts with it.
+    });
+  });
+
+  it("knows when a split really changed, whatever order the lines are in", () => {
+    expect(sameSplit([{ items: { a: 1, b: 2 } }], [{ items: { b: 2, a: 1, c: 0 } }])).toBe(true);
+    expect(sameSplit([{ items: { a: 1, b: 2 } }], [{ items: { a: 1 } }, { items: { b: 2 } }])).toBe(
+      false,
+    );
+    expect(sameSplit([{ items: { a: 2 } }], [{ items: { a: 1 } }])).toBe(false);
   });
 });
