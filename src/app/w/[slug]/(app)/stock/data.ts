@@ -3,9 +3,11 @@ import { localDay } from "@/lib/bookings/slots";
 import { canWriteShopifyStock } from "@/lib/connections/providers/shopify-stock";
 import {
   STOCK_MODULE,
+  STOCK_SEASONS_KEY,
   STOCK_SETTINGS_KEY,
   STOCK_VIEWS_KEY,
   parseSavedViews,
+  parseSeasons,
   parseStockSettings,
 } from "@/lib/stock/config";
 import {
@@ -14,7 +16,14 @@ import {
   type ObservedLeadTime,
 } from "@/lib/stock/engine";
 import { summarizeIncoming, type IncomingOrder } from "@/lib/stock/incoming";
-import { isCarrierStatus, parcelDates, parcelWords } from "@/lib/stock/tracking";
+import { trackingUrl } from "@/lib/shipping/carriers";
+import {
+  CARRIER_WORDS,
+  canAskCarrier,
+  isCarrierStatus,
+  parcelDates,
+  parcelWords,
+} from "@/lib/stock/tracking";
 import type { SpendLineInput } from "@/lib/stock/spend";
 import {
   buildStockRows,
@@ -169,7 +178,7 @@ export async function loadStock(
       .select("key, body")
       .eq("tenant_id", tenant.id)
       .eq("module", STOCK_MODULE)
-      .in("key", [STOCK_SETTINGS_KEY, STOCK_VIEWS_KEY]),
+      .in("key", [STOCK_SETTINGS_KEY, STOCK_VIEWS_KEY, STOCK_SEASONS_KEY]),
     supabase
       .from("connections")
       .select("status, scopes, last_synced_at")
@@ -180,6 +189,7 @@ export async function loadStock(
   const config = (key: string) =>
     ((configs ?? []) as { key: string; body: unknown }[]).find((row) => row.key === key)?.body;
   const settings = parseStockSettings(config(STOCK_SETTINGS_KEY));
+  const seasons = parseSeasons(config(STOCK_SEASONS_KEY)).seasons;
   const openLines: OpenLine[] = lines.map((line) => {
     const order = Array.isArray(line.purchase_orders)
       ? line.purchase_orders[0]
@@ -208,9 +218,17 @@ export async function loadStock(
       received,
       revenue,
       closures,
+      seasons: seasons.map((season) => ({
+        id: season.id,
+        name: season.name,
+        inStockBy: season.in_stock_by,
+        liftPct: season.lift_pct,
+        note: season.note,
+      })),
       settings,
       today,
     }),
+    seasons,
     closures,
     suppliers,
     settings,
@@ -266,6 +284,127 @@ export async function loadOrderTracking(
     words.set(order.number, [...(words.get(order.number) ?? []), said]);
   }
   return words;
+}
+
+/** One parcel still on its way, for its card on the "To order" tab. */
+export type IncomingParcel = {
+  id: string;
+  orderId: string;
+  orderNumber: number;
+  orderReference: string;
+  supplierName: string;
+  carrier: string;
+  tracking: string;
+  url: string | null;
+  note: string;
+  /** The day to go by: the carrier's own estimate, else the one typed in. */
+  expectedOn: string | null;
+  late: boolean;
+  status: { label: string; tone: "open" | "waiting" | "good" | "bad" | "closed" };
+  /** A UPS number in a workspace that can ask UPS. */
+  canCheck: boolean;
+  items: { name: string; quantity: number }[];
+};
+
+/**
+ * Every tracking number still travelling on an order that is still open,
+ * soonest due first (TuftStock's `loadIncomingShipments`). A parcel a person
+ * marked as here, or that UPS says was delivered, has left the list: what is
+ * left to do with it is checking it in, on the order's own page.
+ */
+export async function loadIncomingParcels(
+  supabase: SupabaseClient,
+  tenant: { id: string; timezone: string },
+): Promise<{ parcels: IncomingParcel[]; canAskUps: boolean }> {
+  const [{ data }, { data: ups }] = await Promise.all([
+    supabase
+      .from("purchase_order_shipments")
+      .select(
+        "id, po_id, carrier, tracking, expected_on, arrived_on, note, created_at, carrier_status, carrier_expected_on, carrier_delivered_on, purchase_orders!inner(number, reference, status, suppliers(name)), purchase_order_shipment_items(quantity, purchase_order_lines(stock_items(title, variant_title)))",
+      )
+      .eq("tenant_id", tenant.id)
+      .is("removed_at", null)
+      .is("arrived_on", null)
+      .in("purchase_orders.status", ["ordered", "partial"])
+      .order("created_at")
+      .limit(300),
+    supabase
+      .from("connections")
+      .select("status, metadata")
+      .eq("tenant_id", tenant.id)
+      .eq("provider", "ups")
+      .maybeSingle(),
+  ]);
+  const canAskUps =
+    ups?.status === "active" &&
+    ((ups.metadata as { mode?: string } | null)?.mode ?? "production") !== "test";
+  const today = localDay(new Date(), tenant.timezone);
+  type Row = {
+    id: string;
+    po_id: string;
+    carrier: string;
+    tracking: string;
+    expected_on: string | null;
+    arrived_on: string | null;
+    note: string;
+    carrier_status: string | null;
+    carrier_expected_on: string | null;
+    carrier_delivered_on: string | null;
+    purchase_orders: {
+      number: number;
+      reference: string;
+      suppliers: { name: string } | null;
+    };
+    purchase_order_shipment_items: {
+      quantity: number;
+      purchase_order_lines: {
+        stock_items: { title: string; variant_title: string | null } | null;
+      } | null;
+    }[];
+  };
+  const parcels: IncomingParcel[] = [];
+  for (const row of (data ?? []) as unknown as Row[]) {
+    const carrierStatus = isCarrierStatus(row.carrier_status) ? row.carrier_status : null;
+    const dates = parcelDates({
+      expectedOn: row.expected_on,
+      arrivedOn: row.arrived_on,
+      carrierStatus,
+      carrierExpectedOn: row.carrier_expected_on,
+      carrierDeliveredOn: row.carrier_delivered_on,
+    });
+    if (dates.arrivedOn) continue;
+    const late = dates.expectedOn !== null && dates.expectedOn < today;
+    parcels.push({
+      id: row.id,
+      orderId: row.po_id,
+      orderNumber: row.purchase_orders.number,
+      orderReference: row.purchase_orders.reference,
+      supplierName: row.purchase_orders.suppliers?.name ?? "",
+      carrier: row.carrier,
+      tracking: row.tracking,
+      url: trackingUrl(row.carrier, row.tracking),
+      note: row.note ?? "",
+      expectedOn: dates.expectedOn,
+      late,
+      status:
+        carrierStatus && carrierStatus !== "not_found"
+          ? CARRIER_WORDS[carrierStatus]
+          : late
+            ? { label: "Late", tone: "bad" }
+            : { label: "On its way", tone: "open" },
+      canCheck: canAskUps && canAskCarrier({ tracking: row.tracking, arrivedOn: null }),
+      items: (row.purchase_order_shipment_items ?? []).flatMap((item) => {
+        const stock = item.purchase_order_lines?.stock_items;
+        return stock ? [{ name: itemName(stock), quantity: item.quantity }] : [];
+      }),
+    });
+  }
+  parcels.sort(
+    (a, b) =>
+      (a.expectedOn ?? "9999-12-31").localeCompare(b.expectedOn ?? "9999-12-31") ||
+      a.orderNumber - b.orderNumber,
+  );
+  return { parcels, canAskUps };
 }
 
 /** The workspace's own "today", YYYY-MM-DD. */

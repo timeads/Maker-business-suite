@@ -8,8 +8,10 @@ import { STOCK_MODULE } from "@/lib/stock/config";
 import { PO_EMAIL_KEY, parsePoEmail } from "@/lib/stock/po/email";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
+import { removeSeason } from "../actions";
 import { loadStock } from "../data";
 import { StockSettingsForm } from "../forms";
+import { SeasonForm } from "../season-forms";
 import { stockAccess } from "../gate";
 import { StockTabs } from "../tabs";
 import { OrderEmailTemplateForm } from "./email-template-form";
@@ -22,7 +24,7 @@ export default async function StockSettingsPage({ params }: { params: Promise<{ 
   if (!access.ok) return access.upsell;
   const { tenant, role, entitlements } = access;
   const supabase = await createClient();
-  const [{ settings, link }, { data: emailConfig }] = await Promise.all([
+  const [{ settings, link, seasons, today }, { data: emailConfig }] = await Promise.all([
     loadStock(supabase, tenant),
     supabase
       .from("configs")
@@ -33,6 +35,13 @@ export default async function StockSettingsPage({ params }: { params: Promise<{ 
       .maybeSingle(),
   ]);
   const emailTemplate = parsePoEmail(emailConfig?.body);
+  const seasonDay = (value: string) =>
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "UTC",
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    }).format(new Date(`${value}T12:00:00Z`));
   const synced = link.lastSyncedAt
     ? new Intl.DateTimeFormat("en-US", {
         timeZone: tenant.timezone,
@@ -64,6 +73,62 @@ export default async function StockSettingsPage({ params }: { params: Promise<{ 
             <p className="text-muted-foreground text-sm">
               An owner or admin can change these settings.
             </p>
+          )}
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>Seasons to plan ahead for</CardTitle>
+          <CardDescription>
+            A busy time you want the shelves full for: a fair, the holidays, a sale. Say the day you
+            want the stock in by and the &quot;To order&quot; tab shows the last day to order from
+            each supplier. An extra lift raises that month&apos;s suggested orders on top of what
+            your past sales show, for a push your history can&apos;t know about
+            {settings.seasonality ? "." : " (it only counts while “plan for busy seasons” is on)."}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          {seasons.length > 0 && (
+            <ul className="divide-border flex flex-col divide-y text-sm">
+              {[...seasons]
+                .sort((a, b) => a.in_stock_by.localeCompare(b.in_stock_by))
+                .map((season) => (
+                  <li key={season.id} className="py-2 first:pt-0">
+                    <details>
+                      <summary className="flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-1">
+                        <span className="font-semibold">{season.name}</span>
+                        <span className="text-muted-foreground">
+                          in stock by {seasonDay(season.in_stock_by)}
+                          {season.lift_pct > 0 && ` · +${season.lift_pct}%`}
+                          {season.in_stock_by < today && " · passed"}
+                        </span>
+                        {season.note && (
+                          <span className="text-muted-foreground font-read">{season.note}</span>
+                        )}
+                      </summary>
+                      {canManage(role) && entitlements.canWrite && (
+                        <div className="flex flex-col gap-2 pt-3">
+                          <SeasonForm slug={tenant.slug} season={season} />
+                          <form action={removeSeason.bind(null, tenant.slug, season.id)}>
+                            <Button type="submit" variant="ghost" size="sm">
+                              Take this season off
+                            </Button>
+                          </form>
+                        </div>
+                      )}
+                    </details>
+                  </li>
+                ))}
+            </ul>
+          )}
+          {canManage(role) && entitlements.canWrite ? (
+            <SeasonForm key={seasons.length} slug={tenant.slug} />
+          ) : (
+            seasons.length === 0 && (
+              <p className="text-muted-foreground text-sm">
+                An owner or admin can add the first season.
+              </p>
+            )
           )}
         </CardContent>
       </Card>

@@ -257,8 +257,16 @@ export function AddShipmentForm({ slug, orderId }: { slug: string; orderId: stri
     <form action={action} className="flex flex-col gap-3 print:hidden">
       <div className="grid gap-3 sm:grid-cols-[1.4fr_1fr_10rem]">
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor="ship-tracking">Tracking number</Label>
-          <Input id="ship-tracking" name="tracking" maxLength={80} required />
+          <Label htmlFor="ship-tracking">Tracking numbers, one to a line</Label>
+          <textarea
+            id="ship-tracking"
+            name="tracking"
+            rows={2}
+            maxLength={2000}
+            required
+            placeholder={"1Z999AA10123456784\n1Z999AA10123456785"}
+            className="border-input bg-card placeholder:text-muted-foreground focus-visible:border-ochre focus-visible:ring-ochre/25 w-full rounded-sm border px-[11px] py-2 font-mono text-sm outline-none focus-visible:ring-2"
+          />
         </div>
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="ship-carrier">Carrier</Label>
@@ -279,12 +287,12 @@ export function AddShipmentForm({ slug, orderId }: { slug: string; orderId: stri
         </div>
       </div>
       <div className="flex flex-col gap-1.5">
-        <Label htmlFor="ship-note">Note</Label>
+        <Label htmlFor="ship-note">Label or note</Label>
         <Input
           id="ship-note"
           name="note"
           maxLength={300}
-          placeholder="By sea, two pallets, the yarn only…"
+          placeholder="Box 1 of 3, by sea, the yarn only…"
         />
       </div>
       <Result state={state} />

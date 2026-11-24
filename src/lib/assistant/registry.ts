@@ -45,11 +45,14 @@ import {
 import { DEFAULT_SHIPPING_RULES, SHIPPING_RULES_KEY, shippingRulesSchema } from "../shipping/rules";
 import {
   DEFAULT_SAVED_VIEWS,
+  DEFAULT_SEASONS,
   DEFAULT_STOCK_SETTINGS,
   STOCK_MODULE,
+  STOCK_SEASONS_KEY,
   STOCK_SETTINGS_KEY,
   STOCK_VIEWS_KEY,
   savedViewsSchema,
+  seasonsSchema,
   stockSettingsSchema,
 } from "../stock/config";
 import { DEFAULT_PO_EMAIL, PO_EMAIL_KEY, poEmailSchema } from "../stock/po/email";
@@ -139,6 +142,16 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
       "Named views of Stock's Everything list, shared by the whole workspace: which built-in view (all, onorder, nosales, hidden, atrisk, out, under, healthy, over, nosupplier), a search, the column it is sorted by and which way, the columns on show, and whether the list opens on it (opens_first, at most one). Each view needs a short id of lowercase letters and digits.",
     schema: savedViewsSchema,
     defaultBody: () => DEFAULT_SAVED_VIEWS,
+  },
+  {
+    module: STOCK_MODULE,
+    key: STOCK_SEASONS_KEY,
+    feature: "stock",
+    name: "Selling seasons to plan ahead for",
+    description:
+      "Busy times the business wants stock on the shelf for: a name, the day to be in stock by (in_stock_by, YYYY-MM-DD), an optional lift in percent that raises that month's suggested orders (lift_pct, 0 to 500), a note, and how its card sits on Stock's To order tab (card: open, folded or hidden). Each season needs a short id of lowercase letters and digits. Order-by dates per supplier are worked out from these; nothing is ordered by itself.",
+    schema: seasonsSchema,
+    defaultBody: () => DEFAULT_SEASONS,
   },
   {
     module: STOCK_MODULE,
@@ -401,6 +414,15 @@ export function describeConfig(entry: ConfigEntry, body: unknown): string[] {
         ? `Parcels are marked as sent in the shop${value.notify_customer ? ", and the shop emails the customer" : ""}`
         : "Orders are marked as sent in the shop by hand",
     ];
+  }
+  if (entry.module === STOCK_MODULE && entry.key === STOCK_SEASONS_KEY) {
+    const seasons = list("seasons") as { name: string; in_stock_by: string; lift_pct?: number }[];
+    return seasons.length
+      ? seasons.map(
+          (season) =>
+            `${season.name}: in stock by ${season.in_stock_by}${season.lift_pct ? `, +${season.lift_pct}%` : ""}`,
+        )
+      : ["No seasons planned"];
   }
   if (entry.module === STOCK_MODULE) {
     return [

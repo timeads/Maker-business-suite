@@ -23,6 +23,13 @@ import {
 } from "./engine/closures";
 import { addDays } from "./engine/days";
 import { blendIndex, monthlyIndex } from "./engine/seasonality";
+import {
+  PEAK_MARK_FROM,
+  peakFactor,
+  seasonLiftByMonth,
+  type Season,
+  type SupplierLead,
+} from "./engine/seasons";
 import { SPARSE_WINDOW_DAYS } from "./engine/velocity";
 import { computePoTotals } from "./po/totals";
 
@@ -155,7 +162,17 @@ export type StockRow = {
   openOrders: { count: number; firstNumber: number | null };
   /** This option's photo, else the product's. Null when the shop gave none. */
   photo: string | null;
+  /**
+   * The busiest month's multiplier across the days an order placed today has
+   * to cover (1 when seasons are off or nothing is known). TuftStock marks a
+   * suggestion "↑1.25×" from 1.15 up.
+   */
+  seasonalFactor: number;
 };
+
+/** "↑1.25×" when the item is being bought into a busy season, else null. */
+export const peakMark = (row: Pick<StockRow, "seasonalFactor">) =>
+  row.seasonalFactor >= PEAK_MARK_FROM ? `↑${row.seasonalFactor.toFixed(2)}×` : null;
 
 /** True when the item's name carries one of the workspace's "never reorder" words. */
 export function matchesSkipWords(
@@ -216,6 +233,12 @@ export function buildStockRows(input: {
    * themselves. Left out, it is estimated as units sold × today's price.
    */
   revenue?: RevenueRow[];
+  /**
+   * Selling seasons still to come. One with a lift raises that month's
+   * demand on top of what the sales history shows (only while "plan for busy
+   * seasons" is on, as in TuftStock).
+   */
+  seasons?: Season[];
   settings: StockSettings;
   /** The workspace's own "today", YYYY-MM-DD. */
   today: string;
@@ -260,6 +283,10 @@ export function buildStockRows(input: {
       };
     });
   const storeIndex = input.settings.seasonality ? monthlyIndex(forIndex(everything)) : null;
+  const lift = input.settings.seasonality
+    ? seasonLiftByMonth(input.seasons ?? [], input.today)
+    : null;
+  const lifted = lift !== null && lift.some((x) => x !== 1);
   const closuresBySupplier = new Map<string, Closure[]>();
   for (const row of input.closures ?? []) {
     const closure = { id: row.id, name: row.name, startsOn: row.starts_on, endsOn: row.ends_on };
@@ -286,9 +313,16 @@ export function buildStockRows(input: {
       })),
     );
     const units = sales.reduce((n, s) => n + s.unitsSold, 0);
-    const seasonalIndex = storeIndex
-      ? blendIndex(monthlyIndex(forIndex(sales)), storeIndex, units)
-      : undefined;
+    // The item's own pattern blended with the shop's, then any season's lift
+    // on top. With no history at all the blend is flat, so a lift still counts.
+    let seasonalIndex: number[] | undefined;
+    if (input.settings.seasonality) {
+      const own = monthlyIndex(forIndex(sales));
+      if (own || storeIndex || lifted) {
+        const blended = blendIndex(own, storeIndex, units);
+        seasonalIndex = lift ? blended.map((value, month) => value * lift[month]) : blended;
+      }
+    }
     // The item's own smallest order wins over the supplier's, and is always
     // counted per item. A supplier's minimum counted across the whole order is
     // applied when the order is drafted (draft-po.ts), not here.
@@ -418,6 +452,9 @@ export function buildStockRows(input: {
       revenueShare: 0,
       openOrders: openOrdersOf(linesByItem.get(item.id) ?? []),
       photo: item.variant_image_url ?? item.image_url ?? null,
+      seasonalFactor: seasonalIndex
+        ? peakFactor(seasonalIndex, input.today, leadTimeDays + coverageDays)
+        : 1,
     };
   });
   // Each item's share of everything sold in 90 days (TuftStock's "% Rev").
@@ -567,6 +604,41 @@ export function draftOrders(rows: StockRow[], today: string): DraftOrder[] {
     today,
   );
 }
+
+/**
+ * Each supplier's planned items, grouped by how long they take to arrive, for
+ * the season cards: items with different lead times under one supplier get
+ * their own order-by date (TuftStock's `leadCohortsFromReorderRows`).
+ */
+export function seasonLeadGroups(rows: StockRow[]): SupplierLead[] {
+  const groups = new Map<string, SupplierLead>();
+  for (const row of rows) {
+    if (!isPlanned(row) || !hasLiveSupplier(row)) continue;
+    const key = `${row.supplier!.id}|${row.leadTimeDays}`;
+    const group = groups.get(key);
+    if (group) group.itemCount += 1;
+    else {
+      groups.set(key, {
+        supplierId: row.supplier!.id,
+        supplierName: row.supplier!.name,
+        leadDays: row.leadTimeDays,
+        itemCount: 1,
+      });
+    }
+  }
+  return [...groups.values()];
+}
+
+/** The items of one such group that have something to order right now. */
+export const seasonGroupItems = (rows: StockRow[], supplierId: string, leadDays: number) =>
+  rows.filter(
+    (row) =>
+      isPlanned(row) &&
+      hasLiveSupplier(row) &&
+      row.supplier!.id === supplierId &&
+      row.leadTimeDays === leadDays &&
+      row.suggestedQty > 0,
+  );
 
 /** How far ahead a closure's order shows on the "To order" tab. */
 export const CLOSURE_CARD_DAYS = 60;

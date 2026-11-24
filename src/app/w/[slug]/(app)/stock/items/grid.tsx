@@ -546,6 +546,14 @@ export function ItemsGrid({
         return row.suggest > 0 ? (
           <span title={row.why}>
             <span className="font-semibold">{row.suggest}</span>
+            {row.peak && (
+              <span
+                title={`Ordering into a busy season: ${row.peak.slice(1)} an ordinary month, somewhere in the days this order has to cover`}
+                className="bg-ochre-soft text-ochre-text ml-1 rounded-sm px-1 text-[11px] font-semibold whitespace-nowrap"
+              >
+                {row.peak}
+              </span>
+            )}
             {row.cases && (
               <span className="text-muted-foreground block text-xs whitespace-nowrap">
                 {row.cases}

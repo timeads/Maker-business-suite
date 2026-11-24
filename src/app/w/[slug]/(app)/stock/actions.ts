@@ -10,12 +10,17 @@ import { guessCarrier, tidyTracking } from "@/lib/shipping/carriers";
 import { Money } from "@/lib/stock/balance/money";
 import {
   MAX_SAVED_VIEWS,
+  MAX_SEASONS,
   STOCK_MODULE,
+  STOCK_SEASONS_KEY,
   STOCK_SETTINGS_KEY,
   STOCK_VIEWS_KEY,
   parseSavedViews,
+  parseSeasons,
   savedViewsSchema,
+  seasonsSchema,
   stockSettingsSchema,
+  type SeasonConfig,
 } from "@/lib/stock/config";
 import { isColumnKey, isViewKey } from "@/lib/stock/views";
 import { startingQty } from "@/lib/stock/engine";
@@ -24,6 +29,7 @@ import {
   closureOrders,
   draftOrders,
   draftOrdersForItems,
+  seasonGroupItems,
   type DraftOrder,
   type StockRow,
 } from "@/lib/stock/plan";
@@ -703,7 +709,12 @@ export async function saveOrder(
   return { message: "Saved." };
 }
 
-/** Adds a tracking number to an order that's on its way, or changes one. */
+/**
+ * Adds tracking numbers to an order that's on its way, or changes one. A new
+ * entry can carry several numbers, one to a line (or with commas), pasted as
+ * a batch: each becomes its own parcel with the same carrier, date and note.
+ * One the order already has is left as it is and named, as in TuftStock.
+ */
 export async function saveShipment(
   slug: string,
   orderId: string,
@@ -713,31 +724,74 @@ export async function saveShipment(
 ): Promise<StockState> {
   const ctx = await context(slug);
   if ("error" in ctx) return { error: ctx.error };
-  const tracking = tidyTracking(text(formData, "tracking"));
-  if (tracking.length < 4) return { error: "Type the tracking number." };
+  const typed = text(formData, "tracking");
+  const numbers = shipmentId
+    ? [tidyTracking(typed)]
+    : [
+        ...new Set(
+          typed
+            .split(/[\n,;]+/)
+            .map(tidyTracking)
+            .filter(Boolean),
+        ),
+      ];
+  if (numbers.length === 0 || numbers.some((n) => n.length < 4)) {
+    return { error: "Type the tracking number, or paste several with one on each line." };
+  }
+  if (numbers.length > 40) return { error: "That's a lot at once. Add up to 40 at a time." };
   const expected = text(formData, "expected");
   const arrived = text(formData, "arrived");
-  const { error } = await ctx.supabase.rpc("save_po_shipment", {
-    p_po_id: orderId,
-    p_shipment_id: shipmentId,
-    p_carrier: text(formData, "carrier").slice(0, 60) || (guessCarrier(tracking) ?? ""),
-    p_tracking: tracking,
-    p_expected_on: DAY.test(expected) ? expected : null,
-    p_arrived_on: DAY.test(arrived) ? arrived : null,
-    p_note: text(formData, "note").slice(0, 300),
-  });
-  if (error) {
-    return {
-      error:
-        error.code === "23505"
-          ? "That tracking number is already on this order."
-          : error.message.includes("been sent")
-            ? "Tracking is for orders you've sent."
-            : OOPS,
-    };
+  const carrier = text(formData, "carrier").slice(0, 60);
+  let already: string[] = [];
+  if (!shipmentId && numbers.length > 1) {
+    const { data: existing } = await ctx.supabase
+      .from("purchase_order_shipments")
+      .select("tracking")
+      .eq("tenant_id", ctx.tenant.id)
+      .eq("po_id", orderId)
+      .is("removed_at", null);
+    const have = new Set((existing ?? []).map((row) => row.tracking as string));
+    already = numbers.filter((n) => have.has(n));
+  }
+  let added = 0;
+  for (const tracking of numbers) {
+    if (already.includes(tracking)) continue;
+    const { error } = await ctx.supabase.rpc("save_po_shipment", {
+      p_po_id: orderId,
+      p_shipment_id: shipmentId,
+      p_carrier: carrier || (guessCarrier(tracking) ?? ""),
+      p_tracking: tracking,
+      p_expected_on: DAY.test(expected) ? expected : null,
+      p_arrived_on: DAY.test(arrived) ? arrived : null,
+      p_note: text(formData, "note").slice(0, 300),
+    });
+    if (error) {
+      if (added > 0) done(slug);
+      return {
+        error:
+          error.code === "23505"
+            ? "That tracking number is already on this order."
+            : error.message.includes("been sent")
+              ? "Tracking is for orders you've sent."
+              : numbers.length > 1
+                ? `${tracking} couldn't be added${added > 0 ? ` (the ${plural(added, "number")} before it ${added === 1 ? "was" : "were"})` : ""}. Check it and try again.`
+                : OOPS,
+      };
+    }
+    added += 1;
   }
   done(slug);
-  return { message: shipmentId ? "Saved." : "Tracking added." };
+  if (shipmentId) return { message: "Saved." };
+  const skipped =
+    already.length > 0
+      ? ` ${already.join(", ")} ${already.length === 1 ? "was" : "were"} already on this order.`
+      : "";
+  return {
+    message:
+      numbers.length === 1
+        ? "Tracking added."
+        : `${plural(added, "tracking number")} added.${skipped} Say what's in each one below.`,
+  };
 }
 
 /** Marks a parcel as here today (it still needs checking in), or takes the number off. */
@@ -806,6 +860,46 @@ export async function checkShipmentNow(
   }
   done(slug);
   return { message: "Asking UPS now. Refresh in a minute to see what it says." };
+}
+
+/**
+ * "Ask UPS about all of them": asks the worker to look every travelling UPS
+ * parcel up at its next turn. Ones asked about in the last ten minutes are
+ * left alone, as with "Check now".
+ */
+export async function checkAllShipments(
+  slug: string,
+  _prev: StockState,
+  _formData: FormData,
+): Promise<StockState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const { data } = await ctx.supabase
+    .from("purchase_order_shipments")
+    .select("id, tracking, purchase_orders!inner(status)")
+    .eq("tenant_id", ctx.tenant.id)
+    .is("removed_at", null)
+    .is("arrived_on", null)
+    .like("tracking", "1Z%")
+    .in("purchase_orders.status", ["ordered", "partial"])
+    .limit(100);
+  let asked = 0;
+  let noUps = false;
+  for (const row of data ?? []) {
+    const { error } = await ctx.supabase.rpc("request_po_shipment_check", {
+      p_shipment_id: row.id as string,
+    });
+    if (!error) asked += 1;
+    else if (error.message.includes("no_ups")) noUps = true;
+  }
+  if (noUps) return { error: "Connect your own UPS account under Connections first." };
+  done(slug);
+  return {
+    message:
+      asked > 0
+        ? `Asking UPS about ${plural(asked, "parcel")}. Refresh in a minute to see what it says.`
+        : "Nothing new to ask: UPS was asked about these a few minutes ago.",
+  };
 }
 
 /** Says which of the order's lines are in a parcel, and how many of each. */
@@ -1080,4 +1174,150 @@ export async function removeStockView(slug: string, viewId: string): Promise<voi
   if (error) return;
   done(slug);
   redirect(`/w/${slug}/stock/items?show=all`);
+}
+
+async function readSeasons(ctx: {
+  supabase: Awaited<ReturnType<typeof createClient>>;
+  tenant: { id: string };
+}) {
+  const { data } = await ctx.supabase
+    .from("configs")
+    .select("body")
+    .eq("tenant_id", ctx.tenant.id)
+    .eq("module", STOCK_MODULE)
+    .eq("key", STOCK_SEASONS_KEY)
+    .maybeSingle();
+  return parseSeasons(data?.body).seasons;
+}
+
+async function writeSeasons(
+  ctx: { supabase: Awaited<ReturnType<typeof createClient>>; tenant: { id: string } },
+  seasons: SeasonConfig[],
+) {
+  const parsed = seasonsSchema.safeParse({ version: 1, seasons });
+  if (!parsed.success) return false;
+  const { error } = await ctx.supabase.rpc("save_config", {
+    p_tenant_id: ctx.tenant.id,
+    p_module: STOCK_MODULE,
+    p_key: STOCK_SEASONS_KEY,
+    p_body: parsed.data,
+  });
+  return !error;
+}
+
+/**
+ * Adds a selling season to plan ahead for, or changes one: a name, the day
+ * the stock should be on the shelf by, an optional lift and a note.
+ */
+export async function saveSeason(
+  slug: string,
+  seasonId: string | null,
+  _prev: StockState,
+  formData: FormData,
+): Promise<StockState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const name = text(formData, "name").slice(0, 80);
+  const day = text(formData, "in_stock_by");
+  const typedLift = text(formData, "lift_pct");
+  const lift = typedLift === "" ? 0 : Number(typedLift);
+  if (!name) return { error: "Give the season a name, like “Holiday rush”." };
+  if (dayNumber(day) === null) return { error: "Pick the day you want the stock on the shelf by." };
+  if (!/^\d{0,3}$/.test(typedLift) || !(lift >= 0 && lift <= 500)) {
+    return { error: "The lift is a whole percent from 0 to 500. Leave it empty for none." };
+  }
+  const seasons = await readSeasons(ctx);
+  const existing = seasonId ? seasons.find((season) => season.id === seasonId) : undefined;
+  if (seasonId && !existing) return { error: OOPS };
+  if (!existing && seasons.length >= MAX_SEASONS) {
+    return {
+      error: `That's the most seasons we keep (${MAX_SEASONS}). Take a past one off first.`,
+    };
+  }
+  const season: SeasonConfig = {
+    id: existing?.id ?? crypto.randomUUID().replace(/-/g, "").slice(0, 10),
+    name,
+    in_stock_by: day,
+    lift_pct: lift,
+    note: text(formData, "note").slice(0, 300),
+    card: existing?.card ?? "open",
+  };
+  const ok = await writeSeasons(ctx, [
+    ...seasons.filter((entry) => entry.id !== season.id),
+    season,
+  ]);
+  if (!ok) return { error: OOPS };
+  done(slug);
+  return {
+    message: existing
+      ? "Saved."
+      : lift > 0
+        ? "Added. Suggestions for that month are raised, and the order-by dates are on “To order”."
+        : "Added. You'll find its order-by dates on “To order”.",
+  };
+}
+
+/** Takes a season off. Suggestions go back to what the sales history says. */
+export async function removeSeason(slug: string, seasonId: string): Promise<void> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return;
+  const seasons = await readSeasons(ctx);
+  if (!seasons.some((season) => season.id === seasonId)) return;
+  if (
+    await writeSeasons(
+      ctx,
+      seasons.filter((season) => season.id !== seasonId),
+    )
+  )
+    done(slug);
+}
+
+/**
+ * Folds a season's card to one line, opens it again, or puts it away. Kept
+ * with the season, so it looks the same on every device. "show_all" brings
+ * back every card that was put away.
+ */
+export async function setSeasonCard(
+  slug: string,
+  seasonId: string | null,
+  card: "open" | "folded" | "hidden" | "show_all",
+): Promise<void> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return;
+  const seasons = await readSeasons(ctx);
+  const next =
+    card === "show_all"
+      ? seasons.map((season) =>
+          season.card === "hidden" ? { ...season, card: "open" as const } : season,
+        )
+      : seasons.map((season) => (season.id === seasonId ? { ...season, card } : season));
+  if (await writeSeasons(ctx, next)) done(slug);
+}
+
+/**
+ * Drafts one order for a supplier's items that share a lead time, from a
+ * season's card. The amounts are today's suggestions, already raised for the
+ * season, worked out again here on the server.
+ */
+export async function startSeasonOrder(
+  slug: string,
+  supplierId: string,
+  leadDays: number,
+  formData: FormData,
+): Promise<void> {
+  const ctx = await context(slug);
+  if ("error" in ctx || !UUID.test(supplierId)) return;
+  const { rows, today } = await loadStock(ctx.supabase, ctx.tenant);
+  const items = seasonGroupItems(rows, supplierId, leadDays).map((row) => row.item.id);
+  const picked = draftOrdersForItems(rows, items, today);
+  if (picked.orders.length === 0) return;
+  const { data, error } = await ctx.supabase.rpc("draft_purchase_orders", {
+    p_tenant_id: ctx.tenant.id,
+    p_request_key: requestKey(formData),
+    p_orders: picked.orders.map(orderPayload),
+  });
+  const numbers = (data as number[] | null) ?? [];
+  if (error || numbers.length === 0) return;
+  done(slug);
+  redirect(`/w/${slug}/stock/orders/${numbers[0]}?drafted=1`);
 }

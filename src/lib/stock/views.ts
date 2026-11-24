@@ -8,6 +8,7 @@ import {
   isDeadStock,
   isPlanned,
   notPlannedReason,
+  peakMark,
   relativeDay,
   runsOutBeforeArrival,
   topSellerIds,
@@ -219,6 +220,8 @@ export type GridRow = {
   overdue: boolean;
   suggest: number;
   cases: string | null;
+  /** "↑1.25×" beside the suggestion when it is being bought into a busy season. */
+  peak: string | null;
   health: keyof typeof HEALTH_LABELS;
   healthLabel: string;
   /** Why it's left out of reordering, when it is. */
@@ -306,6 +309,7 @@ export function toGridRow(
     overdue: row.plan.isOverdue,
     suggest: row.suggestedQty,
     cases: caseLabel(row.suggestedQty, row.casePack),
+    peak: row.suggestedQty > 0 ? peakMark(row) : null,
     health: row.health.health,
     healthLabel: HEALTH_LABELS[row.health.health],
     left: reason ? NOT_PLANNED_LABELS[reason] : null,

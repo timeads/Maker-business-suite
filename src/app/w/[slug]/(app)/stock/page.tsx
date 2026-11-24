@@ -5,19 +5,24 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { formatMoney } from "@/lib/dashboard/format";
+import { bySupplier, computeBuildAhead } from "@/lib/stock/engine/seasons";
 import {
   closureOrders,
   draftOrders,
   hasLiveSupplier,
   isPlanned,
   relativeDay,
+  seasonGroupItems,
+  seasonLeadGroups,
 } from "@/lib/stock/plan";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
-import { startClosureOrder, startSuggestedOrder } from "./actions";
+import { setSeasonCard, startClosureOrder, startSeasonOrder, startSuggestedOrder } from "./actions";
 import { CARRIER_WORDS, isCarrierStatus, type CarrierStatus } from "@/lib/stock/tracking";
-import { loadIncoming, loadStock } from "./data";
-import { StartOrderButton } from "./forms";
+import { loadIncoming, loadIncomingParcels, loadStock } from "./data";
+import { RequestKey, StartOrderButton } from "./forms";
+import { CheckAllButton, ParcelButtons, SyncShopButton } from "./home-parts";
+import { SubmitButton } from "@/components/ui/submit-button";
 import { stockAccess } from "./gate";
 import { StockTabs } from "./tabs";
 
@@ -32,9 +37,14 @@ export default async function StockPage({ params }: { params: Promise<{ slug: st
   const base = `/w/${tenant.slug}/stock`;
 
   const supabase = await createClient();
-  const [{ rows, today, link, suppliers }, { incoming }] = await Promise.all([
+  const [
+    { rows, today, link, suppliers, seasons, settings },
+    { incoming },
+    { parcels, canAskUps },
+  ] = await Promise.all([
     loadStock(supabase, tenant),
     loadIncoming(supabase, tenant),
+    loadIncomingParcels(supabase, tenant),
   ]);
   const day = (value: string) =>
     new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short", day: "numeric" }).format(
@@ -73,23 +83,80 @@ export default async function StockPage({ params }: { params: Promise<{ slug: st
   const out = planned.filter((row) => row.health.health === "out" && !row.plan.isDeadStock);
   const onItsWay = planned.reduce((n, row) => n + row.onOrder, 0);
   const money = (value: number) => formatMoney(value, tenant.currency);
-  const stats = [
-    { label: "To order", value: String(due.length), note: "items due in the next two weeks" },
+  const overdue = planned.filter((row) => row.plan.isOverdue && row.suggestedQty > 0);
+  const stats: { label: string; value: string; note: string; bad?: boolean; href?: string }[] = [
+    {
+      label: "Being reordered",
+      value: planned.length.toLocaleString("en-US"),
+      note: "items we plan for",
+      href: `${base}/items?show=all`,
+    },
+    { label: "To order", value: String(due.length), note: "due in the next two weeks" },
+    {
+      label: "Overdue",
+      value: String(overdue.length),
+      note: overdue.length > 0 ? "past their order-by date" : "all clear",
+      bad: overdue.length > 0,
+      href: `${base}/items?show=all&sort=orderBy&dir=asc`,
+    },
     {
       label: "Worth",
       value: money(everyOrder.reduce((sum, order) => sum + order.totalCost, 0)),
       note: "if you place every suggested order",
     },
     { label: "Sold out", value: String(out.length), note: "things people still want" },
-    { label: "On its way", value: String(onItsWay), note: "units on orders you've sent" },
+    {
+      label: "On its way",
+      value: onItsWay.toLocaleString("en-US"),
+      note: "units on orders you've sent",
+      href: `${base}/items?show=onorder`,
+    },
   ];
+  const lastRead = link.lastSyncedAt
+    ? new Intl.DateTimeFormat("en-US", {
+        timeZone: tenant.timezone,
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        timeZoneName: "short",
+      }).format(new Date(link.lastSyncedAt))
+    : null;
+  // Seasons still to come, each with the last day to order from every
+  // supplier (one line per lead time). Worked out here; only the season is kept.
+  const cardOf = new Map(seasons.map((season) => [season.id, season.card]));
+  const seasonPlans = computeBuildAhead(
+    seasons.map((season) => ({
+      id: season.id,
+      name: season.name,
+      inStockBy: season.in_stock_by,
+      liftPct: season.lift_pct,
+      note: season.note,
+    })),
+    seasonLeadGroups(rows),
+    settings.review_buffer_days,
+    today,
+  );
+  const shownSeasons = seasonPlans.filter((plan) => cardOf.get(plan.id) !== "hidden");
+  const putAway = seasonPlans.length - shownSeasons.length;
+  const toOrderIn = (supplierId: string, leadDays: number) =>
+    seasonGroupItems(rows, supplierId, leadDays).length;
 
   return (
     <>
       <PageHeader
         title="Stock"
         description="What to reorder and when, worked out from what you sell and how long things take to arrive."
-      />
+      >
+        {link.connected && (
+          <>
+            <span className="text-muted-foreground text-xs">
+              {lastRead ? `Shop last read ${lastRead}` : "Shop not read yet"}
+            </span>
+            {canEdit && <SyncShopButton slug={tenant.slug} />}
+          </>
+        )}
+      </PageHeader>
       <StockTabs slug={tenant.slug} manager={canManage(role)} />
 
       {rows.length === 0 ? (
@@ -114,15 +181,182 @@ export default async function StockPage({ params }: { params: Promise<{ slug: st
         </Card>
       ) : (
         <>
-          <dl className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
             {stats.map((stat) => (
               <div key={stat.label} className="bg-card border-border rounded-lg border px-4 py-3">
-                <dt className="text-muted-foreground text-xs font-semibold">{stat.label}</dt>
-                <dd className="mt-1 text-2xl leading-none font-bold tabular-nums">{stat.value}</dd>
+                <dt className="text-muted-foreground text-xs font-semibold">
+                  {stat.href ? (
+                    <Link href={stat.href} className="hover:underline">
+                      {stat.label}
+                    </Link>
+                  ) : (
+                    stat.label
+                  )}
+                </dt>
+                <dd
+                  className={`mt-1 text-2xl leading-none font-bold tabular-nums ${stat.bad ? "text-brick" : ""}`}
+                >
+                  {stat.value}
+                </dd>
                 <dd className="text-muted-foreground mt-1.5 text-xs">{stat.note}</dd>
               </div>
             ))}
           </dl>
+
+          {shownSeasons.map((plan) => {
+            const groups = plan.suppliers.filter(
+              (group) => toOrderIn(group.supplierId, group.leadDays) > 0,
+            );
+            const now = groups.filter((group) => group.status === "overdue").length;
+            const soon = groups.filter((group) => group.status === "soon").length;
+            const summary =
+              now + soon === 0
+                ? groups.length === 0
+                  ? "Nothing to order"
+                  : "On track"
+                : [now > 0 ? `${now} to order now` : "", soon > 0 ? `${soon} due soon` : ""]
+                    .filter(Boolean)
+                    .join(" · ");
+            const folded = cardOf.get(plan.id) === "folded";
+            return (
+              <Card key={`season-${plan.id}`}>
+                <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1 basis-80">
+                    <CardTitle className="flex flex-wrap items-center gap-2">
+                      {plan.name}
+                      <Badge tone={now > 0 ? "bad" : soon > 0 ? "waiting" : "good"}>
+                        {summary}
+                      </Badge>
+                    </CardTitle>
+                    <CardDescription>
+                      In stock by {longDay(plan.inStockBy)} · {plan.daysUntil} day
+                      {plan.daysUntil === 1 ? "" : "s"} away
+                      {plan.liftPct > 0 && ` · suggestions for that month raised ${plan.liftPct}%`}
+                      {plan.note && ` · ${plan.note}`}
+                    </CardDescription>
+                  </div>
+                  {canEdit && (
+                    <div className="flex items-center gap-1">
+                      <form
+                        action={setSeasonCard.bind(
+                          null,
+                          tenant.slug,
+                          plan.id,
+                          folded ? "open" : "folded",
+                        )}
+                      >
+                        <Button type="submit" variant="ghost" size="sm">
+                          {folded ? "Open" : "Fold"}
+                        </Button>
+                      </form>
+                      <form action={setSeasonCard.bind(null, tenant.slug, plan.id, "hidden")}>
+                        <Button type="submit" variant="ghost" size="sm">
+                          Put away
+                        </Button>
+                      </form>
+                    </div>
+                  )}
+                </CardHeader>
+                {!folded && (
+                  <CardContent className="flex flex-col gap-3">
+                    {plan.suppliers.length === 0 && (
+                      <p className="text-muted-foreground text-sm">
+                        Give your items a supplier and their order-by dates appear here.
+                      </p>
+                    )}
+                    {bySupplier(plan.suppliers).map((supplier) => (
+                      <div
+                        key={supplier.supplierId}
+                        className="border-border border-t pt-3 first:border-0 first:pt-0"
+                      >
+                        <p className="text-sm font-semibold">
+                          {supplier.supplierName}{" "}
+                          <span className="text-muted-foreground font-normal">
+                            · {supplier.groups.reduce((n, group) => n + group.itemCount, 0)} items
+                            {supplier.groups.length > 1 &&
+                              ` · ${supplier.groups.length} groups by days to arrive`}
+                          </span>
+                        </p>
+                        <ul className="mt-1.5 flex flex-col gap-1.5">
+                          {supplier.groups.map((group) => {
+                            const count = toOrderIn(group.supplierId, group.leadDays);
+                            return (
+                              <li
+                                key={group.leadDays}
+                                className="flex flex-wrap items-center justify-between gap-2 text-sm"
+                              >
+                                <span className="flex flex-wrap items-center gap-2">
+                                  <span className="text-muted-foreground w-28 tabular-nums">
+                                    {group.leadDays} days to arrive
+                                  </span>
+                                  <Badge
+                                    tone={
+                                      group.status === "overdue"
+                                        ? "bad"
+                                        : group.status === "soon"
+                                          ? "waiting"
+                                          : "closed"
+                                    }
+                                  >
+                                    Order by {longDay(group.orderBy)}
+                                    {group.status === "overdue"
+                                      ? ": now"
+                                      : group.status === "soon"
+                                        ? `: ${group.daysUntilOrderBy} day${group.daysUntilOrderBy === 1 ? "" : "s"} left`
+                                        : ""}
+                                  </Badge>
+                                  <span className="text-muted-foreground">
+                                    {group.itemCount} item{group.itemCount === 1 ? "" : "s"}
+                                  </span>
+                                </span>
+                                {canEdit &&
+                                  (count > 0 ? (
+                                    <form
+                                      action={startSeasonOrder.bind(
+                                        null,
+                                        tenant.slug,
+                                        group.supplierId,
+                                        group.leadDays,
+                                      )}
+                                    >
+                                      <RequestKey />
+                                      <SubmitButton
+                                        variant="outline"
+                                        size="sm"
+                                        pendingText="Drafting…"
+                                      >
+                                        Draft an order ({count})
+                                      </SubmitButton>
+                                    </form>
+                                  ) : (
+                                    <span className="text-muted-foreground text-xs">
+                                      Nothing to order
+                                    </span>
+                                  ))}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </div>
+                    ))}
+                    <p className="text-muted-foreground font-read border-border border-t pt-2 text-xs">
+                      &quot;Order by&quot; is the in-stock day, less the days that supplier takes,
+                      less the {settings.review_buffer_days} days you leave between order reviews.
+                      Items that take different times to arrive get their own line, and each line
+                      drafts its own order, at amounts already raised for the season.
+                    </p>
+                  </CardContent>
+                )}
+              </Card>
+            );
+          })}
+          {putAway > 0 && canEdit && (
+            <form action={setSeasonCard.bind(null, tenant.slug, null, "show_all")}>
+              <Button type="submit" variant="ghost" size="sm">
+                Show {putAway} season{putAway === 1 ? "" : "s"} you put away
+              </Button>
+            </form>
+          )}
 
           {suppliers.length === 0 && (
             <Card>
@@ -365,6 +599,92 @@ export default async function StockPage({ params }: { params: Promise<{ slug: st
                               : "no date yet"}
                         </span>
                       </Link>
+                    </li>
+                  ))}
+                </ul>
+              </CardContent>
+            </Card>
+          )}
+
+          {parcels.length > 0 && (
+            <Card>
+              <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
+                <div>
+                  <CardTitle>Parcels on the way · {parcels.length}</CardTitle>
+                  <CardDescription>
+                    Each tracking number on an open order, the soonest due first.
+                    {canAskUps
+                      ? " UPS is asked about its own numbers every few hours."
+                      : " Add tracking numbers on an order's page."}
+                  </CardDescription>
+                </div>
+                {canEdit && canAskUps && parcels.some((parcel) => parcel.canCheck) && (
+                  <CheckAllButton slug={tenant.slug} />
+                )}
+              </CardHeader>
+              <CardContent>
+                <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                  {parcels.map((parcel) => (
+                    <li
+                      key={parcel.id}
+                      className="border-border flex flex-col gap-2 rounded-lg border p-3 text-sm"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <Badge tone={parcel.late ? "bad" : parcel.status.tone}>
+                          {parcel.late && parcel.status.label !== "Late"
+                            ? `${parcel.status.label}, late`
+                            : parcel.status.label}
+                        </Badge>
+                        <span className="text-muted-foreground text-xs">
+                          {parcel.expectedOn ? `Due ${day(parcel.expectedOn)}` : "No date yet"}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="font-semibold">{parcel.carrier || "Carrier not set"}</span>{" "}
+                        {parcel.url ? (
+                          <a
+                            href={parcel.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-ochre-text font-mono text-xs underline-offset-2 hover:underline"
+                          >
+                            {parcel.tracking}
+                          </a>
+                        ) : (
+                          <span className="font-mono text-xs">{parcel.tracking}</span>
+                        )}
+                        <span className="text-muted-foreground block text-xs">
+                          <Link
+                            href={`${base}/orders/${parcel.orderNumber}`}
+                            className="font-mono hover:underline"
+                          >
+                            {parcel.orderReference}
+                          </Link>{" "}
+                          · {parcel.supplierName}
+                        </span>
+                      </div>
+                      {parcel.items.length > 0 ? (
+                        <p className="font-read text-xs">
+                          {parcel.items.map((item) => `${item.quantity} × ${item.name}`).join(", ")}
+                        </p>
+                      ) : (
+                        <p className="text-muted-foreground text-xs">
+                          What&apos;s in it hasn&apos;t been said yet
+                        </p>
+                      )}
+                      {parcel.note && (
+                        <p className="text-muted-foreground font-read text-xs">{parcel.note}</p>
+                      )}
+                      {canEdit && (
+                        <div className="mt-auto">
+                          <ParcelButtons
+                            slug={tenant.slug}
+                            orderId={parcel.orderId}
+                            shipmentId={parcel.id}
+                            canCheck={parcel.canCheck}
+                          />
+                        </div>
+                      )}
                     </li>
                   ))}
                 </ul>
