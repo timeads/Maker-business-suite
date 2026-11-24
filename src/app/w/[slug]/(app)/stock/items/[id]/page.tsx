@@ -47,6 +47,8 @@ export default async function StockItemPage({
       "Sells about",
       plan.isDeadStock ? "nothing lately" : `${plan.velocityPerMonth.toFixed(1)} a month`,
     ],
+    // Days with none to sell don't count against how fast it sells.
+    ...(row.soldOutDays > 0 ? [["Sold-out days left out", String(row.soldOutDays)]] : []),
     ["Runs out", relativeDay(plan.stockOutDate, today)],
     ["Order by", relativeDay(plan.reorderDate, today)],
     [

@@ -409,6 +409,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     ],
     notes: [
       "Lead time and days of cover come from the supplier unless an item has its own.",
+      "Days an item was sold out don't count against it: a day with none on the shelf isn't a day nobody wanted it. We note each item's count once a day from the day Stock is switched on, so this gets better with time.",
       "Every figure is worked out fresh each time you look; nothing is stored, so it's never stale.",
     ],
   },

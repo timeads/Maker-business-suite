@@ -1,6 +1,6 @@
 import type { PGlite } from "@electric-sql/pglite";
 import { beforeAll, describe, expect, it } from "vitest";
-import { asService, asUser, createTestDb, createUser } from "./harness";
+import { asAnon, asService, asUser, createTestDb, createUser } from "./harness";
 
 /**
  * Stock, the gaps closed after the side-by-side with TuftStock: checking a
@@ -380,5 +380,77 @@ describe("trying the shop again", () => {
     await expect(
       as(alice, "select public.finish_stock_receipt_try($1, null, true)", [rug]),
     ).rejects.toThrow(/permission denied/);
+  });
+});
+
+describe("the daily count behind sold-out days", () => {
+  const counts = (user: User, tenant: string) =>
+    as<{ stock_item_id: string; day: string; on_hand: number }>(
+      user,
+      "select stock_item_id, day::text, on_hand from public.stock_daily_counts where tenant_id = $1 order by day, on_hand",
+      [tenant],
+    );
+  const localToday = async (tenant: string) =>
+    (
+      await one<{ day: string }>(
+        "select (now() at time zone t.timezone)::date::text as day from public.tenants t where t.id = $1",
+        [tenant],
+      )
+    ).day;
+
+  it("each sync writes down the day's count, and the last look of the day is kept", async () => {
+    const today = await localToday(tenantA);
+    const batch = items("a");
+    batch[0].on_hand = 0;
+    await sync(tenantA, batch);
+    let mine = (await counts(alice, tenantA)).filter((c) => c.stock_item_id === rug);
+    expect(mine).toEqual([{ stock_item_id: rug, day: today, on_hand: 0 }]);
+    batch[0].on_hand = 7;
+    await sync(tenantA, batch);
+    mine = (await counts(alice, tenantA)).filter((c) => c.stock_item_id === rug);
+    expect(mine).toEqual([{ stock_item_id: rug, day: today, on_hand: 7 }]);
+  });
+
+  it("keeps no count for something the shop doesn't count, and lets old days go", async () => {
+    await sync(tenantA, [
+      { external_id: "a-gift", title: "Gift card", on_hand: 0, tracked: false },
+      { external_id: "a-old", title: "Old thing", on_hand: 0, tracked: true },
+    ]);
+    const gift = await itemId(tenantA, "a-gift");
+    const old = await itemId(tenantA, "a-old");
+    await db.query(
+      `insert into public.stock_daily_counts (tenant_id, stock_item_id, day, on_hand)
+       values ($1, $2, current_date - 400, 0), ($1, $2, current_date - 30, 0)`,
+      [tenantA, old],
+    );
+    await sync(tenantA, [{ external_id: "a-old", title: "Old thing", on_hand: 2, tracked: true }]);
+    const kept = await counts(alice, tenantA);
+    expect(kept.filter((c) => c.stock_item_id === gift)).toEqual([]);
+    expect(kept.filter((c) => c.stock_item_id === old).map((c) => c.on_hand)).toEqual([0, 2]);
+  });
+
+  it("is readable only inside its own workspace, and written only by the sync", async () => {
+    expect((await counts(alice, tenantA)).length).toBeGreaterThan(0);
+    expect((await counts(carol, tenantA)).length).toBeGreaterThan(0);
+    expect(await counts(bob, tenantA)).toEqual([]);
+    expect(
+      await as(bob, "select 1 from public.stock_daily_counts where stock_item_id = $1", [rug]),
+    ).toEqual([]);
+    for (const sql of [
+      `insert into public.stock_daily_counts (tenant_id, stock_item_id, day, on_hand)
+       values ('${tenantA}', '${rug}', current_date - 1, 0)`,
+      "update public.stock_daily_counts set on_hand = 0",
+      "delete from public.stock_daily_counts",
+    ]) {
+      await expect(as(alice, sql)).rejects.toThrow(/permission denied/);
+      await expect(as(bob, sql)).rejects.toThrow(/permission denied/);
+    }
+    await expect(
+      asAnon(db, (tx) => tx.query("select 1 from public.stock_daily_counts")),
+    ).rejects.toThrow(/permission denied/);
+    // Bob's sync wrote Bob's own counts, and nothing of Alice's.
+    const bobs = await counts(bob, tenantB);
+    expect(bobs.length).toBeGreaterThan(0);
+    expect(bobs.every((c) => c.stock_item_id !== rug && c.stock_item_id !== yarn)).toBe(true);
   });
 });

@@ -6,6 +6,7 @@ import {
   computeDraftPo,
   computeOnOrder,
   computeReorder,
+  computeVelocity,
   type DailySale,
   type ReorderResult,
   roundUpToCase,
@@ -13,6 +14,7 @@ import {
 } from "./engine";
 import { addDays } from "./engine/days";
 import { blendIndex, monthlyIndex } from "./engine/seasonality";
+import { SPARSE_WINDOW_DAYS } from "./engine/velocity";
 import { computePoTotals } from "./po/totals";
 
 /**
@@ -53,6 +55,8 @@ export type SupplierRow = {
   archived_at?: string | null;
 };
 export type SaleRow = { stock_item_id: string; day: string; units: number | string };
+/** A day the shop's count for an item read zero or less (from the daily count). */
+export type EmptyDayRow = { stock_item_id: string; day: string };
 export type OpenLine = {
   stock_item_id: string;
   qty_ordered: number;
@@ -75,6 +79,8 @@ export type StockRow = {
   minimum: number;
   /** The engine's own figures. `plan.suggestedQty` is before case rounding. */
   plan: ReorderResult;
+  /** Sold-out days the sales rate left out (0 when it was never out, or none are known). */
+  soldOutDays: number;
   /** What to order: the engine's figure, raised to whole cases. */
   suggestedQty: number;
   health: StockHealthResult;
@@ -109,11 +115,28 @@ export const dayToDate = (day: string) => {
 
 const DUE_WITHIN_DAYS = 14;
 
+const isoDay = (date: Date) =>
+  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+
+/**
+ * The first day whose count can matter to the sales rate: the engine's
+ * longest window back from the workspace's today. Older empty days needn't
+ * be read at all.
+ */
+export const emptyDaysSince = (today: string) =>
+  isoDay(addDays(dayToDate(today), -SPARSE_WINDOW_DAYS));
+
 export function buildStockRows(input: {
   items: ItemRow[];
   suppliers: SupplierRow[];
   sales: SaleRow[];
   openLines: OpenLine[];
+  /**
+   * Days each item's count read zero or less. The engine leaves those days
+   * out of the sales rate (a day with a sale is never counted as sold out),
+   * exactly as TuftStock does. Left out, every day counts.
+   */
+  emptyDays?: EmptyDayRow[];
   settings: StockSettings;
   /** The workspace's own "today", YYYY-MM-DD. */
   today: string;
@@ -128,6 +151,13 @@ export function buildStockRows(input: {
     const list = salesByItem.get(sale.stock_item_id);
     if (list) list.push(row);
     else salesByItem.set(sale.stock_item_id, [row]);
+  }
+  const emptyByItem = new Map<string, Date[]>();
+  for (const row of input.emptyDays ?? []) {
+    const date = dayToDate(row.day);
+    const list = emptyByItem.get(row.stock_item_id);
+    if (list) list.push(date);
+    else emptyByItem.set(row.stock_item_id, [date]);
   }
   const linesByItem = new Map<string, OpenLine[]>();
   for (const line of input.openLines) {
@@ -170,6 +200,7 @@ export function buildStockRows(input: {
     const perItem = item.moq != null || supplier?.moq_applies_to === "sku";
     const moq = item.moq ?? supplier?.moq ?? 1;
     const casePack = casePackOf(item.case_pack);
+    const empty = emptyByItem.get(item.id) ?? [];
     const plan = computeReorder({
       salesByDay: sales,
       stockOnHand: item.on_hand,
@@ -182,6 +213,7 @@ export function buildStockRows(input: {
       reviewBufferDays: input.settings.review_buffer_days,
       today,
       seasonalIndex,
+      outOfStockDates: empty,
     });
     const health = classifyStockHealth({
       stockOnHand: item.on_hand,
@@ -208,6 +240,8 @@ export function buildStockRows(input: {
       casePack,
       minimum: perItem ? moq : 1,
       plan,
+      // The engine's own count of the days it dropped (a day with a sale never is).
+      soldOutDays: empty.length > 0 ? computeVelocity(sales, today, empty).outOfStockDays : 0,
       suggestedQty: roundUpToCase(plan.suggestedQty, casePack),
       health,
       due,
@@ -256,9 +290,6 @@ export type DraftOrder = {
   expectedOn: string;
   bumpedToMinimum: boolean;
 };
-
-const isoDay = (date: Date) =>
-  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 
 /**
  * One draft order per supplier from the rows given (each must have a supplier).
@@ -413,7 +444,10 @@ export function explainSuggestion(row: StockRow, today: string): string {
   const { plan, item } = row;
   if (plan.isDeadStock) return "Nothing sold in 90 days, so there's nothing to suggest.";
   const have = `${item.on_hand} on the shelf${row.onOrder > 0 ? `, ${row.onOrder} on the way` : ""}`;
-  const sells = `Sells about ${perMonth(row)} a month`;
+  const out = row.soldOutDays;
+  const sells = `Sells about ${perMonth(row)} a month${
+    out > 0 ? ` while it's in stock (${out} sold-out day${out === 1 ? "" : "s"} left out)` : ""
+  }`;
   if (plan.suggestedQty <= 0) {
     return `${sells}. ${have}: enough for now${
       plan.stockOutDate ? `, runs out ${relativeDay(plan.stockOutDate, today)}` : ""

@@ -4,6 +4,7 @@ import {
   buildStockRows,
   draftOrders,
   draftOrdersForItems,
+  emptyDaysSince,
   explainSuggestion,
   isAtRisk,
   isPlanned,
@@ -322,5 +323,56 @@ describe("the Everything grid", () => {
       ["Item", "SKU", "Supplier's code", "Sells for", "Case", "Have", "Runs out", "Suggest"],
       ["Item a", "SKU-a", "HM-77", "20.00", 36, 10, "2026-11-30", 72],
     ]);
+  });
+});
+
+describe("sold-out days", () => {
+  // Sold one a day for the last 30 days; before that the shelf was empty for 60.
+  // (One older sale, so the item isn't treated as brand new.)
+  const longAgo = (id: string) => ({ stock_item_id: id, day: "2026-07-23", units: 1 });
+  const sales = [...steady("a", 30), longAgo("a")];
+  const emptyDays = Array.from({ length: 60 }, (_, i) => {
+    const d = new Date(2026, 10, 20 - 30 - i);
+    return {
+      stock_item_id: "a",
+      day: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`,
+    };
+  });
+  const build = (days?: typeof emptyDays) =>
+    buildStockRows({
+      items: [item("a", { on_hand: 5 }), item("b", { on_hand: 5 })],
+      suppliers: [mill],
+      sales: [...sales, ...steady("b", 30), longAgo("b")],
+      openLines: [],
+      emptyDays: days,
+      settings,
+      today: TODAY,
+    });
+
+  it("are left out of the sales rate, so an item that keeps selling out isn't under-ordered", () => {
+    const [plain] = build();
+    const [censored, untouched] = build(emptyDays);
+    // Without the count: 30 units over 90 days at 75%, plus the last 30 days at 25%.
+    expect(plain.plan.unitsPerDay).toBeCloseTo(0.5, 4);
+    expect(plain.soldOutDays).toBe(0);
+    // With it: 30 units over the 30 days it could be bought.
+    expect(censored.plan.unitsPerDay).toBeCloseTo(1, 4);
+    expect(censored.soldOutDays).toBe(60);
+    expect(censored.plan.explain).toContain("60 out-of-stock days excluded");
+    expect(censored.suggestedQty).toBeGreaterThan(plain.suggestedQty);
+    expect(explainSuggestion(censored, TODAY)).toContain("60 sold-out days left out");
+    // Another item's empty days change nothing for this one.
+    expect(untouched.plan.unitsPerDay).toBeCloseTo(0.5, 4);
+    expect(explainSuggestion(untouched, TODAY)).not.toContain("sold-out");
+  });
+
+  it("a day with a sale is never counted as sold out", () => {
+    const [row] = build([{ stock_item_id: "a", day: TODAY }]);
+    expect(row.soldOutDays).toBe(0);
+    expect(row.plan.unitsPerDay).toBeCloseTo(0.5, 4);
+  });
+
+  it("only asks for the days the sums can use", () => {
+    expect(emptyDaysSince("2026-11-20")).toBe("2026-05-24");
   });
 });

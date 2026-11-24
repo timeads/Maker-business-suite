@@ -11,7 +11,9 @@ import { summarizeIncoming, type IncomingOrder } from "@/lib/stock/incoming";
 import type { SpendLineInput } from "@/lib/stock/spend";
 import {
   buildStockRows,
+  emptyDaysSince,
   itemName,
+  type EmptyDayRow,
   type ItemRow,
   type OpenLine,
   type SaleRow,
@@ -48,65 +50,79 @@ export async function loadStock(
   supabase: SupabaseClient,
   tenant: { id: string; timezone: string },
 ) {
-  const [items, suppliers, sales, lines, { data: config }, { data: shop }] = await Promise.all([
-    all<ItemRow & { synced_at: string }>((from, to) =>
-      supabase
-        .from("stock_items")
-        .select(
-          "id, title, variant_title, sku, on_hand, unit_cost, tracked, product_status, supplier_id, lead_time_days, coverage_days, safety_stock, hidden, vendor, price, case_pack, moq, supplier_sku, synced_at",
-        )
-        .eq("tenant_id", tenant.id)
-        .order("title")
-        .order("id")
-        .range(from, to),
-    ),
-    all<SupplierRow & { email: string | null; notes: string }>((from, to) =>
-      supabase
-        .from("suppliers")
-        .select(
-          "id, name, email, lead_time_days, coverage_days, moq, moq_applies_to, notes, archived_at",
-        )
-        .eq("tenant_id", tenant.id)
-        .order("name")
-        .range(from, to),
-    ),
-    all<SaleRow>((from, to) =>
-      supabase
-        .rpc("stock_sales_by_day", { p_tenant_id: tenant.id, p_days: 730 })
-        .order("day")
-        .order("stock_item_id")
-        .range(from, to),
-    ),
-    all<{
-      stock_item_id: string;
-      qty_ordered: number;
-      qty_received: number;
-      purchase_orders: { status: string } | { status: string }[];
-    }>((from, to) =>
-      supabase
-        .from("purchase_order_lines")
-        .select("stock_item_id, qty_ordered, qty_received, purchase_orders!inner(status)")
-        .eq("tenant_id", tenant.id)
-        .in("purchase_orders.status", ["ordered", "partial"])
-        .order("id")
-        .range(from, to),
-    ),
-    supabase
-      .from("configs")
-      .select("body")
-      .eq("tenant_id", tenant.id)
-      .eq("module", STOCK_MODULE)
-      .eq("key", STOCK_SETTINGS_KEY)
-      .maybeSingle(),
-    supabase
-      .from("connections")
-      .select("status, scopes, last_synced_at")
-      .eq("tenant_id", tenant.id)
-      .eq("provider", "shopify")
-      .maybeSingle(),
-  ]);
-  const settings = parseStockSettings(config?.body);
   const today = localDay(new Date(), tenant.timezone);
+  const [items, suppliers, sales, lines, emptyDays, { data: config }, { data: shop }] =
+    await Promise.all([
+      all<ItemRow & { synced_at: string }>((from, to) =>
+        supabase
+          .from("stock_items")
+          .select(
+            "id, title, variant_title, sku, on_hand, unit_cost, tracked, product_status, supplier_id, lead_time_days, coverage_days, safety_stock, hidden, vendor, price, case_pack, moq, supplier_sku, synced_at",
+          )
+          .eq("tenant_id", tenant.id)
+          .order("title")
+          .order("id")
+          .range(from, to),
+      ),
+      all<SupplierRow & { email: string | null; notes: string }>((from, to) =>
+        supabase
+          .from("suppliers")
+          .select(
+            "id, name, email, lead_time_days, coverage_days, moq, moq_applies_to, notes, archived_at",
+          )
+          .eq("tenant_id", tenant.id)
+          .order("name")
+          .range(from, to),
+      ),
+      all<SaleRow>((from, to) =>
+        supabase
+          .rpc("stock_sales_by_day", { p_tenant_id: tenant.id, p_days: 730 })
+          .order("day")
+          .order("stock_item_id")
+          .range(from, to),
+      ),
+      all<{
+        stock_item_id: string;
+        qty_ordered: number;
+        qty_received: number;
+        purchase_orders: { status: string } | { status: string }[];
+      }>((from, to) =>
+        supabase
+          .from("purchase_order_lines")
+          .select("stock_item_id, qty_ordered, qty_received, purchase_orders!inner(status)")
+          .eq("tenant_id", tenant.id)
+          .in("purchase_orders.status", ["ordered", "partial"])
+          .order("id")
+          .range(from, to),
+      ),
+      // Only the days an item had none: the sales rate leaves those out. Days it
+      // was in stock aren't read.
+      all<EmptyDayRow>((from, to) =>
+        supabase
+          .from("stock_daily_counts")
+          .select("stock_item_id, day")
+          .eq("tenant_id", tenant.id)
+          .lte("on_hand", 0)
+          .gte("day", emptyDaysSince(today))
+          .order("day")
+          .order("stock_item_id")
+          .range(from, to),
+      ),
+      supabase
+        .from("configs")
+        .select("body")
+        .eq("tenant_id", tenant.id)
+        .eq("module", STOCK_MODULE)
+        .eq("key", STOCK_SETTINGS_KEY)
+        .maybeSingle(),
+      supabase
+        .from("connections")
+        .select("status, scopes, last_synced_at")
+        .eq("tenant_id", tenant.id)
+        .eq("provider", "shopify")
+        .maybeSingle(),
+    ]);
+  const settings = parseStockSettings(config?.body);
   const openLines: OpenLine[] = lines.map((line) => ({
     stock_item_id: line.stock_item_id,
     qty_ordered: line.qty_ordered,
@@ -120,7 +136,7 @@ export async function loadStock(
     lastSyncedAt: (shop?.last_synced_at as string | null) ?? null,
   };
   return {
-    rows: buildStockRows({ items, suppliers, sales, openLines, settings, today }),
+    rows: buildStockRows({ items, suppliers, sales, openLines, emptyDays, settings, today }),
     suppliers,
     settings,
     today,

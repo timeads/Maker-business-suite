@@ -162,7 +162,11 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   and only when the shop certainly added nothing (`shop_can_retry`; an
   unclear answer is a `StockWriteUnsureError` and is never resent); each try
   has its own key for the shop. A supplier marked "not used any more" gets no
-  suggested order anywhere (`hasLiveSupplier`). Suppliers and orders are
+  suggested order anywhere (`hasLiveSupplier`). The sync also writes each
+  counted item's count once a day (`stock_daily_counts`, the last look of the
+  day, kept 200 days); `loadStock()` reads only the empty days and hands them
+  to the engine as `outOfStockDates`, so sold-out days are left out of the
+  sales rate. Only the count is stored, never "was sold out". Suppliers and orders are
   manager-only; anyone on the team can check a delivery in. Supabase returns 1,000 rows at most, so `loadStock()`
   pages. The shop's vendor on a product becomes a supplier, and items
   with no supplier are filed under it; a supplier chosen by hand is never
