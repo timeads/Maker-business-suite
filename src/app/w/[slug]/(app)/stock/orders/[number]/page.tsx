@@ -24,14 +24,18 @@ import {
   readSnapshot,
   sendLabel,
 } from "@/lib/stock/po/email";
+import { buildTimeline } from "@/lib/stock/po/timeline";
 import { computePoTotals, parseAdjustments } from "@/lib/stock/po/totals";
 import { CARRIER_WORDS, canAskCarrier, isCarrierStatus, parcelDates } from "@/lib/stock/tracking";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
 import { loadStock } from "../../data";
 import {
+  ArchiveButton,
+  DeleteDraftButton,
   PrintButton,
   ReceiveForm,
+  RenameOrderForm,
   RetryShopButton,
   StatusButton,
   type OrderLine,
@@ -72,7 +76,7 @@ export default async function StockOrderPage({
   const { data: order } = await supabase
     .from("purchase_orders")
     .select(
-      "id, number, reference, status, notes, expected_on, ordered_at, supplier_id, shipping_cost, tax_rate_pct, adjustments, suppliers(name, email, notes), purchase_order_lines(id, stock_item_id, qty_ordered, qty_received, unit_cost, supplier_sku, note, stock_items(id, title, variant_title, sku, case_pack))",
+      "id, number, reference, status, notes, expected_on, ordered_at, closed_at, created_at, created_by, archived_at, source, supplier_id, shipping_cost, tax_rate_pct, adjustments, suppliers(name, email, notes), purchase_order_lines(id, stock_item_id, qty_ordered, qty_received, unit_cost, supplier_sku, note, stock_items(id, title, variant_title, sku, case_pack))",
     )
     .eq("tenant_id", tenant.id)
     .eq("number", Number(number))
@@ -113,11 +117,17 @@ export default async function StockOrderPage({
 
   // Suggestions come from the same engine as everywhere else, worked out now.
   const stock = await loadStock(supabase, tenant);
-  const [{ data: receipts }, { data: tracked }, { data: ups }] = await Promise.all([
+  const [
+    { data: receipts },
+    { data: tracked },
+    { data: ups },
+    { data: events },
+    { data: everAdded },
+  ] = await Promise.all([
     supabase
       .from("stock_receipts")
       .select(
-        "id, quantity, shop_status, shop_error, shop_attempts, shop_can_retry, source, created_at, stock_items(title, variant_title)",
+        "id, quantity, shop_status, shop_error, shop_attempts, shop_can_retry, source, created_at, received_by, shop_synced_at, stock_items(title, variant_title)",
       )
       .eq("tenant_id", tenant.id)
       .in(
@@ -142,6 +152,22 @@ export default async function StockOrderPage({
       .eq("tenant_id", tenant.id)
       .eq("provider", "ups")
       .maybeSingle(),
+    // Who sent, closed, renamed or put the order away, and when.
+    supabase
+      .from("purchase_order_events")
+      .select("kind, detail, actor, created_at")
+      .eq("tenant_id", tenant.id)
+      .eq("po_id", order.id)
+      .order("created_at")
+      .limit(200),
+    // Every tracking number the order has had, for the timeline (taken-off ones too).
+    supabase
+      .from("purchase_order_shipments")
+      .select("carrier, tracking, created_by, created_at, removed_at")
+      .eq("tenant_id", tenant.id)
+      .eq("po_id", order.id)
+      .order("created_at")
+      .limit(200),
   ]);
   const upsFollows =
     ups?.status === "active" && (ups.metadata as { mode?: string } | null)?.mode !== "test";
@@ -318,6 +344,49 @@ export default async function StockOrderPage({
     fingerprint: string;
     error: string | null;
   }[];
+  // One line of time from the tables that already hold each fact.
+  const timeline = buildTimeline({
+    createdAt: order.created_at as string,
+    createdBy: (order.created_by as string | null) ?? null,
+    imported: order.source === "import",
+    orderedAt: (order.ordered_at as string | null) ?? null,
+    closedAt: (order.closed_at as string | null) ?? null,
+    status: order.status as string,
+    events: (events ?? []).map((event) => ({
+      kind: event.kind as string,
+      detail: (event.detail as string) ?? "",
+      actor: (event.actor as string | null) ?? null,
+      at: event.created_at as string,
+    })),
+    emails: sends.map((send) => ({
+      status: send.status,
+      to: send.to_emails,
+      subject: send.subject,
+      from: send.sender_email,
+      by: send.sent_by,
+      at: send.sent_at ?? send.created_at,
+      error: send.error,
+    })),
+    receipts: (receipts ?? []).map((receipt) => ({
+      quantity: receipt.quantity as number,
+      name: itemName(receipt.stock_items as unknown as Pick<Item, "title" | "variant_title">),
+      by: (receipt.received_by as string | null) ?? null,
+      at: receipt.created_at as string,
+      imported: receipt.source === "import",
+      shopStatus: receipt.shop_status as string,
+      shopAt: (receipt.shop_synced_at as string | null) ?? null,
+      shopError: (receipt.shop_error as string | null) ?? null,
+    })),
+    shipments: (everAdded ?? []).map((shipment) => ({
+      carrier: shipment.carrier as string,
+      tracking: shipment.tracking as string,
+      by: (shipment.created_by as string | null) ?? null,
+      at: shipment.created_at as string,
+      removedAt: (shipment.removed_at as string | null) ?? null,
+    })),
+  }).reverse();
+  const archived = order.archived_at !== null;
+  const finished = order.status === "closed" || order.status === "cancelled";
   const mailboxEmail = String((mailbox?.metadata as { email?: unknown } | null)?.email ?? "");
   const mailReady = mailOffered && mailbox?.status === "active" && mailboxEmail !== "";
   const lastSent = sends.find((send) => send.status === "sent" && send.sent_at) ?? null;
@@ -400,6 +469,14 @@ export default async function StockOrderPage({
       >
         <Badge tone={status.tone}>{status.label}</Badge>
         {late && <Badge tone="bad">Late</Badge>}
+        {archived && <Badge>Archived</Badge>}
+        {manager && !finished && !archived && (
+          <RenameOrderForm
+            slug={tenant.slug}
+            orderId={order.id}
+            reference={order.reference as string}
+          />
+        )}
         {lines.length > 0 && (
           <>
             <PrintButton />
@@ -747,6 +824,54 @@ export default async function StockOrderPage({
             </ul>
           </CardContent>
         </Card>
+      )}
+
+      <Card className="print:hidden">
+        <CardHeader>
+          <CardTitle>What&apos;s happened</CardTitle>
+          <CardDescription>Everything on this order, the newest first.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ol className="flex flex-col gap-2.5 text-sm">
+            {timeline.map((item, index) => (
+              <li key={index} className="flex gap-3">
+                <span
+                  aria-hidden
+                  className={`mt-1.5 size-2 flex-none rounded-full ${
+                    item.tone === "good"
+                      ? "bg-teal"
+                      : item.tone === "bad"
+                        ? "bg-brick"
+                        : "bg-border"
+                  }`}
+                />
+                <span className="min-w-0 flex-1">
+                  <span
+                    className={item.tone === "bad" ? "text-brick font-semibold" : "font-semibold"}
+                  >
+                    {item.title}
+                  </span>
+                  {item.detail && (
+                    <span className="text-muted-foreground font-read block text-xs">
+                      {item.detail}
+                    </span>
+                  )}
+                  <span className="text-muted-foreground block text-xs">
+                    {when.format(new Date(item.at))}
+                    {item.by && ` · ${nameOf(team.get(item.by))}`}
+                  </span>
+                </span>
+              </li>
+            ))}
+          </ol>
+        </CardContent>
+      </Card>
+
+      {manager && (isDraft || finished) && (
+        <div className="flex flex-wrap justify-end gap-2 print:hidden">
+          {!waiting && <ArchiveButton slug={tenant.slug} orderId={order.id} archived={archived} />}
+          {isDraft && <DeleteDraftButton slug={tenant.slug} orderId={order.id} />}
+        </div>
       )}
 
       {manager && (isDraft || waiting) && (

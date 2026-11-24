@@ -24,6 +24,7 @@ import {
   parcelDates,
   parcelWords,
 } from "@/lib/stock/tracking";
+import { toOrderRow, type OrderListRow } from "@/lib/stock/po/list";
 import type { SpendLineInput } from "@/lib/stock/spend";
 import {
   buildStockRows,
@@ -563,4 +564,94 @@ export async function loadSpendLines(
     qtyOrdered: row.qty_ordered,
     unitCost: Number(row.unit_cost).toFixed(2),
   }));
+}
+
+/**
+ * Every order with what the Orders tab shows of it, newest first: its lines'
+ * totals, and its tracking numbers with the dates to go by. Read as the
+ * member; the list, its search and its spreadsheet all start from this.
+ */
+export async function loadOrderList(
+  supabase: SupabaseClient,
+  tenant: { id: string; timezone: string },
+): Promise<OrderListRow[]> {
+  type Row = {
+    id: string;
+    number: number;
+    reference: string;
+    status: string;
+    supplier_id: string;
+    expected_on: string | null;
+    created_at: string;
+    ordered_at: string | null;
+    archived_at: string | null;
+    shipping_cost: number | string;
+    tax_rate_pct: number | string;
+    adjustments: unknown;
+    suppliers: { name: string } | null;
+    purchase_order_lines: { qty_ordered: number; qty_received: number; unit_cost: number }[];
+    purchase_order_shipments: {
+      expected_on: string | null;
+      arrived_on: string | null;
+      removed_at: string | null;
+      carrier_status: string | null;
+      carrier_expected_on: string | null;
+      carrier_delivered_on: string | null;
+    }[];
+  };
+  const rows = await all<Row>(
+    (from, to) =>
+      supabase
+        .from("purchase_orders")
+        .select(
+          "id, number, reference, status, supplier_id, expected_on, created_at, ordered_at, archived_at, shipping_cost, tax_rate_pct, adjustments, suppliers(name), purchase_order_lines(qty_ordered, qty_received, unit_cost), purchase_order_shipments(expected_on, arrived_on, removed_at, carrier_status, carrier_expected_on, carrier_delivered_on)",
+        )
+        .eq("tenant_id", tenant.id)
+        .order("number", { ascending: false })
+        .range(from, to),
+    5000,
+  );
+  const today = localDay(new Date(), tenant.timezone);
+  return rows.map((order) =>
+    toOrderRow(
+      {
+        id: order.id,
+        number: order.number,
+        reference: order.reference,
+        status: order.status,
+        supplierId: order.supplier_id,
+        supplierName: order.suppliers?.name ?? "",
+        expectedOn: order.expected_on,
+        createdOn: localDay(new Date(order.created_at), tenant.timezone),
+        sentOn: order.ordered_at ? localDay(new Date(order.ordered_at), tenant.timezone) : null,
+        archived: order.archived_at !== null,
+        shippingCost: order.shipping_cost,
+        taxRatePct: order.tax_rate_pct,
+        adjustments: order.adjustments,
+        lines: order.purchase_order_lines.map((line) => ({
+          qtyOrdered: line.qty_ordered,
+          qtyReceived: line.qty_received,
+          unitCost: line.unit_cost,
+        })),
+        parcels: (order.purchase_order_shipments ?? [])
+          .filter((parcel) => !parcel.removed_at)
+          .map((parcel) => {
+            const carrierStatus = isCarrierStatus(parcel.carrier_status)
+              ? parcel.carrier_status
+              : null;
+            return {
+              ...parcelDates({
+                expectedOn: parcel.expected_on,
+                arrivedOn: parcel.arrived_on,
+                carrierStatus,
+                carrierExpectedOn: parcel.carrier_expected_on,
+                carrierDeliveredOn: parcel.carrier_delivered_on,
+              }),
+              carrierStatus,
+            };
+          }),
+      },
+      today,
+    ),
+  );
 }

@@ -7,7 +7,10 @@ import { FormMessage } from "@/components/ui/form-message";
 import { Input, Label, Select } from "@/components/ui/input";
 import { SubmitButton } from "@/components/ui/submit-button";
 import {
+  archiveOrder,
+  deleteDraftOrder,
   receiveDelivery,
+  renameOrder,
   retryShopCount,
   saveItemCost,
   saveItemPlan,
@@ -508,6 +511,94 @@ export function StatusButton({
     <form action={action} className="flex flex-col items-end gap-1 print:hidden">
       <SubmitButton variant={variant} size="sm" pendingText={pending}>
         {label}
+      </SubmitButton>
+      {state.error && <span className="text-brick max-w-56 text-right text-xs">{state.error}</span>}
+    </form>
+  );
+}
+
+/** The order's reference, changed in place. Tucked behind "Rename" so the page stays calm. */
+export function RenameOrderForm({
+  slug,
+  orderId,
+  reference,
+}: {
+  slug: string;
+  orderId: string;
+  reference: string;
+}) {
+  const [state, action] = useActionState(renameOrder.bind(null, slug, orderId), {});
+  return (
+    <details className="relative print:hidden">
+      <summary className="border-input bg-card hover:bg-hover flex h-[30px] cursor-pointer list-none items-center rounded-sm border px-2.5 text-xs font-semibold [&::-webkit-details-marker]:hidden">
+        Rename
+      </summary>
+      <form
+        action={action}
+        className="border-border bg-card absolute right-0 z-10 mt-1 flex w-72 flex-col gap-2 rounded-lg border p-3 shadow-[var(--tuft-shadow)]"
+      >
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="order-reference">Call this order</Label>
+          <Input
+            id="order-reference"
+            name="reference"
+            key={reference}
+            defaultValue={reference}
+            minLength={3}
+            maxLength={40}
+            required
+            className="font-mono text-sm"
+          />
+        </div>
+        <p className="text-muted-foreground text-xs">
+          It&apos;s what your supplier sees on the PDF and in the email. No two orders can share
+          one.
+        </p>
+        <Result state={state} />
+        <SubmitButton variant="outline" size="sm" pendingText="Saving…">
+          Save the name
+        </SubmitButton>
+      </form>
+    </details>
+  );
+}
+
+/** "Put away" / "Bring back" for an order nothing is still expected on. */
+export function ArchiveButton({
+  slug,
+  orderId,
+  archived,
+}: {
+  slug: string;
+  orderId: string;
+  archived: boolean;
+}) {
+  const [state, action] = useActionState(archiveOrder.bind(null, slug, orderId, !archived), {});
+  return (
+    <form action={action} className="flex flex-col items-end gap-1 print:hidden">
+      <SubmitButton variant="ghost" size="sm" pendingText="Saving…">
+        {archived ? "Bring back from the archive" : "Put away (archive)"}
+      </SubmitButton>
+      {state.error && <span className="text-brick max-w-56 text-right text-xs">{state.error}</span>}
+    </form>
+  );
+}
+
+/** "Delete this draft", with an "are you sure?" since there is no undo. */
+export function DeleteDraftButton({ slug, orderId }: { slug: string; orderId: string }) {
+  const [state, action] = useActionState(deleteDraftOrder.bind(null, slug, orderId), {});
+  return (
+    <form
+      action={action}
+      onSubmit={(event) => {
+        if (!window.confirm("Delete this draft for good? This can't be undone.")) {
+          event.preventDefault();
+        }
+      }}
+      className="flex flex-col items-end gap-1 print:hidden"
+    >
+      <SubmitButton variant="danger" size="sm" pendingText="Deleting…">
+        Delete this draft
       </SubmitButton>
       {state.error && <span className="text-brick max-w-56 text-right text-xs">{state.error}</span>}
     </form>

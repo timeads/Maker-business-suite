@@ -956,6 +956,89 @@ export async function setOrderStatus(
   return {};
 }
 
+/** Gives an order a name of your own in place of the one it was given. */
+export async function renameOrder(
+  slug: string,
+  orderId: string,
+  _prev: StockState,
+  formData: FormData,
+): Promise<StockState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const reference = text(formData, "reference").replace(/\s+/g, " ");
+  if (reference.length < 3 || reference.length > 40) {
+    return { error: "A reference is 3 to 40 characters." };
+  }
+  const { error } = await ctx.supabase.rpc("rename_purchase_order", {
+    p_po_id: orderId,
+    p_reference: reference,
+  });
+  if (error) {
+    const why = error.message;
+    return {
+      error:
+        error.code === "23505" || why.includes("reference_taken")
+          ? "Another order already has that reference."
+          : why.includes("bad_reference")
+            ? "Use letters, numbers, spaces and . _ / # - only, starting with a letter or number."
+            : why.includes("finished_order")
+              ? "A finished order keeps the reference it had."
+              : OOPS,
+    };
+  }
+  done(slug);
+  return { message: "Renamed." };
+}
+
+/** Puts a finished order (or an unused draft) away, or brings it back. */
+export async function archiveOrder(
+  slug: string,
+  orderId: string,
+  archived: boolean,
+  _prev: StockState,
+  _formData: FormData,
+): Promise<StockState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const { error } = await ctx.supabase.rpc("archive_purchase_order", {
+    p_po_id: orderId,
+    p_archived: archived,
+  });
+  if (error) {
+    return {
+      error: error.message.includes("still_open")
+        ? "This order is still on its way. Close or cancel it first, then put it away."
+        : OOPS,
+    };
+  }
+  done(slug);
+  return {};
+}
+
+/** Deletes a draft that was never sent or emailed. There is no undo. */
+export async function deleteDraftOrder(
+  slug: string,
+  orderId: string,
+  _prev: StockState,
+  _formData: FormData,
+): Promise<StockState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const { error } = await ctx.supabase.rpc("delete_draft_purchase_order", { p_po_id: orderId });
+  if (error) {
+    const why = error.message;
+    return {
+      error: why.includes("has_history")
+        ? "This draft has been emailed or had stock checked in, so it's kept. Cancel it or put it away instead."
+        : why.includes("not_a_draft")
+          ? "Only a draft can be deleted."
+          : OOPS,
+    };
+  }
+  done(slug);
+  redirect(`/w/${slug}/stock/orders?gone=1`);
+}
+
 /**
  * Checks in what arrived. Anyone on the team can; each line's box says how
  * many. The whole delivery goes in one step under the page's request key, so
