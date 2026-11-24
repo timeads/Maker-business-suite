@@ -114,6 +114,13 @@ type UpsErrors = { response?: { errors?: { code?: unknown; message?: unknown }[]
 /** A shipment that was already voided is as good as voided. */
 const ALREADY_VOIDED = /already\s+(been\s+)?voided/i;
 
+/**
+ * UPS's practice system makes labels but keeps no record of them, so it can
+ * never find one to void. Nothing was billed, so the void counts as done.
+ * Only ever applied to a practice account: on a real one this is an error.
+ */
+const PRACTICE_NOT_FOUND = /no shipment found/i;
+
 async function ups<T>(
   fetchImpl: Fetch,
   access: UpsAccess,
@@ -468,8 +475,9 @@ export async function voidUpsShipment(
       `/api/shipments/${API_VERSION}/void/cancel/${encodeURIComponent(shipmentId)}`,
     );
   } catch (err) {
-    if (err instanceof SourceError && err.status !== null && ALREADY_VOIDED.test(err.message)) {
-      return;
+    if (err instanceof SourceError && err.status !== null) {
+      if (ALREADY_VOIDED.test(err.message)) return;
+      if (access.test && PRACTICE_NOT_FOUND.test(err.message)) return;
     }
     throw err;
   }

@@ -374,6 +374,26 @@ describe("UPS labels", () => {
     expect(none.calls).toHaveLength(0);
   });
 
+  it("counts a practice label UPS can't find as voided, but never a real one", async () => {
+    const notFound = () =>
+      scripted([
+        {
+          status: 400,
+          body: {
+            response: {
+              errors: [
+                { code: "190102", message: "No shipment found within the allowed void period" },
+              ],
+            },
+          },
+        },
+      ]).impl;
+    await voidUpsShipment({ ...ACCESS, test: true }, "1ZSHIP0001", notFound());
+    await expect(voidUpsShipment(ACCESS, "1ZSHIP0001", notFound())).rejects.toThrow(
+      /No shipment found/,
+    );
+  });
+
   it("voids a shipment, and treats one already voided as done", async () => {
     const { impl, calls } = scripted([{ body: { VoidShipmentResponse: {} } }]);
     await voidUpsShipment(ACCESS, "1ZSHIP0001", impl);
