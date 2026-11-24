@@ -30,6 +30,7 @@ export function rpcSyncStore(
     upsertStock: (items) => call("upsert_stock_items", { p_items: items }),
     setProductPhotos: (products) => call("set_product_photos", { p_products: products }),
     setVariantPhotos: (items) => call("set_variant_photos", { p_items: items }),
+    setStockTags: (items) => call("set_stock_item_tags", { p_items: items }),
     bookShopOrders: (orders) => applyShopOrders(admin, scope.tenantId, orders),
     saveSnapshots: (rows) => call("save_financial_snapshots", { p_snapshots: rows }),
     redactCustomer: (externalId, email) =>

@@ -53,6 +53,10 @@ export type ItemRow = {
   coverage_days: number | null;
   safety_stock: number;
   hidden: boolean;
+  /** "Don't reorder": no suggestions, but still in the list (unlike `hidden`). */
+  dont_reorder?: boolean;
+  /** The product's tags in the shop, as the sync noted them. */
+  tags?: string[] | null;
   /** Who the shop says it comes from, and what it sells for there. */
   vendor?: string | null;
   price?: number | string | null;
@@ -77,7 +81,8 @@ export type ReceivedCostRow = {
 export type SupplierRow = {
   id: string;
   name: string;
-  lead_time_days: number;
+  /** Null means "follow the workspace's own default". */
+  lead_time_days: number | null;
   coverage_days: number;
   moq: number;
   moq_applies_to: "order" | "sku";
@@ -131,6 +136,10 @@ export type StockRow = {
   due: boolean;
   /** A rule in Settings ("gift card"...) keeps this one out of planning. */
   skippedByRule: boolean;
+  /** A tag rule in Settings does: the tag that matched, as the shop spells it. */
+  skippedByTag: string | null;
+  /** Whole days since it last sold, within the two years read. Null when it never did. */
+  daysSinceLastSale: number | null;
   /** The stretches its supplier is shut, today's and those to come. */
   closures: Closure[];
   /**
@@ -185,6 +194,16 @@ export function matchesSkipWords(
     const w = word.trim().toLowerCase();
     return w.length >= 2 && name.includes(w);
   });
+}
+
+/** The first of the item's shop tags that is on the workspace's "never reorder" list, or null. */
+export function matchesSkipTags(
+  item: Pick<ItemRow, "tags">,
+  tags: readonly string[] | undefined,
+): string | null {
+  if (!tags || tags.length === 0 || !item.tags || item.tags.length === 0) return null;
+  const wanted = new Set(tags.map((tag) => tag.trim().toLowerCase()).filter(Boolean));
+  return item.tags.find((tag) => wanted.has(tag.trim().toLowerCase())) ?? null;
 }
 
 /** "Wool rug · Large", or just the title when there is one option. */
@@ -446,6 +465,8 @@ export function buildStockRows(input: {
       health,
       due,
       skippedByRule: matchesSkipWords(item, input.settings.skip_words),
+      skippedByTag: matchesSkipTags(item, input.settings.skip_tags),
+      daysSinceLastSale: lastSaleDaysAgo(sales, today),
       revenue90: revenueByItem
         ? (revenueByItem.get(item.id) ?? 0)
         : plan.sales90d * (Number(item.price) || 0),
@@ -465,6 +486,36 @@ export function buildStockRows(input: {
 
 const NO_CLOSURES: Closure[] = [];
 
+/** Whole days from the last day something sold to today. Null with no sales. */
+function lastSaleDaysAgo(sales: DailySale[], today: Date): number | null {
+  let last = -Infinity;
+  for (const sale of sales) {
+    if (sale.unitsSold > 0) last = Math.max(last, (sale.date as Date).getTime());
+  }
+  return Number.isFinite(last)
+    ? Math.max(0, Math.round((today.getTime() - last) / 86_400_000))
+    : null;
+}
+
+/**
+ * The line under an item's "how it's doing" label, as TuftStock's Inventory
+ * list has it: how many too many and the cover, when it last sold, or the cover.
+ */
+export function healthNote(row: StockRow): string {
+  const { health, coverDays, excessUnits } = row.health;
+  const cover = coverDays === null ? null : coverDays >= 365 ? "1y+ cover" : `${coverDays}d cover`;
+  if (health === "over" && excessUnits > 0)
+    return `${excessUnits} too many${cover ? ` · ${cover}` : ""}`;
+  if (health === "nosales" && row.daysSinceLastSale !== null) {
+    return `last sale ${row.daysSinceLastSale}d ago`;
+  }
+  return cover ?? "";
+}
+
+/** Units above the overstock line across the rows given: what a sale would need to clear. */
+export const overstockUnits = (rows: StockRow[]) =>
+  rows.reduce((n, row) => n + (row.health.health === "over" ? row.health.excessUnits : 0), 0);
+
 /** Sent orders that still owe some of an item, oldest first. */
 function openOrdersOf(lines: OpenLine[]): StockRow["openOrders"] {
   const seen = new Map<number, string>();
@@ -480,26 +531,40 @@ function openOrdersOf(lines: OpenLine[]): StockRow["openOrders"] {
 
 /**
  * Why an item is left out of suggestions and orders, or null when it is planned for.
- * "hidden" is the person's own "Don't reorder" switch; "rule" is the name rule in
- * Settings; the last two come from the shop.
+ * "hidden" and "paused" are the person's own two switches, as in TuftStock:
+ * Hidden puts it out of sight, Don't reorder only stops the suggestions.
+ * "rule" and "tag" are the rules in Settings; the last two come from the shop.
  */
-export type NotPlannedReason = "hidden" | "rule" | "untracked" | "archived";
+export type NotPlannedReason = "hidden" | "paused" | "rule" | "tag" | "untracked" | "archived";
 export function notPlannedReason(row: StockRow): NotPlannedReason | null {
   if (row.item.hidden) return "hidden";
+  if (row.item.dont_reorder) return "paused";
   if (row.skippedByRule) return "rule";
+  if (row.skippedByTag) return "tag";
   if (!row.item.tracked) return "untracked";
   if (row.item.product_status === "ARCHIVED") return "archived";
   return null;
 }
 export const NOT_PLANNED_LABELS: Record<NotPlannedReason, string> = {
-  hidden: "You said don't reorder",
+  hidden: "Hidden by you",
+  paused: "You said don't reorder",
   rule: "Matches a rule in Settings",
+  tag: "Tagged don't-reorder in your shop",
   untracked: "Your shop doesn't count it",
   archived: "Archived in your shop",
 };
 
 /** Items worth planning for: counted by the shop, still on sale, not switched off. */
 export const isPlanned = (row: StockRow) => notPlannedReason(row) === null;
+
+/**
+ * Items that stay in the everyday lists: the planned ones, and those a person
+ * said not to reorder (still on the shelf, still counted, just never suggested).
+ */
+export const isListed = (row: StockRow) => {
+  const reason = notPlannedReason(row);
+  return reason === null || reason === "paused";
+};
 
 export type DraftLine = {
   stock_item_id: string;

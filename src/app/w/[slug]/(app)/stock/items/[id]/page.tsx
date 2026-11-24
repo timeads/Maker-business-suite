@@ -138,14 +138,31 @@ export default async function StockItemPage({
         </CardContent>
       </Card>
 
-      {manager && (left === null || left === "hidden") && (
+      {manager && (left === null || left === "hidden" || left === "paused") && (
         <Card>
           <CardHeader>
             <CardTitle>Reordering</CardTitle>
           </CardHeader>
           <CardContent>
-            <ReorderSwitch slug={tenant.slug} itemId={item.id} hidden={item.hidden} />
+            <ReorderSwitch
+              slug={tenant.slug}
+              itemId={item.id}
+              hidden={item.hidden}
+              paused={Boolean(item.dont_reorder)}
+            />
           </CardContent>
+        </Card>
+      )}
+      {manager && left === "tag" && (
+        <Card>
+          <CardHeader className="pb-5">
+            <CardTitle>Reordering</CardTitle>
+            <CardDescription>
+              This one is left out because its product is tagged “{row.skippedByTag}” in your shop,
+              and that tag is under Stock → Settings (&quot;Never reorder anything with these
+              tags&quot;). Take the tag off there, or off the product, to bring it back.
+            </CardDescription>
+          </CardHeader>
         </Card>
       )}
       {manager && left === "rule" && (

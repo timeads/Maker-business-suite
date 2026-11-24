@@ -35,7 +35,7 @@ import {
 } from "@/lib/stock/plan";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
-import { loadStock } from "./data";
+import { loadIncoming, loadStock } from "./data";
 
 export type StockState = { error?: string; message?: string };
 
@@ -138,8 +138,9 @@ export async function saveSupplier(
   ) {
     return { error: "Check the other emails: up to five, with commas between them." };
   }
-  if (lead === null || !(lead >= 0 && lead <= 365)) {
-    return { error: "How many days from ordering to arriving? (0 to 365)" };
+  // Empty follows the workspace's usual figure (Stock → Settings).
+  if (lead !== null && !(lead >= 0 && lead <= 365)) {
+    return { error: "How many days from ordering to arriving? (0 to 365, or leave it empty)" };
   }
   if (cover === null || !(cover >= 1 && cover <= 365)) {
     return { error: "How many days of sales should one order cover? (1 to 365)" };
@@ -169,6 +170,76 @@ export async function saveSupplier(
   if (contactError) return { error: OOPS };
   done(slug);
   return { message: supplierId ? "Saved." : `${name} is added.` };
+}
+
+/**
+ * Sets a supplier's days-to-arrive to how long their past orders really took.
+ * The figure is worked out again here, on the server, not taken from the page.
+ */
+export async function adoptLeadTime(
+  slug: string,
+  supplierId: string,
+  _prev: StockState,
+  _formData: FormData,
+): Promise<StockState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  if (!UUID.test(supplierId)) return { error: OOPS };
+  const { leadTimes } = await loadIncoming(ctx.supabase, ctx.tenant);
+  const observed = leadTimes.get(supplierId);
+  if (!observed) return { error: "There aren't enough arrived orders yet to go by." };
+  const { error } = await ctx.supabase.rpc("set_supplier_lead_time", {
+    p_tenant_id: ctx.tenant.id,
+    p_supplier_id: supplierId,
+    p_days: Math.min(365, Math.max(0, observed.days)),
+  });
+  if (error) return { error: OOPS };
+  done(slug);
+  return { message: `Set to ${observed.days} days. Order-by dates for their items have moved.` };
+}
+
+/** The "Don't reorder" switch on one item: still listed, never suggested. */
+export async function setItemReorder(
+  slug: string,
+  itemId: string,
+  dontReorder: boolean,
+  _prev: StockState,
+  _formData: FormData,
+): Promise<StockState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  if (!UUID.test(itemId)) return { error: OOPS };
+  const { error } = await ctx.supabase.rpc("set_stock_items_reorder", {
+    p_tenant_id: ctx.tenant.id,
+    p_item_ids: [itemId],
+    p_dont_reorder: dontReorder,
+  });
+  if (error) return { error: OOPS };
+  done(slug);
+  return {
+    message: dontReorder
+      ? "Done. It stays in your lists, but we won't suggest it or put it on an order."
+      : "It's back: we'll plan for this one again.",
+  };
+}
+
+/** Gives one item to a supplier (or to none), from its row in the table. */
+export async function saveItemSupplier(
+  slug: string,
+  itemId: string,
+  supplierId: string,
+): Promise<StockState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  if (!UUID.test(itemId) || (supplierId !== "" && !UUID.test(supplierId))) return { error: OOPS };
+  const { error } = await ctx.supabase.rpc("assign_stock_supplier", {
+    p_tenant_id: ctx.tenant.id,
+    p_item_ids: [itemId],
+    p_supplier_id: supplierId || null,
+  });
+  if (error) return { error: OOPS };
+  done(slug);
+  return { message: "Saved" };
 }
 
 /** Saves one item's own planning. Empty lead time, cover or smallest order means "use the supplier's". */
@@ -312,7 +383,7 @@ const FIGURES = {
     bad: "A case holds at least 1.",
   },
 } as const;
-export type FigureField = keyof typeof FIGURES | "cost";
+export type FigureField = keyof typeof FIGURES | "cost" | "supplier_sku";
 const isFigure = (value: string): value is keyof typeof FIGURES => value in FIGURES;
 
 /** A typed whole number for one figure: `{ value }`, or `{ error }` in plain words. */
@@ -346,6 +417,9 @@ export async function saveItemFigure(
     const cost = value === "" ? null : amount(value);
     if (value !== "" && cost === null) return { error: "Type the cost like 12.50." };
     changes = { own_cost: cost === null ? null : Number(cost) };
+  } else if (field === "supplier_sku") {
+    if (value.length > 120) return { error: "That code is too long." };
+    changes = { supplier_sku: value === "" ? null : value };
   } else if (isFigure(field)) {
     const parsed = figure(field, value);
     if ("error" in parsed) return { error: parsed.error };
@@ -397,7 +471,7 @@ export async function bulkItems(
     const n = (data as number) ?? 0;
     if (what === "hide") {
       return {
-        message: `${plural(n, "item")} won't be reordered. You'll find ${n === 1 ? "it" : "them"} under “Hidden”.`,
+        message: `${plural(n, "item")} hidden: out of sight and out of planning. You'll find ${n === 1 ? "it" : "them"} under “Hidden”.`,
       };
     }
     return {
@@ -405,6 +479,25 @@ export async function bulkItems(
         n === 0
           ? "Nothing changed: those are left out by your shop or by a rule in Settings, not by you."
           : `${plural(n, "item")} ${n === 1 ? "is" : "are"} back in planning.`,
+    };
+  }
+
+  if (what === "pause" || what === "resume") {
+    const { data, error } = await ctx.supabase.rpc("set_stock_items_reorder", {
+      p_tenant_id: ctx.tenant.id,
+      p_item_ids: ids,
+      p_dont_reorder: what === "pause",
+    });
+    if (error) return { error: OOPS };
+    done(slug);
+    const n = (data as number) ?? 0;
+    return {
+      message:
+        what === "pause"
+          ? `${plural(n, "item")} won't be reordered. ${n === 1 ? "It stays" : "They stay"} in the list.`
+          : n === 0
+            ? "Nothing changed: none of those were set to “don't reorder”."
+            : `${plural(n, "item")} ${n === 1 ? "is" : "are"} back in planning.`,
     };
   }
 
@@ -1158,11 +1251,19 @@ export async function saveStockSettings(
           .filter(Boolean),
       ),
     ],
+    skip_tags: [
+      ...new Set(
+        text(formData, "skip_tags")
+          .split(/[\n,]+/)
+          .map((tag) => tag.trim().toLowerCase())
+          .filter(Boolean),
+      ),
+    ],
   });
   if (!parsed.success) {
     return {
       error:
-        "Check the numbers (each is a whole number of days) and the words: up to 20, each 2 to 40 letters.",
+        "Check the numbers (each is a whole number of days), the words (up to 20, each 2 to 40 letters) and the tags (up to 20).",
     };
   }
   const { error } = await ctx.supabase.rpc("save_config", {

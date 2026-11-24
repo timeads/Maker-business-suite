@@ -7,10 +7,14 @@ import {
   draftOrdersForItems,
   emptyDaysSince,
   explainSuggestion,
+  healthNote,
   isAtRisk,
+  isListed,
   isPlanned,
+  matchesSkipTags,
   matchesSkipWords,
   notPlannedReason,
+  overstockUnits,
   topSellerIds,
   type ItemRow,
   type SupplierRow,
@@ -158,10 +162,97 @@ describe("leaving items out of reordering", () => {
     expect(views.hidden.map((r) => r.item.id)).toEqual(["b", "c", "d", "e"]);
     expect(views.all.map((r) => r.item.id)).toEqual(["a"]);
     expect(toGridRow(rows[1], TODAY)).toMatchObject({
-      left: "You said don't reorder",
+      left: "Hidden by you",
       hiddenByHand: true,
+      paused: false,
     });
     expect(toGridRow(rows[2], TODAY).hiddenByHand).toBe(false);
+  });
+
+  it("“don't reorder” stops the suggestions but keeps the item in the lists", () => {
+    const rows = buildStockRows({
+      items: [item("a"), item("p", { dont_reorder: true }), item("h", { hidden: true })],
+      suppliers: [mill],
+      sales: [...steady("a", 90), ...steady("p", 90), ...steady("h", 90)],
+      openLines: [],
+      settings,
+      today: TODAY,
+    });
+    expect(rows.map(notPlannedReason)).toEqual([null, "paused", "hidden"]);
+    expect(rows.map(isListed)).toEqual([true, true, false]);
+    // Never suggested, never drafted, even when ticked.
+    expect(draftOrders(rows, TODAY).flatMap((o) => o.lines.map((l) => l.stock_item_id))).toEqual([
+      "a",
+    ]);
+    const ticked = draftOrdersForItems(rows, ["p"], TODAY);
+    expect(ticked.orders).toEqual([]);
+    expect(ticked.notPlanned.map((r) => r.item.id)).toEqual(["p"]);
+    const views = viewRows(rows, TODAY);
+    expect(views.all.map((r) => r.item.id)).toEqual(["a", "p"]);
+    expect(views.under.map((r) => r.item.id)).toEqual(["a", "p"]);
+    expect(views.hidden.map((r) => r.item.id)).toEqual(["h"]);
+    expect(views.atrisk.map((r) => r.item.id)).not.toContain("p");
+    expect(toGridRow(rows[1], TODAY)).toMatchObject({
+      left: "You said don't reorder",
+      hiddenByHand: false,
+      paused: true,
+    });
+  });
+
+  it("leaves out anything whose product carries a “never reorder” tag in the shop", () => {
+    expect(matchesSkipTags({ tags: ["Made To Order", "wool"] }, ["made to order"])).toBe(
+      "Made To Order",
+    );
+    // The whole tag, not part of it; and no rule or no tags means no match.
+    expect(matchesSkipTags({ tags: ["made to order soon"] }, ["made to order"])).toBeNull();
+    expect(matchesSkipTags({ tags: ["wool"] }, [])).toBeNull();
+    expect(matchesSkipTags({ tags: null }, ["wool"])).toBeNull();
+    expect(matchesSkipTags({}, ["wool"])).toBeNull();
+    const rows = buildStockRows({
+      items: [item("a", { tags: ["wool"] }), item("t", { tags: ["Discontinued"] })],
+      suppliers: [mill],
+      sales: [...steady("a", 90), ...steady("t", 90)],
+      openLines: [],
+      settings: { ...settings, skip_tags: ["discontinued"] },
+      today: TODAY,
+    });
+    expect(rows.map(notPlannedReason)).toEqual([null, "tag"]);
+    expect(viewRows(rows, TODAY).hidden.map((r) => r.item.id)).toEqual(["t"]);
+    expect(toGridRow(rows[1], TODAY).left).toBe("Tagged “Discontinued” in your shop");
+    expect(draftOrders(rows, TODAY).flatMap((o) => o.lines.map((l) => l.stock_item_id))).toEqual([
+      "a",
+    ]);
+  });
+
+  it("says under each label how much cover, how many too many, or when it last sold", () => {
+    const sales = [
+      ...steady("slow", 90).filter((_, index) => index % 30 === 0),
+      { stock_item_id: "dead", day: "2026-07-13", units: 2 },
+    ];
+    const rows = buildStockRows({
+      items: [
+        item("a"),
+        item("slow", { on_hand: 400 }),
+        item("dead", { on_hand: 5 }),
+        item("never", { on_hand: 5 }),
+      ],
+      suppliers: [mill],
+      sales: [...steady("a", 90), ...sales],
+      openLines: [],
+      settings,
+      today: TODAY,
+    });
+    const [a, slow, dead, never] = rows;
+    expect(healthNote(a)).toBe("10d cover");
+    expect(slow.health.health).toBe("over");
+    expect(healthNote(slow)).toMatch(/^\d+ too many · 1y\+ cover$/);
+    expect(dead.daysSinceLastSale).toBe(130);
+    expect(healthNote(dead)).toBe("last sale 130d ago");
+    expect(never.daysSinceLastSale).toBeNull();
+    expect(healthNote(never)).toBe("");
+    expect(overstockUnits(rows)).toBe(slow.health.excessUnits);
+    expect(slow.health.excessUnits).toBeGreaterThan(0);
+    expect(toGridRow(dead, TODAY).healthNote).toBe("last sale 130d ago");
   });
 });
 

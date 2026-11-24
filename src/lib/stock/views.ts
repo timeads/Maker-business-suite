@@ -4,8 +4,10 @@ import {
   HEALTH_LABELS,
   NOT_PLANNED_LABELS,
   explainSuggestion,
+  healthNote,
   isAtRisk,
   isDeadStock,
+  isListed,
   isPlanned,
   notPlannedReason,
   peakMark,
@@ -44,19 +46,26 @@ export const VIEW_NOTES: Partial<Record<ViewKey, string>> = {
   atrisk:
     "Your best sellers (the top fifth by what they bring in) that need ordering within a week.",
   nosales: "Nothing sold in 90 days, and there's still some on the shelf.",
-  hidden: "Left out of suggestions and orders. Press “Unhide” on any you want back.",
+  hidden:
+    "Out of sight and out of planning: hidden by you, by a rule in Settings, or by your shop. Press “Unhide” on any you hid yourself.",
 };
 
-/** The rows each view holds. "hidden" is everything left out; the rest are planned items only. */
+/**
+ * The rows each view holds. "hidden" is everything out of sight. The lists
+ * that show what is on the shelf also carry items marked "don't reorder"
+ * (still listed, never suggested, as in TuftStock); the views that are about
+ * ordering hold planned items only.
+ */
 export function viewRows(rows: StockRow[], today: string): Record<ViewKey, StockRow[]> {
   const planned = rows.filter(isPlanned);
+  const listed = rows.filter(isListed);
   const top = topSellerIds(rows);
-  const byHealth = (health: string) => planned.filter((row) => row.health.health === health);
+  const byHealth = (health: string) => listed.filter((row) => row.health.health === health);
   return {
-    all: planned,
-    onorder: planned.filter((row) => row.onOrder > 0),
-    nosales: planned.filter(isDeadStock),
-    hidden: rows.filter((row) => !isPlanned(row)),
+    all: listed,
+    onorder: listed.filter((row) => row.onOrder > 0),
+    nosales: listed.filter(isDeadStock),
+    hidden: rows.filter((row) => !isListed(row)),
     atrisk: planned.filter((row) => isAtRisk(row, top, today)),
     out: byHealth("out"),
     under: byHealth("under"),
@@ -119,6 +128,7 @@ export const DEFAULT_HIDDEN_COLUMNS: ColumnKey[] = COLUMNS.map((column) => colum
 );
 /** The figures a manager can change right in the table. */
 export const EDITABLE_COLUMNS: ColumnKey[] = [
+  "supplier",
   "cost",
   "lead",
   "cover",
@@ -224,10 +234,17 @@ export type GridRow = {
   peak: string | null;
   health: keyof typeof HEALTH_LABELS;
   healthLabel: string;
+  /** Under the label: "12 too many · 240d cover", "last sale 40d ago", "41d cover". */
+  healthNote: string;
   /** Why it's left out of reordering, when it is. */
   left: string | null;
-  /** The person's own switch, which "Reorder these again" can undo. */
+  /** The person's own "Hidden" switch, which "Unhide" can undo. */
   hiddenByHand: boolean;
+  /** The person's own "Don't reorder" switch: still listed, never suggested. */
+  paused: boolean;
+  /** The supplier's id and their code for the item, for changing them in the table. */
+  supplierId: string | null;
+  supplierSku: string;
   why: string;
 };
 
@@ -312,8 +329,17 @@ export function toGridRow(
     peak: row.suggestedQty > 0 ? peakMark(row) : null,
     health: row.health.health,
     healthLabel: HEALTH_LABELS[row.health.health],
-    left: reason ? NOT_PLANNED_LABELS[reason] : null,
+    healthNote: healthNote(row),
+    left:
+      reason === "tag" && row.skippedByTag
+        ? `Tagged “${row.skippedByTag}” in your shop`
+        : reason
+          ? NOT_PLANNED_LABELS[reason]
+          : null,
     hiddenByHand: row.item.hidden,
+    paused: Boolean(row.item.dont_reorder),
+    supplierId: row.item.supplier_id,
+    supplierSku: row.item.supplier_sku ?? "",
     why: explainSuggestion(row, today),
   };
 }

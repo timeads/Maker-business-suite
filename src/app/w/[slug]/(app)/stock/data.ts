@@ -89,7 +89,7 @@ export async function loadStock(
       supabase
         .from("stock_items")
         .select(
-          "id, title, variant_title, sku, on_hand, unit_cost, tracked, product_status, supplier_id, lead_time_days, coverage_days, safety_stock, hidden, vendor, price, case_pack, moq, supplier_sku, own_cost, image_url, variant_image_url, synced_at",
+          "id, title, variant_title, sku, on_hand, unit_cost, tracked, product_status, supplier_id, lead_time_days, coverage_days, safety_stock, hidden, dont_reorder, tags, vendor, price, case_pack, moq, supplier_sku, own_cost, image_url, variant_image_url, synced_at",
         )
         .eq("tenant_id", tenant.id)
         .order("title")

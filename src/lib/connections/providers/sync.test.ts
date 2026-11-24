@@ -448,6 +448,46 @@ describe("Shopify sync", () => {
     expect(asked).toEqual([true, false]);
     expect(second.state.stock.map((item) => item.external_id)).toEqual(["v1", "v2"]);
     expect(second.state.variantPhotos).toEqual([]);
+    expect(second.state.stockTags).toEqual([]);
+  });
+
+  it("notes each product's shop tags once, for the “never reorder” tag rule", async () => {
+    const product = (id: string, tags: unknown) => ({
+      legacyResourceId: id,
+      title: "Wool rug",
+      status: "ACTIVE",
+      vendor: null,
+      tags,
+    });
+    const stock = [
+      {
+        nodes: [
+          variant("v1", { product: product("p1", ["Made to order", "  wool ", ""]) }),
+          variant("v2", { product: product("p1", ["Made to order", "  wool ", ""]) }),
+          variant("v3", { product: product("p2", []) }),
+          // A shop that didn't answer with tags for this one: left alone.
+          variant("v4", { product: product("p3", undefined) }),
+        ],
+        hasNextPage: false,
+        endCursor: null,
+      },
+    ];
+    const net = pagedGraphql([{ nodes: [], hasNextPage: false, endCursor: null }], stock);
+    const { ctx, state } = context({
+      type: "incremental",
+      cursor: { synced_through: "2026-11-20T00:00:00.000Z" },
+    });
+    const queries: string[] = [];
+    const watching = (async (shop, token, query, variables) => {
+      if (query.includes("productVariants")) queries.push(query);
+      return net.graphql(shop, token, query, variables);
+    }) as ShopifyGraphql;
+    await syncShopify(ctx, watching, NOW);
+    expect(queries[0]).toContain("vendor tags");
+    expect(state.stockTags).toEqual([
+      { product_external_id: "p1", tags: ["Made to order", "wool"] },
+      { product_external_id: "p2", tags: [] },
+    ]);
   });
 
   it("reads the stock count once the orders are in, and carries on where it left off", async () => {

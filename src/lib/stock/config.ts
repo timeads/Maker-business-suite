@@ -23,6 +23,11 @@ export const stockSettingsSchema = z.object({
    * It works on read, so taking a word off brings the items straight back.
    */
   skip_words: z.array(z.string().trim().min(2).max(40)).max(20).default(["gift card"]),
+  /**
+   * Never plan for an item whose product carries one of these tags in the
+   * shop (any capitals; the whole tag, not part of it). Also on read.
+   */
+  skip_tags: z.array(z.string().trim().min(1).max(80)).max(20).default([]),
 });
 export type StockSettings = z.infer<typeof stockSettingsSchema>;
 

@@ -24,6 +24,7 @@ import {
   bulkItems,
   removeStockView,
   saveItemFigure,
+  saveItemSupplier,
   saveStockView,
   setItemHidden,
   type FigureField,
@@ -98,7 +99,7 @@ const toolButton = cn(
   "[&::-webkit-details-marker]:hidden",
 );
 
-/** "Hide" on a row (or "Unhide" in the Hidden view): the Don't-reorder switch, one press. */
+/** "Hide" on a row (or "Unhide" in the Hidden view): out of sight and out of planning, one press. */
 function HideButton({ slug, row }: { slug: string; row: GridRow }) {
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -111,7 +112,7 @@ function HideButton({ slug, row }: { slug: string; row: GridRow }) {
         type="button"
         disabled={pending}
         aria-label={`${hide ? "Hide" : "Unhide"} ${row.name}`}
-        title={hide ? "Don't reorder this one" : "Plan for this one again"}
+        title={hide ? "Take it out of your lists and out of planning" : "Bring it back"}
         className="text-muted-foreground hover:text-foreground text-xs font-semibold hover:underline disabled:opacity-50"
         onClick={() =>
           start(async () => {
@@ -217,10 +218,13 @@ function FigureBox({
   placeholder,
   label,
   emptyAs = "",
+  text = false,
 }: {
   slug: string;
   itemId: string;
   field: FigureField;
+  /** Words rather than a number (the supplier's code): wider, and left-aligned. */
+  text?: boolean;
   /** What's saved now, as it sits in the box ("" = nothing typed). */
   value: string;
   /** What's used while the box is empty (the supplier's figure, say). */
@@ -237,9 +241,13 @@ function FigureBox({
         placeholder={placeholder}
         aria-label={label}
         aria-invalid={error ? true : undefined}
-        inputMode={field === "cost" ? "decimal" : "numeric"}
-        maxLength={14}
-        className={cn("h-7 w-20 px-1.5 text-right text-sm", pending && "opacity-60")}
+        inputMode={text ? "text" : field === "cost" ? "decimal" : "numeric"}
+        maxLength={text ? 120 : 14}
+        className={cn(
+          "h-7 px-1.5 text-sm",
+          text ? "w-40 font-mono text-xs" : "w-20 text-right",
+          pending && "opacity-60",
+        )}
         onKeyDown={(event) => {
           if (event.key === "Enter") {
             event.preventDefault();
@@ -262,6 +270,52 @@ function FigureBox({
       />
       {error && (
         <span role="alert" className="text-brick max-w-36 text-right text-xs whitespace-normal">
+          {error}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** The supplier, chosen right in the row. It saves as soon as one is picked. */
+function SupplierPick({
+  slug,
+  row,
+  suppliers,
+}: {
+  slug: string;
+  row: GridRow;
+  suppliers: { id: string; name: string }[];
+}) {
+  const [pending, start] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  // A supplier no longer used isn't offered, but an item still filed under one keeps it showing.
+  const known = suppliers.some((s) => s.id === row.supplierId);
+  return (
+    <span className="inline-flex flex-col items-start gap-0.5">
+      <Select
+        defaultValue={row.supplierId ?? ""}
+        aria-label={`Supplier for ${row.name}`}
+        disabled={pending}
+        className={cn("h-7 w-40 py-0 text-sm", pending && "opacity-60")}
+        onChange={(event) => {
+          const picked = event.currentTarget.value;
+          start(async () => {
+            const result = await saveItemSupplier(slug, row.id, picked);
+            setError(result.error ?? null);
+          });
+        }}
+      >
+        <option value="">No supplier</option>
+        {!known && row.supplierId && <option value={row.supplierId}>{row.supplier}</option>}
+        {suppliers.map((s) => (
+          <option key={s.id} value={s.id}>
+            {s.name}
+          </option>
+        ))}
+      </Select>
+      {error && (
+        <span role="alert" className="text-brick text-xs">
           {error}
         </span>
       )}
@@ -294,6 +348,7 @@ export function ItemsGrid({
   sort,
   currency,
   emptyText,
+  overstock,
 }: {
   slug: string;
   rows: GridRow[];
@@ -316,6 +371,7 @@ export function ItemsGrid({
   sort: { key: ColumnKey; dir: SortDir };
   currency: string;
   emptyText: string;
+  overstock: number;
 }) {
   const base = `/w/${slug}/stock`;
   const [state, action] = useActionState(bulkItems.bind(null, slug), {});
@@ -402,6 +458,27 @@ export function ItemsGrid({
   /** The box for a planning column while figures are being changed, else null. */
   const editCell = (row: GridRow, key: ColumnKey): React.ReactNode => {
     switch (key) {
+      case "supplier":
+        return (
+          <span className="flex flex-col gap-1">
+            <SupplierPick
+              key={`${row.id}:supplier:${row.supplierId ?? ""}`}
+              slug={slug}
+              row={row}
+              suppliers={suppliers}
+            />
+            <FigureBox
+              key={`${row.id}:supplier_sku:${row.supplierSku}`}
+              slug={slug}
+              itemId={row.id}
+              field="supplier_sku"
+              value={row.supplierSku}
+              placeholder="Their code"
+              label={`The supplier's code for ${row.name}`}
+              text
+            />
+          </span>
+        );
       case "cost":
         return box(
           row,
@@ -475,6 +552,11 @@ export function ItemsGrid({
                   </span>
                 )}
                 {row.left && <Badge>{row.left}</Badge>}
+                {row.healthNote && row.health === "nosales" && (
+                  <span className="text-muted-foreground px-0.5 py-0.5 text-xs">
+                    {row.healthNote}
+                  </span>
+                )}
                 {row.closure && (
                   <span title={row.closure.why}>
                     <Badge tone="waiting">{row.closure.label}</Badge>
@@ -564,7 +646,16 @@ export function ItemsGrid({
           <span title={row.why}>–</span>
         );
       case "health":
-        return <Badge tone={TONES[row.health]}>{row.healthLabel}</Badge>;
+        return (
+          <span title={row.left ?? undefined}>
+            <Badge tone={TONES[row.health]}>{row.healthLabel}</Badge>
+            {row.healthNote && (
+              <span className="text-muted-foreground mt-0.5 block text-xs whitespace-nowrap">
+                {row.healthNote}
+              </span>
+            )}
+          </span>
+        );
     }
   };
 
@@ -631,6 +722,14 @@ export function ItemsGrid({
           )}
         </nav>
         {note && <p className="text-muted-foreground font-read text-sm">{note}</p>}
+        {overstock > 0 && (view === "all" || view === "over") && (
+          <p className="text-muted-foreground text-xs">
+            <Link href={`${base}/items?show=over`} className="hover:underline">
+              {overstock.toLocaleString("en-US")} unit{overstock === 1 ? "" : "s"} of overstock to
+              clear
+            </Link>
+          </p>
+        )}
         <div className="flex flex-wrap items-center gap-2">
           <form role="search" className="w-full max-w-xs">
             <input type="hidden" name="show" value={view} />
@@ -706,7 +805,7 @@ export function ItemsGrid({
                 pendingText="Saving…"
                 disabled={ticked.length === 0}
               >
-                Reorder these again
+                Unhide these
               </DoButton>
             ) : (
               <>
@@ -715,12 +814,27 @@ export function ItemsGrid({
                   Draft an order
                 </DoButton>
                 <DoButton
+                  value="pause"
+                  variant="outline"
+                  pendingText="Saving…"
+                  disabled={ticked.length === 0}
+                  title="Stop suggesting these. They stay in the list."
+                >
+                  Don&apos;t reorder
+                </DoButton>
+                {ticked.some((row) => row.paused) && (
+                  <DoButton value="resume" variant="outline" pendingText="Saving…">
+                    Reorder again
+                  </DoButton>
+                )}
+                <DoButton
                   value="hide"
                   variant="outline"
                   pendingText="Saving…"
                   disabled={ticked.length === 0}
+                  title="Take these out of your lists and out of planning"
                 >
-                  Don&apos;t reorder
+                  Hide
                 </DoButton>
               </>
             )}
@@ -800,7 +914,8 @@ export function ItemsGrid({
       {editing && (
         <p className="text-muted-foreground font-read text-sm print:hidden">
           Type in a box and move on: it saves by itself, and the sums beside it catch up. An empty
-          box goes back to the supplier&apos;s own figure (shown in grey).
+          box goes back to the supplier&apos;s own figure (shown in grey). The supplier and their
+          code for the item can be changed here too.
         </p>
       )}
       {rows.length > 0 && (

@@ -117,6 +117,9 @@ export type StockItemRow = {
   price: number | null;
 };
 
+/** A product's tags in the shop, noted on each of its stock items. */
+export type StockTagsRow = { product_external_id: string; tags: string[] };
+
 /** One option's own photo (a product with several colours has one each). */
 export type VariantPhotoRow = { external_id: string; image_url: string | null };
 
@@ -190,6 +193,8 @@ export type SyncStore = {
   setProductPhotos(products: ProductPhotoRow[]): Promise<void>;
   /** Each option's own photo, for the reorder list. */
   setVariantPhotos(items: VariantPhotoRow[]): Promise<void>;
+  /** Each product's shop tags, for "never reorder anything tagged X". */
+  setStockTags(items: StockTagsRow[]): Promise<void>;
   /** Turns orders with workshop dates on them into bookings. Safe to repeat. */
   bookShopOrders(orders: ShopBookingOrder[]): Promise<void>;
   /** For orders already stored with upsertCommerce. */

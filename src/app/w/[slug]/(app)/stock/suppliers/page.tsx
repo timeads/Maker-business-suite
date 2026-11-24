@@ -1,14 +1,16 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { Button } from "@/components/ui/button";
 import { closedOn, planBuildAhead, type Closure } from "@/lib/stock/engine/closures";
+import { orderCountsBySupplier } from "@/lib/stock/po/list";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
 import { loadIncoming, loadStock } from "../data";
 import { removeSupplierClosure } from "../actions";
-import { ClosureForm, SupplierForm } from "../forms";
+import { AdoptLeadTimeButton, ClosureForm, SupplierForm } from "../forms";
 import { stockAccess } from "../gate";
 import { StockTabs } from "../tabs";
 
@@ -21,10 +23,26 @@ export default async function SuppliersPage({ params }: { params: Promise<{ slug
   const { tenant, role, entitlements } = access;
   const canEdit = canManage(role) && entitlements.canWrite;
   const supabase = await createClient();
-  const [{ suppliers, rows, closures, today }, { leadTimes }] = await Promise.all([
-    loadStock(supabase, tenant),
-    loadIncoming(supabase, tenant),
-  ]);
+  const [{ suppliers, rows, closures, today, settings }, { leadTimes }, { data: orderRows }] =
+    await Promise.all([
+      loadStock(supabase, tenant),
+      loadIncoming(supabase, tenant),
+      supabase
+        .from("purchase_orders")
+        .select("supplier_id, status")
+        .eq("tenant_id", tenant.id)
+        .limit(5000),
+    ]);
+  // How many orders each supplier has had (drafts and cancelled ones aside).
+  const orderCounts = orderCountsBySupplier(
+    (orderRows ?? []).map((order) => ({
+      supplierId: order.supplier_id as string,
+      status: order.status as string,
+    })),
+  );
+  // An empty "days to arrive" follows the workspace's own default.
+  const leadOf = (s: { lead_time_days: number | null }) =>
+    s.lead_time_days ?? settings.default_lead_time_days;
   const itemCount = (id: string) => rows.filter((row) => row.item.supplier_id === id).length;
   const closuresOf = (id: string): Closure[] =>
     closures
@@ -77,39 +95,53 @@ export default async function SuppliersPage({ params }: { params: Promise<{ slug
                       {s.archived_at && <Badge>Not used any more</Badge>}
                       <span className="text-muted-foreground">
                         {itemCount(s.id)} item{itemCount(s.id) === 1 ? "" : "s"} · arrives in{" "}
-                        {s.lead_time_days} days · covers {s.coverage_days} days
+                        {leadOf(s)} days{s.lead_time_days === null ? " (your usual)" : ""} · covers{" "}
+                        {s.coverage_days} days
                         {s.moq > 1 &&
                           ` · smallest order ${s.moq}${s.moq_applies_to === "sku" ? " per item" : ""}`}
                       </span>
-                      {closureWords(closuresOf(s.id), s.lead_time_days).now ? (
-                        <Badge tone="bad">
-                          {closureWords(closuresOf(s.id), s.lead_time_days).now}
-                        </Badge>
+                      {closureWords(closuresOf(s.id), leadOf(s)).now ? (
+                        <Badge tone="bad">{closureWords(closuresOf(s.id), leadOf(s)).now}</Badge>
                       ) : (
-                        closureWords(closuresOf(s.id), s.lead_time_days).aheadShort && (
+                        closureWords(closuresOf(s.id), leadOf(s)).aheadShort && (
                           <Badge
                             tone={
-                              closureWords(closuresOf(s.id), s.lead_time_days).missed
-                                ? "bad"
-                                : "waiting"
+                              closureWords(closuresOf(s.id), leadOf(s)).missed ? "bad" : "waiting"
                             }
                           >
-                            {closureWords(closuresOf(s.id), s.lead_time_days).aheadShort}
+                            {closureWords(closuresOf(s.id), leadOf(s)).aheadShort}
                           </Badge>
                         )
                       )}
                       {leadTimes.has(s.id) && (
                         <Badge
-                          tone={
-                            leadTimes.get(s.id)!.days > s.lead_time_days + 3 ? "waiting" : "closed"
-                          }
+                          tone={leadTimes.get(s.id)!.days > leadOf(s) + 3 ? "waiting" : "closed"}
                         >
                           Really takes about {leadTimes.get(s.id)!.days} days (
                           {leadTimes.get(s.id)!.sampleSize} order
                           {leadTimes.get(s.id)!.sampleSize === 1 ? "" : "s"})
                         </Badge>
                       )}
+                      {(orderCounts.get(s.id) ?? 0) > 0 && (
+                        <Link
+                          href={`/w/${tenant.slug}/stock/orders?show=all&supplier=${s.id}`}
+                          className="text-ochre-text text-xs font-semibold underline-offset-2 hover:underline"
+                        >
+                          {orderCounts.get(s.id)} order{orderCounts.get(s.id) === 1 ? "" : "s"}
+                        </Link>
+                      )}
                     </summary>
+                    {canEdit &&
+                      leadTimes.has(s.id) &&
+                      leadTimes.get(s.id)!.days !== s.lead_time_days && (
+                        <div className="pt-3">
+                          <AdoptLeadTimeButton
+                            slug={tenant.slug}
+                            supplierId={s.id}
+                            days={leadTimes.get(s.id)!.days}
+                          />
+                        </div>
+                      )}
                     {canEdit ? (
                       <div className="pt-4">
                         <SupplierForm
@@ -125,8 +157,8 @@ export default async function SuppliersPage({ params }: { params: Promise<{ slug
                         <div>
                           <h3 className="text-sm font-semibold">When they&apos;re shut</h3>
                           <p className="text-muted-foreground font-read text-sm">
-                            {closureWords(closuresOf(s.id), s.lead_time_days).ahead ??
-                              closureWords(closuresOf(s.id), s.lead_time_days).now ??
+                            {closureWords(closuresOf(s.id), leadOf(s)).ahead ??
+                              closureWords(closuresOf(s.id), leadOf(s)).now ??
                               "Holidays and shutdowns, when an order would just sit. We move the order-by dates for their items earlier, so each order arrives before they shut."}
                           </p>
                         </div>
@@ -174,9 +206,10 @@ export default async function SuppliersPage({ params }: { params: Promise<{ slug
           <CardHeader>
             <CardTitle>Add a supplier</CardTitle>
             <CardDescription>
-              &quot;Days to arrive&quot; is from placing the order to having it on the shelf.
-              &quot;Each order covers&quot; is how long you want one order to last. Once orders have
-              arrived, we show how long each supplier really took, so you can match it.
+              &quot;Days to arrive&quot; is from placing the order to having it on the shelf; leave
+              it empty to use your usual figure from Settings ({settings.default_lead_time_days}{" "}
+              days). &quot;Each order covers&quot; is how long you want one order to last. Once
+              orders have arrived, we show how long each supplier really took, so you can match it.
             </CardDescription>
           </CardHeader>
           <CardContent>

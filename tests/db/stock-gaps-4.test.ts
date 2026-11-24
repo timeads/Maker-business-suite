@@ -381,3 +381,122 @@ describe("putting an order away, and deleting a draft", () => {
     ).toHaveLength(1);
   });
 });
+
+describe("an item's two switches, and the shop's tags", () => {
+  const flags = async (id: string) =>
+    one<{ dont_reorder: boolean; hidden: boolean; tags: string[] }>(
+      "select dont_reorder, hidden, tags from public.stock_items where id = $1",
+      [id],
+    );
+
+  it("“don't reorder” is a manager's switch, apart from “hidden”, and a sync leaves it alone", async () => {
+    const set = "select public.set_stock_items_reorder($1, $2::uuid[], $3) as n";
+    await expect(as(carol, set, [tenantA, [rug], true])).rejects.toThrow();
+    await expect(as(bob, set, [tenantA, [rug], true])).rejects.toThrow();
+    await expect(asAnon(db, (tx) => tx.query(set, [tenantA, [rug], true]))).rejects.toThrow(
+      /permission denied/,
+    );
+    // Another workspace's item named among ours is never touched.
+    expect(await as(alice, set, [tenantA, [rug, bobRug], true])).toEqual([{ n: 1 }]);
+    expect(await as(alice, set, [tenantA, [rug], true])).toEqual([{ n: 0 }]); // already so
+    expect(await flags(rug)).toMatchObject({ dont_reorder: true, hidden: false });
+    expect((await flags(bobRug)).dont_reorder).toBe(false);
+    await service("select public.upsert_stock_items($1, 'shopify', $2::jsonb)", [
+      tenantA,
+      JSON.stringify(items("a")),
+    ]);
+    expect((await flags(rug)).dont_reorder).toBe(true);
+    await expect(
+      as(alice, "update public.stock_items set dont_reorder = false where id = $1", [rug]),
+    ).rejects.toThrow(/permission denied/);
+    expect(await as(alice, set, [tenantA, [rug], false])).toEqual([{ n: 1 }]);
+  });
+
+  it("the sync notes each product's tags on its items, tidied, inside one workspace", async () => {
+    const tag = "select public.set_stock_item_tags($1, 'shopify', $2::jsonb) as n";
+    const [{ n }] = await service<{ n: number }>(tag, [
+      tenantA,
+      JSON.stringify([
+        { product_external_id: "a-p1", tags: [" Made to order ", "wool", "wool", ""] },
+        // Another workspace's product id: nothing of theirs changes.
+        { product_external_id: "b-p1", tags: ["not yours"] },
+        { product_external_id: "a-p2", tags: "not a list" },
+      ]),
+    ]);
+    expect(n).toBe(1);
+    expect((await flags(rug)).tags).toEqual(["Made to order", "wool"]);
+    expect((await flags(yarn)).tags).toEqual([]);
+    expect((await flags(bobRug)).tags).toEqual([]);
+    // The same tags again change nothing; an emptied list clears them.
+    expect(
+      await service<{ n: number }>(tag, [
+        tenantA,
+        JSON.stringify([{ product_external_id: "a-p1", tags: ["wool", "Made to order"] }]),
+      ]),
+    ).toEqual([{ n: 0 }]);
+    // Members read them with the item; only the sync writes them.
+    expect(
+      await as<{ tags: string[] }>(carol, "select tags from public.stock_items where id = $1", [
+        rug,
+      ]),
+    ).toEqual([{ tags: ["Made to order", "wool"] }]);
+    await expect(as(alice, tag, [tenantA, "[]"])).rejects.toThrow(/permission denied/);
+    await expect(asAnon(db, (tx) => tx.query(tag, [tenantA, "[]"]))).rejects.toThrow(
+      /permission denied/,
+    );
+    await expect(
+      as(alice, "update public.stock_items set tags = '{}' where id = $1", [rug]),
+    ).rejects.toThrow(/permission denied/);
+  });
+});
+
+describe("a supplier's days to arrive", () => {
+  const lead = async (id: string) =>
+    (
+      await one<{ lead_time_days: number | null }>(
+        "select lead_time_days from public.suppliers where id = $1",
+        [id],
+      )
+    ).lead_time_days;
+
+  it("can be left empty to follow the workspace's default, and adopted in one press", async () => {
+    const [{ id }] = await as<{ id: string }>(
+      alice,
+      "select public.save_supplier($1, null, 'Usual Co', '', null, 45, 1, 'order', '') as id",
+      [tenantA],
+    );
+    expect(await lead(id)).toBeNull();
+    const set = "select public.set_supplier_lead_time($1, $2, $3)";
+    await expect(as(carol, set, [tenantA, id, 12])).rejects.toThrow();
+    await expect(as(bob, set, [tenantA, id, 12])).rejects.toThrow();
+    await expect(as(bob, set, [tenantB, id, 12])).rejects.toThrow(/not found/i);
+    await expect(asAnon(db, (tx) => tx.query(set, [tenantA, id, 12]))).rejects.toThrow(
+      /permission denied/,
+    );
+    await expect(as(alice, set, [tenantA, id, 400])).rejects.toThrow(/Bad lead time/);
+    await as(alice, set, [tenantA, id, 12]);
+    expect(await lead(id)).toBe(12);
+    await as(alice, set, [tenantA, id, null]);
+    expect(await lead(id)).toBeNull();
+  });
+
+  it("a supplier the sync or an import makes starts empty, and an import can fill it in", async () => {
+    await service("select public.upsert_stock_items($1, 'shopify', $2::jsonb)", [
+      tenantA,
+      JSON.stringify([{ ...items("a")[0], external_id: "a-v9", vendor: "Shop Vendor" }]),
+    ]);
+    const vendor = await one<{ id: string }>(
+      "select id from public.suppliers where tenant_id = $1 and name = 'Shop Vendor'",
+      [tenantA],
+    );
+    expect(await lead(vendor.id)).toBeNull();
+    // The only thing the file changes is the figure that was empty: it must still count.
+    const [{ counts }] = await as<{ counts: { new: number; changed: number; same: number } }>(
+      alice,
+      "select public.import_suppliers($1, gen_random_uuid(), $2::jsonb, 'suppliers.csv', true) as counts",
+      [tenantA, JSON.stringify([{ name: "Shop Vendor", lead_time_days: 21 }])],
+    );
+    expect(counts).toMatchObject({ new: 0, changed: 1, same: 0 });
+    expect(await lead(vendor.id)).toBe(21);
+  });
+});

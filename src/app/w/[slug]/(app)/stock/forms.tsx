@@ -7,6 +7,7 @@ import { FormMessage } from "@/components/ui/form-message";
 import { Input, Label, Select } from "@/components/ui/input";
 import { SubmitButton } from "@/components/ui/submit-button";
 import {
+  adoptLeadTime,
   archiveOrder,
   deleteDraftOrder,
   receiveDelivery,
@@ -18,6 +19,7 @@ import {
   saveSupplierClosure,
   saveSupplier,
   setItemHidden,
+  setItemReorder,
   setOrderStatus,
   startEmptyOrder,
   type StockState,
@@ -70,31 +72,58 @@ export function StartOrderButton() {
   );
 }
 
-/** The "Don't reorder" switch for one item: says where it stands, and flips it. */
+/**
+ * An item's two switches, as TuftStock has them. "Don't reorder" stops the
+ * suggestions and keeps the item in the lists; "Hide" also puts it out of sight.
+ */
 export function ReorderSwitch({
   slug,
   itemId,
   hidden,
+  paused,
 }: {
   slug: string;
   itemId: string;
   hidden: boolean;
+  paused: boolean;
 }) {
-  const [state, action] = useActionState(setItemHidden.bind(null, slug, itemId, !hidden), {});
+  const [hideState, hideAction] = useActionState(
+    setItemHidden.bind(null, slug, itemId, !hidden),
+    {},
+  );
+  const [pauseState, pauseAction] = useActionState(
+    setItemReorder.bind(null, slug, itemId, !paused),
+    {},
+  );
   return (
-    <form action={action} className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="font-read max-w-xl text-sm">
-          {hidden
-            ? "You've said don't reorder this one. It's left out of suggestions and never put on an order."
-            : "We plan for this item: it shows up in suggestions when it runs low. Switch it off for things you won't buy again, like gift cards or made-to-order pieces."}
-        </p>
-        <SubmitButton variant="outline" pendingText="Saving…">
-          {hidden ? "Reorder this again" : "Don't reorder this"}
-        </SubmitButton>
-      </div>
-      <Result state={state} />
-    </form>
+    <div className="flex flex-col gap-4">
+      <form action={pauseAction} className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="font-read max-w-xl text-sm">
+            {paused
+              ? "You've said don't reorder this one. It stays in your lists with its count, but it's never suggested or put on an order."
+              : "We plan for this item: it shows up in suggestions when it runs low. Switch that off for things you won't buy again but still want to see, like a line you're selling through."}
+          </p>
+          <SubmitButton variant="outline" pendingText="Saving…">
+            {paused ? "Reorder this again" : "Don't reorder this"}
+          </SubmitButton>
+        </div>
+        <Result state={pauseState} />
+      </form>
+      <form action={hideAction} className="border-border flex flex-col gap-3 border-t pt-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="font-read max-w-xl text-sm">
+            {hidden
+              ? "This one is hidden: out of sight under Everything → Hidden, and out of planning."
+              : "Hide it to take it out of your lists altogether, for things that were never stock: gift cards, made-to-order pieces."}
+          </p>
+          <SubmitButton variant="outline" pendingText="Saving…">
+            {hidden ? "Unhide this" : "Hide this"}
+          </SubmitButton>
+        </div>
+        <Result state={hideState} />
+      </form>
+    </div>
   );
 }
 
@@ -148,13 +177,42 @@ export type SupplierValues = {
   email: string | null;
   contact_name?: string | null;
   more_emails?: string[] | null;
-  lead_time_days: number;
+  lead_time_days: number | null;
   coverage_days: number;
   moq: number;
   moq_applies_to: "order" | "sku";
   notes: string;
   archived: boolean;
 };
+
+/** One press to set a supplier's days-to-arrive to what their past orders really took. */
+export function AdoptLeadTimeButton({
+  slug,
+  supplierId,
+  days,
+}: {
+  slug: string;
+  supplierId: string;
+  days: number;
+}) {
+  const [state, action] = useActionState(adoptLeadTime.bind(null, slug, supplierId), {});
+  return (
+    <form action={action} className="flex flex-wrap items-center gap-2">
+      <SubmitButton variant="outline" size="sm" pendingText="Saving…">
+        Use the {days} days they really take
+      </SubmitButton>
+      <span className="text-xs" aria-live="polite">
+        {state.error ? (
+          <span className="text-brick">{state.error}</span>
+        ) : (
+          <span className="text-muted-foreground">
+            {state.message ?? "Worked out from when their past orders arrived."}
+          </span>
+        )}
+      </span>
+    </form>
+  );
+}
 
 export function SupplierForm({ slug, supplier }: { slug: string; supplier?: SupplierValues }) {
   const [state, action] = useActionState(saveSupplier.bind(null, slug, supplier?.id ?? null), {});
@@ -215,8 +273,8 @@ export function SupplierForm({ slug, supplier }: { slug: string; supplier?: Supp
             type="number"
             min={0}
             max={365}
-            defaultValue={supplier?.lead_time_days ?? 30}
-            required
+            defaultValue={supplier ? (supplier.lead_time_days ?? "") : ""}
+            placeholder="Your usual"
           />
         </div>
         <div className="flex flex-col gap-1.5">
@@ -699,6 +757,7 @@ export function StockSettingsForm({
     seasonality: boolean;
     push_to_shop: boolean;
     skip_words: string[];
+    skip_tags: string[];
   };
   canPush: boolean;
 }) {
@@ -792,6 +851,21 @@ export function StockSettingsForm({
         <p className="text-muted-foreground text-xs">
           One per line. Matching items are left out of suggestions and orders, and listed under
           Everything → Hidden. Take a word off and they come straight back.
+        </p>
+      </div>
+      <div className="flex flex-col gap-1.5 sm:max-w-md">
+        <Label htmlFor="set-skip-tags">Never reorder anything with these tags in my shop</Label>
+        <textarea
+          id="set-skip-tags"
+          name="skip_tags"
+          rows={2}
+          defaultValue={settings.skip_tags.join("\n")}
+          placeholder={"made to order\ndiscontinued"}
+          className={textarea}
+        />
+        <p className="text-muted-foreground text-xs">
+          One per line, the whole tag as your shop has it (capitals don&apos;t matter). Tags are
+          read with each sync, so a product you tag today is left out after the next one.
         </p>
       </div>
       <Result state={state} />

@@ -6,6 +6,7 @@ import type {
   ShippingOrderRow,
   ShopBookingOrder,
   StockItemRow,
+  StockTagsRow,
   VariantPhotoRow,
   SyncContext,
   SyncResult,
@@ -439,20 +440,23 @@ type ShopifyVariant = {
     title: string;
     status: string | null;
     vendor?: string | null;
+    /** Asked for along with the photos; absent when the shop wouldn't answer that. */
+    tags?: string[] | null;
   } | null;
   inventoryItem: { id: string; tracked: boolean; unitCost: { amount: string } | null } | null;
   /** This option's own photo, when the shop has one for it. */
   image?: { url?: string | null } | null;
 };
 
-// With each option's own photo, and without: a shop that won't answer the
-// first is asked the second, so a picture can never cost the stock count.
+// With each option's own photo and its product's tags, and without: a shop
+// that won't answer the first is asked the second, so neither a picture nor
+// a tag can ever cost the stock count.
 const variantsQuery = (photos: boolean) => `query Variants($first: Int!, $after: String) {
   productVariants(first: $first, after: $after) {
     pageInfo { hasNextPage endCursor }
     nodes {
       legacyResourceId title sku inventoryQuantity price
-      product { legacyResourceId title status vendor }
+      product { legacyResourceId title status vendor${photos ? " tags" : ""} }
       inventoryItem { id tracked unitCost { amount } }
       ${photos ? `image { url(transform: { maxWidth: ${VARIANT_PHOTO_WIDTH} }) }` : ""}
     }
@@ -466,6 +470,23 @@ export function mapVariantPhotos(variants: ShopifyVariant[]): VariantPhotoRow[] 
     external_id: variant.legacyResourceId,
     image_url: shopPhotoAddress(variant.image?.url, VARIANT_PHOTO_WIDTH),
   }));
+}
+
+/** Each product's tags, once per product, as the shop spells them. */
+export function mapStockTags(variants: ShopifyVariant[]): StockTagsRow[] {
+  const byProduct = new Map<string, string[]>();
+  for (const variant of variants) {
+    const id = variant.product?.legacyResourceId;
+    if (!id || byProduct.has(id) || !Array.isArray(variant.product?.tags)) continue;
+    byProduct.set(
+      id,
+      variant.product.tags
+        .filter((tag): tag is string => typeof tag === "string" && tag.trim() !== "")
+        .map((tag) => tag.trim().slice(0, 80))
+        .slice(0, 100),
+    );
+  }
+  return [...byProduct].map(([product_external_id, tags]) => ({ product_external_id, tags }));
 }
 const VARIANT_PAGE_SIZE = 100;
 
@@ -609,9 +630,11 @@ async function pullStock(
       if (photos) {
         try {
           await ctx.store.setVariantPhotos(mapVariantPhotos(data.productVariants.nodes));
+          const tags = mapStockTags(data.productVariants.nodes);
+          if (tags.length > 0) await ctx.store.setStockTags(tags);
         } catch (err) {
           console.warn(
-            `variant photos not saved for ${ctx.externalAccountId}:`,
+            `variant photos or tags not saved for ${ctx.externalAccountId}:`,
             err instanceof Error ? err.message : err,
           );
         }

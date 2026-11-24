@@ -8,6 +8,7 @@ import type {
   ShippingOrderRow,
   ShopBookingOrder,
   StockItemRow,
+  StockTagsRow,
   SyncStore,
 } from "./types";
 
@@ -23,6 +24,7 @@ export function memoryStore() {
     shopBookings: [] as ShopBookingOrder[],
     productPhotos: [] as ProductPhotoRow[],
     variantPhotos: [] as VariantPhotoRow[],
+    stockTags: [] as StockTagsRow[],
     redacted: [] as { externalId: string; email: string | null }[],
     purged: 0,
     usage: 0,
@@ -45,6 +47,9 @@ export function memoryStore() {
     },
     async setVariantPhotos(items) {
       state.variantPhotos.push(...items);
+    },
+    async setStockTags(items) {
+      state.stockTags.push(...items);
     },
     async bookShopOrders(orders) {
       state.shopBookings.push(...orders);

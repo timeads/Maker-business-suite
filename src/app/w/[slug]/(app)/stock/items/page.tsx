@@ -16,6 +16,7 @@ import {
   toGridRow,
   viewRows,
 } from "@/lib/stock/views";
+import { overstockUnits } from "@/lib/stock/plan";
 import { canManage } from "@/lib/tenants";
 import { loadOrderTracking, loadStock } from "../data";
 import { stockAccess } from "../gate";
@@ -122,11 +123,12 @@ export default async function StockItemsPage({
         query={keep.toString()}
         sort={sort}
         currency={tenant.currency}
+        overstock={overstockUnits(views.all)}
         emptyText={
           rows.length === 0
             ? "Your shop's items appear here after the next sync."
             : show === "hidden" && !q
-              ? "Nothing is hidden. To stop reordering something, press “Hide” on its row under All."
+              ? "Nothing is hidden. To take something out of your lists, press “Hide” on its row under All."
               : "Nothing matches."
         }
       />
