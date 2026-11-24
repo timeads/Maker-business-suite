@@ -8,6 +8,7 @@
  *  - confirm booking payments and send booking reminders
  *  - publish scheduled social posts
  *  - ask UPS where incoming stock orders are, a few parcels at a time
+ *  - look at Michaels for workspaces that sell there (reads only: nothing is sent)
  *  - run sync jobs for connected accounts (first sync, webhooks, scheduled pulls)
  *  - every few minutes, queue pulls for providers that don't push changes
  *  - once an hour, delete workspaces whose retention window has passed
@@ -44,6 +45,7 @@ import {
   type PostmarkInbound,
 } from "../src/lib/helpdesk/inbound";
 import { postAlert } from "../src/lib/messages/alerts";
+import { runClaimedLook, type ClaimedLook } from "../src/lib/michaels/worker";
 import { moduleOpen } from "../src/lib/module-access";
 import { trackWithUps } from "../src/lib/shipping/label-access";
 import { SourceError } from "../src/lib/shipping/sources/types";
@@ -673,6 +675,34 @@ async function drainPickupSteps(): Promise<number> {
   return steps.length;
 }
 
+/**
+ * Looks at Michaels for workspaces that connected their seller account and
+ * switched the connector on: about once an hour each, or when a manager
+ * presses "Look now". The database decides who is due and hands each look to
+ * one worker; a look that never finishes is marked failed, not run again.
+ * Watch-only: a look reads Michaels and writes down what it WOULD send. It
+ * sends nothing to Michaels and nothing to the shop.
+ */
+async function drainMichaelsLooks(): Promise<number> {
+  const admin = getAdminClient();
+  const { data, error } = await admin.rpc("claim_michaels_runs", { p_limit: 3 });
+  if (error) throw new Error(`Could not claim Michaels looks: ${error.message}`);
+  const looks = (data ?? []) as ClaimedLook[];
+  if (looks.length === 0) return 0;
+  const tokenDeps: TokenDeps = {
+    store: vaultTokenStore(admin),
+    adapter: getAdapter,
+    now: Date.now,
+    wait: sleep,
+    onNeedsReconnect: notifyNeedsReconnect,
+  };
+  for (const look of looks) {
+    const outcome = await runClaimedLook(look, { admin, tokenDeps });
+    console.log(`michaels look ${look.id} (${look.source}): ${outcome}`);
+  }
+  return looks.length;
+}
+
 /** Sends scheduled social posts whose time has come. */
 async function drainSocialPosts(): Promise<number> {
   const admin = getAdminClient();
@@ -767,7 +797,8 @@ async function main() {
       (await attempt(drainShipmentUndos, 0)) +
       (await attempt(drainShipments, 0)) +
       (await attempt(drainPickupSteps, 0)) +
-      (await attempt(drainShipmentChecks, 0));
+      (await attempt(drainShipmentChecks, 0)) +
+      (await attempt(drainMichaelsLooks, 0));
 
     if (Date.now() - lastSchedule > SCHEDULE_EVERY_MS) {
       lastSchedule = Date.now();
