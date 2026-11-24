@@ -111,7 +111,7 @@ export default async function StockSettingsPage({ params }: { params: Promise<{ 
         title="Stock"
         description="How far ahead to plan, and how your shop is kept in step."
       />
-      <StockTabs slug={tenant.slug} manager={canManage(role)} />
+      <StockTabs slug={tenant.slug} tenantId={tenant.id} manager={canManage(role)} />
       <Card>
         <CardHeader>
           <CardTitle>Planning</CardTitle>

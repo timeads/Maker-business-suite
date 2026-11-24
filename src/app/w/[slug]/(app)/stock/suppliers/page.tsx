@@ -81,7 +81,7 @@ export default async function SuppliersPage({ params }: { params: Promise<{ slug
         title="Stock"
         description="Who you buy from, how long they take, and the smallest order they'll accept."
       />
-      <StockTabs slug={tenant.slug} manager={canManage(role)} />
+      <StockTabs slug={tenant.slug} tenantId={tenant.id} manager={canManage(role)} />
 
       {suppliers.length > 0 && (
         <Card>

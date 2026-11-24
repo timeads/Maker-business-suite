@@ -157,7 +157,7 @@ export default async function StockPage({ params }: { params: Promise<{ slug: st
           </>
         )}
       </PageHeader>
-      <StockTabs slug={tenant.slug} manager={canManage(role)} />
+      <StockTabs slug={tenant.slug} tenantId={tenant.id} manager={canManage(role)} />
 
       {rows.length === 0 ? (
         <Card>

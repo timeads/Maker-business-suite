@@ -43,7 +43,7 @@ export default async function StockSpendPage({
         title="Stock"
         description="What you've spent with suppliers: the items on orders you've sent, without shipping or tax."
       />
-      <StockTabs slug={tenant.slug} manager={canManage(role)} />
+      <StockTabs slug={tenant.slug} tenantId={tenant.id} manager={canManage(role)} />
     </>
   );
   if (!canManage(role)) {

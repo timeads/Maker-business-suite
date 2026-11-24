@@ -99,7 +99,7 @@ export default async function StockItemsPage({
         title="Stock"
         description="Every item your shop keeps a count of, soonest to reorder first. Tick the ones you want and draft an order for them."
       />
-      <StockTabs slug={tenant.slug} manager={canManage(role)} />
+      <StockTabs slug={tenant.slug} tenantId={tenant.id} manager={canManage(role)} />
 
       <ItemsGrid
         slug={tenant.slug}

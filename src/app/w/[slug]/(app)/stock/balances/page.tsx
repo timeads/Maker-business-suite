@@ -49,7 +49,7 @@ export default async function SupplierBalancesPage({
         title="Stock"
         description="Supplier balances: what you owe each supplier, and when each bill is due."
       />
-      <StockTabs slug={tenant.slug} manager={canManage(role)} />
+      <StockTabs slug={tenant.slug} tenantId={tenant.id} manager={canManage(role)} />
     </>
   );
   if (!canManage(role)) {

@@ -19,6 +19,12 @@ import {
   autoTagRulesSchema,
   replyTemplatesSchema,
 } from "../helpdesk/config";
+import {
+  DEFAULT_MICHAELS_SETTINGS,
+  MICHAELS_MODULE,
+  MICHAELS_SETTINGS_KEY,
+  michaelsSettingsSchema,
+} from "../michaels/config";
 import type { ModuleKey } from "../modules";
 import {
   DEFAULT_LINKS,
@@ -175,6 +181,16 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
       "The subject and message an order's email to a supplier starts from when it is sent from the business's own Gmail, whether a copy to the sender is ticked to begin with (cc_me), and the name suppliers see it from (from_name; empty uses the workspace's name). The subject and body may use {{po_reference}}, {{supplier_name}}, {{contact_name}}, {{month}} and {{sender_name}}. This only changes the starting words: a person still looks each email over and presses send themselves.",
     schema: poEmailSchema,
     defaultBody: () => DEFAULT_PO_EMAIL,
+  },
+  {
+    module: MICHAELS_MODULE,
+    key: MICHAELS_SETTINGS_KEY,
+    feature: "stock",
+    name: "Michaels Marketplace",
+    description:
+      "Whether the workspace's Michaels seller account is looked at about once an hour (enabled), how many units of every item are held back from Michaels (units_held_back), and which things each look works out: the stock and the prices that would be sent, and what recent Michaels orders would become in the shop (jobs). The only mode is watch: nothing is ever sent to Michaels or to the shop, and there is no setting that changes that.",
+    schema: michaelsSettingsSchema,
+    defaultBody: () => DEFAULT_MICHAELS_SETTINGS,
   },
   {
     module: SHIPPING_MODULE,

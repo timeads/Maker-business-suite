@@ -133,7 +133,7 @@ export default async function StockOrdersPage({
   return (
     <>
       <PageHeader title="Stock" description="What you've ordered, and what has arrived." />
-      <StockTabs slug={tenant.slug} manager={canManage(role)} />
+      <StockTabs slug={tenant.slug} tenantId={tenant.id} manager={canManage(role)} />
       {flags.gone && <FormMessage kind="success">That draft is deleted.</FormMessage>}
       {drafted.length > 0 && (
         <FormMessage kind="success">
