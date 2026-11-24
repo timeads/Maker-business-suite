@@ -207,6 +207,11 @@ export async function correctLedgerEntry(
     return { error: OOPS };
   }
   if (saved !== entryId) return { error: OOPS };
+  // A person has now set the figures themselves: nothing is left to check.
+  await ctx.supabase.rpc("settle_ledger_review", {
+    p_tenant_id: ctx.tenant.id,
+    p_entry_id: entryId,
+  });
   done(slug);
   return { message: "Saved." };
 }

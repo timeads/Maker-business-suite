@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -14,6 +15,9 @@ import { cn } from "@/lib/utils";
 import { stockAccess } from "../../gate";
 import { loadBalances } from "../data";
 import { EntryForm, TermsForm } from "../forms";
+import { loadMailFacts } from "../mail-data";
+import { UploadBillForm } from "../mail-forms";
+import { MailNotices, ToCheckList, mailNoticesFor } from "../mail-parts";
 import {
   AgingTiles,
   BalanceValue,
@@ -68,10 +72,11 @@ export default async function SupplierBalancePage({
   }
   if (!/^[0-9a-f-]{36}$/i.test(supplierId)) notFound();
 
-  const { accounts, combined, today, hiddenNotices, booksOn } = await loadBalances(
-    await createClient(),
-    tenant,
-  );
+  const supabase = await createClient();
+  const [{ accounts, combined, today, hiddenNotices, booksOn }, mail] = await Promise.all([
+    loadBalances(supabase, tenant),
+    loadMailFacts(supabase, tenant),
+  ]);
   const account = accounts.find((a) => a.supplierId === supplierId.toLowerCase());
   if (!account) notFound();
   const money = moneyText(tenant.currency);
@@ -115,6 +120,15 @@ export default async function SupplierBalancePage({
   const statements = history.rows.filter((row) => row.anchor).reverse();
   const stated = new Map(account.ledger.map((row) => [row.id, row.statedBalance]));
   const payments = [...history.payments].reverse();
+  const toCheck = account.ledger.filter((row) => row.needsReview);
+  const quietNotices = mailNoticesFor(mail, [account], today, hiddenNotices).filter(
+    (n) => n.kind === "payments-quiet",
+  );
+  const mailOn = mail.readingOn || mail.bills !== null;
+  const listed =
+    mail.sources.suppliers.some((s) => s.supplier_id === account.supplierId) ||
+    mail.sources.bank.some((b) => b.payees.some((p) => p.supplier_id === account.supplierId));
+  const lastEmail = lastArrival(account.ledger, "email");
   const lastBooks = lastArrival(account.ledger, "books");
   const lastImport = lastArrival(account.ledger, "import");
 
@@ -337,8 +351,42 @@ export default async function SupplierBalancePage({
         </Note>
       )}
 
+      <MailNotices
+        notices={quietNotices}
+        names={new Map([[account.supplierId, name]])}
+        slug={tenant.slug}
+        base={base}
+        timezone={tenant.timezone}
+        canEdit={canEdit}
+      />
+
+      {toCheck.length > 0 && (
+        <Panel
+          title={`${toCheck.length} to check`}
+          aside={
+            <span className="text-muted-foreground text-xs">
+              Read from email or a file, with something unclear
+            </span>
+          }
+        >
+          <ToCheckList
+            rows={toCheck}
+            slug={tenant.slug}
+            base={base}
+            money={money}
+            canEdit={canEdit}
+            showSupplier={false}
+          />
+        </Panel>
+      )}
+
       {canEdit && (
-        <HiddenNotices slug={tenant.slug} count={notices.filter((n) => n.hidden).length} />
+        <HiddenNotices
+          slug={tenant.slug}
+          count={
+            notices.filter((n) => n.hidden).length + quietNotices.filter((n) => n.hidden).length
+          }
+        />
       )}
 
       <Card>
@@ -347,6 +395,8 @@ export default async function SupplierBalancePage({
             <h2 className="font-semibold">How entries get here</h2>
             <p className="text-muted-foreground text-xs">
               {[
+                lastEmail &&
+                  `Last filed from email ${moment(lastEmail.at, tenant.timezone)} · ${lastEmail.count} new`,
                 lastBooks &&
                   `Last filed from your books ${moment(lastBooks.at, tenant.timezone)} · ${lastBooks.count} new`,
                 lastImport &&
@@ -356,13 +406,38 @@ export default async function SupplierBalancePage({
                 .join(" · ") || "Everything here so far was typed in"}
             </p>
           </div>
-          {arrivalWords(name, { booksOn, lastBooks, lastImport }).map((line) => (
+          {arrivalWords(name, {
+            booksOn,
+            lastBooks,
+            lastImport,
+            mail: { forwarding: mail.bills !== null, reading: mail.readingOn, listed },
+          }).map((line) => (
             <p key={line} className="font-read text-text-2">
               {line}
             </p>
           ))}
+          <p className="text-xs">
+            <Link href={`${base}/email`} className="text-ochre-text font-semibold hover:underline">
+              {mailOn
+                ? "Bills by email settings"
+                : "Have bills file themselves: set up Bills by email"}
+            </Link>
+          </p>
         </CardContent>
       </Card>
+
+      {canEdit && (
+        <details className="group flex flex-col">
+          <summary className={cn(summaryButton, "list-none [&::-webkit-details-marker]:hidden")}>
+            + Upload an invoice or statement
+          </summary>
+          <Card className="mt-3">
+            <CardContent>
+              <UploadBillForm slug={tenant.slug} supplierId={account.supplierId} />
+            </CardContent>
+          </Card>
+        </details>
+      )}
 
       {canEdit && (
         <details open={empty} className="group flex flex-col">

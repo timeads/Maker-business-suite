@@ -12,6 +12,7 @@ import {
 import type { EntrySource } from "@/lib/stock/balance/activity";
 import { accountHistory, type AccountHistory } from "@/lib/stock/balance/history";
 import { Money } from "@/lib/stock/balance/money";
+import { gmailLink } from "@/lib/stock/mail/query";
 import {
   STOCK_HIDDEN_NOTICES_KEY,
   STOCK_MODULE,
@@ -49,6 +50,16 @@ type DbLedgerRow = {
   source: EntrySource;
 };
 
+/** What an emailed or uploaded entry carries beside the figures. */
+type MailMark = {
+  id: string;
+  needs_review: boolean;
+  review_note: string | null;
+  reported_by: "supplier" | "bank" | null;
+  mail_route: "gmail" | "forward" | null;
+  mail_message_id: string | null;
+};
+
 /** One line of a supplier's account, ready to show. */
 export type LedgerRow = {
   id: string;
@@ -71,6 +82,13 @@ export type LedgerRow = {
   createdBy: string | null;
   /** Invoices: when someone ticked "Paid", or null. */
   paymentSentAt: string | null;
+  /** Waiting for a person to look it over (it counts in the balance meanwhile). */
+  needsReview: boolean;
+  reviewNote: string | null;
+  /** Read from Gmail: a plain link that opens the message there. */
+  gmailLink: string | null;
+  /** Arrived at the bills address. */
+  forwarded: boolean;
 };
 
 /** A supplier's whole account: the entries and everything worked out from them. */
@@ -138,7 +156,23 @@ const TYPES: Record<DbLedgerRow["type"], LedgerType> = {
 /** A plain date as the UTC-midnight instant the balance maths works in. */
 const dayDate = (day: string) => new Date(`${day.slice(0, 10)}T00:00:00.000Z`);
 
-function toInput(row: DbLedgerRow): LedgerEntryInput {
+/**
+ * How the balance maths sees where an entry came from. A payment the supplier
+ * says it received is their record; the bank's notice and the books are ours,
+ * and the same money seen from both sides is counted once.
+ */
+function ledgerSource(row: DbLedgerRow, mark: MailMark | undefined): LedgerEntryInput["source"] {
+  if (row.source === "books") return "QUICKBOOKS";
+  if (row.source !== "email" && row.source !== "upload") return "MANUAL";
+  if (row.type !== "payment") return "VENDOR_EMAIL";
+  return mark?.reported_by === "supplier"
+    ? "KARIDA_EMAIL"
+    : mark?.reported_by === "bank"
+      ? "WELLS_FARGO_EMAIL"
+      : "MANUAL";
+}
+
+function toInput(row: DbLedgerRow, mark: MailMark | undefined): LedgerEntryInput {
   return {
     id: row.id,
     type: TYPES[row.type],
@@ -147,9 +181,8 @@ function toInput(row: DbLedgerRow): LedgerEntryInput {
     statedBalance: row.stated_balance === null ? null : new Money(row.stated_balance),
     reference: row.reference,
     description: row.description,
-    // A payment read from the books is seen from the bank's side, like TuftStock's.
-    source: row.source === "books" ? "QUICKBOOKS" : "MANUAL",
-    needsReview: false,
+    source: ledgerSource(row, mark),
+    needsReview: mark?.needs_review ?? false,
     supersededById: null,
     paymentSentAt: row.payment_sent_at ? new Date(row.payment_sent_at) : null,
   };
@@ -160,9 +193,10 @@ function toAccount(
   rows: DbLedgerRow[],
   today: string,
   now: Date,
+  marks: Map<string, MailMark>,
 ): SupplierAccount {
   const asOf = dayDate(today);
-  const inputs = rows.map(toInput);
+  const inputs = rows.map((row) => toInput(row, marks.get(row.id)));
   // A payment the business wrote down itself is its own record of money sent,
   // so one dated just before a statement may not be in that statement yet.
   const balance = computeVendorBalance(inputs, asOf, { ownPaymentsAreOurs: true });
@@ -189,7 +223,7 @@ function toAccount(
       paymentTermsDays: supplier.payment_terms_days,
       estimatedBalance: balance.estimatedBalance,
       aging,
-      needsReviewCount: 0,
+      needsReviewCount: balance.needsReviewCount,
       entryCount: rows.length,
       markedPaid: paid.waitingTotal,
     }),
@@ -208,6 +242,10 @@ function toAccount(
       source: row.source ?? "manual",
       createdBy: row.created_by ?? null,
       paymentSentAt: row.payment_sent_at,
+      needsReview: marks.get(row.id)?.needs_review ?? false,
+      reviewNote: marks.get(row.id)?.review_note ?? null,
+      gmailLink: gmailLink(marks.get(row.id)?.mail_message_id ?? ""),
+      forwarded: marks.get(row.id)?.mail_route === "forward",
     })),
   };
 }
@@ -223,7 +261,7 @@ export async function loadBalances(
   /** Only this supplier's account. */
   supplierId?: string,
 ): Promise<Balances> {
-  const [suppliers, ledger, { data: configs }] = await Promise.all([
+  const [suppliers, ledger, { data: configs }, markRows] = await Promise.all([
     all<SupplierRow>("suppliers", (from, to) => {
       const query = supabase
         .from("suppliers")
@@ -253,7 +291,18 @@ export async function loadBalances(
       .eq("tenant_id", tenant.id)
       .eq("module", STOCK_MODULE)
       .in("key", [STOCK_HIDDEN_NOTICES_KEY, STOCK_SETTINGS_KEY]),
+    // What emailed entries carry, read in a query of its own that is allowed
+    // to fail: without it the balances still show, just without the marks.
+    all<MailMark>("entry marks", (from, to) => {
+      const query = supabase
+        .from("supplier_ledger")
+        .select("id, needs_review, review_note, reported_by, mail_route, mail_message_id")
+        .eq("tenant_id", tenant.id)
+        .or("needs_review.eq.true,source.in.(email,upload)");
+      return (supplierId ? query.eq("supplier_id", supplierId) : query).order("id").range(from, to);
+    }).catch(() => [] as MailMark[]),
   ]);
+  const marks = new Map(markRows.map((mark) => [mark.id, mark]));
   const config = (key: string) =>
     ((configs ?? []) as { key: string; body: unknown }[]).find((c) => c.key === key)?.body;
   const now = new Date();
@@ -264,7 +313,9 @@ export async function loadBalances(
     if (rows) rows.push(row);
     else bySupplier.set(row.supplier_id, [row]);
   }
-  const accounts = suppliers.map((s) => toAccount(s, bySupplier.get(s.id) ?? [], today, now));
+  const accounts = suppliers.map((s) =>
+    toAccount(s, bySupplier.get(s.id) ?? [], today, now, marks),
+  );
   return {
     accounts,
     combined: combineSummaries(accounts.filter((a) => a.ledger.length > 0).map((a) => a.summary)),

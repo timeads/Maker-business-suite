@@ -20,6 +20,8 @@ import { stockAccess } from "../gate";
 import { StockTabs } from "../tabs";
 import { loadBalances } from "./data";
 import { BalanceFilterBar } from "./filters";
+import { loadMailFacts } from "./mail-data";
+import { MailPanel, mailNoticesFor } from "./mail-parts";
 import {
   AgingTiles,
   DueTable,
@@ -71,9 +73,28 @@ export default async function SupplierBalancesPage({
   }
 
   const filters = parseBalanceFilters(await searchParams);
-  const { accounts, combined, today } = await loadBalances(await createClient(), tenant);
+  const supabase = await createClient();
+  const [{ accounts, combined, today, hiddenNotices }, mail] = await Promise.all([
+    loadBalances(supabase, tenant),
+    loadMailFacts(supabase, tenant),
+  ]);
   const money = moneyText(tenant.currency);
   const canEdit = entitlements.canWrite;
+  // What came in by email, what's waiting for a person, and the two notices
+  // about it. Shown from the first day, so a forwarded bill for a supplier
+  // with nothing written down yet is never out of sight.
+  const mailPanel = (
+    <MailPanel
+      facts={mail}
+      accounts={accounts}
+      notices={mailNoticesFor(mail, accounts, today, hiddenNotices)}
+      slug={tenant.slug}
+      base={base}
+      money={money}
+      timezone={tenant.timezone}
+      canEdit={canEdit}
+    />
+  );
   const started = accounts.filter((a) => a.ledger.length > 0);
   const notStarted = accounts.filter((a) => a.ledger.length === 0 && !a.archived);
 
@@ -136,6 +157,7 @@ export default async function SupplierBalancesPage({
             )}
           </CardContent>
         </Card>
+        {mailPanel}
       </>
     );
   }
@@ -181,6 +203,8 @@ export default async function SupplierBalancesPage({
         selectedId="all"
         money={money}
       />
+
+      {mailPanel}
 
       <BalanceFilterBar
         base={base}

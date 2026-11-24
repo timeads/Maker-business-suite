@@ -131,6 +131,15 @@ export interface ArrivalFacts {
   lastBooks: { at: string; count: number } | null;
   /** The newest entries brought in from a spreadsheet. */
   lastImport: { at: string; count: number } | null;
+  /** Bills by email, when the workspace uses it. */
+  mail?: {
+    /** The workspace has a bills address to forward to. */
+    forwarding: boolean;
+    /** Its Gmail is read directly, once a day. */
+    reading: boolean;
+    /** This supplier's sender is on the workspace's list. */
+    listed: boolean;
+  };
 }
 
 /**
@@ -160,6 +169,20 @@ export function arrivalWords(supplier: string, facts: ArrivalFacts): string[] {
       ? `Payments made out to ${supplier} in your books are read at each sync and filed here, marked “your books”. Nothing is ever changed in your books.`
       : "Payments aren't read from your books. You can switch that on under Stock → Settings if your books are connected.",
   );
+  const mail = facts.mail;
+  if (mail && (mail.forwarding || mail.reading)) {
+    const how = [
+      mail.forwarding ? "forwarded to your bills address" : null,
+      mail.reading ? "found in your Gmail at the daily read" : null,
+    ]
+      .filter(Boolean)
+      .join(", or ");
+    out.push(
+      mail.listed
+        ? `Emails from ${supplier} that are ${how} are read by Claude and filed here, marked “from email”. A read there's any doubt about is marked “to check”; it counts in the balance meanwhile, so look it over. The email itself isn't kept.`
+        : `Bills by email is on, but ${supplier}'s sender isn't on your list yet, so their mail isn't recognised. Add it under Bills by email.`,
+    );
+  }
   out.push(
     `${supplier}'s latest statement always wins: anything dated on or before it is already in their figure, so each new statement sets the account straight.`,
   );

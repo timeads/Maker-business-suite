@@ -364,7 +364,25 @@ export function LedgerTable({
                   </td>
                 )}
                 <td className={cn(td, "text-muted-foreground text-xs whitespace-nowrap")}>
-                  {sourceLabel(row.source)}
+                  {row.gmailLink ? (
+                    <a
+                      href={row.gmailLink}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title="Open the message in Gmail"
+                      className="text-ochre-text font-semibold hover:underline"
+                    >
+                      {sourceLabel(row.source)}
+                    </a>
+                  ) : (
+                    sourceLabel(row.source)
+                  )}
+                  {row.forwarded && <span className="block">forwarded</span>}
+                  {row.needsReview && (
+                    <span className="mt-0.5 block">
+                      <Badge tone="waiting">To check</Badge>
+                    </span>
+                  )}
                 </td>
                 {remove && (
                   <td className="py-1 align-top">

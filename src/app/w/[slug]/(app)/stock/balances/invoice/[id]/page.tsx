@@ -20,10 +20,12 @@ import { cn } from "@/lib/utils";
 import { stockAccess } from "../../../gate";
 import { loadBalances } from "../../data";
 import { CorrectEntryForm, PaidTick, RemoveEntryButton } from "../../forms";
+import { SettleButton } from "../../mail-forms";
 import {
   BalanceValue,
   InvoiceLink,
   ManagersOnly,
+  Note,
   Panel,
   day,
   days,
@@ -386,12 +388,46 @@ export default async function InvoicePage({
         </p>
       </Panel>
 
+      {row.needsReview && (
+        <Note title="This one is marked to check">
+          <p>{row.reviewNote ?? "Something about it was unclear when it was read."}</p>
+          <p className="mt-1">
+            It counts in the balance meanwhile. If the figures are right, say so; if not, correct
+            them below (that settles it too) or remove the entry.
+          </p>
+          {canEdit && (
+            <div className="mt-2 flex justify-start">
+              <SettleButton
+                slug={tenant.slug}
+                entryId={row.id}
+                what={`invoice ${row.reference ?? ""}`.trim()}
+              />
+            </div>
+          )}
+        </Note>
+      )}
+
       <Panel title="About this entry">
         <dl className="grid gap-4 text-sm sm:grid-cols-3">
           <Fact name="Note">
             <span className="font-read">{row.description || "—"}</span>
           </Fact>
-          <Fact name="How it got here">{sourceLabel(row.source)}</Fact>
+          <Fact name="How it got here">
+            {sourceLabel(row.source)}
+            {row.forwarded && <Small>forwarded to your bills address</Small>}
+            {row.gmailLink && (
+              <Small>
+                <a
+                  href={row.gmailLink}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-ochre-text font-semibold hover:underline"
+                >
+                  Open the email in Gmail
+                </a>
+              </Small>
+            )}
+          </Fact>
           <Fact name="Written down">
             {moment(row.createdAt, tenant.timezone)}
             {who(row.createdBy) && <Small>by {who(row.createdBy)}</Small>}

@@ -795,3 +795,53 @@ describe("the Gmail connection's optional reading", () => {
     expect(scopeOf("read")).not.toMatch(/gmail\.modify|mail\.google\.com|gmail\.compose/);
   });
 });
+
+describe("words about what came in", () => {
+  it("sums up what was read from a message", async () => {
+    const { documentsSummary, readCountsWords } = await import("./words");
+    const base = {
+      reference: null,
+      date: null,
+      amountCents: null,
+      currency: null,
+      linesCents: null,
+      balanceCents: null,
+      balanceDate: null,
+      sure: { reference: true, date: true, amount: true },
+    };
+    expect(
+      documentsSummary([
+        { ...base, kind: "invoice", reference: "HM-1001", amountCents: 12345 },
+        { ...base, kind: "statement", balanceCents: -2500 },
+        { ...base, kind: "payment", amountCents: 50000 },
+      ]),
+    ).toBe("invoice HM-1001 · 123.45; statement · balance -25.00; payment · 500.00");
+    expect(readCountsWords({ filed: 3, toCheck: 0, capped: false })).toBe("3 new");
+    expect(readCountsWords({ filed: 0, toCheck: 2, capped: true })).toBe(
+      "0 new · 2 to check · stopped at a limit",
+    );
+  });
+
+  it("says how emailed entries get to a supplier's account, only where that is true", async () => {
+    const { arrivalWords } = await import("../balance/words");
+    const { sourceLabel } = await import("../balance/activity");
+    const facts = { booksOn: false, lastBooks: null, lastImport: null };
+    expect(arrivalWords("Hill Mill", facts).join(" ")).not.toMatch(/email/i);
+    const listed = arrivalWords("Hill Mill", {
+      ...facts,
+      mail: { forwarding: true, reading: false, listed: true },
+    }).join(" ");
+    expect(listed).toMatch(/forwarded to your bills address are read by Claude/);
+    expect(listed).not.toMatch(/found in your Gmail/);
+    expect(listed).toMatch(/counts in the balance meanwhile/);
+    expect(
+      arrivalWords("Hill Mill", {
+        ...facts,
+        mail: { forwarding: true, reading: true, listed: false },
+      }).join(" "),
+    ).toMatch(/sender isn't on your list yet/);
+    expect(sourceLabel("email")).toBe("From email");
+    expect(sourceLabel("upload")).toBe("Uploaded file");
+    expect(sourceLabel("manual")).toBe("Typed in");
+  });
+});

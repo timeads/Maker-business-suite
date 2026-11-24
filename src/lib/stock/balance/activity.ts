@@ -170,9 +170,20 @@ export function filterBills<
   );
 }
 
-export type EntrySource = "manual" | "import" | "books";
+export type EntrySource = "manual" | "import" | "books" | "email" | "upload";
 
 /** Where an entry came from, in the words the Source column uses. */
 export function sourceLabel(source: EntrySource): string {
-  return source === "books" ? "Your books" : source === "import" ? "Spreadsheet" : "Typed in";
+  switch (source) {
+    case "books":
+      return "Your books";
+    case "import":
+      return "Spreadsheet";
+    case "email":
+      return "From email";
+    case "upload":
+      return "Uploaded file";
+    default:
+      return "Typed in";
+  }
 }
