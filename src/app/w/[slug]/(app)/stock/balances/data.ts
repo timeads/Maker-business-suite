@@ -10,6 +10,7 @@ import {
   type VendorBalanceResult,
 } from "@/lib/stock/balance/balance";
 import { Money } from "@/lib/stock/balance/money";
+import { STOCK_HIDDEN_NOTICES_KEY, STOCK_MODULE, parseHiddenNotices } from "@/lib/stock/config";
 import { paidMarks, type PaidMarks } from "@/lib/stock/balance/paid-marks";
 import {
   combineSummaries,
@@ -36,6 +37,7 @@ type DbLedgerRow = {
   description: string;
   payment_sent_at: string | null;
   created_at: string;
+  source: "manual" | "import" | "books";
 };
 
 /** One line of a supplier's account, ready to show. */
@@ -52,6 +54,8 @@ export type LedgerRow = {
   reference: string | null;
   description: string;
   createdAt: string;
+  /** Read from the connected books rather than typed in. */
+  fromBooks: boolean;
 };
 
 /** A supplier's whole account: the entries and everything worked out from them. */
@@ -76,6 +80,8 @@ export type Balances = {
   combined: CombinedSummary;
   /** The workspace's calendar day, YYYY-MM-DD. */
   today: string;
+  /** Keys of the notices someone has hidden (lib/stock/balance/notices.ts). */
+  hiddenNotices: string[];
 };
 
 const PAGE = 1000;
@@ -120,7 +126,8 @@ function toInput(row: DbLedgerRow): LedgerEntryInput {
     statedBalance: row.stated_balance === null ? null : new Money(row.stated_balance),
     reference: row.reference,
     description: row.description,
-    source: "MANUAL",
+    // A payment read from the books is seen from the bank's side, like TuftStock's.
+    source: row.source === "books" ? "QUICKBOOKS" : "MANUAL",
     needsReview: false,
     supersededById: null,
     paymentSentAt: row.payment_sent_at ? new Date(row.payment_sent_at) : null,
@@ -135,7 +142,9 @@ function toAccount(
 ): SupplierAccount {
   const asOf = dayDate(today);
   const inputs = rows.map(toInput);
-  const balance = computeVendorBalance(inputs, asOf);
+  // A payment the business wrote down itself is its own record of money sent,
+  // so one dated just before a statement may not be in that statement yet.
+  const balance = computeVendorBalance(inputs, asOf, { ownPaymentsAreOurs: true });
   const aging = computeAging(inputs, balance.estimatedBalance, asOf, supplier.payment_terms_days);
   const paid = paidMarks(inputs, aging, now);
   return {
@@ -168,6 +177,7 @@ function toAccount(
       reference: row.reference,
       description: row.description,
       createdAt: row.created_at,
+      fromBooks: row.source === "books",
     })),
   };
 }
@@ -183,7 +193,7 @@ export async function loadBalances(
   /** Only this supplier's account. */
   supplierId?: string,
 ): Promise<Balances> {
-  const [suppliers, ledger] = await Promise.all([
+  const [suppliers, ledger, { data: hidden }] = await Promise.all([
     all<SupplierRow>("suppliers", (from, to) => {
       const query = supabase
         .from("suppliers")
@@ -198,7 +208,7 @@ export async function loadBalances(
       const query = supabase
         .from("supplier_ledger")
         .select(
-          "id, supplier_id, type, entry_date, amount, stated_balance, reference, description, payment_sent_at, created_at",
+          "id, supplier_id, type, entry_date, amount, stated_balance, reference, description, payment_sent_at, created_at, source",
         )
         .eq("tenant_id", tenant.id);
       return (supplierId ? query.eq("supplier_id", supplierId) : query)
@@ -207,6 +217,13 @@ export async function loadBalances(
         .order("id")
         .range(from, to);
     }),
+    supabase
+      .from("configs")
+      .select("body")
+      .eq("tenant_id", tenant.id)
+      .eq("module", STOCK_MODULE)
+      .eq("key", STOCK_HIDDEN_NOTICES_KEY)
+      .maybeSingle(),
   ]);
   const now = new Date();
   const today = localDay(now, tenant.timezone);
@@ -221,5 +238,6 @@ export async function loadBalances(
     accounts,
     combined: combineSummaries(accounts.filter((a) => a.ledger.length > 0).map((a) => a.summary)),
     today,
+    hiddenNotices: parseHiddenNotices(hidden?.body).keys,
   };
 }

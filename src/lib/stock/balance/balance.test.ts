@@ -127,6 +127,22 @@ describe("computeVendorBalance", () => {
     expect(r.estimatedBalance).toBe("20000.00");
   });
 
+  it("only flags a hand-typed payment when asked to count those as ours, and never moves the balance", () => {
+    const entries = [
+      entry("PAYMENT", "2026-07-30", 8000, { source: "MANUAL" }),
+      entry("PAYMENT", "2026-07-20", 500, { source: "MANUAL" }), // too long before
+      statement("2026-08-01", 20000),
+      entry("PAYMENT", "2026-08-02", 100, { source: "MANUAL" }), // after it: just counted
+    ];
+    const asOf = new Date("2026-08-05T00:00:00Z");
+    const plain = computeVendorBalance(entries, asOf);
+    expect(plain.paymentsPossiblyUnreflected).toHaveLength(0);
+    const ours = computeVendorBalance(entries, asOf, { ownPaymentsAreOurs: true });
+    expect(ours.paymentsPossiblyUnreflected.map((p) => p.amount)).toEqual(["8000.00"]);
+    expect(ours.estimatedBalance).toBe(plain.estimatedBalance);
+    expect(ours.estimatedBalance).toBe("19900.00");
+  });
+
   it("does not flag a wire the vendor already reported receiving", () => {
     const entries = [
       entry("PAYMENT", "2026-07-31", 8000, { source: "WELLS_FARGO_EMAIL" }),

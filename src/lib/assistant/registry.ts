@@ -44,13 +44,16 @@ import {
 } from "../shipping/config";
 import { DEFAULT_SHIPPING_RULES, SHIPPING_RULES_KEY, shippingRulesSchema } from "../shipping/rules";
 import {
+  DEFAULT_HIDDEN_NOTICES,
   DEFAULT_SAVED_VIEWS,
   DEFAULT_SEASONS,
   DEFAULT_STOCK_SETTINGS,
+  STOCK_HIDDEN_NOTICES_KEY,
   STOCK_MODULE,
   STOCK_SEASONS_KEY,
   STOCK_SETTINGS_KEY,
   STOCK_VIEWS_KEY,
+  hiddenNoticesSchema,
   savedViewsSchema,
   seasonsSchema,
   stockSettingsSchema,
@@ -129,7 +132,7 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
     feature: "stock",
     name: "Stock planning",
     description:
-      "The lead time and days of cover used when a supplier doesn't say, how often orders are reviewed, whether busy seasons are planned for, whether checked-in deliveries are added to the shop's count, and the words in an item's name that mean it is never reordered (gift cards and the like).",
+      "The lead time and days of cover used when a supplier doesn't say, how often orders are reviewed, whether busy seasons are planned for, whether checked-in deliveries are added to the shop's count, the words in an item's name (skip_words) and the shop tags (skip_tags) that mean it is never reordered (gift cards and the like), and whether payments to suppliers are read from the connected books onto supplier balances (payments_from_books).",
     schema: stockSettingsSchema,
     defaultBody: () => DEFAULT_STOCK_SETTINGS,
   },
@@ -142,6 +145,16 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
       "Named views of Stock's Everything list, shared by the whole workspace: which built-in view (all, onorder, nosales, hidden, atrisk, out, under, healthy, over, nosupplier), a search, the column it is sorted by and which way, the columns on show, and whether the list opens on it (opens_first, at most one). Each view needs a short id of lowercase letters and digits.",
     schema: savedViewsSchema,
     defaultBody: () => DEFAULT_SAVED_VIEWS,
+  },
+  {
+    module: STOCK_MODULE,
+    key: STOCK_HIDDEN_NOTICES_KEY,
+    feature: "stock",
+    name: "Notices hidden on supplier balances",
+    description:
+      "The notices on Stock's Balances tab that someone has hidden (an old statement, a payment that may not be in a statement yet, a statement that doesn't add up), as a list of keys. Each key names the notice and its facts, so a notice comes back by itself when its facts change. An empty list shows every notice again.",
+    schema: hiddenNoticesSchema,
+    defaultBody: () => DEFAULT_HIDDEN_NOTICES,
   },
   {
     module: STOCK_MODULE,
@@ -415,6 +428,14 @@ export function describeConfig(entry: ConfigEntry, body: unknown): string[] {
         : "Orders are marked as sent in the shop by hand",
     ];
   }
+  if (entry.module === STOCK_MODULE && entry.key === STOCK_HIDDEN_NOTICES_KEY) {
+    const keys = list("keys") as string[];
+    return [
+      keys.length
+        ? `${keys.length} notice${keys.length === 1 ? "" : "s"} hidden`
+        : "No notices hidden",
+    ];
+  }
   if (entry.module === STOCK_MODULE && entry.key === STOCK_SEASONS_KEY) {
     const seasons = list("seasons") as { name: string; in_stock_by: string; lift_pct?: number }[];
     return seasons.length
@@ -433,6 +454,9 @@ export function describeConfig(entry: ConfigEntry, body: unknown): string[] {
       value.push_to_shop
         ? "Checked-in deliveries are added to the shop's count"
         : "The shop's count is kept by hand",
+      value.payments_from_books
+        ? "Payments to suppliers are read from the books"
+        : "Payments to suppliers are typed in",
     ];
   }
   if (entry.key === EMAILS_KEY) {

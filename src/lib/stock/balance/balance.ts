@@ -119,6 +119,14 @@ export interface BalanceOptions {
   paymentLagDays?: number;
   /** Window for treating a vendor-reported payment as the same one as a wire. */
   matchWindowDays?: number;
+  /**
+   * Also treat payments typed in by hand as "seen from our side" when looking
+   * for ones a statement may not include yet. In the suite every payment the
+   * business writes down is its own record of money sent, so this is on there;
+   * TuftStock keeps it to payments read from the bank. It never changes the
+   * balance: only which payments are listed as possibly not in the statement.
+   */
+  ownPaymentsAreOurs?: boolean;
 }
 
 export function computeVendorBalance(
@@ -164,8 +172,10 @@ export function computeVendorBalance(
     const vendorPayments = activity.filter(
       (e) => e.type === "PAYMENT" && e.source === "KARIDA_EMAIL",
     );
+    const ours = (e: LedgerEntryInput) =>
+      BANK_SOURCES.has(e.source) || (opts.ownPaymentsAreOurs === true && e.source === "MANUAL");
     unreflected = activity.filter((e) => {
-      if (e.type !== "PAYMENT" || !BANK_SOURCES.has(e.source)) return false;
+      if (e.type !== "PAYMENT" || !ours(e)) return false;
       if (e.entryDate > anchorDate || e.entryDate < windowStart) return false;
       return !vendorPayments.some(
         (v) =>

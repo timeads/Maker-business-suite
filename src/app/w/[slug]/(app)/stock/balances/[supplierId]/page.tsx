@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { PageHeader } from "@/components/ui/page-header";
 import { describeAdjustment, describeBalance } from "@/lib/stock/balance/format";
 import { Money } from "@/lib/stock/balance/money";
+import { balanceNotices } from "@/lib/stock/balance/notices";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
 import { cn } from "@/lib/utils";
@@ -12,6 +13,8 @@ import { stockAccess } from "../../gate";
 import { loadBalances } from "../data";
 import { EntryForm, TermsForm } from "../forms";
 import {
+  AgingTiles,
+  HiddenNotices,
   BalanceValue,
   DueWords,
   LedgerTable,
@@ -53,7 +56,11 @@ export default async function SupplierBalancePage({
   }
   if (!/^[0-9a-f-]{36}$/i.test(supplierId)) notFound();
 
-  const { accounts, today } = await loadBalances(await createClient(), tenant, supplierId);
+  const { accounts, today, hiddenNotices } = await loadBalances(
+    await createClient(),
+    tenant,
+    supplierId,
+  );
   const account = accounts[0];
   if (!account) notFound();
   const money = moneyText(tenant.currency);
@@ -63,6 +70,24 @@ export default async function SupplierBalancePage({
   const owed = describeBalance(b.estimatedBalance);
   const drifted = audits.filter((a) => !new Money(a.delta).isZero()).reverse();
   const stale = b.daysSinceStatement !== null && b.daysSinceStatement > STALE_DAYS;
+  // Each notice's key carries its facts, so one that was hidden comes back
+  // when a newer statement or another payment changes them.
+  const notices = balanceNotices(
+    {
+      supplierId,
+      anchorDate: b.anchor?.date ?? null,
+      stale,
+      unreflectedIds: b.paymentsPossiblyUnreflected.map((p) => p.id),
+      drifted: drifted.map((a) => ({ toDate: a.toDate, delta: a.delta })),
+    },
+    hiddenNotices,
+  );
+  const notice = (kind: "stale" | "unreflected" | "drift") => {
+    const found = notices.find((n) => n.kind === kind && !n.hidden);
+    return found && canEdit ? { slug: tenant.slug, noticeKey: found.key } : undefined;
+  };
+  const shows = (kind: "stale" | "unreflected" | "drift") =>
+    notices.some((n) => n.kind === kind && !n.hidden);
   const marks = Object.fromEntries(paid.waiting.map((w) => [w.billId, w]));
   const oldest = aging.bills[0];
   const heroLabel = empty
@@ -163,6 +188,34 @@ export default async function SupplierBalancePage({
         </Card>
       </div>
 
+      {!empty && <AgingTiles buckets={aging.buckets} money={money} />}
+
+      {shows("unreflected") && (
+        <Note
+          title={
+            b.paymentsPossiblyUnreflected.length === 1
+              ? "A payment may not be in their statement yet"
+              : "Some payments may not be in their statement yet"
+          }
+          hide={notice("unreflected")}
+        >
+          <ul className="flex flex-col gap-0.5">
+            {b.paymentsPossiblyUnreflected.map((p) => (
+              <li key={p.id}>
+                {money(p.amount)} paid {day(p.date, "full")}
+                {p.reference ? ` (${p.reference})` : ""}: sent shortly before the statement&apos;s
+                date, so {name} may not have counted it.
+              </li>
+            ))}
+          </ul>
+          <p className="mt-1">
+            {b.paymentsPossiblyUnreflected.length === 1 ? "It isn't" : "These aren't"} taken off the
+            balance above, so nothing is counted twice. Check with {name}; their next statement will
+            settle it.
+          </p>
+        </Note>
+      )}
+
       {!empty && (
         <Card>
           <CardHeader>
@@ -247,8 +300,8 @@ export default async function SupplierBalancePage({
 
       <PaymentsConfirmed confirmed={paid.confirmed} money={money} timezone={tenant.timezone} />
 
-      {stale && (
-        <Note title="Their statement is getting old">
+      {shows("stale") && (
+        <Note title="Their statement is getting old" hide={notice("stale")}>
           <p>
             The last statement from {name} is {days(b.daysSinceStatement ?? 0)} old. Anything
             they&apos;ve billed since only counts if it has been added here, so you may owe more
@@ -257,8 +310,12 @@ export default async function SupplierBalancePage({
         </Note>
       )}
 
-      {drifted.length > 0 && (
-        <Note tone="bad" title="A statement doesn't add up with what's written down here">
+      {shows("drift") && (
+        <Note
+          tone="bad"
+          title="A statement doesn't add up with what's written down here"
+          hide={notice("drift")}
+        >
           <ul className="flex flex-col gap-0.5">
             {drifted.map((a) => {
               const delta = new Money(a.delta);
@@ -278,6 +335,10 @@ export default async function SupplierBalancePage({
             An invoice or payment missing from between two statements is the usual reason.
           </p>
         </Note>
+      )}
+
+      {canEdit && (
+        <HiddenNotices slug={tenant.slug} count={notices.filter((n) => n.hidden).length} />
       )}
 
       {canEdit && (

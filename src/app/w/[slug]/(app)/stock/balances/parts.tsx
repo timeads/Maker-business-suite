@@ -7,6 +7,8 @@ import { describeAdjustment, describeBalance } from "@/lib/stock/balance/format"
 import { Money } from "@/lib/stock/balance/money";
 import type { ConfirmedMark, WaitingMark } from "@/lib/stock/balance/paid-marks";
 import { cn } from "@/lib/utils";
+import type { AgingBucket, AgingResult } from "@/lib/stock/balance/aging";
+import { setBalanceNotice } from "./actions";
 import type { LedgerRow } from "./data";
 import { PaidTick, RemoveEntryButton } from "./forms";
 
@@ -123,6 +125,11 @@ export function LedgerTable({
                 )}
                 <td className={td}>
                   <Badge tone={type.tone}>{type.label}</Badge>
+                  {row.fromBooks && (
+                    <span className="text-muted-foreground mt-0.5 block text-xs whitespace-nowrap">
+                      from your books
+                    </span>
+                  )}
                 </td>
                 <td className={cn(td, "font-read")}>{row.reference ?? "—"}</td>
                 <td className={cn(td, "font-read text-text-2")}>{row.description || "—"}</td>
@@ -264,28 +271,104 @@ export function PaymentsConfirmed({
   );
 }
 
-/** Something worth a look, said plainly. */
+/**
+ * Something worth a look, said plainly. With `hide`, a manager can put it
+ * away: it stays hidden on every device until its facts change.
+ */
 export function Note({
   tone = "waiting",
   title,
   children,
+  hide,
 }: {
   tone?: "waiting" | "bad";
   title: string;
   children: React.ReactNode;
+  hide?: { slug: string; noticeKey: string };
 }) {
   return (
     <div
       className={cn(
-        "font-read rounded-lg border px-3 py-2 text-sm",
+        "font-read flex items-start gap-3 rounded-lg border px-3 py-2 text-sm",
         tone === "bad"
           ? "border-brick/25 bg-brick-soft text-brick"
           : "border-ochre/30 bg-ochre-soft text-ochre-text",
       )}
     >
-      <p className="font-semibold">{title}</p>
-      {children}
+      <div className="min-w-0 flex-1">
+        <p className="font-semibold">{title}</p>
+        {children}
+      </div>
+      {hide && (
+        <form action={setBalanceNotice.bind(null, hide.slug, hide.noticeKey)} className="flex-none">
+          <button
+            type="submit"
+            aria-label={`Hide the notice: ${title}`}
+            title="Hide this until something about it changes"
+            className="rounded-sm px-1.5 py-0.5 font-sans text-xs font-semibold underline-offset-2 opacity-80 hover:underline hover:opacity-100"
+          >
+            Hide
+          </button>
+        </form>
+      )}
     </div>
+  );
+}
+
+/** "2 notices hidden · Show them": brings every hidden notice back. */
+export function HiddenNotices({ slug, count }: { slug: string; count: number }) {
+  if (count === 0) return null;
+  return (
+    <form
+      action={setBalanceNotice.bind(null, slug, null)}
+      className="text-muted-foreground flex items-center gap-1 text-xs"
+    >
+      {count} notice{count === 1 ? "" : "s"} hidden ·
+      <button type="submit" className="text-ochre-text font-semibold hover:underline">
+        Show {count === 1 ? "it" : "them"}
+      </button>
+    </form>
+  );
+}
+
+const BUCKETS: { key: AgingBucket; label: string; tone: string }[] = [
+  { key: "notDue", label: "Not due yet", tone: "" },
+  { key: "late1to30", label: "1–30 days late", tone: "text-ochre-text" },
+  { key: "late31to60", label: "31–60 days late", tone: "text-brick" },
+  { key: "late60plus", label: "Over 60 days late", tone: "text-brick" },
+];
+
+/** How late the money is: four tiles, each with its amount and how many bills. */
+export function AgingTiles({
+  buckets,
+  money,
+}: {
+  buckets: AgingResult["buckets"];
+  money: MoneyText;
+}) {
+  return (
+    <dl className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      {BUCKETS.map(({ key, label, tone }) => {
+        const bucket = buckets[key];
+        const some = bucket.count > 0;
+        return (
+          <div key={key} className="bg-card border-border rounded-lg border px-4 py-3">
+            <dt className="text-muted-foreground text-xs font-semibold">{label}</dt>
+            <dd
+              className={cn(
+                "mt-1 text-xl leading-none font-bold tabular-nums",
+                some ? tone : "text-muted-foreground",
+              )}
+            >
+              {money(bucket.amount)}
+            </dd>
+            <dd className="text-muted-foreground mt-1.5 text-xs">
+              {bucket.count} bill{bucket.count === 1 ? "" : "s"}
+            </dd>
+          </div>
+        );
+      })}
+    </dl>
   );
 }
 

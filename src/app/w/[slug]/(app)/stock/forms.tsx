@@ -748,6 +748,7 @@ export function StockSettingsForm({
   slug,
   settings,
   canPush,
+  booksConnected,
 }: {
   slug: string;
   settings: {
@@ -758,8 +759,11 @@ export function StockSettingsForm({
     push_to_shop: boolean;
     skip_words: string[];
     skip_tags: string[];
+    payments_from_books: boolean;
   };
   canPush: boolean;
+  /** The workspace has its books connected, so payments can be read from them. */
+  booksConnected: boolean;
 }) {
   const [state, action] = useActionState(saveStockSettings.bind(null, slug), {});
   return (
@@ -838,6 +842,30 @@ export function StockSettingsForm({
           </span>
         </span>
       </label>
+      {booksConnected ? (
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            name="payments_from_books"
+            defaultChecked={settings.payments_from_books}
+            className="mt-0.5"
+          />
+          <span>
+            Read payments to my suppliers from QuickBooks
+            <span className="text-muted-foreground block text-xs">
+              A bill payment, cheque or card charge made out to a supplier of the same name is added
+              to that supplier&apos;s account under Balances, a few times a day. Only for suppliers
+              whose account you&apos;ve started, and never one you&apos;ve already typed in. Nothing
+              is ever changed in your books.
+            </span>
+          </span>
+        </label>
+      ) : (
+        // Not on offer here, but whatever was chosen is kept as it is.
+        settings.payments_from_books && (
+          <input type="hidden" name="payments_from_books" value="on" />
+        )
+      )}
       <div className="flex flex-col gap-1.5 sm:max-w-md">
         <Label htmlFor="set-skip">Never reorder anything with these words in its name</Label>
         <textarea

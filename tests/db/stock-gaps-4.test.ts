@@ -500,3 +500,204 @@ describe("a supplier's days to arrive", () => {
     expect(await lead(vendor.id)).toBe(21);
   });
 });
+
+describe("payments read from the books", () => {
+  let mill: string;
+  const ledger = async (supplier: string) =>
+    (
+      await db.query<{
+        type: string;
+        day: string;
+        amount: string;
+        source: string;
+        key: string | null;
+      }>(
+        `select type, entry_date::text as day, amount::text, source, external_key as key
+         from public.supplier_ledger where supplier_id = $1 order by entry_date, created_at`,
+        [supplier],
+      )
+    ).rows;
+  const file = (tenant: string, rows: object[]) =>
+    service<{ counts: Record<string, number | boolean> }>(
+      "select public.import_book_payments($1, 'quickbooks', $2::jsonb) as counts",
+      [tenant, JSON.stringify(rows)],
+    ).then((rows) => rows[0].counts);
+  const payment = (id: string, date: string, amount: number, payee = "hill mill", memo = "") => ({
+    external_id: id,
+    kind: "BillPayment",
+    date,
+    payee,
+    amount,
+    memo,
+  });
+  const settings = (tenant: string, user: User, on: boolean) =>
+    as(user, "select public.save_config($1, 'stock', 'settings', $2::jsonb)", [
+      tenant,
+      JSON.stringify({ version: 1, payments_from_books: on }),
+    ]);
+
+  it("does nothing until the workspace asks for it", async () => {
+    mill = supplierA;
+    await as(
+      alice,
+      "select public.save_ledger_entry($1, $2, 'invoice', '2026-10-01', 500, null, 'INV-1', '')",
+      [tenantA, mill],
+    );
+    const wanted = () =>
+      service<{ on: boolean }>("select public.book_payments_wanted($1, 'quickbooks') as on", [
+        tenantA,
+      ]).then((rows) => rows[0].on);
+    expect(await wanted()).toBe(false);
+    expect(await file(tenantA, [payment("1", "2026-10-20", 200)])).toEqual({ off: true });
+    expect((await ledger(mill)).filter((row) => row.type === "payment")).toEqual([]);
+    await settings(tenantA, alice, true);
+    expect(await wanted()).toBe(true);
+    // Only the books connection is asked.
+    expect(
+      (
+        await service<{ on: boolean }>("select public.book_payments_wanted($1, 'shopify') as on", [
+          tenantA,
+        ])
+      )[0].on,
+    ).toBe(false);
+  });
+
+  it("files a payment on the supplier of the same name, once, and follows the books' corrections", async () => {
+    const rows = [
+      payment("1", "2026-10-20", 200, "  Hill MILL ", "inv INV-1"),
+      payment("2", "2026-09-01", 75), // before the account's first invoice
+      payment("3", "2026-10-21", 10, "Nobody We Know"),
+      payment("4", "2026-10-22", -5),
+      { ...payment("5", "2026-10-22", 5), kind: "Bill; drop" },
+    ];
+    expect(await file(tenantA, rows)).toMatchObject({
+      read: 5,
+      added: 1,
+      before_account: 1,
+      no_supplier: 3,
+    });
+    expect((await ledger(mill)).filter((row) => row.type === "payment")).toEqual([
+      {
+        type: "payment",
+        day: "2026-10-20",
+        amount: "200.00",
+        source: "books",
+        key: "qbo:BillPayment:1",
+      },
+    ]);
+    // Read again: nothing new. Corrected in the books: the same row follows.
+    expect(await file(tenantA, rows)).toMatchObject({ added: 0, same: 1 });
+    expect(await file(tenantA, [payment("1", "2026-10-21", 210)])).toMatchObject({ changed: 1 });
+    expect((await ledger(mill)).filter((row) => row.type === "payment")).toMatchObject([
+      { day: "2026-10-21", amount: "210.00" },
+    ]);
+    const [{ description }] = (
+      await db.query<{ description: string }>(
+        "select description from public.supplier_ledger where external_key = 'qbo:BillPayment:1'",
+      )
+    ).rows;
+    expect(description).toBe("From your books (QuickBooks)");
+  });
+
+  it("leaves alone a payment already typed in by hand", async () => {
+    await as(
+      alice,
+      "select public.save_ledger_entry($1, $2, 'payment', '2026-11-02', 90, null, 'wire', '')",
+      [tenantA, mill],
+    );
+    expect(
+      await file(tenantA, [payment("9", "2026-11-05", 90), payment("10", "2026-11-12", 90)]),
+    ).toMatchObject({ typed_already: 1, added: 1 });
+    const keys = (await ledger(mill)).map((row) => row.key).filter(Boolean);
+    expect(keys).toEqual(["qbo:BillPayment:1", "qbo:BillPayment:10"]);
+  });
+
+  it("stays off an account once a manager has taken it off", async () => {
+    const row = await one<{ id: string }>(
+      "select id from public.supplier_ledger where external_key = 'qbo:BillPayment:10'",
+    );
+    await expect(
+      as(carol, "select public.remove_ledger_entry($1, $2)", [tenantA, row.id]),
+    ).rejects.toThrow();
+    await as(alice, "select public.remove_ledger_entry($1, $2)", [tenantA, row.id]);
+    expect(await file(tenantA, [payment("10", "2026-11-12", 90)])).toMatchObject({
+      taken_off: 1,
+      added: 0,
+    });
+    // A hand-typed entry is removed as before, with nothing noted.
+    const typed = await one<{ id: string }>(
+      "select id from public.supplier_ledger where supplier_id = $1 and reference = 'wire'",
+      [mill],
+    );
+    await as(alice, "select public.remove_ledger_entry($1, $2)", [tenantA, typed.id]);
+    const skips = (
+      await db.query<{ external_key: string; skipped_by: string }>(
+        "select external_key, skipped_by from public.supplier_ledger_skips where tenant_id = $1",
+        [tenantA],
+      )
+    ).rows;
+    expect(skips).toEqual([{ external_key: "qbo:BillPayment:10", skipped_by: alice.id }]);
+  });
+
+  it("is for the sync only, and never crosses workspaces", async () => {
+    const call = "select public.import_book_payments($1, 'quickbooks', '[]'::jsonb)";
+    await expect(as(alice, call, [tenantA])).rejects.toThrow(/permission denied/);
+    await expect(asAnon(db, (tx) => tx.query(call, [tenantA]))).rejects.toThrow(
+      /permission denied/,
+    );
+    await expect(
+      as(alice, "select public.book_payments_wanted($1, 'quickbooks')", [tenantA]),
+    ).rejects.toThrow(/permission denied/);
+    await expect(
+      service("select public.import_book_payments($1, 'shopify', '[]'::jsonb)", [tenantA]),
+    ).rejects.toThrow(/Only the books/);
+    // Bob's workspace has a supplier of its own and has switched it on; a
+    // payment named for Alice's supplier finds nothing there.
+    await settings(tenantB, bob, true);
+    expect(await file(tenantB, [payment("77", "2026-11-01", 60)])).toMatchObject({
+      no_supplier: 1,
+      added: 0,
+    });
+    // Skips and books rows are read by managers of their own workspace only.
+    const skips = (user: User) =>
+      as(user, "select 1 from public.supplier_ledger_skips where tenant_id = $1", [tenantA]);
+    expect(await skips(alice)).toHaveLength(1);
+    expect(await skips(carol)).toEqual([]);
+    expect(await skips(bob)).toEqual([]);
+    await expect(
+      as(alice, "delete from public.supplier_ledger_skips where tenant_id = $1", [tenantA]),
+    ).rejects.toThrow(/permission denied/);
+    await expect(
+      as(
+        alice,
+        "insert into public.supplier_ledger_skips (tenant_id, supplier_id, external_key) values ($1, $2, 'x')",
+        [tenantA, mill],
+      ),
+    ).rejects.toThrow(/permission denied/);
+    // A typed entry can't pass itself off as one from the books, or the other way round.
+    await expect(
+      db.query(
+        "insert into public.supplier_ledger (tenant_id, supplier_id, type, entry_date, amount, source) values ($1, $2, 'payment', '2026-11-01', 1, 'books')",
+        [tenantA, mill],
+      ),
+    ).rejects.toThrow(/supplier_ledger_books_have_a_key/);
+  });
+});
+
+describe("notices hidden on supplier balances", () => {
+  it("are kept with the workspace by its managers", async () => {
+    const save = "select public.save_config($1, 'stock', 'hidden_notices', $2::jsonb)";
+    const body = JSON.stringify({ version: 1, keys: ["stale:s1:2026-08-06"] });
+    await expect(as(carol, save, [tenantA, body])).rejects.toThrow();
+    await expect(as(bob, save, [tenantA, body])).rejects.toThrow();
+    await as(alice, save, [tenantA, body]);
+    const read = (user: User) =>
+      as<{ body: { keys: string[] } }>(
+        user,
+        "select body from public.configs where tenant_id = $1 and module = 'stock' and key = 'hidden_notices'",
+        [tenantA],
+      );
+    expect((await read(alice))[0].body.keys).toEqual(["stale:s1:2026-08-06"]);
+    expect(await read(bob)).toEqual([]);
+  });
+});

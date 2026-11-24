@@ -3,6 +3,13 @@
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/auth";
 import { getEntitlements } from "@/lib/entitlements";
+import { hideNotice } from "@/lib/stock/balance/notices";
+import {
+  STOCK_HIDDEN_NOTICES_KEY,
+  STOCK_MODULE,
+  hiddenNoticesSchema,
+  parseHiddenNotices,
+} from "@/lib/stock/config";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
 import type { StockState } from "../actions";
@@ -188,4 +195,35 @@ export async function setSupplierTerms(
   if (error) return { error: OOPS };
   done(slug);
   return { message: "Saved." };
+}
+
+/**
+ * Hides one notice on the Balances tab, or (with no key) shows them all
+ * again. Kept with the workspace, so it holds on every device; a notice comes
+ * back by itself when its facts change, because its key changes with them.
+ */
+export async function setBalanceNotice(slug: string, key: string | null): Promise<void> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return;
+  if (key !== null && (key.length < 1 || key.length > 300)) return;
+  const { data } = await ctx.supabase
+    .from("configs")
+    .select("body")
+    .eq("tenant_id", ctx.tenant.id)
+    .eq("module", STOCK_MODULE)
+    .eq("key", STOCK_HIDDEN_NOTICES_KEY)
+    .maybeSingle();
+  const now = parseHiddenNotices(data?.body).keys;
+  const parsed = hiddenNoticesSchema.safeParse({
+    version: 1,
+    keys: key === null ? [] : hideNotice(now, key),
+  });
+  if (!parsed.success) return;
+  const { error } = await ctx.supabase.rpc("save_config", {
+    p_tenant_id: ctx.tenant.id,
+    p_module: STOCK_MODULE,
+    p_key: STOCK_HIDDEN_NOTICES_KEY,
+    p_body: parsed.data,
+  });
+  if (!error) done(slug);
 }

@@ -24,16 +24,23 @@ export default async function StockSettingsPage({ params }: { params: Promise<{ 
   if (!access.ok) return access.upsell;
   const { tenant, role, entitlements } = access;
   const supabase = await createClient();
-  const [{ settings, link, seasons, today }, { data: emailConfig }] = await Promise.all([
-    loadStock(supabase, tenant),
-    supabase
-      .from("configs")
-      .select("body")
-      .eq("tenant_id", tenant.id)
-      .eq("module", STOCK_MODULE)
-      .eq("key", PO_EMAIL_KEY)
-      .maybeSingle(),
-  ]);
+  const [{ settings, link, seasons, today }, { data: emailConfig }, { data: books }] =
+    await Promise.all([
+      loadStock(supabase, tenant),
+      supabase
+        .from("configs")
+        .select("body")
+        .eq("tenant_id", tenant.id)
+        .eq("module", STOCK_MODULE)
+        .eq("key", PO_EMAIL_KEY)
+        .maybeSingle(),
+      supabase
+        .from("connections")
+        .select("status")
+        .eq("tenant_id", tenant.id)
+        .eq("provider", "quickbooks")
+        .maybeSingle(),
+    ]);
   const emailTemplate = parsePoEmail(emailConfig?.body);
   const seasonDay = (value: string) =>
     new Intl.DateTimeFormat("en-US", {
@@ -68,7 +75,12 @@ export default async function StockSettingsPage({ params }: { params: Promise<{ 
         </CardHeader>
         <CardContent>
           {canManage(role) && entitlements.canWrite ? (
-            <StockSettingsForm slug={tenant.slug} settings={settings} canPush={link.canPush} />
+            <StockSettingsForm
+              slug={tenant.slug}
+              settings={settings}
+              canPush={link.canPush}
+              booksConnected={books?.status === "active"}
+            />
           ) : (
             <p className="text-muted-foreground text-sm">
               An owner or admin can change these settings.

@@ -5,9 +5,19 @@ import {
   type ConnectedAccount,
   type Fetch,
   type ProviderAdapter,
+  type BookPaymentRow,
   type SnapshotRow,
   type TokenSet,
 } from "../types";
+import {
+  PAYMENT_ENTITIES,
+  PAYMENT_PAGE,
+  PAYMENT_PAGES,
+  answerSize,
+  parsePayments,
+  paymentsQuery,
+  type PaymentsResponse,
+} from "./quickbooks-payments";
 import {
   parseAgedReceivables,
   parseBalanceSheet,
@@ -99,6 +109,35 @@ export function createQuickBooksAdapter(fetchImpl: Fetch = fetch): ProviderAdapt
       }
       throw err;
     }
+  }
+
+  /**
+   * Payments made out to suppliers over the last 400 days, for Stock's
+   * Balances tab. Only reads. Returns the rows and how many calls it took.
+   */
+  async function supplierPayments(realmId: string, token: TokenSet, since: string) {
+    const rows: BookPaymentRow[] = [];
+    let calls = 0;
+    for (const entity of PAYMENT_ENTITIES) {
+      for (let page = 0; page < PAYMENT_PAGES; page++) {
+        const query = new URLSearchParams({
+          query: paymentsQuery(entity, since, page),
+          minorversion: "75",
+        });
+        calls += 1;
+        const answer = await requestJson<PaymentsResponse>(
+          fetchImpl,
+          "QuickBooks",
+          `${apiBase()}/v3/company/${encodeURIComponent(realmId)}/query?${query}`,
+          {
+            headers: { Authorization: `Bearer ${token.access_token}`, Accept: "application/json" },
+          },
+        );
+        rows.push(...parsePayments(entity, answer));
+        if (answerSize(entity, answer) < PAYMENT_PAGE) break;
+      }
+    }
+    return { rows, calls };
   }
 
   return {
@@ -199,7 +238,23 @@ export function createQuickBooksAdapter(fetchImpl: Fetch = fetch): ProviderAdapt
         parseAgedReceivables(receivables, iso(today)),
       ].filter((row): row is SnapshotRow => row !== null);
       await store.saveSnapshots(snapshots);
-      await store.recordUsage(4);
+      let calls = 4;
+      // Payments to suppliers, for Stock's balances. The reports matter more:
+      // trouble here is noted and never stops the sync.
+      try {
+        if (await store.bookPaymentsWanted()) {
+          const since = new Date(today.getTime() - 400 * 86_400_000);
+          const payments = await supplierPayments(externalAccountId, token, iso(since));
+          calls += payments.calls;
+          await store.importBookPayments(payments.rows);
+        }
+      } catch (err) {
+        console.warn(
+          `QuickBooks payments not read for ${externalAccountId}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+      await store.recordUsage(calls);
 
       return {
         account: { displayName: info.CompanyInfo.CompanyName },

@@ -117,6 +117,19 @@ export type StockItemRow = {
   price: number | null;
 };
 
+/** Money paid out to a supplier, as the books record it. */
+export type BookPaymentRow = {
+  /** The books' own id for the record, and what kind of record it is. */
+  external_id: string;
+  kind: string;
+  /** YYYY-MM-DD. */
+  date: string;
+  /** Who it was made out to, as the books name them. */
+  payee: string;
+  amount: number;
+  memo: string;
+};
+
 /** A product's tags in the shop, noted on each of its stock items. */
 export type StockTagsRow = { product_external_id: string; tags: string[] };
 
@@ -200,6 +213,13 @@ export type SyncStore = {
   /** For orders already stored with upsertCommerce. */
   upsertShipping(orders: ShippingOrderRow[]): Promise<void>;
   saveSnapshots(rows: SnapshotRow[]): Promise<void>;
+  /**
+   * Payments to suppliers read from the books, for Stock's Balances tab. The
+   * database files only those the workspace asked for and can match.
+   */
+  importBookPayments(rows: BookPaymentRow[]): Promise<void>;
+  /** Has the workspace asked for that? If not, the books aren't read for payments at all. */
+  bookPaymentsWanted(): Promise<boolean>;
   /** Erases one shopper's personal details, keeping the sales figures. */
   redactCustomer(externalId: string, email: string | null): Promise<void>;
   /** Deletes everything synced from this provider for the workspace. */

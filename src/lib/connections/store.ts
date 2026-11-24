@@ -33,6 +33,15 @@ export function rpcSyncStore(
     setStockTags: (items) => call("set_stock_item_tags", { p_items: items }),
     bookShopOrders: (orders) => applyShopOrders(admin, scope.tenantId, orders),
     saveSnapshots: (rows) => call("save_financial_snapshots", { p_snapshots: rows }),
+    importBookPayments: (rows) => call("import_book_payments", { p_rows: rows }),
+    async bookPaymentsWanted() {
+      const { data, error } = await admin.rpc("book_payments_wanted", {
+        p_tenant_id: scope.tenantId,
+        p_provider: scope.provider,
+      });
+      if (error) throw new Error(`book_payments_wanted failed: ${error.message}`);
+      return data === true;
+    },
     redactCustomer: (externalId, email) =>
       call("redact_customer", { p_customer_external_id: externalId, p_email: email }),
     purgeProviderData: () => call("purge_provider_data", {}),

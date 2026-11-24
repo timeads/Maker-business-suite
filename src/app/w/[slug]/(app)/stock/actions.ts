@@ -1243,6 +1243,7 @@ export async function saveStockSettings(
     review_buffer_days: whole(formData, "review"),
     seasonality: formData.get("seasonality") === "on",
     push_to_shop: formData.get("push_to_shop") === "on",
+    payments_from_books: formData.get("payments_from_books") === "on",
     skip_words: [
       ...new Set(
         text(formData, "skip_words")

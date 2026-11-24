@@ -14,6 +14,7 @@ import { stockAccess } from "../gate";
 import { StockTabs } from "../tabs";
 import { loadBalances } from "./data";
 import {
+  AgingTiles,
   DueWords,
   LedgerTable,
   ManagersOnly,
@@ -178,6 +179,8 @@ export default async function SupplierBalancesPage({
         </CardContent>
       </Card>
 
+      <AgingTiles buckets={aging.buckets} money={money} />
+
       <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {started.map(({ summary: s }) => {
           const balance = describeBalance(s.balance);
@@ -311,6 +314,21 @@ export default async function SupplierBalancesPage({
             <p className="text-ochre-text text-xs">
               {money(aging.unattributed)} of what you owe is older than any invoice written down
               here, so we can&apos;t say when it&apos;s due.
+            </p>
+          )}
+          {groups.length > 0 && (
+            <p className="text-xs print:hidden">
+              <a
+                href={`${base}/calendar`}
+                className="text-ochre-text font-semibold underline-offset-2 hover:underline"
+              >
+                Put these due dates on my calendar
+              </a>{" "}
+              <span className="text-muted-foreground">
+                (a calendar file: one entry per supplier per pay day, a weekend&apos;s bills on the
+                Friday before. Download it again after things change and your calendar updates the
+                same entries.)
+              </span>
             </p>
           )}
           <p className="text-muted-foreground text-xs">

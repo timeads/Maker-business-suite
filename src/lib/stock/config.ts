@@ -28,6 +28,13 @@ export const stockSettingsSchema = z.object({
    * shop (any capitals; the whole tag, not part of it). Also on read.
    */
   skip_tags: z.array(z.string().trim().min(1).max(80)).max(20).default([]),
+  /**
+   * File payments read from the connected books (QuickBooks) on the matching
+   * supplier's account, under Balances. Off until someone asks: the books are
+   * not read for payments at all while it is off. The database reads this
+   * itself (`book_payments_wanted`).
+   */
+  payments_from_books: z.boolean().default(false),
 });
 export type StockSettings = z.infer<typeof stockSettingsSchema>;
 
@@ -105,4 +112,21 @@ export const DEFAULT_SEASONS: SeasonsConfig = { version: 1, seasons: [] };
 export function parseSeasons(body: unknown): SeasonsConfig {
   const parsed = seasonsSchema.safeParse(body);
   return parsed.success ? parsed.data : DEFAULT_SEASONS;
+}
+
+/**
+ * Notices a manager has hidden on the Balances tab, by key. A key carries
+ * the notice's facts, so it shows again when they change
+ * (lib/stock/balance/notices.ts). Kept here so it is the same on every device.
+ */
+export const STOCK_HIDDEN_NOTICES_KEY = "hidden_notices";
+export const hiddenNoticesSchema = z.object({
+  version: z.literal(1),
+  keys: z.array(z.string().min(1).max(300)).max(200).default([]),
+});
+export type HiddenNotices = z.infer<typeof hiddenNoticesSchema>;
+export const DEFAULT_HIDDEN_NOTICES: HiddenNotices = { version: 1, keys: [] };
+export function parseHiddenNotices(body: unknown): HiddenNotices {
+  const parsed = hiddenNoticesSchema.safeParse(body);
+  return parsed.success ? parsed.data : DEFAULT_HIDDEN_NOTICES;
 }

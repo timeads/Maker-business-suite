@@ -1,4 +1,5 @@
 import type {
+  BookPaymentRow,
   CustomerRow,
   OrderRow,
   ProductPhotoRow,
@@ -25,6 +26,9 @@ export function memoryStore() {
     productPhotos: [] as ProductPhotoRow[],
     variantPhotos: [] as VariantPhotoRow[],
     stockTags: [] as StockTagsRow[],
+    bookPayments: [] as BookPaymentRow[],
+    /** Set to true for a workspace that asked for payments from its books. */
+    bookPaymentsWanted: false,
     redacted: [] as { externalId: string; email: string | null }[],
     purged: 0,
     usage: 0,
@@ -53,6 +57,12 @@ export function memoryStore() {
     },
     async bookShopOrders(orders) {
       state.shopBookings.push(...orders);
+    },
+    async bookPaymentsWanted() {
+      return state.bookPaymentsWanted;
+    },
+    async importBookPayments(rows) {
+      state.bookPayments.push(...rows);
     },
     async saveSnapshots(rows) {
       state.snapshots.push(...rows);
