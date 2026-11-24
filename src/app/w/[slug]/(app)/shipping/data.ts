@@ -339,7 +339,9 @@ type TotalJoin = {
 };
 
 /** The joined sale's total as a plain number on the row itself. */
-function withOrderTotal<T extends object>(row: T & TotalJoin): T & { order_total: number | null } {
+export function withOrderTotal<T extends object>(
+  row: T & TotalJoin,
+): T & { order_total: number | null } {
   const { sale, ...rest } = row;
   const total = (Array.isArray(sale) ? sale[0] : sale)?.total;
   const amount = total === null || total === undefined ? Number.NaN : Number(total);
@@ -614,3 +616,61 @@ export function withRuleFacts(
   });
   return { orders: seen, holds };
 }
+
+/** A bought label's parcel, with what is known about its boxes. */
+export type ParcelBoxes = {
+  id: string;
+  number: number;
+  shipping_order_id: string | null;
+  /** [{"line_id", "title", "qty"}]: what went in the parcel. */
+  items: unknown;
+  /** What went in each box, when the server noted it (see `boughtBoxes`). */
+  box_items: unknown;
+  /** Box number to when its label was last printed. */
+  label_boxes_printed: unknown;
+  label_parcels: unknown;
+  tracking_number: string | null;
+  label_printed_at: string | null;
+};
+
+const PARCEL_BOXES =
+  "id, number, shipping_order_id, items, box_items, label_boxes_printed, label_parcels, tracking_number, label_printed_at";
+
+/**
+ * The parcels with a bought label, not undone and not riding on another
+ * order's, for one order (newest first) or by the parcel's own id. Read on
+ * its own and allowed to fail: without it every parcel simply has one slip
+ * and is packed as a whole, as before.
+ */
+export async function loadParcelBoxes(
+  supabase: SupabaseClient,
+  tenantId: string,
+  by: { orderId: string } | { shipmentId: string },
+): Promise<ParcelBoxes[]> {
+  let request = supabase
+    .from("shipments")
+    .select(PARCEL_BOXES)
+    .eq("tenant_id", tenantId)
+    .is("voided_at", null)
+    .is("merged_with", null)
+    .not("label_provider", "is", null)
+    .order("number", { ascending: false })
+    .limit(20);
+  request =
+    "orderId" in by ? request.eq("shipping_order_id", by.orderId) : request.eq("id", by.shipmentId);
+  const { data, error } = await request;
+  if (error || !data) return [];
+  return data as unknown as ParcelBoxes[];
+}
+
+/** Each box's tracking number, in box order, from what is kept with a bought label. */
+export const parcelTracking = (parcel: Pick<ParcelBoxes, "label_parcels" | "tracking_number">) =>
+  Array.isArray(parcel.label_parcels) && parcel.label_parcels.length > 0
+    ? (parcel.label_parcels as unknown[]).map((box) =>
+        box &&
+        typeof box === "object" &&
+        typeof (box as { tracking_number?: unknown }).tracking_number === "string"
+          ? (box as { tracking_number: string }).tracking_number
+          : null,
+      )
+    : [parcel.tracking_number];

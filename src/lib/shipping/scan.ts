@@ -51,3 +51,30 @@ export function scanItem(
 export const allPacked = (lines: PackLine[], packed: Record<string, number>) =>
   lines.some((line) => line.left > 0) &&
   lines.every((line) => (packed[line.line_id] ?? 0) >= line.left);
+
+/** Whether a scanned code is one of these lines' own (its SKU or barcode). */
+export const isItemCode = (lines: PackLine[], input: string) => {
+  const code = norm(input);
+  return (
+    Boolean(code) && lines.some((line) => norm(line.sku) === code || norm(line.barcode) === code)
+  );
+};
+
+/**
+ * The lines to check for one box of an order going out in several: only what
+ * goes in that box, each with the number in that box. Worked out from the
+ * box, not from what is left on the order, so a box can still be checked
+ * after the labels for every box have been bought.
+ */
+export function boxPackLines(
+  lines: PackLine[],
+  box: { items: Record<string, number> },
+): PackLine[] {
+  return lines
+    .map((line) => ({ ...line, left: Math.max(0, Math.floor(box.items[line.line_id] ?? 0)) }))
+    .filter((line) => line.left > 0);
+}
+
+/** The first box whose label hasn't been printed yet; null when every box's has. */
+export const nextBox = <T extends { n: number }>(boxes: T[], printed: number[]): T | null =>
+  boxes.find((box) => !printed.includes(box.n)) ?? null;

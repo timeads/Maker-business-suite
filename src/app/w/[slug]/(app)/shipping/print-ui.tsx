@@ -402,9 +402,19 @@ export function LabelPrint({
   printedText,
   auto = false,
   primary = false,
+  box,
+  onPrinted,
 }: {
   slug: string;
   shipmentId: string;
+  /**
+   * Only this box's label, for a bench that packs and labels one box at a
+   * time: `label` is where it sits among the purchase's labels (from 1), `n`
+   * what the slip calls it. `links` and `printedAt` are then that box's own.
+   */
+  box?: { n: number; label: number };
+  /** Told when a label has gone to the Zebra from here. */
+  onPrinted?: () => void;
   /** Each box's label to open in the browser: today's way, and the way out when the Zebra won't answer. */
   links: LabelLink[];
   /** When this label last went to a printer, on any computer. */
@@ -431,7 +441,7 @@ export function LabelPrint({
         !byItself &&
         already &&
         !window.confirm(
-          `This label was already printed${printedText ? ` (${printedText})` : ""}. Printing it again makes a second copy of the same label; only one of them can be used. Print it again?`,
+          `${box ? `Box ${box.n}'s label` : "This label"} was already printed${printedText ? ` (${printedText})` : ""}. Printing it again makes a second copy of the same label; only one of them can be used. Print it again?`,
         )
       ) {
         return;
@@ -440,7 +450,7 @@ export function LabelPrint({
       setPrinting(true);
       setNote(null);
       try {
-        const data = await getLabelPrintData(slug, shipmentId);
+        const data = await getLabelPrintData(slug, shipmentId, box?.label);
         if (data.error || !data.labels) {
           setNote({ kind: "error", text: data.error ?? "We couldn't load that label. Try again." });
           return;
@@ -458,7 +468,8 @@ export function LabelPrint({
         const jobs = await labelsToZpl(data.labels, settings.zebraDpi);
         const { device, labels } = await zebraClient().send(jobs.join("\n"), settings.zebraName);
         setPrintedHere(true);
-        const marked = await markLabelPrinted(slug, shipmentId).catch(() => null);
+        const marked = await markLabelPrinted(slug, shipmentId, box?.label).catch(() => null);
+        onPrinted?.();
         setNote({
           kind: missing > 0 || marked?.error ? "error" : "success",
           text: `${labels === 1 ? "Label" : `${labels} labels`} sent to ${device.name}.${
@@ -480,7 +491,7 @@ export function LabelPrint({
         setPrinting(false);
       }
     },
-    [slug, shipmentId, already, printedText, settings.zebraDpi, settings.zebraName],
+    [slug, shipmentId, already, printedText, settings.zebraDpi, settings.zebraName, box, onPrinted],
   );
 
   // Just bought on a computer with a Zebra: print by itself, once, even if this page is shown again.
@@ -488,7 +499,7 @@ export function LabelPrint({
   useEffect(() => {
     if (!zebra || !auto || printedAt || started.current) return;
     started.current = true;
-    const key = `zebra-auto:${shipmentId}`;
+    const key = `zebra-auto:${shipmentId}${box ? `:${box.label}` : ""}`;
     try {
       if (window.sessionStorage.getItem(key)) return;
       window.sessionStorage.setItem(key, "1");
@@ -497,7 +508,7 @@ export function LabelPrint({
     }
     // Not cancelled if this renders again: the two guards above already make it once only.
     window.setTimeout(() => void print(true), 0);
-  }, [zebra, auto, printedAt, shipmentId, print]);
+  }, [zebra, auto, printedAt, shipmentId, print, box]);
 
   const openLinks = (from: number) =>
     links.slice(from).map((link) => (
@@ -524,7 +535,15 @@ export function LabelPrint({
             disabled={printing}
           >
             <Printer aria-hidden />
-            {printing ? "Sending to the Zebra…" : already ? "Print again" : "Print to Zebra"}
+            {printing
+              ? "Sending to the Zebra…"
+              : box
+                ? already
+                  ? `Print box ${box.n} label again`
+                  : `Print box ${box.n} label`
+                : already
+                  ? "Print again"
+                  : "Print to Zebra"}
           </Button>
           {openLinks(0)}
         </>
@@ -532,7 +551,17 @@ export function LabelPrint({
         <>
           {primary && links[0] ? (
             <Button asChild>
-              <a href={links[0].href} target="_blank" rel="noopener noreferrer">
+              <a
+                href={links[0].href}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => {
+                  // One box of several, opened to print: noted, so the bench knows which boxes are done.
+                  if (!box) return;
+                  void markLabelPrinted(slug, shipmentId, box.label).catch(() => null);
+                  onPrinted?.();
+                }}
+              >
                 {links[0].text}
               </a>
             </Button>

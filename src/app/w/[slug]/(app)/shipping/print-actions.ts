@@ -60,9 +60,16 @@ const PARCEL =
  * EasyPost label we hold only a link to is fetched from EasyPost's own file
  * store, and from nowhere else.
  */
-export async function getLabelPrintData(slug: string, shipmentId: string): Promise<LabelPrintData> {
+export async function getLabelPrintData(
+  slug: string,
+  shipmentId: string,
+  /** Just this box's label, for a bench that packs and labels one box at a time. Counting from 1. */
+  box?: number,
+): Promise<LabelPrintData> {
   const ctx = await context(slug);
   if ("error" in ctx) return { error: ctx.error };
+  const onlyBox =
+    typeof box === "number" && Number.isInteger(box) && box >= 1 && box <= 6 ? box : 0;
   if (!UUID.test(shipmentId)) return { error: NOT_FOUND };
   const load = async (id: string) => {
     const { data } = await ctx.supabase
@@ -103,7 +110,9 @@ export async function getLabelPrintData(slug: string, shipmentId: string): Promi
 
   const labels: PrintLabel[] = [];
   let unprintable = 0;
+  if (onlyBox > boxes.length) return { error: NOT_FOUND };
   for (const [index, box] of boxes.entries()) {
+    if (onlyBox && index + 1 !== onlyBox) continue;
     let file = files.get(box.file) ?? null;
     if (!file && parcel.label_provider === "easypost" && isEasyPostFileLink(box.link)) {
       const fetched = await downloadEasyPostLabel(box.link);
@@ -124,6 +133,23 @@ export async function getLabelPrintData(slug: string, shipmentId: string): Promi
         : {}),
     });
   }
+  if (onlyBox) {
+    // When this one box's label was last printed. Read on its own: without it, nothing is known.
+    const { data: noted } = await ctx.supabase
+      .from("shipments")
+      .select("label_boxes_printed")
+      .eq("tenant_id", ctx.tenant.id)
+      .eq("id", parcel.id)
+      .maybeSingle();
+    const when = (noted as { label_boxes_printed?: Record<string, unknown> } | null)
+      ?.label_boxes_printed?.[String(onlyBox)];
+    return {
+      labels,
+      unprintable,
+      printedAt: typeof when === "string" ? when : null,
+      printCount: typeof when === "string" ? 1 : 0,
+    };
+  }
   return {
     labels,
     unprintable,
@@ -136,15 +162,18 @@ export async function getLabelPrintData(slug: string, shipmentId: string): Promi
 export async function markLabelPrinted(
   slug: string,
   shipmentId: string,
+  /** Only this box's label was printed (counting from 1). */
+  box?: number,
 ): Promise<{ printedAt?: string; error?: string }> {
   const ctx = await context(slug);
   if ("error" in ctx) return { error: ctx.error };
   if (!UUID.test(shipmentId)) return { error: NOT_FOUND };
   // A read-only workspace can still print what it bought; it just isn't written down.
   if (!ctx.entitlements.canWrite) return {};
-  const { data, error } = await ctx.supabase.rpc("mark_label_printed", {
-    p_shipment_id: shipmentId,
-  });
+  const oneBox = typeof box === "number" && Number.isInteger(box) && box >= 1 && box <= 6;
+  const { data, error } = oneBox
+    ? await ctx.supabase.rpc("mark_label_box_printed", { p_shipment_id: shipmentId, p_box: box })
+    : await ctx.supabase.rpc("mark_label_printed", { p_shipment_id: shipmentId });
   if (error) {
     console.error("could not mark label printed", error.message);
     return { error: "It printed, but we couldn't note that here." };
@@ -179,6 +208,7 @@ export async function getSlipPrintData(
     ids: text(picked.ids),
     together: text(picked.together),
     all: text(picked.all),
+    parcel: text(picked.parcel),
   });
   return slipsToPrint(run, ctx.tenant);
 }

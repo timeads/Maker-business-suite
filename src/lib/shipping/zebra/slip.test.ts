@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_SLIP_LAYOUT, shippingSettingsSchema, type SlipLayout } from "../config";
+import { slipBoxes } from "../slip-boxes";
 import { buildSlipData, slipZpl, type SlipData, type SlipOrder } from "./slip";
 
 const settings = shippingSettingsSchema.parse({
@@ -103,7 +104,9 @@ describe("a packing slip's words", () => {
     expect(slip.parts.find((part) => part.kind === "barcode")).toEqual({
       kind: "barcode",
       code: "1042",
+      caption: "1042",
     });
+    expect(slip.boxLabel).toBe("");
   });
 
   it("follows the layout: sections switched off, and in the saved order", () => {
@@ -205,5 +208,82 @@ describe("a packing slip as ZPL", () => {
     expect(size(slipZpl(build({ layout: all({ text_size: "large" }) })))).toBeGreaterThan(
       size(slipZpl(build({ layout: all({ text_size: "small" }) }))),
     );
+  });
+});
+
+describe("one slip per box, for an order going out in several", () => {
+  // Two yarn bundles are left to send: one rides with the rug, one goes alone.
+  const [first, second] = slipBoxes([
+    { name: "Medium box", tracking: null, items: { "1": 1, "2": 1 } },
+    { name: null, tracking: "1Z999", items: { "2": 1 } },
+  ]);
+
+  it("lists only what is in that box, in that box's numbers", () => {
+    const rows = (slip: SlipData) => {
+      const items = slip.parts.find((part) => part.kind === "items");
+      return items?.kind === "items"
+        ? items.rows.map((row) => [row.qty, row.title, row.price])
+        : [];
+    };
+    expect(rows(build({ box: first }))).toEqual([
+      [1, "Wool rug", "$120.00"],
+      [1, "Yarn bundle", "$9.00"],
+    ]);
+    expect(rows(build({ box: second }))).toEqual([[1, "Yarn bundle", "$9.00"]]);
+  });
+
+  it("says which box it is, by name, with its tracking number once bought", () => {
+    const one = build({ box: first });
+    expect(one.boxLabel).toBe("Box 1 of 2");
+    expect(one.parts.find((part) => part.kind === "method")).toEqual({
+      kind: "method",
+      heading: "Shipping",
+      text: "Standard shipping",
+      more: [{ heading: "Box 1 of 2", text: "Medium box" }],
+    });
+    expect(build({ box: second }).parts.find((part) => part.kind === "method")).toMatchObject({
+      more: [
+        { heading: "Box 2 of 2", text: "Custom size" },
+        { heading: "Tracking", text: "1Z999" },
+      ],
+    });
+  });
+
+  it("scans as that box", () => {
+    expect(build({ box: second }).parts.find((part) => part.kind === "barcode")).toEqual({
+      kind: "barcode",
+      code: "1042/B2",
+      caption: "1042 · Box 2 of 2",
+    });
+    const zpl = slipZpl(build({ box: second }));
+    expect(zpl).toContain("^FD1042/B2^FS");
+    expect(zpl).toContain("^FH^FDBox 2 of 2^FS");
+    expect(zpl).toContain("^FH^FD1Z999^FS");
+    expect(zpl).not.toContain("Wool rug");
+  });
+
+  it("lists a box's items even after the label is bought and nothing is left on the order", () => {
+    const sent = { ...order, items: order.items.map((item) => ({ ...item, left: 0 })) };
+    const items = build({ order: sent, box: first }).parts.find((part) => part.kind === "items");
+    expect(items?.kind === "items" && items.rows.map((row) => row.title)).toEqual([
+      "Wool rug",
+      "Yarn bundle",
+    ]);
+  });
+
+  it("names the planned boxes on a slip for the whole order", () => {
+    expect(
+      build({ boxNames: ["Medium box"] }).parts.find((part) => part.kind === "method"),
+    ).toMatchObject({ more: [{ heading: "Box", text: "Medium box" }] });
+    expect(
+      build({ boxNames: ["Medium box", "Tube"] }).parts.find((part) => part.kind === "method"),
+    ).toMatchObject({ more: [{ heading: "Boxes (2)", text: "Medium box + Tube" }] });
+    // With no method chosen at checkout the boxes are still said.
+    const bare = build({ order: { ...order, shipping_method: null }, boxNames: ["Tube"] });
+    expect(bare.parts.find((part) => part.kind === "method")).toMatchObject({
+      text: "",
+      more: [{ heading: "Box", text: "Tube" }],
+    });
+    expect(slipZpl(bare)).toContain("^FH^FDTube^FS");
   });
 });

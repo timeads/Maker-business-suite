@@ -21,6 +21,7 @@ import {
 import { leftBehind, parsePart, partOrder } from "@/lib/shipping/part";
 import { choiceOf, planFor, type OrderPlan } from "@/lib/shipping/plan";
 import { pickupTells, undoWords } from "@/lib/shipping/shop-steps";
+import { boughtBoxes, slipBoxes } from "@/lib/shipping/slip-boxes";
 import { combineOrders, groupHref, groupKey, parseWith, sumAmounts } from "@/lib/shipping/merge";
 import {
   formatHoldDate,
@@ -47,7 +48,9 @@ import {
   loadLabelConnections,
   loadOrderExtras,
   loadPackingMemory,
+  loadParcelBoxes,
   loadPlans,
+  parcelTracking,
   planSetupOf,
   loadQueueSteps,
   loadShippingSetup,
@@ -70,7 +73,7 @@ import { LabelDesk, type DeskStart } from "../../label-desk";
 import { OrderRailActions } from "../../order-rail";
 import { OrderSteps } from "../../order-steps";
 import { PartPicker } from "../../part-picker";
-import { LabelPrint } from "../../print-ui";
+import { LabelPrint, SlipsButton } from "../../print-ui";
 import { TogetherNote } from "../../together-ui";
 
 const saleOf = (order: OrderWithSale): Sale | null =>
@@ -435,6 +438,14 @@ export default async function ShippingOrderPage({
       leads.get(parcel.merged_with as string)?.label_printed_at ??
       null) as string | null;
   const linkClass = "text-ochre-text font-medium hover:underline";
+  // Parcels that went out in several boxes, with what went in each: those can have a slip per box.
+  const splitParcels = new Set(
+    (await loadParcelBoxes(supabase, tenant.id, { orderId: id }))
+      .filter(
+        (parcel) => slipBoxes(boughtBoxes(parcel.box_items, parcelTracking(parcel))).length > 0,
+      )
+      .map((parcel) => parcel.id),
+  );
 
   // Buying a label here: a postage account (EasyPost, UPS or Redo) is connected and this is a parcel to post.
   const lapsed = postage.needsReconnect.map((key) => SOURCE_NAMES[key]);
@@ -1112,6 +1123,16 @@ export default async function ShippingOrderPage({
                                 printedOf(parcel) ? when.format(new Date(printedOf(parcel)!)) : null
                               }
                             />
+                            {splitParcels.has(parcel.id as string) && (
+                              <SlipsButton
+                                slug={tenant.slug}
+                                href={`${base}/slips?parcel=${parcel.id}`}
+                                selection={{ parcel: parcel.id as string }}
+                                title="A packing slip for each box, listing what went in it, with that box's tracking number"
+                              >
+                                Slip for each box
+                              </SlipsButton>
+                            )}
                             {manager && (
                               <VoidButton
                                 slug={tenant.slug}

@@ -1,7 +1,7 @@
 import { formatMoney } from "../../dashboard/format";
 import { addressLines, type ShipTo } from "../carriers";
-import { code128 } from "../code128";
 import { shipFromCityLine, type ShippingSettings, type SlipLayout } from "../config";
+import { barcodeSafe, boxLines, boxSlipCode, slipCode, type SlipBox } from "../slip-boxes";
 import { wrapText, zplText } from "./zpl";
 
 /**
@@ -31,7 +31,13 @@ export type SlipOrder = ShipTo & {
 
 export type SlipPart =
   | { kind: "shipto"; heading: string; lines: string[]; phone: string }
-  | { kind: "method"; heading: string; text: string }
+  | {
+      kind: "method";
+      heading: string;
+      text: string;
+      /** Under the method: which box this is and its tracking number, or the boxes the order is planned in. */
+      more: { heading: string; text: string }[];
+    }
   | {
       kind: "items";
       showSku: boolean;
@@ -40,13 +46,21 @@ export type SlipPart =
     }
   | { kind: "note"; heading: string; text: string }
   | { kind: "message"; text: string }
-  | { kind: "barcode"; code: string };
+  | {
+      kind: "barcode";
+      /** What the bars say: the order's code, or a box of it ("68762-TG/B2"). */
+      code: string;
+      /** The words under the bars ("68762-TG · Box 2 of 3"). */
+      caption: string;
+    };
 
 /** Everything a slip says, as plain words: what both the screen and the printer show. */
 export type SlipData = {
   fromName: string;
   fromLines: string[];
   orderName: string;
+  /** "Box 2 of 3" on one box's slip of an order in several; else empty. */
+  boxLabel: string;
   placed: string;
   textSize: SlipLayout["text_size"];
   parts: SlipPart[];
@@ -64,13 +78,34 @@ export function buildSlipData(input: {
   code?: string;
   /** For orders sent together: which order each line came from, by line id. */
   from?: ReadonlyMap<string, string>;
+  /** One box of an order going out in several: the slip lists only what is in it. */
+  box?: SlipBox;
+  /** On a slip for the whole order: the boxes it is planned in, by name. */
+  boxNames?: string[];
 }): SlipData {
-  const { order, settings, layout } = input;
+  const { order, settings, layout, box } = input;
   const from = settings.ship_from;
-  const items = order.items.filter((item) => item.left > 0);
+  // A box's slip lists what is in that box; any other, what is still to send.
+  const items = box
+    ? boxLines(order.items, box).map((item) => ({ ...item, left: item.inBox, qty: item.inBox }))
+    : order.items.filter((item) => item.left > 0);
   const to = addressLines(order, settings.ship_from_country);
   const priced = layout.show_price && items.some((item) => item.price != null);
-  const code = (input.code ?? order.name ?? "").replace(/^#/, "").trim();
+  const code = slipCode(input.code ?? order.name);
+  const boxLabel = box ? `Box ${box.n} of ${box.of}` : "";
+  const more = box
+    ? [
+        { heading: boxLabel, text: box.name ?? "Custom size" },
+        ...(box.tracking ? [{ heading: "Tracking", text: box.tracking }] : []),
+      ]
+    : input.boxNames && input.boxNames.length > 0
+      ? [
+          {
+            heading: input.boxNames.length > 1 ? `Boxes (${input.boxNames.length})` : "Box",
+            text: input.boxNames.join(" + "),
+          },
+        ]
+      : [];
   const parts: SlipPart[] = [];
   for (const section of layout.sections) {
     if (!section.on) continue;
@@ -82,11 +117,12 @@ export function buildSlipData(input: {
         phone: order.phone ?? "",
       });
     } else if (section.id === "method") {
-      if (order.shipping_method) {
+      if (order.shipping_method || more.length > 0) {
         parts.push({
           kind: "method",
           heading: order.pickup ? "Collecting" : "Shipping",
-          text: order.shipping_method,
+          text: order.shipping_method ?? "",
+          more,
         });
       }
     } else if (section.id === "items") {
@@ -118,13 +154,21 @@ export function buildSlipData(input: {
     } else if (section.id === "message") {
       if (layout.message) parts.push({ kind: "message", text: layout.message });
     } else if (section.id === "barcode") {
-      if (code) parts.push({ kind: "barcode", code });
+      if (code) {
+        parts.push({
+          kind: "barcode",
+          // A box's slip scans as that box: the packing bench then lists just its items.
+          code: box ? boxSlipCode(code, box.n) : code,
+          caption: box ? `${code} · ${boxLabel}` : code,
+        });
+      }
     }
   }
   return {
     fromName: from.name || input.workspaceName,
     fromLines: [from.address1, from.address2, shipFromCityLine(from), from.country].filter(Boolean),
     orderName: order.name ?? "Order",
+    boxLabel,
     placed: new Intl.DateTimeFormat("en-US", {
       timeZone: input.timeZone,
       dateStyle: "long",
@@ -137,10 +181,6 @@ export function buildSlipData(input: {
 
 /** Dots tall at 203 dpi, for each text size a slip can be set to. */
 const BASE: Record<SlipLayout["text_size"], number> = { small: 22, normal: 26, large: 30 };
-
-/** A barcode ZPL can print as it stands: plain characters, none that ^BC reads as commands. */
-const barcodeSafe = (code: string) =>
-  /^[\x20-\x7e]{1,32}$/.test(code) && !/[\^~>]/.test(code) && code128(code) !== null;
 
 /** One slip as ZPL: one 4 × 6 label, or several when the order is long. */
 export function slipZpl(slip: SlipData, dpi: number = 203): string {
@@ -212,6 +252,7 @@ export function slipZpl(slip: SlipData, dpi: number = 203): string {
   y = top;
   const right = inner - left - dots(12);
   lines(slip.orderName, big, M + left + dots(12), right, "R");
+  if (slip.boxLabel) lines(slip.boxLabel, base, M + left + dots(12), right, "R");
   lines(slip.placed, small, M + left + dots(12), right, "R");
   y = Math.max(y, afterLeft) + dots(6);
   rule(dots(3));
@@ -223,8 +264,14 @@ export function slipZpl(slip: SlipData, dpi: number = 203): string {
       for (const line of part.lines) lines(line, Math.round(base * 1.15));
       if (part.phone) lines(part.phone, small);
     } else if (part.kind === "method") {
-      heading(part.heading);
-      lines(part.text, base);
+      if (part.text) {
+        heading(part.heading);
+        lines(part.text, base);
+      }
+      for (const extra of part.more) {
+        heading(extra.heading);
+        lines(extra.text, base);
+      }
     } else if (part.kind === "note") {
       heading(part.heading);
       lines(part.text, base);
@@ -291,7 +338,7 @@ export function slipZpl(slip: SlipData, dpi: number = 203): string {
         );
         y += tall + dots(8);
       }
-      lines(part.code, small, M, inner, "C");
+      lines(part.caption, small, M, inner, "C");
     }
   }
 

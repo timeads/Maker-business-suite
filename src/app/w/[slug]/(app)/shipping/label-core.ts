@@ -40,6 +40,7 @@ import { groupName, parseWith } from "@/lib/shipping/merge";
 import { cleanPart, samePart, type PartItem } from "@/lib/shipping/part";
 import { isWholeOrder, memoryItems } from "@/lib/shipping/plan";
 import { isInternational, todayIn } from "@/lib/shipping/queue";
+import { sizeName } from "@/lib/shipping/slip-boxes";
 import { boughtForZebra, easyPostZplFiles, labelSource } from "@/lib/shipping/sources";
 import { filesForKeeping } from "@/lib/shipping/sources/files";
 import { mergeRates } from "@/lib/shipping/sources/rates";
@@ -58,6 +59,7 @@ import { getAdminClient } from "@/lib/supabase/admin";
 import {
   BOX_FIELDS,
   ORDER_FIELDS,
+  loadBoxes,
   loadGroup,
   loadLabelConnections,
   loadShippingSetup,
@@ -844,6 +846,8 @@ export async function purchaseLabel(
   }
   // The parcel is recorded. How it was packed is remembered for the next order like it.
   await rememberPacking(ctx, riders, input, claim.request_hash, packed);
+  // And what went in each box is noted on the parcel, so each box can have its own slip.
+  await noteBoxes(ctx, number as number, riders, input, claim.request_hash, packed);
   return {
     state: "recorded",
     number: number as number,
@@ -852,6 +856,51 @@ export async function purchaseLabel(
     price: label.price,
     currency: label.currency,
   };
+}
+
+/**
+ * Notes on the parcel what went in each box, for an order sent whole in the
+ * boxes the browser named: after the label is bought nothing is left on the
+ * order to plan from, and each box still wants its own slip and its own
+ * check at the bench. Only when the boxes are exactly what was priced; the
+ * database then keeps the note only if it is true of the parcel. Never
+ * throws and never holds anything up.
+ */
+async function noteBoxes(
+  ctx: LabelCtx,
+  number: number,
+  riders: string[],
+  input: RatesInput | undefined,
+  requestHash: unknown,
+  before: Pick<Prepared, "part" | "boxIds" | "request"> | null,
+) {
+  try {
+    if (!input || !before || riders.length > 0 || before.part !== null) return;
+    if (!matchesFingerprint(requestHash, before.request)) return;
+    const parcels = before.request.parcels;
+    if (parcels.length !== input.boxes.length) return;
+    if (!input.boxes.some((box) => box.alloc && Object.keys(box.alloc).length > 0)) return;
+    const saved = new Map(
+      (await loadBoxes(ctx.supabase, ctx.tenant.id)).map((box) => [box.id, box.name]),
+    );
+    const { error } = await getAdminClient().rpc("note_shipment_boxes", {
+      p_tenant_id: ctx.tenant.id,
+      p_number: number,
+      p_boxes: parcels.map((parcel, index) => ({
+        name:
+          (before.boxIds[index] && saved.get(before.boxIds[index]!)) ||
+          sizeName({ length: parcel.length, width: parcel.width, height: parcel.height }),
+        items: Object.fromEntries(
+          Object.entries(input.boxes[index]?.alloc ?? {}).filter(
+            ([, qty]) => Number.isInteger(qty) && qty > 0,
+          ),
+        ),
+      })),
+    });
+    if (error) console.error("could not note what went in each box", error.message);
+  } catch (err) {
+    console.error("could not note what went in each box", err instanceof Error ? err.message : err);
+  }
 }
 
 /**

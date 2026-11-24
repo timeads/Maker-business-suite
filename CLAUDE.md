@@ -367,7 +367,22 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   (`scan-actions.ts`): `assess` and `planInput` in `planned.ts` are shared
   with bulk runs, and the purchase is still `purchaseLabel`. The packing slip's
   layout is a config (`slip_layout`); its barcode (`code128.ts`) is what
-  Scan & pack reads. Packing details are asked of the shop ten orders at a
+  Scan & pack reads. Slip codes and boxes are `lib/shipping/slip-boxes.ts`
+  (ported from the help desk with its tests): the code is the order's name
+  without "#"; an order in two or more filled boxes gets one slip per box
+  (`<code>/B<n>`, "Box n of m", only that box's items) on screen
+  (`slip.tsx`) and on the Zebra (`zebra/slip.ts`) alike; a group's one slip
+  carries the numbers joined with "+". Before buying, the boxes are the plan's
+  (`plannedBoxes` in `slips-data.ts`, nothing stored); after, what went in
+  each box is the note `shipments.box_items`, written only by the server
+  (`note_shipment_boxes`, from `purchaseLabel`) and only when it is true of
+  the parcel. The bench reads a code with `parseSlipCode` (the whole code as
+  an order's name first, then a box of the shorter one; "/", "-", "?" and a
+  space all read as the box separator), packs a box from the box's own
+  numbers, buys every box's label in one purchase and prints one box's at a
+  time (`mark_label_box_printed`, `label_boxes_printed`). Those two columns
+  are read in a query of their own that is allowed to fail
+  (`loadParcelBoxes`). Packing details are asked of the shop ten orders at a
   time, and without delivery methods if the shop won't share them.
   Ship together: orders for the same person and address can go on one label
   (`lib/shipping/merge.ts`; the database has the same address rule in

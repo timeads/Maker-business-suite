@@ -36,15 +36,17 @@ export default async function PackingSlipsPage({
           back={{ href: base, label: "To ship" }}
           title={`${entries.length} packing slip${entries.length === 1 ? "" : "s"}`}
           description={
-            run.together
-              ? `One slip for ${run.together}, going out together. Each line says which order it's from.`
-              : run.one
-                ? "One slip, ready to print."
-                : run.ticked > 0
-                  ? "The orders you ticked, oldest first. One to a page."
-                  : shown.length === ready.length
-                    ? "Every order that's ready to send, oldest first. One to a page."
-                    : `Only the ones you haven't printed yet. ${ready.length - shown.length} already printed are left out.`
+            run.parcel
+              ? `${run.parcel}, already labelled: ${entries.length === 1 ? "its slip" : "a slip for each box, listing what went in it, with that box's tracking number"}.`
+              : run.together
+                ? `One slip for ${run.together}, going out together. Each line says which order it's from.`
+                : run.one
+                  ? "One slip, ready to print."
+                  : run.ticked > 0
+                    ? "The orders you ticked, oldest first. One to a page."
+                    : shown.length === ready.length
+                      ? "Every order that's ready to send, oldest first. One to a page."
+                      : `Only the ones you haven't printed yet. ${ready.length - shown.length} already printed are left out.`
           }
         >
           {!run.chosen && shown.length !== ready.length && (
@@ -52,7 +54,7 @@ export default async function PackingSlipsPage({
               <a href={`${base}/slips?all=1`}>Include printed ones</a>
             </Button>
           )}
-          {shown.length > 0 && entitlements.canWrite && (
+          {shown.length > 0 && entitlements.canWrite && !run.parcel && (
             <form
               action={markPrinted.bind(
                 null,
@@ -72,6 +74,15 @@ export default async function PackingSlipsPage({
             <BrowserPrintingHint slug={tenant.slug} />
           </p>
         )}
+        {run.split > 0 && !run.parcel && (
+          <p className="text-muted-foreground mt-2 text-sm">
+            {run.split === 1 && shown.length === 1
+              ? "This order is going out in several boxes"
+              : `${run.split} of these orders ${run.split === 1 ? "is" : "are"} going out in several boxes`}
+            , so there&apos;s a slip for each box, listing just what goes in it. Scan a box&apos;s
+            slip at Scan &amp; pack to check that box on its own.
+          </p>
+        )}
       </div>
       {entries.length === 0 ? (
         <p className="text-muted-foreground text-sm">Nothing is waiting for a slip.</p>
@@ -83,6 +94,8 @@ export default async function PackingSlipsPage({
               order={entry.order}
               code={entry.code}
               from={entry.from}
+              box={entry.box}
+              boxNames={entry.boxNames}
               settings={setup.settings}
               layout={setup.slip}
               workspaceName={tenant.name}

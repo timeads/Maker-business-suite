@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { allPacked, orderCode, scanItem, type PackLine } from "./scan";
+import {
+  allPacked,
+  boxPackLines,
+  isItemCode,
+  nextBox,
+  orderCode,
+  scanItem,
+  type PackLine,
+} from "./scan";
 
 const lines: PackLine[] = [
   {
@@ -57,5 +65,54 @@ describe("scan and pack", () => {
       { line_id: "b", title: "Yarn", variant: "Gift", sku: "YARN", left: 1 },
     ];
     expect(scanItem(twins, { a: 1 }, "YARN")).toMatchObject({ ok: true, line_id: "b", done: true });
+  });
+});
+
+describe("packing one box of several", () => {
+  const first = { n: 1, items: { l1: 1, l3: 2 } };
+  const second = { n: 2, items: { l1: 1, l2: 1 } };
+
+  it("lists only what goes in that box, in that box's numbers", () => {
+    expect(boxPackLines(lines, first).map((line) => [line.line_id, line.left])).toEqual([
+      ["l1", 1],
+      // Nothing is left of it on the order (the labels are bought), but two went in this box.
+      ["l3", 2],
+    ]);
+    expect(boxPackLines(lines, second).map((line) => [line.line_id, line.left])).toEqual([
+      ["l1", 1],
+      ["l2", 1],
+    ]);
+    expect(boxPackLines(lines, { items: {} })).toEqual([]);
+  });
+
+  it("checks a box against its own numbers, not the order's", () => {
+    const inBox = boxPackLines(lines, second);
+    const one = scanItem(inBox, {}, "RUG-L");
+    expect(one).toMatchObject({ ok: true, line_id: "l1", done: false });
+    // The order has two rugs, but only one goes in this box.
+    expect(scanItem(inBox, { l1: 1 }, "RUG-L")).toMatchObject({
+      ok: false,
+      reason: "full",
+      left: 1,
+    });
+    expect(allPacked(inBox, { l1: 1 })).toBe(false);
+    expect(allPacked(inBox, { l1: 1, l2: 1 })).toBe(true);
+    // Something that goes in another box isn't in this one.
+    expect(scanItem(inBox, {}, "GONE")).toEqual({ ok: false, reason: "unknown" });
+    expect(isItemCode(lines, "gone")).toBe(true);
+  });
+
+  it("tells an item's code from anything else", () => {
+    expect(isItemCode(lines, "rug-l")).toBe(true);
+    expect(isItemCode(lines, " 0123456789012 ")).toBe(true);
+    expect(isItemCode(lines, "1042")).toBe(false);
+    expect(isItemCode(lines, "")).toBe(false);
+  });
+
+  it("knows which box's label is still to print", () => {
+    const boxes = [{ n: 1 }, { n: 2 }, { n: 3 }];
+    expect(nextBox(boxes, [])).toEqual({ n: 1 });
+    expect(nextBox(boxes, [1, 3])).toEqual({ n: 2 });
+    expect(nextBox(boxes, [3, 2, 1])).toBeNull();
   });
 });

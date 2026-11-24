@@ -1,6 +1,7 @@
 import { formatMoney } from "@/lib/dashboard/format";
 import { addressLines } from "@/lib/shipping/carriers";
 import { code128 } from "@/lib/shipping/code128";
+import { boxLines, boxSlipCode, slipCode, type SlipBox } from "@/lib/shipping/slip-boxes";
 import {
   shipFromCityLine,
   type ShippingSettings,
@@ -49,12 +50,18 @@ export function PackingSlip({
   currency,
   code: codeText,
   from: cameFrom,
+  box,
+  boxNames,
 }: {
   order: ShippingOrder;
   /** What the barcode says, when it isn't the order's own number (orders sent together). */
   code?: string;
   /** For orders sent together: which order each line came from, by line id. */
   from?: ReadonlyMap<string, string>;
+  /** One box of an order going out in several: the slip lists only what is in it, and scans as that box. */
+  box?: SlipBox;
+  /** On a slip for the whole order: the boxes it is planned in, by name. */
+  boxNames?: string[];
   settings: ShippingSettings;
   layout: SlipLayout;
   workspaceName: string;
@@ -65,11 +72,28 @@ export function PackingSlip({
   const fromLines = [from.address1, from.address2, shipFromCityLine(from), from.country].filter(
     Boolean,
   );
-  const items = order.items.filter((item) => item.left > 0);
+  // A box's slip lists what is in that box; any other, what is still to send.
+  const items = box
+    ? boxLines(order.items, box).map((item) => ({ ...item, left: item.inBox, qty: item.inBox }))
+    : order.items.filter((item) => item.left > 0);
+  const boxLabel = box ? `Box ${box.n} of ${box.of}` : "";
   const placed = new Intl.DateTimeFormat("en-US", { timeZone, dateStyle: "long" }).format(
     new Date(order.placed_at),
   );
-  const code = (codeText ?? order.name ?? "").replace(/^#/, "").trim();
+  const code = slipCode(codeText ?? order.name);
+  const more = box
+    ? [
+        { heading: boxLabel, text: box.name ?? "Custom size" },
+        ...(box.tracking ? [{ heading: "Tracking", text: box.tracking }] : []),
+      ]
+    : boxNames && boxNames.length > 0
+      ? [
+          {
+            heading: boxNames.length > 1 ? `Boxes (${boxNames.length})` : "Box",
+            text: boxNames.join(" + "),
+          },
+        ]
+      : [];
   const to = addressLines(order, settings.ship_from_country);
   const priced = layout.show_price && items.some((item) => item.price != null);
 
@@ -87,10 +111,20 @@ export function PackingSlip({
       </section>
     ),
     method: () =>
-      order.shipping_method ? (
-        <section key="method" className="min-w-0 flex-1">
-          <p className={label}>{order.pickup ? "Collecting" : "Shipping"}</p>
-          <p className="font-read">{order.shipping_method}</p>
+      order.shipping_method || more.length > 0 ? (
+        <section key="method" className="flex min-w-0 flex-1 flex-col gap-1.5">
+          {order.shipping_method && (
+            <div>
+              <p className={label}>{order.pickup ? "Collecting" : "Shipping"}</p>
+              <p className="font-read">{order.shipping_method}</p>
+            </div>
+          )}
+          {more.map((extra) => (
+            <div key={extra.heading}>
+              <p className={label}>{extra.heading}</p>
+              <p className="font-read tabular-nums">{extra.text}</p>
+            </div>
+          ))}
         </section>
       ) : null,
     items: () => (
@@ -157,8 +191,9 @@ export function PackingSlip({
     barcode: () =>
       code ? (
         <div key="barcode" className="flex flex-col items-center gap-1">
-          <OrderBarcode text={code} />
-          <p className="text-[0.85em] tabular-nums">{code}</p>
+          {/* A box's slip scans as that box: the packing bench then lists just its items. */}
+          <OrderBarcode text={box ? boxSlipCode(code, box.n) : code} />
+          <p className="text-[0.85em] tabular-nums">{box ? `${code} · ${boxLabel}` : code}</p>
         </div>
       ) : null,
   };
@@ -198,6 +233,7 @@ export function PackingSlip({
         </div>
         <div className="text-right">
           <p className="text-[1.3em] font-bold tabular-nums">{order.name ?? "Order"}</p>
+          {boxLabel && <p className="font-bold tabular-nums">{boxLabel}</p>}
           <p className="text-[0.85em]">{placed}</p>
         </div>
       </header>
