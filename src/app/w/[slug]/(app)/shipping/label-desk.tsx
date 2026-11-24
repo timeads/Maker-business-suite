@@ -21,7 +21,6 @@ import {
   poundsToTenthOz,
   sameService,
   tenthOzToPounds,
-  type CarrierMarkKey,
 } from "@/lib/shipping/order-page";
 import {
   contentsTenthOz as boxContentsTenthOz,
@@ -43,7 +42,9 @@ import {
   type LabelSourceKey,
 } from "@/lib/shipping/sources/types";
 import { printSettings, wantedLabelFormat } from "@/lib/shipping/zebra/settings";
+import { MARK_TONES } from "./carrier-mark";
 import { buyLabel, checkLabelAddress, getLabelRates, type RatesInput } from "./label-actions";
+import { rememberOrderBox } from "./plan-actions";
 import { PrintsToZebraNote } from "./print-ui";
 
 /** An item in the order, as the bench needs it for dividing between boxes. */
@@ -177,20 +178,6 @@ const FIELDS: { key: keyof ShipToEdit; label: string; span: string; max: number 
   { key: "postal_code", label: "ZIP", span: "sm:col-span-3", max: 20 },
 ];
 
-/**
- * The carriers' own colours for their small marks: the same on a light or a
- * dark page, like the marks themselves. Anything else gets the plain tile.
- */
-const MARK_TONES: Record<CarrierMarkKey, React.CSSProperties | undefined> = {
-  ups: { background: "#351c15", color: "#ffb500" },
-  usps: { background: "#333366", color: "#ffffff" },
-  fedex: { background: "#4d148c", color: "#ffffff" },
-  dhl: { background: "#ffcc00", color: "#d40511" },
-  ontrac: { background: "#0a3d7a", color: "#ffffff" },
-  canpost: { background: "#da291c", color: "#ffffff" },
-  other: undefined,
-};
-
 const sentence = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
 /** "$9.42" and whether the label costs more than the shopper paid. */
@@ -214,6 +201,7 @@ export function LabelDesk({
   shipTo,
   country,
   boxes,
+  startBoxId = null,
   contentsTenthOz,
   paid,
   rule,
@@ -237,6 +225,8 @@ export function LabelDesk({
   country: string;
   /** The usual box first. */
   boxes: DeskBox[];
+  /** The box someone picked for this order before, when it's still on the list: the order starts in it. */
+  startBoxId?: string | null;
   /** What the shop says the items weigh, in tenths of an ounce. */
   contentsTenthOz: number | null;
   /** What the shopper paid for shipping and the option they picked. */
@@ -295,13 +285,14 @@ export function LabelDesk({
     width: box?.width ?? "",
     height: box?.height ?? "",
   });
-  // The order starts in one box: the usual one, at the weight the shop gave.
+  // The order starts in one box: the one picked for it before, else the usual one, at the weight the shop gave.
+  const startBox = boxes.find((box) => box.id === startBoxId) ?? boxes[0];
   const [packed, setPacked] = useState<Packed[]>(() => [
     {
       key: 0,
-      boxId: boxes[0]?.id ?? CUSTOM,
-      size: sizeOf(boxes[0]),
-      ...startWeight(boxes[0]),
+      boxId: startBox?.id ?? CUSTOM,
+      size: sizeOf(startBox),
+      ...startWeight(startBox),
       weightTyped: false,
       alloc: fullAlloc(lines),
     },
@@ -441,7 +432,7 @@ export function LabelDesk({
     opened.current = true;
     void (async () => {
       const found = await check(shipTo);
-      const first = boxes[0];
+      const first = startBox;
       const starting = startTenths(first);
       if (setup || !first || !starting) return;
       quote(
@@ -499,6 +490,13 @@ export function LabelDesk({
   };
   const pickBox = (key: number, id: string) => {
     const saved = boxes.find((box) => box.id === id);
+    // One order in one box: the choice is remembered for the list and for next time
+    // (the usual box is simply "no choice"). Nothing waits on it.
+    if (saved && !together && packed.length === 1) {
+      void rememberOrderBox(slug, orderId, saved.id === boxes[0]?.id ? null : saved.id).catch(
+        () => undefined,
+      );
+    }
     change(key, (box) => ({
       ...box,
       boxId: id,

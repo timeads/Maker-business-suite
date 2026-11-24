@@ -44,6 +44,7 @@ import {
   loadKnownGroup,
   loadLabelConnections,
   loadOrderExtras,
+  loadPlans,
   loadQueueSteps,
   loadShippingSetup,
   loadUnfinishedLabels,
@@ -88,34 +89,45 @@ export default async function ShippingOrderPage({
   if (!/^[0-9a-f-]{36}$/i.test(id)) notFound();
 
   const supabase = await createClient();
-  const [{ data }, setup, { data: parcels }, boxes, postage, unfinished, steps, { data: shop }] =
-    await Promise.all([
-      supabase
-        .from("shipping_orders")
-        .select(ORDER_WITH_SALE)
-        .eq("tenant_id", tenant.id)
-        .eq("id", id)
-        .maybeSingle(),
-      loadShippingSetup(supabase, tenant.id),
-      supabase
-        .from("shipments")
-        .select(
-          "id, number, order_name, carrier, service, tracking_number, tracking_url, shipped_at, items, voided_at, label_provider, label_url, label_mode, label_parcels, merged_with, label_printed_at",
-        )
-        .eq("tenant_id", tenant.id)
-        .eq("shipping_order_id", id)
-        .order("number"),
-      loadBoxes(supabase, tenant.id),
-      loadLabelConnections(supabase, tenant.id),
-      loadUnfinishedLabels(supabase, tenant.id, id),
-      loadQueueSteps(supabase, tenant.id),
-      supabase
-        .from("connections")
-        .select("external_account_id")
-        .eq("tenant_id", tenant.id)
-        .eq("provider", "shopify")
-        .maybeSingle(),
-    ]);
+  const [
+    { data },
+    setup,
+    { data: parcels },
+    boxes,
+    postage,
+    unfinished,
+    steps,
+    { data: shop },
+    plans,
+  ] = await Promise.all([
+    supabase
+      .from("shipping_orders")
+      .select(ORDER_WITH_SALE)
+      .eq("tenant_id", tenant.id)
+      .eq("id", id)
+      .maybeSingle(),
+    loadShippingSetup(supabase, tenant.id),
+    supabase
+      .from("shipments")
+      .select(
+        "id, number, order_name, carrier, service, tracking_number, tracking_url, shipped_at, items, voided_at, label_provider, label_url, label_mode, label_parcels, merged_with, label_printed_at",
+      )
+      .eq("tenant_id", tenant.id)
+      .eq("shipping_order_id", id)
+      .order("number"),
+    loadBoxes(supabase, tenant.id),
+    loadLabelConnections(supabase, tenant.id),
+    loadUnfinishedLabels(supabase, tenant.id, id),
+    loadQueueSteps(supabase, tenant.id),
+    supabase
+      .from("connections")
+      .select("external_account_id")
+      .eq("tenant_id", tenant.id)
+      .eq("provider", "shopify")
+      .maybeSingle(),
+    // The box someone picked for this order before, if any.
+    loadPlans(supabase, tenant.id, [id]),
+  ]);
   const own = data as unknown as OrderWithSale | null;
   if (!own) notFound();
   const base = `/w/${tenant.slug}/shipping`;
@@ -262,7 +274,7 @@ export default async function ShippingOrderPage({
   );
   // Up and down walk the list the person came from, oldest first, like the queue itself.
   const place = queuePlace(
-    steps.filter((step) => inQueueView(step, view, today, home)),
+    steps.filter((step) => inQueueView(step, view, today, home, setup.settings.signature_over)),
     order,
   );
   const carry = view === "ready" ? "" : `?view=${view}`;
@@ -491,7 +503,7 @@ export default async function ShippingOrderPage({
   const summaryRow = "flex items-baseline justify-between gap-4 py-1";
 
   return (
-    <div className="mx-auto flex w-full max-w-[1480px] flex-col gap-4">
+    <div className="flex w-full flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <nav aria-label="Where you are" className="text-muted-foreground min-w-0 truncate text-sm">
           <Link href={`${base}${carry}`} className="hover:underline" title={`Back to ${listName}`}>
@@ -775,6 +787,7 @@ export default async function ShippingOrderPage({
               width: String(Number(box.width_in)),
               height: String(Number(box.height_in)),
             }))}
+            startBoxId={group ? null : (plans.get(order.id)?.chosen_box_id ?? null)}
             contentsTenthOz={order.weight_grams ? gramsToTenthOz(Number(order.weight_grams)) : null}
             paid={{
               cents:

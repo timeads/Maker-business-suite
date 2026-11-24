@@ -125,6 +125,38 @@ describe("the to-ship queue", () => {
     expect(views(order({ pickup: true, picked_up_at: "2026-11-22T15:00:00Z" }))).toEqual([]);
   });
 
+  it("lists orders the signature rule applies to, while they're ready to post", () => {
+    const today = "2026-11-23";
+    const dear = order({ order_total: 318.6 });
+    const sig = (o: QueueFacts, over: number | null) =>
+      inQueueView(o, "signature", today, "US", over);
+    expect(sig(dear, 250)).toBe(true);
+    // At the amount exactly counts, as on the order page; a sale that came as text is still a number.
+    expect(sig(order({ order_total: 250 }), 250)).toBe(true);
+    expect(sig(order({ order_total: "318.60" }), 250)).toBe(true);
+    expect(sig(order({ order_total: 249.99 }), 250)).toBe(false);
+    // No rule, or no total to hold against it: never.
+    expect(sig(dear, null)).toBe(false);
+    expect(inQueueView(dear, "signature", today, "US")).toBe(false);
+    expect(sig(order(), 250)).toBe(false);
+    expect(sig(order({ order_total: null }), 0)).toBe(false);
+    // Only orders that are ready to post: not held, unpaid, a pickup or finished.
+    expect(sig(order({ order_total: 400, on_hold: true }), 250)).toBe(false);
+    expect(sig(order({ order_total: 400, paid: false }), 250)).toBe(false);
+    expect(sig(order({ order_total: 400, pickup: true }), 250)).toBe(false);
+    expect(sig(order({ order_total: 400, units_left: 0 }), 250)).toBe(false);
+    // A hold whose day has come is back in it.
+    expect(sig(order({ order_total: 400, on_hold: true, hold_until: today }), 250)).toBe(true);
+    // It stays under Ready to ship as well.
+    expect(inQueueView(dear, "ready", today, "US", 250)).toBe(true);
+  });
+
+  it("counts the signature chip like the others", () => {
+    const orders = [order({ order_total: 300 }), order({ order_total: 20 }), order()];
+    expect(queueCounts(orders, "2026-11-23", "US", 250)).toMatchObject({ ready: 3, signature: 1 });
+    expect(queueCounts(orders, "2026-11-23", "US")).toMatchObject({ ready: 3, signature: 0 });
+  });
+
   it("counts every chip in one pass", () => {
     const counts = queueCounts(
       [order(), order({ pickup: true }), order({ on_hold: true }), order({ units_left: 0 })],

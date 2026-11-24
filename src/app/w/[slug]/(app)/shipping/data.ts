@@ -15,6 +15,7 @@ import {
   type GroupCheck,
   type StoredGroup,
 } from "@/lib/shipping/merge";
+import { PLAN_FIELDS, type StoredPlan } from "@/lib/shipping/plan";
 import type { QueueFacts } from "@/lib/shipping/queue";
 import { LABEL_SOURCES, type LabelSourceKey } from "@/lib/shipping/sources/types";
 
@@ -61,6 +62,8 @@ export type ShippingOrder = {
   pickup_ready_at: string | null;
   picked_up_at: string | null;
   slip_printed_at: string | null;
+  /** What the whole order came to, on the lists that ask for it (the signature rule looks at it). */
+  order_total?: number | null;
 };
 
 export const ORDER_FIELDS =
@@ -300,56 +303,91 @@ export const itemsSummary = (order: Pick<ShippingOrder, "items">) =>
 const PAGE = 1000;
 const MOST = 5000;
 
-/** Every order with something still to send, oldest first. */
-export async function loadOpenOrders(
+/** The sale's total beside each order, for the signature rule. */
+const WITH_TOTAL = ", sale:orders(total)";
+type TotalJoin = {
+  sale?: { total: number | string | null } | { total: number | string | null }[] | null;
+};
+
+/** The joined sale's total as a plain number on the row itself. */
+function withOrderTotal<T extends object>(row: T & TotalJoin): T & { order_total: number | null } {
+  const { sale, ...rest } = row;
+  const total = (Array.isArray(sale) ? sale[0] : sale)?.total;
+  const amount = total === null || total === undefined ? Number.NaN : Number(total);
+  return { ...(rest as T), order_total: Number.isFinite(amount) ? amount : null };
+}
+
+/**
+ * Every open order, oldest first, in pages. The sale's total is asked for
+ * alongside; if that can't be read the orders still load, without it.
+ */
+async function loadOpen<T extends object>(
   supabase: SupabaseClient,
   tenantId: string,
-): Promise<ShippingOrder[]> {
-  const orders: ShippingOrder[] = [];
+  fields: string,
+): Promise<(T & { order_total: number | null })[]> {
+  const rows: (T & { order_total: number | null })[] = [];
+  let totals = true;
   for (let from = 0; from < MOST; from += PAGE) {
-    const { data } = await supabase
-      .from("shipping_orders")
-      .select(ORDER_FIELDS)
-      .eq("tenant_id", tenantId)
-      .gt("units_left", 0)
-      .eq("cancelled", false)
-      .is("picked_up_at", null)
-      .order("placed_at")
-      .order("id")
-      .range(from, from + PAGE - 1);
-    const page = (data ?? []) as unknown as ShippingOrder[];
-    orders.push(...page);
+    const read = (select: string) =>
+      supabase
+        .from("shipping_orders")
+        .select(select)
+        .eq("tenant_id", tenantId)
+        .gt("units_left", 0)
+        .eq("cancelled", false)
+        .is("picked_up_at", null)
+        .order("placed_at")
+        .order("id")
+        .range(from, from + PAGE - 1);
+    let { data, error } = await read(totals ? `${fields}${WITH_TOTAL}` : fields);
+    if (error && totals) {
+      totals = false;
+      ({ data, error } = await read(fields));
+    }
+    const page = ((data ?? []) as unknown as (T & TotalJoin)[]).map(withOrderTotal);
+    rows.push(...page);
     if (page.length < PAGE) break;
   }
-  return orders;
+  return rows;
 }
+
+/** Every order with something still to send, oldest first. */
+export const loadOpenOrders = (
+  supabase: SupabaseClient,
+  tenantId: string,
+): Promise<ShippingOrder[]> => loadOpen<ShippingOrder>(supabase, tenantId, ORDER_FIELDS);
 
 export type QueueStep = QueueFacts & { id: string; placed_at: string };
 
 /** The open orders with only what's needed to say which view each is in, oldest first. */
-export async function loadQueueSteps(
+export const loadQueueSteps = (supabase: SupabaseClient, tenantId: string): Promise<QueueStep[]> =>
+  loadOpen<QueueStep>(
+    supabase,
+    tenantId,
+    "id, placed_at, units_left, cancelled, paid, on_hold, hold_until, pickup, pickup_ready_at, picked_up_at, shipping_method, country_code",
+  );
+
+/**
+ * What the list remembers about these orders (box, best price, address
+ * check), by order id. Allowed to fail: the list still opens without it.
+ */
+export async function loadPlans(
   supabase: SupabaseClient,
   tenantId: string,
-): Promise<QueueStep[]> {
-  const steps: QueueStep[] = [];
-  for (let from = 0; from < MOST; from += PAGE) {
-    const { data } = await supabase
-      .from("shipping_orders")
-      .select(
-        "id, placed_at, units_left, cancelled, paid, on_hold, hold_until, pickup, pickup_ready_at, picked_up_at, shipping_method, country_code",
-      )
+  orderIds: string[],
+): Promise<Map<string, StoredPlan>> {
+  const found = new Map<string, StoredPlan>();
+  for (let from = 0; from < orderIds.length; from += 100) {
+    const { data, error } = await supabase
+      .from("shipping_order_plans")
+      .select(PLAN_FIELDS)
       .eq("tenant_id", tenantId)
-      .gt("units_left", 0)
-      .eq("cancelled", false)
-      .is("picked_up_at", null)
-      .order("placed_at")
-      .order("id")
-      .range(from, from + PAGE - 1);
-    const page = (data ?? []) as unknown as QueueStep[];
-    steps.push(...page);
-    if (page.length < PAGE) break;
+      .in("shipping_order_id", orderIds.slice(from, from + 100));
+    if (error || !data) break;
+    for (const row of data as unknown as StoredPlan[]) found.set(row.shipping_order_id, row);
   }
-  return steps;
+  return found;
 }
 
 /** "Hudson, NY" at home, "Toronto, ON, Canada" abroad. */

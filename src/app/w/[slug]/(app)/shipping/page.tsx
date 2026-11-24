@@ -6,7 +6,9 @@ import { PageHeader } from "@/components/ui/page-header";
 import { daysFromNow } from "@/lib/bookings/slots";
 import { formatMoney } from "@/lib/dashboard/format";
 import { countryName, hasAddress } from "@/lib/shipping/carriers";
+import { MOST_SHOWN, NO_PLAN, orderAge } from "@/lib/shipping/list";
 import { dismissedKeys, liveSavedGroups, mergeSuggestions } from "@/lib/shipping/merge";
+import { planCell, planFor, type PlanSetup } from "@/lib/shipping/plan";
 import {
   QUEUE_VIEWS,
   cleanSearch,
@@ -28,13 +30,17 @@ import { cn } from "@/lib/utils";
 import {
   ORDER_FIELDS,
   itemsSummary,
+  loadBoxes,
   loadGroups,
+  loadLabelConnections,
   loadOpenOrders,
+  loadPlans,
   loadShippingSetup,
   placeOf,
   type ShippingOrder,
 } from "./data";
 import { shippingAccess } from "./gate";
+import { ListFreshness, PrintingChip } from "./list-tools";
 import { QueueTable, type QueueRow } from "./queue-table";
 import { ShippingTabs } from "./tabs";
 import { TogetherBanners, type TogetherGroup } from "./together-ui";
@@ -44,13 +50,11 @@ export const metadata: Metadata = { title: "Shipping" };
 /** The queues where orders are posted, so where "Ship together?" is worth asking. */
 const TOGETHER_VIEWS: QueueView[] = ["ready", "priority", "international", "all"];
 
-/** More rows than this on one screen helps nobody; the chips and the search narrow it. */
-const MOST_SHOWN = 300;
-
 const EMPTY: Record<QueueView, string> = {
   ready: "All caught up. New orders appear here as they come in.",
   pickup: "Nobody is waiting to collect an order.",
   priority: "No rush orders right now.",
+  signature: "Nothing waiting needs a signature.",
   unpaid: "Every open order has been paid for.",
   hold: "Nothing is on hold.",
   international: "Nothing is waiting to go abroad.",
@@ -75,10 +79,12 @@ export default async function ShippingPage({
   const q = cleanSearch(query.q);
 
   const supabase = await createClient();
-  const [open, setup, groups, found] = await Promise.all([
+  const [open, setup, groups, boxes, postage, found] = await Promise.all([
     loadOpenOrders(supabase, tenant.id),
     loadShippingSetup(supabase, tenant.id),
     loadGroups(supabase, tenant.id),
+    loadBoxes(supabase, tenant.id),
+    loadLabelConnections(supabase, tenant.id),
     q
       ? supabase
           .from("shipping_orders")
@@ -89,21 +95,45 @@ export default async function ShippingPage({
           .limit(100)
       : null,
   ]);
-  const today = todayIn(tenant.timezone, new Date(daysFromNow(0)));
+  const now = new Date(daysFromNow(0));
+  const today = todayIn(tenant.timezone, now);
   const home = setup.settings.ship_from_country;
-  const counts = queueCounts(open, today, home);
+  const signatureOver = setup.settings.signature_over;
+  const counts = queueCounts(open, today, home, signatureOver);
+  // A search can turn up orders that aren't open; the open ones bring their sale's total along.
+  const totals = new Map(open.map((order) => [order.id, order.order_total ?? null]));
   const matching = found
-    ? ((found.data ?? []) as unknown as ShippingOrder[])
-    : open.filter((order) => inQueueView(order, view, today, home));
+    ? ((found.data ?? []) as unknown as ShippingOrder[]).map((order) => ({
+        ...order,
+        order_total: totals.get(order.id) ?? null,
+      }))
+    : open.filter((order) => inQueueView(order, view, today, home, signatureOver));
   const shown = matching.slice(0, MOST_SHOWN);
   const unprinted = open.filter(
     (order) => inQueueView(order, "ready", today, home) && !order.slip_printed_at,
   );
+  // What the list already knows about each order shown: its box, best price and address check.
+  const plans = await loadPlans(
+    supabase,
+    tenant.id,
+    shown.filter(isOpen).map((order) => order.id),
+  );
+  const planSetup: PlanSetup = { boxes, sources: postage.active, settings: setup.settings };
+  // Whatever is missing is worked out once the list is on screen, a few orders at a time.
+  const willFill = entitlements.canWrite && !q;
 
   const day = new Intl.DateTimeFormat("en-US", {
     timeZone: tenant.timezone,
     month: "short",
     day: "numeric",
+  });
+  // "Nov 20, 5:03 PM", for hovering over an order's age.
+  const placed = new Intl.DateTimeFormat("en-US", {
+    timeZone: tenant.timezone,
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
   });
   // Orders that could share a box, and groups someone saved to finish.
   const offerTogether = !q && TOGETHER_VIEWS.includes(view);
@@ -122,12 +152,17 @@ export default async function ShippingPage({
   const rows: QueueRow[] = shown.map((order) => {
     const stillOpen = isOpen(order);
     const hold = stillOpen ? holdState(order, today) : "none";
+    const plan = stillOpen
+      ? planFor(order, plans.get(order.id)?.chosen_box_id, order.order_total, planSetup)
+      : null;
     return {
       id: order.id,
       name: order.name ?? "Order",
-      placed: day.format(new Date(order.placed_at)),
-      customer: order.recipient ?? "No name on this order",
+      age: orderAge(order.placed_at, now, tenant.timezone),
+      placed: placed.format(new Date(order.placed_at)),
+      customer: order.recipient ?? order.email ?? "No name on this order",
       email: order.email,
+      itemCount: order.items.reduce((sum, item) => sum + (stillOpen ? item.left : item.qty), 0),
       items: stillOpen
         ? itemsSummary(order)
         : order.items.map((item) => `${item.qty} × ${item.title}`).join(", "),
@@ -152,6 +187,18 @@ export default async function ShippingPage({
       pickupReady: Boolean(order.pickup_ready_at),
       partSent: stillOpen && order.items.some((item) => item.left < item.qty),
       slipPrinted: Boolean(order.slip_printed_at),
+      signature: Boolean(plan?.signature) && !order.pickup,
+      plan: plan
+        ? planCell(plan, plans.get(order.id), {
+            now,
+            willFill,
+            paidCents:
+              order.shipping_paid === null ? null : Math.round(Number(order.shipping_paid) * 100),
+            currency: tenant.currency,
+            imperial: home === "US",
+            money: formatMoney,
+          })
+        : NO_PLAN,
     };
   });
 
@@ -159,8 +206,9 @@ export default async function ShippingPage({
     <>
       <PageHeader
         title="Shipping"
-        description="What's waiting to go out, oldest first. Tick orders to print their slips, set them aside or ship them together; open one to pack it and record its tracking."
+        description="Orders waiting to ship, labels from every carrier, packing slips and the packing station."
       >
+        <PrintingChip href={`${base}/settings`} />
         {counts.ready > 0 && (
           <Button asChild variant="outline" size="sm">
             <Link href={`${base}/slips`}>
@@ -183,8 +231,8 @@ export default async function ShippingPage({
         </p>
       )}
 
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <nav aria-label="Queues" className="flex flex-1 flex-wrap gap-1">
+      <div className="flex flex-wrap items-start gap-x-4 gap-y-2">
+        <nav aria-label="Queues" className="flex min-w-0 flex-1 flex-wrap gap-1">
           {QUEUE_VIEWS.map((chip) => {
             const active = chip.key === view && !q;
             return (
@@ -203,16 +251,19 @@ export default async function ShippingPage({
             );
           })}
         </nav>
-        <form action={base} role="search" className="flex w-full gap-2 sm:w-80">
-          <Input
-            name="q"
-            type="search"
-            defaultValue={q}
-            maxLength={60}
-            placeholder="Find any order — #, email or name"
-            aria-label="Find any order"
-          />
-        </form>
+        <div className="flex w-full flex-wrap items-center gap-2 sm:ml-auto sm:w-auto sm:flex-nowrap">
+          <ListFreshness readAt={now.getTime()} />
+          <form action={base} role="search" className="w-full min-w-0 sm:w-72">
+            <Input
+              name="q"
+              type="search"
+              defaultValue={q}
+              maxLength={60}
+              placeholder="Find any order — #, email or name"
+              aria-label="Find any order"
+            />
+          </form>
+        </div>
       </div>
 
       {q && (
@@ -251,6 +302,7 @@ export default async function ShippingPage({
           today={today}
           choices={holdChoices(today)}
           view={found ? "all" : view}
+          fill={willFill ? view : undefined}
         />
       )}
       {matching.length > shown.length && (

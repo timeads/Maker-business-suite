@@ -201,6 +201,16 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   stock receipts. The to-ship queue's views (ready, pickup, priority,
   on hold, international) and "back from hold" are worked out on read by
   `lib/shipping/queue.ts`, so a hold with an end date needs no timer.
+  "Needs signature" is the workspace's `signature_over` rule held against
+  the sale's total. The list's Box, "Best quote · margin" and address-check
+  columns come from `shipping_order_plans`, a cache worked out by
+  `lib/shipping/plan.ts` (the usual box unless a person picked one, items
+  plus box, salted fingerprints instead of any address) and filled a few
+  orders at a time by `planNextOrders` after the list is on screen: a price
+  lasts 12 hours or until the order changes, an address is asked about once.
+  A list price is only words (no rate id) and never touches
+  `shipping_label_quotes`, so it can't be bought: buying is the order page's
+  own quote.
   Pickup steps are kept here, not sent to the shop. The packing slip's
   layout is a config (`slip_layout`); its barcode (`code128.ts`) is what
   Scan & pack reads. Packing details are asked of the shop ten orders at a

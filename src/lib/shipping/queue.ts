@@ -1,4 +1,5 @@
 import { localDay } from "../bookings/slots";
+import { signatureByRule } from "./labels";
 
 /**
  * The to-ship queue, worked out on read. Nothing here is stored: a hold that
@@ -9,6 +10,7 @@ export const QUEUE_VIEWS = [
   { key: "ready", label: "Ready to ship" },
   { key: "pickup", label: "In-store pickup" },
   { key: "priority", label: "Priority" },
+  { key: "signature", label: "Needs signature" },
   { key: "unpaid", label: "Payment pending" },
   { key: "hold", label: "On hold" },
   { key: "international", label: "International" },
@@ -31,6 +33,8 @@ export type QueueFacts = {
   picked_up_at: string | null;
   shipping_method: string | null;
   country_code: string | null;
+  /** What the whole order came to, when the sale is known: the signature rule looks at it. */
+  order_total?: number | string | null;
 };
 
 /** Today's date where the workspace is, as YYYY-MM-DD. */
@@ -102,12 +106,31 @@ export const isPriority = (method: string | null | undefined) =>
 export const isInternational = (country: string | null | undefined, home: string) =>
   Boolean(country) && country!.toUpperCase() !== (home || "US").toUpperCase();
 
-/** Whether an order shows under a chip. An order can sit under several. */
+/**
+ * Whether the workspace's rule asks for a signature on this order: it is
+ * worth at least `signatureOver`. Never without a rule or without a total.
+ */
+export const needsSignature = (
+  order: Pick<QueueFacts, "order_total">,
+  signatureOver: number | null | undefined,
+) =>
+  signatureByRule(
+    order.order_total === null || order.order_total === undefined
+      ? null
+      : Number(order.order_total),
+    signatureOver,
+  );
+
+/**
+ * Whether an order shows under a chip. An order can sit under several.
+ * `signatureOver` is the workspace's signature rule (null: it has none).
+ */
 export function inQueueView(
   order: QueueFacts,
   view: QueueView,
   today: string,
   homeCountry: string,
+  signatureOver: number | null = null,
 ): boolean {
   if (!isOpen(order)) return false;
   const held = holdState(order, today) === "held";
@@ -119,6 +142,8 @@ export function inQueueView(
       return ready;
     case "priority":
       return ready && isPriority(order.shipping_method);
+    case "signature":
+      return ready && needsSignature(order, signatureOver);
     case "pickup":
       return order.pickup;
     case "unpaid":
@@ -134,6 +159,7 @@ export function queueCounts(
   orders: QueueFacts[],
   today: string,
   homeCountry: string,
+  signatureOver: number | null = null,
 ): Record<QueueView, number> {
   const counts = Object.fromEntries(QUEUE_VIEWS.map((view) => [view.key, 0])) as Record<
     QueueView,
@@ -141,7 +167,7 @@ export function queueCounts(
   >;
   for (const order of orders) {
     for (const view of QUEUE_VIEWS) {
-      if (inQueueView(order, view.key, today, homeCountry)) counts[view.key] += 1;
+      if (inQueueView(order, view.key, today, homeCountry, signatureOver)) counts[view.key] += 1;
     }
   }
   return counts;

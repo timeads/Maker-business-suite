@@ -176,7 +176,8 @@ export const HELP_TOPICS: HelpTopic[] = [
     summary: "Views, search, holds and marking an order as sent.",
     steps: [
       "Open Shipping. “Ready to ship” lists paid orders with something left to send, oldest first.",
-      "Use the views along the top for pickup orders, priority shipping, payment pending, on hold and international.",
+      "Use the views along the top for pickup orders, priority shipping, orders that need a signature, payment pending, on hold and international.",
+      "Each line shows the order's age, how many items are left to send, the weight, the box it would go in, what your customer chose and paid, the best label price found for it with your margin, and where it's going.",
       "Open an order to see what to pack. Record the parcel with its carrier and tracking number, or buy a label (see “Buy a postage label”).",
       "Sending only part of an order? Press “Ship part of this order” and enter how many of each item went. The rest stays in the queue.",
     ],
@@ -184,6 +185,10 @@ export const HELP_TOPICS: HelpTopic[] = [
       "Put an order on hold with the “Hold” button under its summary: add a note and, if you like, the day it should come back. It returns marked “Back from hold”.",
       "If Shipping settings say so, recording a parcel also marks the order as sent in your shop, and your shop emails the customer their tracking.",
       "The number beside Shipping in the menu is how many orders are ready to go.",
+      "“Best quote · margin” is worked out a few orders at a time after the list opens, for your usual box (or the box you picked on the order, shown as “your choice”) and kept for 12 hours or until the order changes. It's a guide: open the order to see every rate and buy the label.",
+      "“Address found” or “Address not found” under the town is what the carriers' address book said. Each address is asked about once.",
+      "“Needs signature” lists orders your signature rule in Shipping → Settings applies to.",
+      "“Refresh” reads the list again. The chip at the top right shows how this computer prints and opens the setting.",
     ],
   },
   {
