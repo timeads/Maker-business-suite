@@ -83,11 +83,18 @@ export async function loadStock(
         .order("id")
         .range(from, to),
     ),
-    all<SupplierRow & { email: string | null; notes: string }>((from, to) =>
+    all<
+      SupplierRow & {
+        email: string | null;
+        notes: string;
+        contact_name: string | null;
+        more_emails: string[] | null;
+      }
+    >((from, to) =>
       supabase
         .from("suppliers")
         .select(
-          "id, name, email, lead_time_days, coverage_days, moq, moq_applies_to, notes, archived_at",
+          "id, name, email, contact_name, more_emails, lead_time_days, coverage_days, moq, moq_applies_to, notes, archived_at",
         )
         .eq("tenant_id", tenant.id)
         .order("name")

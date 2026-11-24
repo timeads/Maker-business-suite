@@ -111,6 +111,20 @@ export async function saveSupplier(
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return { error: "That email doesn't look right." };
   }
+  const moreEmails = [
+    ...new Set(
+      text(formData, "more_emails")
+        .split(/[\s,;]+/)
+        .map((value) => value.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ];
+  if (
+    moreEmails.length > 5 ||
+    moreEmails.some((value) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value))
+  ) {
+    return { error: "Check the other emails: up to five, with commas between them." };
+  }
   if (lead === null || !(lead >= 0 && lead <= 365)) {
     return { error: "How many days from ordering to arriving? (0 to 365)" };
   }
@@ -118,7 +132,7 @@ export async function saveSupplier(
     return { error: "How many days of sales should one order cover? (1 to 365)" };
   }
   if (!(moq >= 1 && moq <= 1_000_000)) return { error: "The smallest order is at least 1." };
-  const { error } = await ctx.supabase.rpc("save_supplier", {
+  const { data: savedId, error } = await ctx.supabase.rpc("save_supplier", {
     p_tenant_id: ctx.tenant.id,
     p_supplier_id: supplierId,
     p_name: name,
@@ -133,6 +147,13 @@ export async function saveSupplier(
   if (error) {
     return { error: error.code === "23505" ? "You already have a supplier with that name." : OOPS };
   }
+  const { error: contactError } = await ctx.supabase.rpc("save_supplier_contact", {
+    p_tenant_id: ctx.tenant.id,
+    p_supplier_id: (savedId as string | null) ?? supplierId,
+    p_contact_name: text(formData, "contact_name").slice(0, 120),
+    p_more_emails: moreEmails,
+  });
+  if (contactError) return { error: OOPS };
   done(slug);
   return { message: supplierId ? "Saved." : `${name} is added.` };
 }

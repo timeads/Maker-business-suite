@@ -223,3 +223,55 @@ describe("the reorder list", () => {
     expect(versions.n).toBe(1);
   });
 });
+
+describe("who an order is addressed to", () => {
+  it("a manager keeps a contact name and a few more emails; nobody else can", async () => {
+    const [{ id: supplier }] = await as<{ id: string }>(
+      alice,
+      "select public.save_supplier($1, null, 'Hill Mill', 'orders@mill.test', 21, 45, 1, 'order', '') as id",
+      [tenantA],
+    );
+    const save = "select public.save_supplier_contact($1, $2, $3, $4::text[])";
+    await as(alice, save, [
+      tenantA,
+      supplier,
+      "  Dana Reyes ",
+      ["Accounts@Mill.test", "accounts@mill.test", " ", "sales@mill.test"],
+    ]);
+    const read = () =>
+      one<{ contact_name: string | null; more_emails: string[] }>(
+        "select contact_name, more_emails from public.suppliers where id = $1",
+        [supplier],
+      );
+    expect(await read()).toEqual({
+      contact_name: "Dana Reyes",
+      more_emails: ["accounts@mill.test", "sales@mill.test"],
+    });
+
+    // Not an address, or too many of them: refused, and nothing changes.
+    await expect(as(alice, save, [tenantA, supplier, "X", ["not an email"]])).rejects.toThrow(
+      /Bad email/,
+    );
+    await expect(
+      as(alice, save, [tenantA, supplier, "X", [1, 2, 3, 4, 5, 6].map((n) => `a${n}@mill.test`)]),
+    ).rejects.toThrow(/Too many/);
+    expect((await read()).contact_name).toBe("Dana Reyes");
+
+    // A plain member, another workspace's owner (even naming this workspace), and a visitor.
+    await expect(as(carol, save, [tenantA, supplier, "Carol", []])).rejects.toThrow();
+    await expect(as(bob, save, [tenantA, supplier, "Bob", []])).rejects.toThrow();
+    await expect(as(bob, save, [tenantB, supplier, "Bob", []])).rejects.toThrow(/not found/i);
+    await expect(
+      asAnon(db, (tx) => tx.query(save, [tenantA, supplier, "Anon", []])),
+    ).rejects.toThrow(/permission denied/);
+    expect((await read()).contact_name).toBe("Dana Reyes");
+    // The other workspace can't read them either.
+    expect(
+      await as(bob, "select contact_name from public.suppliers where id = $1", [supplier]),
+    ).toEqual([]);
+
+    // Emptied, both go back to nothing.
+    await as(alice, save, [tenantA, supplier, "", []]);
+    expect(await read()).toEqual({ contact_name: null, more_emails: [] });
+  });
+});

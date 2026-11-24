@@ -108,6 +108,8 @@ export type SupplierValues = {
   id: string;
   name: string;
   email: string | null;
+  contact_name?: string | null;
+  more_emails?: string[] | null;
   lead_time_days: number;
   coverage_days: number;
   moq: number;
@@ -141,6 +143,28 @@ export function SupplierForm({ slug, supplier }: { slug: string; supplier?: Supp
             type="email"
             maxLength={200}
             defaultValue={supplier?.email ?? ""}
+          />
+        </div>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor={`${id}-contact`}>Who you deal with</Label>
+          <Input
+            id={`${id}-contact`}
+            name="contact_name"
+            maxLength={120}
+            defaultValue={supplier?.contact_name ?? ""}
+            placeholder="Dana Reyes"
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor={`${id}-more`}>Other emails for orders</Label>
+          <Input
+            id={`${id}-more`}
+            name="more_emails"
+            maxLength={600}
+            defaultValue={(supplier?.more_emails ?? []).join(", ")}
+            placeholder="accounts@hillmill.example, …"
           />
         </div>
       </div>

@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Download } from "lucide-react";
+import { Download, FileText } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -231,6 +231,13 @@ export default async function StockOrderPage({
         {lines.length > 0 && (
           <>
             <PrintButton />
+            {canManage(role) && (
+              <Button asChild variant="outline" size="sm" className="print:hidden">
+                <a href={`${base}/orders/${order.number}/pdf`} target="_blank" rel="noopener">
+                  <FileText /> PDF
+                </a>
+              </Button>
+            )}
             <Button asChild variant="outline" size="sm" className="print:hidden">
               <a href={`${base}/orders/${order.number}/sheet`}>
                 <Download /> Spreadsheet
