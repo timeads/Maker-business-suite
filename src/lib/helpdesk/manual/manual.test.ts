@@ -10,7 +10,8 @@ import {
   searchHint,
 } from "./config";
 import { applySuggestion, planReading, type Reading, type TopicState } from "./plan";
-import { buildReadPrompt, tidyReading, type RawReading } from "./reader";
+import { bodyAsAdditions, copyFacets, copyTitle, joinTopics } from "./join";
+import { buildReadPrompt, tidyExtras, tidyReading, type RawReading } from "./reader";
 import { needsScrub, scrub, scrubDoc } from "./scrub";
 import { closestEntries, searchEntries, words, type Entry } from "./search";
 import {
@@ -409,6 +410,9 @@ describe("the reader's prompt and its answer", () => {
     summary: "The lid rattles once the water boils.",
     facets: [{ facet: "product", value: "Kettle K2" }],
     additions: [{ section: "What to do", points: ["Tighten the knob"] }],
+    case_summary: "The kettle's lid rattled; the knob was loose.",
+    outcome: "Fixed by tightening the knob",
+    photos: [],
     ...more,
   });
   const context = {
@@ -416,6 +420,38 @@ describe("the reader's prompt and its answer", () => {
     config,
     facts: { names: ["Pat Example"] },
   };
+
+  it("tidies the case line and picture picks: scrubbed, cut to length, and only pictures that were shown", () => {
+    const extras = tidyExtras(
+      raw({
+        case_summary: `  Pat Example's kettle\nrattled. ${"x".repeat(900)}`,
+        outcome: "**Fixed** <b>by hand</b>",
+        photos: [
+          { ref: "P2", caption: "- The knob, from pat@example.test" },
+          { ref: "P9", caption: "Never shown" },
+          { ref: " P1 ", caption: "c".repeat(900) },
+          { ref: "P2", caption: "Twice" },
+        ],
+      }),
+      { shown: ["P1", "P2"], facts: { names: ["Pat Example"] } },
+    );
+    expect(extras.caseLine?.summary.startsWith("the customer's kettle rattled.")).toBe(true);
+    expect(extras.caseLine?.summary.length).toBeLessThanOrEqual(500);
+    expect(extras.caseLine?.outcome).toBe("Fixed bby hand/b");
+    expect(extras.photoPicks.map((pick) => pick.ref)).toEqual(["P2", "P1"]);
+    expect(extras.photoPicks[0].caption).toBe("The knob, from (email removed)");
+    expect(extras.photoPicks[1].caption).toHaveLength(300);
+    // Not useful, or nothing written: no case line, no picks.
+    expect(
+      tidyExtras(raw({ useful: false, photos: [{ ref: "P1", caption: "x" }] }), {
+        shown: ["P1"],
+        facts: { names: [] },
+      }),
+    ).toEqual({ caseLine: null, photoPicks: [] });
+    expect(
+      tidyExtras(raw({ case_summary: " " }), { shown: [], facts: { names: [] } }).caseLine,
+    ).toBeNull();
+  });
 
   it("marks the conversation as material and keeps its angle brackets from closing our tags", () => {
     const prompt = buildReadPrompt({
@@ -546,5 +582,86 @@ describe("topics beside a conversation and in a reply draft", () => {
       orders: [],
     });
     expect(without).not.toContain("<manual>");
+  });
+});
+
+describe("joining two topics and copying one", () => {
+  const H = (heading: string): RichDoc[number] => ({ t: "p", runs: [{ text: heading, b: true }] });
+  const UL = (...points: string[]): RichDoc[number] => ({
+    t: "ul",
+    items: points.map((text) => [{ text }]),
+  });
+  const SECTIONS = ["What people notice", "What to do", "Notes"];
+
+  it("reads a body as points under its headings; writing with no heading goes under the last one", () => {
+    expect(
+      bodyAsAdditions(
+        [
+          { t: "p", runs: [{ text: "Seen on  older " }, { text: "frames.", b: true }] },
+          H("What to do"),
+          UL("Level the table", " "),
+          { t: "p", runs: [{ text: "Then check the feet." }] },
+          H("Empty"),
+        ],
+        "Notes",
+      ),
+    ).toEqual([
+      { section: "Notes", points: ["Seen on older frames."] },
+      { section: "What to do", points: ["Level the table", "Then check the feet."] },
+    ]);
+  });
+
+  it("adds what the other topic says without touching a word of the one that stays", () => {
+    const into = {
+      body: [H("What to do"), UL("Level the table")] as RichDoc,
+      facets: [{ facet: "product", value: "Frame" }],
+    };
+    const before = JSON.stringify(into);
+    const from = {
+      body: [
+        H("What people notice"),
+        UL("It rocks"),
+        H("What to do"),
+        UL("level the table.", "Check the feet"),
+      ] as RichDoc,
+      facets: [
+        { facet: "product", value: "frame" },
+        { facet: "problem", value: "Wobble" },
+      ],
+    };
+    const joined = joinTopics(into, from, SECTIONS);
+    expect(joined.body).toEqual([
+      H("What people notice"),
+      UL("It rocks"),
+      H("What to do"),
+      UL("Level the table", "Check the feet"),
+    ]);
+    expect(joined.added).toBe(2);
+    expect(joined.facets).toEqual([
+      { facet: "product", value: "Frame" },
+      { facet: "problem", value: "Wobble" },
+    ]);
+    expect(JSON.stringify(into)).toBe(before);
+    // Joining with an empty topic changes nothing.
+    expect(joinTopics(into, { body: [], facets: [] }, SECTIONS).body).toEqual(into.body);
+  });
+
+  it("copies under another value of one label and keeps the other labels", () => {
+    const facets = [
+      { facet: "product", value: "Tabletop frame" },
+      { facet: "problem", value: "Wobble" },
+    ];
+    const copy = copyFacets(facets, "product", " Floor frame, <Big> frame ");
+    expect(copy).toEqual([
+      { facet: "problem", value: "Wobble" },
+      { facet: "product", value: "Floor frame" },
+      { facet: "product", value: "Big frame" },
+    ]);
+    expect(copyFacets(facets, "product", "tabletop FRAME")).toBeNull();
+    expect(copyFacets(facets, "product", " , ")).toBeNull();
+    expect(copyTitle(" Frame rocks ", [{ facet: "product", value: "Floor frame" }])).toBe(
+      "Frame rocks (Floor frame)",
+    );
+    expect(copyTitle("x".repeat(200), copy!)).toHaveLength(160);
   });
 });

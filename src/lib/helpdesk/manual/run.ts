@@ -20,6 +20,7 @@ import {
   MAX_PHOTO_BYTES,
   PHOTO_TYPES,
   SHORTLIST,
+  tidyExtras,
   tidyReading,
   type ManualReader,
   type PhotoType,
@@ -48,6 +49,11 @@ export type ClaimedRun = {
   source: string;
   ticket_id: string | null;
 };
+
+/** What a topic may show from a conversation: pictures a browser can draw, and videos. */
+export const CANDIDATE_TYPES = [...PHOTO_TYPES, "video/mp4", "video/quicktime"] as const;
+/** How many of one conversation's files are offered to its topic. */
+export const MAX_CANDIDATES = 12;
 
 /** How many conversations one run reads at most. */
 export const PER_RUN = 10;
@@ -262,6 +268,7 @@ const topicEntry = (topic: TopicState): Entry & { topic: TopicState } => ({
 
 type MessageRow = { id: string; direction: string; body: string; created_at: string; kind: string };
 type FileRow = {
+  id: string;
   message_id: string;
   name: string;
   mime_type: string;
@@ -283,7 +290,15 @@ export async function buildInput(
   config: ManualConfig,
   tenantId: string,
   deps: ManualDeps,
-): Promise<{ input: ReadInput; refs: Map<string, string>; scrubFacts: ScrubFacts } | null> {
+): Promise<{
+  input: ReadInput;
+  refs: Map<string, string>;
+  scrubFacts: ScrubFacts;
+  /** The customer's kept pictures and videos: what the topic may be offered. Ids only. */
+  candidates: string[];
+  /** Our picture reference (P1…) → the attachment it is. */
+  photoRefs: Map<string, string>;
+} | null> {
   const { messages, files } = await withTenant(
     tenantId,
     async (scope) => {
@@ -299,7 +314,7 @@ export async function buildInput(
           ? await scope
               .select(
                 "message_attachments",
-                "message_id, name, mime_type, bytes, storage_path, state",
+                "id, message_id, name, mime_type, bytes, storage_path, state",
               )
               .in("message_id", ids)
           : { data: [] };
@@ -319,10 +334,24 @@ export async function buildInput(
     files: clean(filesNote(files.filter((f) => f.message_id === m.id))),
   }));
 
+  const inbound = new Set(messages.filter((m) => m.direction === "inbound").map((m) => m.id));
+  // What the topic may be offered to show: the customer's kept pictures and videos, by id.
+  // A person picks from these; none is sent anywhere by being listed.
+  const candidates = files
+    .filter(
+      (file) =>
+        inbound.has(file.message_id) &&
+        file.state === "kept" &&
+        file.storage_path !== null &&
+        (CANDIDATE_TYPES as readonly string[]).includes(file.mime_type),
+    )
+    .map((file) => file.id)
+    .slice(0, MAX_CANDIDATES);
+
   // The customer's own photos only: kept files, pictures, small enough, never a video.
   const photos: ReadInput["photos"] = [];
+  const photoRefs = new Map<string, string>();
   if (config.read_photos) {
-    const inbound = new Set(messages.filter((m) => m.direction === "inbound").map((m) => m.id));
     const load = deps.loadFile ?? ((path: string) => defaultLoadFile(deps.admin, path));
     for (const file of files) {
       if (photos.length >= MAX_PHOTOS) break;
@@ -334,7 +363,9 @@ export async function buildInput(
       // By its own first bytes, as when it was kept.
       const type = sniffType(bytes);
       if (!type || !(PHOTO_TYPES as readonly string[]).includes(type)) continue;
-      photos.push({ type: type as PhotoType, base64: Buffer.from(bytes).toString("base64") });
+      const ref = `P${photos.length + 1}`;
+      photoRefs.set(ref, file.id);
+      photos.push({ ref, type: type as PhotoType, base64: Buffer.from(bytes).toString("base64") });
     }
   }
 
@@ -356,10 +387,24 @@ export async function buildInput(
     input: { config, shortlist, subject, messages: thread, photos },
     refs,
     scrubFacts,
+    candidates,
+    photoRefs,
   };
 }
 
-const planPayload = (plan: Planned): Record<string, unknown> => {
+/** The case line and the candidates, as `apply_manual_reading` takes them beside a plan. */
+export type CaseFiling = {
+  case: { summary: string; outcome: string } | null;
+  media: { attachment_id: string; suggested: boolean; caption: string }[];
+};
+
+const planPayload = (plan: Planned, filing: CaseFiling | null): Record<string, unknown> => ({
+  ...planBody(plan),
+  // Only where the conversation ends up under a topic.
+  ...(filing && plan.kind !== "nothing" ? { case: filing.case, media: filing.media } : {}),
+});
+
+const planBody = (plan: Planned): Record<string, unknown> => {
   switch (plan.kind) {
     case "new":
       return { ...plan };
@@ -452,6 +497,7 @@ export async function runClaimedManual(run: ClaimedRun, deps: ManualDeps): Promi
       const topics = await loadTopics(run.tenant_id, deps);
       const built = await buildInput(ticket, topics, loaded.config, run.tenant_id, deps);
       let plan: Planned | { kind: "failed" } = { kind: "nothing" };
+      let filing: CaseFiling | null = null;
       if (built) {
         mayRead -= 1;
         counts.read += 1;
@@ -476,6 +522,26 @@ export async function runClaimedManual(run: ClaimedRun, deps: ManualDeps): Promi
           if (reading) {
             const topic = topics.find((t) => t.id === reading.topicId) ?? null;
             plan = planReading(reading, topic, loaded.config.sections);
+            // Beside the points: one line for the topic's cases, and the customer's
+            // pictures and videos as candidates. Claude's picks are only a mark on a
+            // candidate (pictures it was shown, never a video); a person keeps or not.
+            const extras = result.ok
+              ? tidyExtras(result.reading, {
+                  shown: [...built.photoRefs.keys()],
+                  facts: built.scrubFacts,
+                })
+              : { caseLine: null, photoPicks: [] };
+            const picked = new Map(
+              extras.photoPicks.map((pick) => [built.photoRefs.get(pick.ref)!, pick.caption]),
+            );
+            filing = {
+              case: extras.caseLine,
+              media: built.candidates.map((id) => ({
+                attachment_id: id,
+                suggested: picked.has(id),
+                caption: picked.get(id) ?? "",
+              })),
+            };
           }
         } catch (err) {
           console.error(
@@ -496,7 +562,7 @@ export async function runClaimedManual(run: ClaimedRun, deps: ManualDeps): Promi
       const { data: outcome, error } = await deps.admin.rpc("apply_manual_reading", {
         p_run_id: run.id,
         p_ticket_id: ticket.id,
-        p_plan: plan.kind === "failed" ? { kind: "failed" } : planPayload(plan),
+        p_plan: plan.kind === "failed" ? { kind: "failed" } : planPayload(plan, filing),
       });
       if (error) throw new Error(`Could not file a reading: ${error.message}`);
       if (outcome === "new") counts.written += 1;

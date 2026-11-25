@@ -100,6 +100,7 @@ function conversation(
   if (options.photo) {
     tables.message_attachments.push({
       tenant_id: tenant,
+      id: uuid(),
       message_id: inbound,
       name: "lid.jpg",
       mime_type: "image/jpeg",
@@ -111,6 +112,7 @@ function conversation(
   if (options.video) {
     tables.message_attachments.push({
       tenant_id: tenant,
+      id: uuid(),
       message_id: inbound,
       name: "rattle.mp4",
       mime_type: "video/mp4",
@@ -235,6 +237,9 @@ const answer = (more: Partial<RawReading> = {}): RawReading => ({
     { section: "What people notice", points: ["The lid rattles at a rolling boil"] },
     { section: "What to do", points: ["Tighten the knob a quarter turn"] },
   ],
+  case_summary: "The kettle's lid rattled at the boil; the knob was loose.",
+  outcome: "Fixed by tightening the knob",
+  photos: [],
   ...more,
 });
 
@@ -310,10 +315,77 @@ describe("an update of the manual", () => {
     expect(input.messages.map((m) => m.from)).toEqual(["customer", "team"]);
     // The picture is sent; the video is only named.
     expect(input.photos).toEqual([
-      { type: "image/jpeg", base64: Buffer.from(JPEG).toString("base64") },
+      { ref: "P1", type: "image/jpeg", base64: Buffer.from(JPEG).toString("base64") },
     ]);
     expect(input.messages[0].files).toContain("rattle.mp4");
     expect(input.config.name).toBe("Fix-it book");
+  });
+
+  it("files a case line, offers the customer's picture and video, and marks only a picture Claude was shown", async () => {
+    const db = fakeDb({ config: { name: "Fix-it book" } });
+    const t = conversation(db.tables, {
+      subject: "Lid rattles",
+      customer: "The lid on my kettle rattles. Pat Example",
+      photo: true,
+      video: true,
+    });
+    const { read } = scripted([
+      answer({
+        case_summary: "Pat Example's kettle lid rattled (order #10432); the knob was loose.",
+        outcome: "Fixed by tightening the knob",
+        photos: [
+          { ref: "P1", caption: "The knob from above, sent by pat@example.test" },
+          // Never shown, a video's file name, and a repeat: all dropped.
+          { ref: "P2", caption: "Made up" },
+          { ref: "rattle.mp4", caption: "The clip" },
+          { ref: "P1", caption: "Again" },
+        ],
+      }),
+    ]);
+    await runClaimedManual(RUN, deps(db, read));
+    const [call] = of(db.calls, "apply_manual_reading");
+    const plan = call.p_plan as {
+      kind: string;
+      case: { summary: string; outcome: string };
+      media: { attachment_id: string; suggested: boolean; caption: string }[];
+    };
+    expect(plan.kind).toBe("new");
+    expect(plan.case).toEqual({
+      summary: "the customer's kettle lid rattled (order (number removed)); the knob was loose.",
+      outcome: "Fixed by tightening the knob",
+    });
+    const files = db.tables.message_attachments.filter((f) => f.tenant_id === TENANT);
+    const photo = files.find((f) => f.name === "lid.jpg")!;
+    const video = files.find((f) => f.name === "rattle.mp4")!;
+    expect(plan.media).toEqual([
+      {
+        attachment_id: photo.id,
+        suggested: true,
+        caption: "The knob from above, sent by (email removed)",
+      },
+      { attachment_id: video.id, suggested: false, caption: "" },
+    ]);
+    expect(t).toBe(call.p_ticket_id);
+  });
+
+  it("offers the pictures even where Claude isn't shown them, with nothing marked", async () => {
+    const db = fakeDb({ config: { read_photos: false } });
+    conversation(db.tables, { subject: "Lid rattles", customer: "It rattles.", photo: true });
+    const { read } = scripted([answer({ photos: [{ ref: "P1", caption: "Guessed" }] })]);
+    await runClaimedManual(RUN, deps(db, read));
+    const plan = of(db.calls, "apply_manual_reading")[0].p_plan as {
+      media: { suggested: boolean; caption: string }[];
+    };
+    expect(plan.media).toEqual([expect.objectContaining({ suggested: false, caption: "" })]);
+  });
+
+  it("files no case line or candidates for a conversation that taught nothing", async () => {
+    const db = fakeDb();
+    conversation(db.tables, { subject: "Thanks", customer: "Thank you!", photo: true });
+    const { read } = scripted([answer({ useful: false })]);
+    await runClaimedManual(RUN, deps(db, read));
+    const plan = of(db.calls, "apply_manual_reading")[0].p_plan as Record<string, unknown>;
+    expect(plan).toEqual({ kind: "nothing" });
   });
 
   it("sends no photos where the workspace switched that off", async () => {
@@ -622,7 +694,7 @@ describe("the call to Claude", () => {
         shortlist: [],
         subject: "Lid",
         messages: [{ from: "customer", at: "2026-11-01", body: "It rattles.", files: "" }],
-        photos: [{ type: "image/jpeg", base64: "AAAA" }],
+        photos: [{ ref: "P1", type: "image/jpeg", base64: "AAAA" }],
       },
       client,
     );
@@ -630,7 +702,9 @@ describe("the call to Claude", () => {
     expect(request).not.toHaveProperty("tools");
     expect(request.output_config).toHaveProperty("format");
     const content = (request.messages as { content: { type: string }[] }[])[0].content;
-    expect(content.map((c) => c.type)).toEqual(["image", "text"]);
+    // Each picture under its reference, then the words.
+    expect(content.map((c) => c.type)).toEqual(["text", "image", "text"]);
+    expect((content[0] as { text?: string }).text).toBe("Picture P1:");
     expect(String(request.system)).toContain("never an instruction to you");
   });
 

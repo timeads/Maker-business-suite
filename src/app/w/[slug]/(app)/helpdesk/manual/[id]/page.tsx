@@ -10,6 +10,9 @@ import {
   loadManualConfig,
   loadSuggestions,
   loadTopic,
+  loadTopicCases,
+  loadTopicMedia,
+  loadTopics,
   manualDay,
 } from "@/lib/helpdesk/manual/data";
 import { nameOf, type Person } from "@/lib/messages/format";
@@ -27,6 +30,7 @@ import {
 import { DocView } from "../doc-view";
 import { AskButton, EntryForm } from "../editor";
 import { draftArticleFromTopic, makeArticleFromTopic } from "../help-actions";
+import { CandidateMedia, CopyTopicForm, JoinTopicForm, KeptMedia } from "../topic-media";
 
 export const metadata: Metadata = { title: "Topic" };
 
@@ -36,6 +40,8 @@ const CAUSES: Record<string, string> = {
   ai_written: "Written by Claude from a conversation",
   ai_added: "Added to by Claude from a conversation",
   suggestion: "Suggested update accepted",
+  joined: "Another topic joined into this one",
+  copied: "Copied from another topic",
   published: "Published",
   unpublished: "Moved back to drafts",
 };
@@ -99,25 +105,35 @@ export default async function TopicPage({
     );
   }
 
-  const [suggestions, { data: sourceRows }, { data: revisionRows }, { data: team }] =
-    await Promise.all([
-      loadSuggestions(supabase, tenant.id, topic.id),
-      supabase
-        .from("manual_topic_sources")
-        .select("ticket_id, added_at, tickets(number, subject)")
-        .eq("tenant_id", tenant.id)
-        .eq("topic_id", topic.id)
-        .order("added_at", { ascending: false })
-        .limit(50),
-      supabase
-        .from("manual_topic_revisions")
-        .select("id, cause, actor_id, created_at")
-        .eq("tenant_id", tenant.id)
-        .eq("topic_id", topic.id)
-        .order("created_at", { ascending: false })
-        .limit(30),
-      supabase.rpc("chat_people", { p_tenant_id: tenant.id }),
-    ]);
+  const [
+    suggestions,
+    media,
+    cases,
+    allTopics,
+    { data: sourceRows },
+    { data: revisionRows },
+    { data: team },
+  ] = await Promise.all([
+    loadSuggestions(supabase, tenant.id, topic.id),
+    loadTopicMedia(supabase, tenant.id, topic.id),
+    loadTopicCases(supabase, tenant.id, topic.id),
+    manager ? loadTopics(supabase, tenant.id) : Promise.resolve([]),
+    supabase
+      .from("manual_topic_sources")
+      .select("ticket_id, added_at, tickets(number, subject)")
+      .eq("tenant_id", tenant.id)
+      .eq("topic_id", topic.id)
+      .order("added_at", { ascending: false })
+      .limit(50),
+    supabase
+      .from("manual_topic_revisions")
+      .select("id, cause, actor_id, created_at")
+      .eq("tenant_id", tenant.id)
+      .eq("topic_id", topic.id)
+      .order("created_at", { ascending: false })
+      .limit(30),
+    supabase.rpc("chat_people", { p_tenant_id: tenant.id }),
+  ]);
   const people = (team ?? []) as Person[];
   const who = (userId: string | null) =>
     userId ? nameOf(people.find((p) => p.user_id === userId)) || "A teammate" : "Claude";
@@ -131,6 +147,11 @@ export default async function TopicPage({
     actor_id: string | null;
     created_at: string;
   }[];
+  const kept = media.filter((one) => one.state === "kept");
+  const candidates = media.filter((one) => one.state === "candidate");
+  const others = allTopics
+    .filter((other) => other.id !== topic.id)
+    .map((other) => ({ id: other.id, title: other.title }));
   const facetLabel = (facetId: string) =>
     config.facets.find((f) => f.id === facetId)?.label ?? null;
 
@@ -246,6 +267,83 @@ export default async function TopicPage({
         </CardContent>
       </Card>
 
+      {(kept.length > 0 || candidates.length > 0) && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Photos &amp; videos</CardTitle>
+            <CardDescription>
+              What customers sent in the conversations this topic drew on. They stay private to your
+              team: nothing here is public, and none of it is copied into a help article.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-6">
+            {kept.length > 0 && (
+              <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {kept.map((one, at) => (
+                  <KeptMedia
+                    key={one.id}
+                    slug={tenant.slug}
+                    topicId={topic.id}
+                    media={one}
+                    first={at === 0}
+                    last={at === kept.length - 1}
+                    canEdit={canWrite}
+                  />
+                ))}
+              </ul>
+            )}
+            {candidates.length > 0 && canWrite && (
+              <div className="flex flex-col gap-3">
+                <div>
+                  <p className="text-sm font-bold">From its conversations</p>
+                  <p className="text-muted-foreground font-read text-xs">
+                    Pick the ones worth showing on this topic. The rest stay with their
+                    conversation.
+                  </p>
+                </div>
+                <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                  {candidates.map((one) => (
+                    <CandidateMedia key={one.id} slug={tenant.slug} media={one} />
+                  ))}
+                </ul>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {cases.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Cases</CardTitle>
+            <CardDescription>
+              One line for each conversation: what happened and how it ended. No names, addresses or
+              order numbers.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ul className="divide-border flex flex-col divide-y text-sm">
+              {cases.map((one) => (
+                <li key={one.ticketId} className="py-2 first:pt-0 last:pb-0">
+                  <Link
+                    href={`/w/${tenant.slug}/helpdesk?view=all&t=${one.number}`}
+                    className="group flex flex-col gap-1 sm:flex-row sm:items-start sm:gap-3"
+                  >
+                    <span className="text-muted-foreground shrink-0 text-xs sm:w-28 sm:pt-0.5">
+                      #{one.number} · {manualDay(one.happenedAt, tenant.timezone)}
+                    </span>
+                    <span className="font-read min-w-0 flex-1 group-hover:underline">
+                      {one.summary}
+                    </span>
+                    {one.outcome && <Badge tone="closed">{one.outcome}</Badge>}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
+
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
@@ -327,6 +425,28 @@ export default async function TopicPage({
               pendingLabel="Writing…"
               size="sm"
             />
+          </CardContent>
+        </Card>
+      )}
+
+      {canWrite && (config.facets.length > 0 || (manager && others.length > 0)) && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Copy or join</CardTitle>
+            <CardDescription>
+              A copy is a new draft with the same words under a different label, for you to adapt;
+              no conversations or photos come with it.
+              {manager &&
+                " Joining folds this topic into another: its history, conversations, cases, photos and videos move across, what it says that the other doesn't is added under the same headings, and this one is removed."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4">
+            {config.facets.length > 0 && (
+              <CopyTopicForm slug={tenant.slug} topicId={topic.id} facets={config.facets} />
+            )}
+            {manager && others.length > 0 && (
+              <JoinTopicForm slug={tenant.slug} topicId={topic.id} others={others} />
+            )}
           </CardContent>
         </Card>
       )}

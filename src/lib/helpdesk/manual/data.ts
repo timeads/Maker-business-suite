@@ -230,6 +230,118 @@ export async function loadSuggestions(
   }));
 }
 
+/** A customer's picture or video on a topic: offered by a reading, or kept by a person. */
+export type TopicMedia = {
+  id: string;
+  /** The file itself: served only by the help desk's own file route, to the team. */
+  attachmentId: string;
+  ticketId: string;
+  kind: "image" | "video";
+  state: "candidate" | "kept";
+  caption: string;
+  /** Claude pointed at it and proposed the caption. A person still decides. */
+  suggested: boolean;
+  name: string;
+};
+
+type MediaRow = {
+  id: string;
+  attachment_id: string;
+  ticket_id: string;
+  kind: string;
+  state: string;
+  caption: string;
+  suggested: boolean;
+  message_attachments: { name: string; state: string } | { name: string; state: string }[] | null;
+};
+
+/**
+ * A topic's kept media (in their order) and the candidates still waiting.
+ * An entry whose file is no longer kept is left out, so nothing broken shows.
+ */
+export async function loadTopicMedia(
+  supabase: SupabaseClient,
+  tenantId: string,
+  topicId: string,
+): Promise<TopicMedia[]> {
+  const { data } = await supabase
+    .from("manual_topic_media")
+    .select(
+      "id, attachment_id, ticket_id, kind, state, caption, suggested, message_attachments(name, state)",
+    )
+    .eq("tenant_id", tenantId)
+    .eq("topic_id", topicId)
+    .in("state", ["candidate", "kept"])
+    .order("position")
+    .order("created_at")
+    .limit(200);
+  return ((data ?? []) as unknown as MediaRow[]).flatMap((row) => {
+    const file = Array.isArray(row.message_attachments)
+      ? row.message_attachments[0]
+      : row.message_attachments;
+    if (!file || file.state !== "kept") return [];
+    return [
+      {
+        id: row.id,
+        attachmentId: row.attachment_id,
+        ticketId: row.ticket_id,
+        kind: row.kind === "video" ? ("video" as const) : ("image" as const),
+        state: row.state === "kept" ? ("kept" as const) : ("candidate" as const),
+        caption: row.caption,
+        suggested: row.suggested,
+        name: file.name,
+      },
+    ];
+  });
+}
+
+/** One conversation's line in a topic's record: what happened and how it ended. */
+export type TopicCase = {
+  ticketId: string;
+  number: number;
+  subject: string;
+  summary: string;
+  outcome: string;
+  happenedAt: string;
+};
+
+type CaseRow = {
+  ticket_id: string;
+  summary: string;
+  outcome: string;
+  happened_at: string;
+  tickets: { number: number; subject: string } | { number: number; subject: string }[] | null;
+};
+
+export async function loadTopicCases(
+  supabase: SupabaseClient,
+  tenantId: string,
+  topicId: string,
+): Promise<TopicCase[]> {
+  const { data } = await supabase
+    .from("manual_topic_cases")
+    .select("ticket_id, summary, outcome, happened_at, tickets(number, subject)")
+    .eq("tenant_id", tenantId)
+    .eq("topic_id", topicId)
+    .order("happened_at", { ascending: false })
+    .limit(100);
+  return ((data ?? []) as unknown as CaseRow[]).flatMap((row) => {
+    const ticket = Array.isArray(row.tickets) ? row.tickets[0] : row.tickets;
+    return ticket
+      ? [
+          {
+            ticketId: row.ticket_id,
+            number: ticket.number,
+            subject: ticket.subject,
+            summary: row.summary,
+            outcome: row.outcome,
+            happenedAt: row.happened_at,
+          },
+        ]
+      : [];
+  });
+}
+
 export const topicEntry = (topic: Topic): Entry => ({
   id: topic.id,
   kind: "topic",

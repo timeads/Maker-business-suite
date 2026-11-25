@@ -2,12 +2,12 @@
 
 import Link from "next/link";
 import { useActionState, useEffect, useRef, useState } from "react";
-import { Bold, Heading, Italic, List, ListOrdered, Underline } from "lucide-react";
+import { Bold, Heading, Italic, Link2, List, ListOrdered, Underline } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FormMessage } from "@/components/ui/form-message";
 import { Input, Label } from "@/components/ui/input";
 import { SubmitButton } from "@/components/ui/submit-button";
-import { richToHtml, type RichDoc } from "@/lib/helpdesk/rich";
+import { isSafeLink, richToHtml, type RichDoc } from "@/lib/helpdesk/rich";
 import { readEditor } from "@/lib/helpdesk/rich-dom";
 import type { ManualState } from "./actions";
 
@@ -51,6 +51,27 @@ function BodyEditor({
     document.execCommand(name, false);
     changed();
   };
+  /** Turns the selected words into a link. Only a web address we would accept is used. */
+  const addLink = () => {
+    const selection = window.getSelection();
+    if (!box.current || !selection || selection.isCollapsed) {
+      window.alert("Select the words the link should sit on first.");
+      return;
+    }
+    const typed = window.prompt(
+      "Where should it go? (an address starting with https://)",
+      "https://",
+    );
+    const href = (typed ?? "").trim();
+    if (!href || href === "https://") return;
+    if (!/^https:\/\//i.test(href) || !isSafeLink(href)) {
+      window.alert("That doesn't look like a web address starting with https://.");
+      return;
+    }
+    box.current.focus();
+    document.execCommand("createLink", false, href);
+    changed();
+  };
   const addHeading = (heading: string) => {
     const root = box.current;
     if (!root) return;
@@ -88,6 +109,16 @@ function BodyEditor({
             <format.icon aria-hidden />
           </button>
         ))}
+        <button
+          type="button"
+          title="Link"
+          aria-label="Link"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={addLink}
+          className={tool}
+        >
+          <Link2 aria-hidden />
+        </button>
         <span className="text-muted-foreground ml-2 hidden text-xs sm:inline">
           A line that is all bold is a heading.
         </span>
@@ -105,7 +136,7 @@ function BodyEditor({
           event.preventDefault();
           document.execCommand("insertText", false, event.clipboardData.getData("text/plain"));
         }}
-        className="rich font-read min-h-[280px] px-3 py-3 text-[15px] leading-relaxed break-words outline-none [&_ol]:mb-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:mb-2 [&_ul]:mb-3 [&_ul]:list-disc [&_ul]:pl-5"
+        className="rich font-read [&_a]:text-ochre-text min-h-[280px] px-3 py-3 text-[15px] leading-relaxed break-words outline-none [&_a]:underline [&_ol]:mb-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:mb-2 [&_ul]:mb-3 [&_ul]:list-disc [&_ul]:pl-5"
       />
       {headings.length > 0 && (
         <div className="border-border flex flex-wrap items-center gap-1.5 border-t px-2 py-2">

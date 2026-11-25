@@ -25,6 +25,12 @@ export const readingSchema = z.object({
   summary: z.string(),
   facets: z.array(z.object({ facet: z.string(), value: z.string() })),
   additions: z.array(z.object({ section: z.string(), points: z.array(z.string()) })),
+  /** One sentence: what it was, the problem and what was done. */
+  case_summary: z.string(),
+  /** A few words on how it ended. */
+  outcome: z.string(),
+  /** The attached pictures worth keeping on the topic, by our reference, each with a caption. */
+  photos: z.array(z.object({ ref: z.string(), caption: z.string() })),
 });
 export type RawReading = z.infer<typeof readingSchema>;
 
@@ -47,7 +53,8 @@ export type ReadInput = {
   subject: string;
   /** Already scrubbed, oldest first. `files` is a line of names and kinds, or "". */
   messages: { from: "customer" | "team"; at: string; body: string; files: string }[];
-  photos: { type: PhotoType; base64: string }[];
+  /** Each under a short reference of ours (P1…), so the model can point at one without an id. */
+  photos: { ref: string; type: PhotoType; base64: string }[];
 };
 
 export type ReadResult =
@@ -66,6 +73,9 @@ Report:
 - title: for a new topic, a short title naming the thing and what is going on with it. For an existing topic, leave it empty.
 - summary: for a new topic, one or two sentences for the list of topics. For an existing topic, leave it empty.
 - facets: the labels the manual sorts topics by, each as {facet, value}, using only the facet ids you are given. Use the business's own names for things as the team writes them. Leave out a facet the conversation doesn't settle.
+- case_summary: one sentence for the topic's record of cases: the product, the problem and what was done. Empty when not useful.
+- outcome: a few words on how it ended, for example "Fixed by cleaning the blade", "Sent a replacement spring", "Unresolved".
+- photos: the attached pictures that would help someone on the team recognise or fix the same thing, each by the reference shown just before it (for example P1) with a short caption saying what the picture shows. Leave out a picture that shows nothing useful, and never make up a reference. A caption describes the thing, never the person.
 - additions: what this conversation adds, as short plain points, each under one of the section headings you are given (use the headings exactly). One fact or one step per point, in the team's own approach, written so it stands on its own. No Markdown, no numbering, no greetings.
 
 Privacy: the manual is about the problem, never about the person. Do not include anyone's name, email address, phone number, postal address, order number, tracking number or anything else that would identify the customer. Say "the customer" if you must refer to them.
@@ -125,10 +135,13 @@ export async function readConversation(
   input: ReadInput,
   client: ReaderClient = new Anthropic(),
 ): Promise<ReadResult> {
-  const photos = input.photos.slice(0, MAX_PHOTOS).map((photo) => ({
-    type: "image" as const,
-    source: { type: "base64" as const, media_type: photo.type, data: photo.base64 },
-  }));
+  const photos = input.photos.slice(0, MAX_PHOTOS).flatMap((photo) => [
+    { type: "text" as const, text: `Picture ${photo.ref}:` },
+    {
+      type: "image" as const,
+      source: { type: "base64" as const, media_type: photo.type, data: photo.base64 },
+    },
+  ]);
   const response = await client.beta.messages.parse({
     model: "claude-opus-5-5",
     max_tokens: 6000,
@@ -163,6 +176,46 @@ function line(text: string, max: number, facts: ScrubFacts): string {
 
 export const MAX_POINTS = 8;
 export const MAX_POINT_CHARS = 400;
+/** The case line and a caption, as the old help desk kept them. */
+export const MAX_CASE_CHARS = 500;
+export const MAX_OUTCOME_CHARS = 200;
+export const MAX_CAPTION_CHARS = 300;
+
+/** What a reading says beside its points: the case line, and which pictures it would keep. */
+export type ReadingExtras = {
+  /** Null when the model wrote nothing usable. */
+  caseLine: { summary: string; outcome: string } | null;
+  /** By our reference; only references that were really shown, each once. */
+  photoPicks: { ref: string; caption: string }[];
+};
+
+/**
+ * The case line and picture picks from the model's answer, scrubbed and cut
+ * to length. A reference that wasn't shown is dropped, so the model can only
+ * ever point at a picture the code chose to send. This is a suggestion for a
+ * person: nothing here keeps a picture on a topic.
+ */
+export function tidyExtras(
+  raw: Pick<RawReading, "useful" | "case_summary" | "outcome" | "photos">,
+  context: { shown: readonly string[]; facts: ScrubFacts },
+): ReadingExtras {
+  if (!raw.useful) return { caseLine: null, photoPicks: [] };
+  const summary = line(raw.case_summary ?? "", MAX_CASE_CHARS, context.facts);
+  const outcome = line(raw.outcome ?? "", MAX_OUTCOME_CHARS, context.facts);
+  const shown = new Set(context.shown);
+  const seen = new Set<string>();
+  const photoPicks: ReadingExtras["photoPicks"] = [];
+  for (const pick of raw.photos ?? []) {
+    const ref = String(pick?.ref ?? "").trim();
+    if (!shown.has(ref) || seen.has(ref)) continue;
+    seen.add(ref);
+    photoPicks.push({
+      ref,
+      caption: line(String(pick.caption ?? ""), MAX_CAPTION_CHARS, context.facts),
+    });
+  }
+  return { caseLine: summary.length >= 3 ? { summary, outcome } : null, photoPicks };
+}
 
 /**
  * Turns the model's answer into a reading the code can plan with, or null
