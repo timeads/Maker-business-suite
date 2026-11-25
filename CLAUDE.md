@@ -184,7 +184,25 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   in the reply box's picker (`findInManual`), beside a conversation and to
   the "AI" draft as marked reference (`match.ts`: word matching, no model
   call on a page load). Keep `tests/db/helpdesk-manual.test.ts` and
-  `manual/run.test.ts` passing. What the
+  `manual/run.test.ts` passing.
+  Instagram and Facebook messages (`lib/helpdesk/social`,
+  docs/meta-messages.md) are a channel beside email (`tickets.channel`), on
+  the Social tool's `meta` connection with OPTIONAL messaging permissions
+  asked only from Settings → Help desk → Channels; the granted `scopes`, the
+  `helpdesk` / `channels` config and `channelState()` gate everything.
+  `/api/webhooks/meta` checks `X-Hub-Signature-256` on the raw body and only
+  queues (`private.meta_events`; `enqueue_meta_event` drops what no workspace
+  has connected); the worker files through `file_social_message` (one
+  conversation per person per channel, once per Meta message id), echoes,
+  unsends and reactions through their own functions. A person has no email:
+  `contacts` carries `external_id` and `handle`, and the shop is matched only
+  by a `known_email` the team wrote down, never by name. Files are fetched
+  from Meta's hosts only (`metaFileUrl`), never a profile picture. Replies
+  are plain words through the same outbox (`sendSocialMessage` →
+  `sendSocialReply` → `record_social_outbound` / `finish_social_outbound`);
+  Meta's 24-hour window is worked out on read (`replyWindow`) and re-checked
+  on the server, and the HUMAN_AGENT tag is used only where the config says
+  the app is approved (off by default). What the
   old help desk does that this one doesn't is in
   `docs/helpdesk-side-by-side.md`.
 - Bookings: seats are never stored as a count. `hold_booking`,

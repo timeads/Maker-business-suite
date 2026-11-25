@@ -263,6 +263,31 @@ export const HELP_TOPICS: HelpTopic[] = [
     ],
   },
   {
+    slug: "helpdesk-instagram-facebook",
+    group: "helpdesk",
+    title: "Answer Instagram and Facebook messages",
+    summary: "Messages to your Instagram account or Facebook Page, beside your email.",
+    intro:
+      "Messages people send your Instagram account or your Facebook Page can come into the help desk as conversations. You answer them from the same reply box as email, and they show under “Instagram & Facebook” in the menu.",
+    steps: [
+      "An owner or admin opens Settings → Help desk → Channels and presses “Allow messages on Facebook”. Facebook asks for permission to read and send messages for your Page and the Instagram account linked to it. Leave every permission ticked and pick the same Page you post from.",
+      "Back on Channels, tick Instagram messages, Facebook messages or both, and save.",
+      "Send yourself a test from a personal account. It should arrive within a minute, as “Instagram message: …” with the person's @handle.",
+      "Open a conversation and reply as usual. Messages are plain words: there is no formatting, Cc or forward, and a counter shows how much one message can hold. “Picture” adds up to three JPEG or PNG photos.",
+      "Macros, the manual and the AI draft work as they do for email. A draft only fills the box; nothing is sent until you press Send.",
+      "To see someone's orders, ask them for their email and press “Add their email” in the details rail. Instagram and Facebook don't share one, and we never guess from a name.",
+    ],
+    notes: [
+      "Instagram and Facebook only let a business reply within 24 hours of the customer's last message. The reply box tells you until when, and after that it won't send. You can still leave an internal note, and you can reply again as soon as they write back.",
+      "If nothing arrives from Instagram, open the Instagram app: Settings → Messages and story replies → Message controls → Connected tools → Allow access to messages.",
+      "Photos, videos and voice messages people send are kept with the conversation. A shared post or a story reply is noted in words; the post itself isn't copied.",
+      "If someone unsends a message, it is removed here too.",
+      "Replies you send from the Instagram or Facebook app show up in the conversation as well.",
+      "On Facebook you may see “Facebook user” instead of a name; Facebook only shares names with apps it has approved for that.",
+      "An owner or admin can delete everything held about a person with “Forget this customer” in the details rail.",
+    ],
+  },
+  {
     slug: "helpdesk-manual",
     group: "helpdesk",
     title: "Keep a manual of what the team has learned",
