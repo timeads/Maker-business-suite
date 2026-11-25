@@ -38,6 +38,17 @@ export default async function LoginPage({
           <LoginForm next={next} initialError={params.error ? ERRORS[params.error] : undefined} />
         </CardContent>
       </Card>
+      <p className="text-muted-foreground text-xs">
+        By continuing you agree to the{" "}
+        <Link href="/terms" className="hover:text-foreground underline">
+          terms of service
+        </Link>{" "}
+        and the{" "}
+        <Link href="/privacy" className="hover:text-foreground underline">
+          privacy policy
+        </Link>
+        .
+      </p>
     </main>
   );
 }

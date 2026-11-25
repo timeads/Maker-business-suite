@@ -40,6 +40,12 @@ export function SiteFooter() {
         <Link href="/help" className="hover:text-foreground">
           Help
         </Link>
+        <Link href="/privacy" className="hover:text-foreground">
+          Privacy
+        </Link>
+        <Link href="/terms" className="hover:text-foreground">
+          Terms
+        </Link>
         <Link href="/login" className="hover:text-foreground">
           Sign in
         </Link>

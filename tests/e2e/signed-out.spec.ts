@@ -106,3 +106,25 @@ test("a link page that doesn't exist, or isn't published, is simply not found", 
   await page.goto("/links/nobody-here");
   await expect(page.getByRole("heading", { name: "We couldn't find that page" })).toBeVisible();
 });
+
+for (const [path, heading] of [
+  ["/privacy", "Privacy policy"],
+  ["/terms", "Terms of service"],
+] as const) {
+  test(`${path} is public and reachable from the footer and sign-in`, async ({ page }) => {
+    await page.goto(path);
+    await expect(page).toHaveURL(new RegExp(`${path}$`));
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText(heading);
+    await page.goto("/pricing");
+    await expect(page.getByRole("contentinfo").locator(`a[href="${path}"]`)).toBeVisible();
+    await page.goto("/login");
+    await expect(page.locator(`a[href="${path}"]`)).toBeVisible();
+  });
+}
+
+test("the privacy policy covers what Meta's and Google's reviews look for", async ({ page }) => {
+  await page.goto("/privacy");
+  await expect(page.getByRole("heading", { name: /Facebook and Instagram data/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /Google user data/ })).toBeVisible();
+  await expect(page.getByText("Limited Use requirements")).toBeVisible();
+});
