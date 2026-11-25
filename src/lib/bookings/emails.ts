@@ -73,6 +73,39 @@ export function reminderEmail(d: BookingDetails, note?: string): Email {
   };
 }
 
+/** A short nudge on the day, for workspaces that switched it on. */
+export function dayOfEmail(d: BookingDetails, note?: string): Email {
+  return {
+    to: d.customer_email,
+    subject: `Nearly time: ${d.service_name} with ${d.workspace_name}`,
+    text: [
+      `Hi ${firstName(d.customer_name)},`,
+      "",
+      `${d.service_name} with ${d.workspace_name} starts soon.`,
+      "",
+      `When: ${when(d)}`,
+      "",
+      ...noteLines(note),
+      "See you there!",
+    ].join("\n"),
+  };
+}
+
+/** A refund or cancellation in the business's shop took this booking off the list. */
+export function shopCancelledEmail(d: BookingDetails): Email {
+  return {
+    to: d.customer_email,
+    subject: `Your booking was cancelled: ${d.service_name} with ${d.workspace_name}`,
+    text: [
+      `Hi ${firstName(d.customer_name)},`,
+      "",
+      `Your booking for ${d.service_name} on ${when(d)} has been cancelled.`,
+      "",
+      `If that wasn't expected, or you'd like to book another date, just reply to ${d.workspace_name} and they'll help.`,
+    ].join("\n"),
+  };
+}
+
 export function sessionCancelledEmail(d: BookingDetails): Email {
   return {
     to: d.customer_email,

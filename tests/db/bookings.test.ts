@@ -385,15 +385,19 @@ describe("manage link", () => {
 });
 
 describe("reminders", () => {
-  it("are handed out once, for confirmed bookings starting within a day", async () => {
+  it("the older claims hand nothing out any more (tests/db/booking-emails.test.ts has the new path)", async () => {
     const svc = await makeService(bob, tenantB, "workshop", 0, 5);
     const tomorrow = await makeSession(bob, svc, 12);
-    const nextWeek = await makeSession(bob, svc, 24 * 7);
-    const due = await hold(tenantB, tomorrow);
-    await hold(tenantB, nextWeek);
-    const first = await service<Booking>("select * from public.claim_booking_reminders(50)");
-    expect(first.map((b) => b.id)).toEqual([due.booking.id]);
+    await hold(tenantB, tomorrow);
     expect(await service("select * from public.claim_booking_reminders(50)")).toHaveLength(0);
+    expect(await service("select * from public.claim_booking_emails('reminder', 50)")).toHaveLength(
+      0,
+    );
+    const stamped = await service<{ n: number }>(
+      "select count(*)::int as n from public.bookings where session_id = $1 and reminder_sent_at is not null",
+      [tomorrow],
+    );
+    expect(stamped[0].n).toBe(0);
   });
 });
 
@@ -560,24 +564,37 @@ describe("the business's own changes", () => {
           JSON.stringify(body),
         ]),
       );
-    const claim = (kind: string) =>
-      service<Booking>("select * from public.claim_booking_emails($1, 50)", [kind]);
-    const mine = (rows: Booking[]) => rows.filter((r) => r.session_id === in40h).map((r) => r.id);
+    // Claims every kind that is due and says each one went.
+    const claim = async (kind: string) => {
+      const rows = await service<{ send_id: string; booking_id: string; kind: string }>(
+        "select * from public.claim_booking_email_sends(200)",
+      );
+      for (const row of rows) {
+        await service("select public.finish_booking_email_send($1, 'sent')", [row.send_id]);
+      }
+      const ours = await service<{ id: string }>(
+        "select id from public.bookings where session_id = $1",
+        [in40h],
+      );
+      return rows
+        .filter((r) => r.kind === kind && ours.some((b) => b.id === r.booking_id))
+        .map((r) => r.booking_id);
+    };
     // A day ahead by default, so nothing is due 40 hours out.
-    expect(mine(await claim("reminder"))).toEqual([]);
+    expect(await claim("reminder")).toEqual([]);
     await setEmails({ version: 1, reminder_hours: 48 });
-    expect(mine(await claim("reminder"))).toEqual([a.booking.id]);
-    expect(mine(await claim("reminder"))).toEqual([]);
+    expect(await claim("reminder")).toEqual([a.booking.id]);
+    expect(await claim("reminder")).toEqual([]);
 
     await db.query(
       "update public.sessions set starts_at = now() - interval '30 hours', ends_at = now() - interval '29 hours' where id = $1",
       [in40h],
     );
     // Thank-yous are off until the workspace switches them on.
-    expect(mine(await claim("followup"))).toEqual([]);
+    expect(await claim("followup")).toEqual([]);
     await setEmails({ version: 1, reminder_hours: 48, followup_on: true, followup_hours: 24 });
-    expect(mine(await claim("followup"))).toEqual([a.booking.id]);
-    expect(mine(await claim("followup"))).toEqual([]);
+    expect(await claim("followup")).toEqual([a.booking.id]);
+    expect(await claim("followup")).toEqual([]);
   });
 
   it("messages sent to a date are logged by owners and hidden from other workspaces", async () => {

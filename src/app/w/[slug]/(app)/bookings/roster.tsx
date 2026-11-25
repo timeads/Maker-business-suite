@@ -53,6 +53,8 @@ export type RosterPerson = {
   emails: boolean;
   paid: string | null;
   answers: [string, string][];
+  /** Automatic emails that didn't go, or may not have, in plain words. */
+  mailTrouble?: string[];
 };
 
 /** Two big tap targets: here, or didn't come. Tapping the lit one clears it. */
@@ -247,6 +249,11 @@ export function Roster({
                     Here
                   </Badge>
                 )}
+                {(p.mailTrouble ?? []).map((words) => (
+                  <Badge key={words} tone="bad" className="print:hidden">
+                    {words}
+                  </Badge>
+                ))}
                 {p.tags.map((tag) => (
                   <Badge key={tag} tone="waiting">
                     {tag}

@@ -40,6 +40,13 @@ type BookingRow = {
   email_opt_in: boolean;
 };
 
+const MAIL_WORDS: Record<string, string> = {
+  reminder: "Reminder",
+  day_of: "Day-of reminder",
+  followup: "Thank-you",
+  cancelled: "Cancellation email",
+};
+
 export default async function SessionPage({
   params,
 }: {
@@ -62,36 +69,47 @@ export default async function SessionPage({
     .maybeSingle();
   if (!session) notFound();
   const service = session.services as unknown as { name: string; kind: string };
-  const [{ data: bookingRows }, { data: waiting }, { data: siblings }, { data: sent }] =
-    await Promise.all([
-      supabase
-        .from("bookings")
-        .select(
-          "id, customer_name, customer_email, seats, status, oversold, answers, confirmed_at, amount_cents, currency, attendance, notes, tags, source, email_opt_in",
-        )
-        .eq("session_id", id)
-        .order("created_at"),
-      supabase
-        .from("waitlist")
-        .select("id, customer_name, customer_email")
-        .eq("session_id", id)
-        .order("created_at"),
-      supabase
-        .from("sessions")
-        .select("id, starts_at, ends_at")
-        .eq("service_id", session.service_id)
-        .is("cancelled_at", null)
-        .neq("id", id)
-        .gte("starts_at", new Date().toISOString())
-        .order("starts_at")
-        .limit(40),
-      supabase
-        .from("booking_messages")
-        .select("id, subject, recipients, created_at")
-        .eq("session_id", id)
-        .order("created_at", { ascending: false })
-        .limit(10),
-    ]);
+  const [
+    { data: bookingRows },
+    { data: waiting },
+    { data: siblings },
+    { data: sent },
+    { data: mailRows },
+  ] = await Promise.all([
+    supabase
+      .from("bookings")
+      .select(
+        "id, customer_name, customer_email, seats, status, oversold, answers, confirmed_at, amount_cents, currency, attendance, notes, tags, source, email_opt_in",
+      )
+      .eq("session_id", id)
+      .order("created_at"),
+    supabase
+      .from("waitlist")
+      .select("id, customer_name, customer_email")
+      .eq("session_id", id)
+      .order("created_at"),
+    supabase
+      .from("sessions")
+      .select("id, starts_at, ends_at")
+      .eq("service_id", session.service_id)
+      .is("cancelled_at", null)
+      .neq("id", id)
+      .gte("starts_at", new Date().toISOString())
+      .order("starts_at")
+      .limit(40),
+    supabase
+      .from("booking_messages")
+      .select("id, subject, recipients, created_at")
+      .eq("session_id", id)
+      .order("created_at", { ascending: false })
+      .limit(10),
+    // Automatic emails that didn't go, or may not have: someone should know.
+    supabase
+      .from("booking_emails")
+      .select("booking_id, kind, status")
+      .eq("session_id", id)
+      .in("status", ["failed", "unsure"]),
+  ]);
   const bookings = (bookingRows ?? []) as BookingRow[];
   const coming = bookings.filter((b) => b.status === "confirmed");
   // After a date is called off, keep showing who had booked.
@@ -108,6 +126,13 @@ export default async function SessionPage({
     new Date(Date.parse(session.starts_at) - 24 * 3600 * 1000).toISOString(),
   );
 
+  const mailTrouble = new Map<string, string[]>();
+  for (const row of (mailRows ?? []) as { booking_id: string; kind: string; status: string }[]) {
+    const what = MAIL_WORDS[row.kind] ?? "Email";
+    const words = row.status === "unsure" ? `${what} may not have sent` : `${what} didn't send`;
+    mailTrouble.set(row.booking_id, [...(mailTrouble.get(row.booking_id) ?? []), words]);
+  }
+
   const people: RosterPerson[] = shown.map((b) => ({
     id: b.id,
     name: b.customer_name,
@@ -121,6 +146,7 @@ export default async function SessionPage({
     emails: b.email_opt_in,
     paid: b.amount_cents > 0 ? formatMoney(b.amount_cents / 100, b.currency) : null,
     answers: Object.entries(b.answers ?? {}),
+    mailTrouble: mailTrouble.get(b.id) ?? [],
   }));
   const otherDates = (siblings ?? []).map((s) => ({
     id: s.id as string,

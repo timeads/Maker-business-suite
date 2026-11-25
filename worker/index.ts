@@ -22,9 +22,9 @@ import { ensureStripeCatalog } from "../src/lib/billing/setup";
 import { liveSyncDeps } from "../src/lib/billing/store";
 import { billingConfigured, getStripe } from "../src/lib/billing/stripe";
 import { processStripeEvent, type StripeEventLike } from "../src/lib/billing/sync";
-import { followupEmail, reminderEmail } from "../src/lib/bookings/emails";
+import { drainBookingEmails } from "../src/lib/bookings/email-sends";
 import { isConnectEvent, processConnectEvent } from "../src/lib/bookings/payments";
-import { getBookingDetails, getBookingEmails, livePaymentDeps } from "../src/lib/bookings/server";
+import { livePaymentDeps } from "../src/lib/bookings/server";
 import { PROVIDER_ORDER, getAdapter } from "../src/lib/connections/registry";
 import { runSyncJob, type RunnerDeps, type SyncJob } from "../src/lib/connections/runner";
 import { rpcSyncStore } from "../src/lib/connections/store";
@@ -500,43 +500,11 @@ async function drainOutbound(): Promise<number> {
 }
 
 /**
- * Emails reminders ahead of each date and thank-yous after it. The database
- * decides what's due from each workspace's own settings; the words the
- * business added are read here.
+ * Emails reminders ahead of each date, thank-yous after it, and the notice
+ * that a shop refund cancelled a booking. The database decides what's due and
+ * keeps the record of every try (`lib/bookings/email-sends.ts`).
  */
-async function sendBookingReminders(): Promise<number> {
-  const admin = getAdminClient();
-  let sent = 0;
-  for (const kind of ["reminder", "followup"] as const) {
-    const { data, error } = await admin.rpc("claim_booking_emails", { p_kind: kind, p_limit: 50 });
-    if (error) throw new Error(`Could not claim booking ${kind}s: ${error.message}`);
-    const due = (data ?? []) as { id: string; tenant_id: string }[];
-    const settings = new Map<string, Awaited<ReturnType<typeof getBookingEmails>>>();
-    for (const booking of due) {
-      try {
-        const details = await getBookingDetails(
-          { tenantId: booking.tenant_id, bookingId: booking.id },
-          admin,
-        );
-        if (!details) continue;
-        if (!settings.has(booking.tenant_id)) {
-          settings.set(booking.tenant_id, await getBookingEmails(booking.tenant_id));
-        }
-        const words = settings.get(booking.tenant_id)!;
-        await sendEmail(
-          kind === "reminder"
-            ? reminderEmail(details, words.reminder_note)
-            : followupEmail(details, words.followup_message),
-        );
-        sent += 1;
-      } catch (err) {
-        console.error(`booking ${kind} ${booking.id}:`, err instanceof Error ? err.message : err);
-      }
-    }
-  }
-  if (sent) console.log(`sent ${sent} booking email(s)`);
-  return sent;
-}
+const sendBookingReminders = () => drainBookingEmails(getAdminClient());
 
 /**
  * Adds deliveries that were checked in to the shop's own count, for
