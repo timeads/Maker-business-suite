@@ -239,7 +239,7 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
     feature: "bookings",
     name: "Booking emails",
     description:
-      "How many hours ahead the reminder goes out, whether a thank-you is sent afterwards, and the business's own note added to the confirmation, reminder and thank-you emails.",
+      "How many hours ahead the reminder goes out (reminder_hours), whether a second short reminder goes out on the day (day_of_on, off unless switched on) and how many hours before the start (day_of_hours, 1 to 24, only sent when shorter than reminder_hours), whether a thank-you is sent afterwards, whether the customer is emailed when a refund or cancellation in the shop cancels their booking (shop_cancel_email), and the business's own note added to the confirmation, reminder, day-of reminder and thank-you emails.",
     schema: bookingEmailsSchema,
     defaultBody: () => DEFAULT_EMAILS,
   },

@@ -310,6 +310,10 @@ export function BookingQuestionsForm({ slug, questions }: { slug: string; questi
 
 export type EmailSettings = {
   reminder_hours: number;
+  day_of_on: boolean;
+  day_of_hours: number;
+  day_of_note: string;
+  shop_cancel_email: boolean;
   followup_on: boolean;
   followup_hours: number;
   confirmation_note: string;
@@ -344,6 +348,7 @@ function LeadTime({ id, name, value }: { id: string; name: string; value: number
 export function BookingEmailsForm({ slug, settings }: { slug: string; settings: EmailSettings }) {
   const [state, action] = useActionState(saveBookingEmails.bind(null, slug), {});
   const [followup, setFollowup] = useState(settings.followup_on);
+  const [dayOf, setDayOf] = useState(settings.day_of_on);
   const read = `${textarea} font-read`;
   return (
     <form action={action} className="flex flex-col gap-5">
@@ -382,6 +387,49 @@ export function BookingEmailsForm({ slug, settings }: { slug: string; settings: 
         <label className="flex items-center gap-2 text-sm font-semibold">
           <input
             type="checkbox"
+            name="day_of_on"
+            checked={dayOf}
+            onChange={(e) => setDayOf(e.target.checked)}
+          />
+          Send a second, short reminder on the day
+        </label>
+        {/* Kept in the page while off, so words already written aren't lost. */}
+        <div className="flex flex-col gap-2" hidden={!dayOf}>
+          <div className="flex items-center gap-2 text-sm">
+            <Input
+              id="day-of-hours"
+              name="day_of_hours"
+              type="number"
+              min={1}
+              max={24}
+              defaultValue={settings.day_of_hours}
+              className="w-20"
+              aria-label="Hours before it starts"
+            />
+            hours before it starts
+          </div>
+          <Label htmlFor="day-of-note" className="mt-1">
+            Add to the day-of reminder
+          </Label>
+          <textarea
+            id="day-of-note"
+            name="day_of_note"
+            rows={2}
+            maxLength={1500}
+            defaultValue={settings.day_of_note}
+            placeholder="Running late? Call us on 555 0100. The door is the blue one."
+            className={read}
+          />
+          <p className="text-muted-foreground text-xs">
+            It only goes out when it comes after the first reminder, and not to someone who booked
+            in those last hours: they&apos;ve just had their confirmation.
+          </p>
+        </div>
+      </div>
+      <div className="flex flex-col gap-2">
+        <label className="flex items-center gap-2 text-sm font-semibold">
+          <input
+            type="checkbox"
             name="followup_on"
             checked={followup}
             onChange={(e) => setFollowup(e.target.checked)}
@@ -411,6 +459,20 @@ export function BookingEmailsForm({ slug, settings }: { slug: string; settings: 
             </p>
           </>
         )}
+      </div>
+      <div className="flex flex-col gap-1">
+        <label className="flex items-center gap-2 text-sm font-semibold">
+          <input
+            type="checkbox"
+            name="shop_cancel_email"
+            defaultChecked={settings.shop_cancel_email}
+          />
+          Tell the customer when a refund in your shop cancels their booking
+        </label>
+        <p className="text-muted-foreground text-xs">
+          For workshops sold through your own shop. When the order is refunded or cancelled there,
+          the place is freed here and they get a short email, as long as the date is still to come.
+        </p>
       </div>
       <Result state={state} />
       <SubmitButton pendingText="Saving…" className="sm:w-fit">

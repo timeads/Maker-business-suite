@@ -373,6 +373,10 @@ export async function saveBookingEmails(
   const parsed = bookingEmailsSchema.safeParse({
     version: 1,
     reminder_hours: Number.parseInt(text(formData, "reminder_hours"), 10),
+    day_of_on: formData.get("day_of_on") === "on",
+    day_of_hours: Number.parseInt(text(formData, "day_of_hours") || "2", 10),
+    day_of_note: text(formData, "day_of_note"),
+    shop_cancel_email: formData.get("shop_cancel_email") === "on",
     followup_on: formData.get("followup_on") === "on",
     followup_hours: Number.parseInt(text(formData, "followup_hours") || "24", 10),
     confirmation_note: text(formData, "confirmation_note"),
@@ -381,7 +385,8 @@ export async function saveBookingEmails(
   });
   if (!parsed.success) {
     return {
-      error: "Keep each note under 1,500 characters, and timings between 1 hour and 14 days.",
+      error:
+        "Keep each note under 1,500 characters, timings between 1 hour and 14 days, and the day-of reminder within 24 hours of the start.",
     };
   }
   const { error } = await ctx.supabase.rpc("save_config", {
@@ -392,5 +397,10 @@ export async function saveBookingEmails(
   });
   if (error) return { error: OOPS };
   done(slug);
-  return { message: "Saved." };
+  return {
+    message:
+      parsed.data.day_of_on && parsed.data.day_of_hours >= parsed.data.reminder_hours
+        ? "Saved. The day-of reminder won't go out until it's set closer to the start than the first reminder."
+        : "Saved.",
+  };
 }
