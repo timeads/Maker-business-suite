@@ -547,6 +547,28 @@ as $$
     and private.help_centre_on(p_tenant_id);
 $$;
 
+-- The quick check made before a public page is drawn at all, so a page that
+-- isn't there answers "not found" properly: is this workspace's help centre
+-- on, and (when an article is named) is there a published article at that
+-- address or one it used to have? Answers the workspace and the address the
+-- article has now; null for anything else.
+create function public.help_centre_where(p_workspace text, p_article text default null)
+returns jsonb
+language sql stable security definer set search_path = ''
+as $$
+  select jsonb_build_object('tenant_id', t.id, 'slug', hit.slug)
+  from public.tenants t
+  left join lateral (
+    select a.slug
+    from public.help_article_slugs s
+    join public.manual_articles a on a.id = s.article_id and a.tenant_id = s.tenant_id
+    where s.tenant_id = t.id and s.slug = p_article
+      and a.public_state = 'published' and a.slug is not null
+  ) hit on p_article is not null
+  where t.slug = p_workspace and private.help_centre_on(t.id)
+    and (p_article is null or hit.slug is not null);
+$$;
+
 -- Counts one more of this kind from this visitor and says whether that is
 -- still within the limit. A new window starts when the old one has run out.
 create function public.help_centre_allow(
@@ -604,6 +626,7 @@ begin
   foreach fn in array array[
     'public.help_centre_list(uuid)',
     'public.help_centre_article(uuid, text)',
+    'public.help_centre_where(text, text)',
     'public.help_centre_allow(uuid, text, text, int, int)',
     'public.help_centre_vote(uuid, text, boolean)',
     'public.register_help_article_picture(uuid, uuid, uuid, text, text, int)',

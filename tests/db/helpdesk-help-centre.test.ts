@@ -304,6 +304,17 @@ describe("addresses", () => {
     );
     expect(await read(tenantA, "looking-after-it")).toMatchObject({ id, slug: "looking-after-it" });
     expect(await read(tenantA, "care-guide")).toMatchObject({ id, slug: "looking-after-it" });
+    const [{ slug: workspace }] = (
+      await db.query<{ slug: string }>("select slug from public.tenants where id = $1", [tenantA])
+    ).rows;
+    expect(
+      (
+        await service<{ w: { slug: string } }>(
+          "select public.help_centre_where($1, 'care-guide') as w",
+          [workspace],
+        )
+      )[0].w.slug,
+    ).toBe("looking-after-it");
     expect(await listed(tenantA)).toContain("looking-after-it");
     expect(await listed(tenantA)).not.toContain("care-guide");
     // Nobody else can take the old one while this article is here.
@@ -371,6 +382,38 @@ describe("what a visitor's request can reach", () => {
       "title",
       "updated_at",
     ]);
+  });
+
+  it("the quick check before a page is drawn says the same", async () => {
+    const where = async (workspace: string, article: string | null) =>
+      (
+        await service<{ w: { tenant_id: string; slug: string | null } | null }>(
+          "select public.help_centre_where($1, $2) as w",
+          [workspace, article],
+        )
+      )[0].w;
+    const [{ slug: a }] = await db
+      .query<{ slug: string }>("select slug from public.tenants where id = $1", [tenantA])
+      .then((r) => r.rows);
+    const [{ slug: b }] = await db
+      .query<{ slug: string }>("select slug from public.tenants where id = $1", [tenantB])
+      .then((r) => r.rows);
+    expect(await where(a, null)).toEqual({ tenant_id: tenantA, slug: null });
+    expect(await where(a, "public-one")).toEqual({ tenant_id: tenantA, slug: "public-one" });
+    for (const guess of ["draft-one", "internal-one", "topic-one", "neighbour-one", "nope"]) {
+      expect(await where(a, guess), guess).toBeNull();
+    }
+    expect(await where(b, "public-one")).toBeNull();
+    expect(await where("no-such-workspace", null)).toBeNull();
+    await fails(q(alice, "select public.help_centre_where($1, null)", [a]), /permission denied/);
+    await fails(
+      asAnon(db, (tx) => tx.query("select public.help_centre_where($1, null)", [a])),
+      /permission denied/,
+    );
+    await switchOn(alice, tenantA, false);
+    expect(await where(a, null)).toBeNull();
+    expect(await where(a, "public-one")).toBeNull();
+    await switchOn(alice, tenantA, true);
   });
 
   it("nothing at all while the help centre is switched off", async () => {

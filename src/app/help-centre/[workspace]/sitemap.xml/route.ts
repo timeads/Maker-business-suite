@@ -1,4 +1,5 @@
 import { sitemapXml } from "@/lib/helpdesk/help-centre/public";
+import { helpCentreGate } from "@/lib/helpdesk/help-centre-gate";
 import { getHelpCentre } from "@/lib/helpdesk/help-centre-server";
 import { getSiteUrl } from "@/lib/site-url";
 
@@ -8,7 +9,9 @@ export async function GET(
   { params }: { params: Promise<{ workspace: string }> },
 ) {
   const { workspace } = await params;
-  const centre = await getHelpCentre(workspace);
+  // The same check the pages get in front of them, asked fresh each time.
+  const open = (await helpCentreGate(workspace, null)).kind === "ok";
+  const centre = open ? await getHelpCentre(workspace) : null;
   if (!centre || centre.config.noindex) {
     return new Response("Not found", {
       status: 404,
