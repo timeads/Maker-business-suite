@@ -29,13 +29,16 @@ export async function GET(
   if (!session) return missing;
   const { data: rows } = await supabase
     .from("bookings")
-    .select("customer_name, customer_email, seats, amount_cents, attendance, notes, tags, answers")
+    .select(
+      "customer_name, customer_email, customer_phone, seats, amount_cents, attendance, notes, tags, answers",
+    )
     .eq("session_id", id)
     .eq("status", "confirmed")
     .order("created_at");
   const bookings = (rows ?? []) as {
     customer_name: string;
     customer_email: string;
+    customer_phone: string;
     seats: number;
     amount_cents: number;
     attendance: string | null;
@@ -45,10 +48,11 @@ export async function GET(
   }[];
   const questions = [...new Set(bookings.flatMap((b) => Object.keys(b.answers ?? {})))];
   const lines = [
-    ["Name", "Email", "Places", "Paid", "Checked in", "Tags", "Notes", ...questions],
+    ["Name", "Email", "Phone", "Places", "Paid", "Checked in", "Tags", "Notes", ...questions],
     ...bookings.map((b) => [
       b.customer_name,
       b.customer_email,
+      b.customer_phone ?? "",
       b.seats,
       (b.amount_cents / 100).toFixed(2),
       b.attendance === "attended" ? "Yes" : b.attendance === "no_show" ? "No-show" : "",

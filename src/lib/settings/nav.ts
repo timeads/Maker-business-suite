@@ -246,6 +246,22 @@ const TOOLS: Def[] = [
           "contact",
         ],
       },
+      {
+        id: "bookings.import",
+        name: "Bring your bookings across",
+        path: "bookings/import",
+        show: managers,
+        keywords: [
+          "import",
+          "csv",
+          "spreadsheet",
+          "move from another booking app",
+          "workshops",
+          "dates",
+          "session id",
+          "migrate",
+        ],
+      },
     ],
   },
   {

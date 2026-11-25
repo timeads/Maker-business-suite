@@ -100,7 +100,7 @@ const dates = () => [
   },
   { line: 4, ref: DATE_PAST, keep_id: DATE_PAST, workshop_ref: "w-mini", starts_at: BEFORE },
 ];
-const bookings = () => [
+const bookings = (): Record<string, unknown>[] => [
   {
     line: 2,
     ref: "b-1",

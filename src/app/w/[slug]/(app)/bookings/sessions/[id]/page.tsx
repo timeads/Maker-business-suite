@@ -31,6 +31,7 @@ type BookingRow = {
   id: string;
   customer_name: string;
   customer_email: string;
+  customer_phone: string;
   seats: number;
   status: "pending_payment" | "confirmed" | "cancelled";
   oversold: boolean;
@@ -86,7 +87,7 @@ export default async function SessionPage({
     supabase
       .from("bookings")
       .select(
-        "id, customer_name, customer_email, seats, status, oversold, answers, confirmed_at, amount_cents, currency, attendance, notes, tags, source, email_opt_in",
+        "id, customer_name, customer_email, customer_phone, seats, status, oversold, answers, confirmed_at, amount_cents, currency, attendance, notes, tags, source, email_opt_in",
       )
       .eq("session_id", id)
       .order("created_at"),
@@ -185,6 +186,7 @@ export default async function SessionPage({
     id: b.id,
     name: b.customer_name,
     email: b.customer_email,
+    phone: b.customer_phone,
     seats: b.seats,
     attendance: b.attendance,
     notes: b.notes,

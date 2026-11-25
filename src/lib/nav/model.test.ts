@@ -443,7 +443,12 @@ describe("filterMenu", () => {
   });
 
   it("keeps every screen of a tool matched by name", () => {
-    expect(names("bookings")).toEqual(["Bookings", "› Emails & questions", "› Shop product page"]);
+    expect(names("bookings")).toEqual([
+      "Bookings",
+      "› Emails & questions",
+      "› Shop product page",
+      "› Bring your bookings across",
+    ]);
     expect(names("shipping")[0]).toBe("Shipping");
     expect(names("shipping")).toHaveLength(5);
   });

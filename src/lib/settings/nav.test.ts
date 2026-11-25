@@ -69,7 +69,11 @@ describe("settingsNav", () => {
       "shipping.slip",
       "shipping.printing",
     ]);
-    expect(kids(nav, "bookings")).toEqual(["bookings.emails", "bookings.shop-page"]);
+    expect(kids(nav, "bookings")).toEqual([
+      "bookings.emails",
+      "bookings.shop-page",
+      "bookings.import",
+    ]);
     expect(kids(nav, "helpdesk")).toEqual([
       "helpdesk.desk",
       "helpdesk.channels",
@@ -108,6 +112,7 @@ describe("settingsNav", () => {
   it("keeps the manager-only Stock screens from the rest of the team", () => {
     const nav = settingsNav(viewer({ manager: false }));
     expect(kids(nav, "stock")).toEqual(["stock.planning", "stock.seasons", "stock.michaels"]);
+    expect(kids(nav, "bookings")).toEqual(["bookings.emails", "bookings.shop-page"]);
   });
 
   it("treats a manager of a read-only workspace as before: no Shipping forms, no order emails", () => {
@@ -204,7 +209,7 @@ describe("filterSettings", () => {
   });
   it("finds a screen by a keyword and keeps it under its tool", () => {
     expect(found("zebra")).toEqual(["shipping", "shipping.printing"]);
-    expect(found("csv")).toEqual(["stock", "stock.import"]);
+    expect(found("csv")).toEqual(["stock", "stock.import", "bookings", "bookings.import"]);
   });
   it("opens the tool on the screen that matched", () => {
     const [group] = filterSettings(nav, "zebra");

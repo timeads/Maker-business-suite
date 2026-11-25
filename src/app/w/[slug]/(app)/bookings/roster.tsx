@@ -45,6 +45,8 @@ export type RosterPerson = {
   id: string;
   name: string;
   email: string;
+  /** Kept from the earlier booking app; empty for most. */
+  phone?: string;
   seats: number;
   attendance: "attended" | "no_show" | null;
   notes: string;
@@ -292,6 +294,14 @@ export function Roster({
                 <a href={`mailto:${p.email}`} className="hover:underline">
                   {p.email}
                 </a>
+                {p.phone && (
+                  <>
+                    {" · "}
+                    <a href={`tel:${p.phone.replace(/[^0-9+]/g, "")}`} className="hover:underline">
+                      {p.phone}
+                    </a>
+                  </>
+                )}
                 {p.paid && ` · paid ${p.paid}`}
               </p>
               {p.notes && <p className="font-read mt-1 text-sm">{p.notes}</p>}

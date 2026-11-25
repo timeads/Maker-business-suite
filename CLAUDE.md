@@ -325,6 +325,17 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   room's) and clears the marks. A workshop's place (`services.location`,
   `set_service_location`) shows in the picker, on our pages and in emails.
   All manager-only; keep `tests/db/booking-date-changes.test.ts` passing.
+  Bookings imports (Settings → Bookings → "Bring your bookings across",
+  docs/bookings-import.md) copy Stock's design: `lib/bookings/import`
+  (pure, tested) reads workshops, dates and bookings files; the three
+  `import_booking_*` / `import_bookings` functions run for a look or for real
+  under a request key (`booking_imports`), and the same file again changes
+  nothing. A date keeps the earlier app's id when it is free (an id in use
+  anywhere else is refused in words that give nothing away); imported
+  bookings send nothing, carry what was already sent as `booking_emails`
+  rows (no thank-you for a class already over), keep their shop order so
+  `book_from_shop` finds them, and keep `customer_phone` / `text_opt_in`
+  (nothing sends texts). Keep `tests/db/booking-imports.test.ts` passing.
   A workshop can instead be sold through the business's own shop
   (`services.shop_product_id`): the date picker on the product page
   (`public/booking-widget.js`, plain JS in a shadow root, reads
