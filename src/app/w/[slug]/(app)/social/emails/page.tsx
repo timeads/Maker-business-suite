@@ -8,7 +8,6 @@ import { BRAND_MODULE, KIT_KEY, parseBrandKit } from "@/lib/brand/kit";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
 import { socialAccess } from "../gate";
-import { SocialTabs } from "../tabs";
 import { NewEmail, WriteWithClaude } from "./new-email";
 import { RowActions } from "./row-actions";
 
@@ -48,10 +47,9 @@ export default async function EmailsPage({ params }: { params: Promise<{ slug: s
   return (
     <>
       <PageHeader
-        title="Social"
+        title="Emails"
         description="Design an email in your brand, then copy it into whatever you send email with."
       />
-      <SocialTabs slug={tenant.slug} />
 
       {entitlements.canWrite &&
         (kit ? (

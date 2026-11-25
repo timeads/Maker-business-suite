@@ -6,7 +6,6 @@ import { PageHeader } from "@/components/ui/page-header";
 import { formatMoney } from "@/lib/dashboard/format";
 import { createClient } from "@/lib/supabase/server";
 import { bookingsAccess } from "../gate";
-import { BookingsTabs } from "../tabs";
 
 export const metadata: Metadata = { title: "Booking customers" };
 
@@ -105,10 +104,9 @@ export default async function BookingCustomersPage({
   return (
     <>
       <PageHeader
-        title="Bookings"
+        title="Customers"
         description="Everyone who has booked with you, with the regulars at the top."
       />
-      <BookingsTabs slug={tenant.slug} />
       <form className="flex max-w-sm gap-2" role="search">
         <Input
           name="q"

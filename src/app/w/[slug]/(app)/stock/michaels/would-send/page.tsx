@@ -7,7 +7,7 @@ import type { JobCounts } from "@/lib/michaels/would-send";
 import { createClient } from "@/lib/supabase/server";
 import { loadMichaels, loadWouldSend } from "../data";
 import { michaelsAccess } from "../gate";
-import { MichaelsTabs, WatchingBanner } from "../tabs";
+import { WatchingBanner } from "../watching";
 
 export const metadata: Metadata = { title: "What Michaels would be sent" };
 
@@ -55,11 +55,10 @@ export default async function MichaelsWouldSendPage({
   return (
     <>
       <PageHeader
-        title="Michaels Marketplace"
+        title="What Michaels would get"
         description="The stock and prices the last look would have sent. None of it was."
         back={{ href: `/w/${tenant.slug}/stock`, label: "Stock" }}
       />
-      <MichaelsTabs slug={tenant.slug} />
       <WatchingBanner />
 
       {!latest ? (

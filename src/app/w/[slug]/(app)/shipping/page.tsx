@@ -49,7 +49,6 @@ import {
 import { shippingAccess } from "./gate";
 import { ListFreshness, PrintingChip, RuleHolds } from "./list-tools";
 import { QueueTable, type QueueRow } from "./queue-table";
-import { ShippingTabs } from "./tabs";
 import { TogetherBanners, type TogetherGroup } from "./together-ui";
 
 export const metadata: Metadata = { title: "Shipping" };
@@ -252,7 +251,7 @@ export default async function ShippingPage({
   return (
     <>
       <PageHeader
-        title="Shipping"
+        title="To ship"
         description="Orders waiting to ship, labels from every carrier, packing slips and the packing station."
       >
         <PrintingChip href={`/w/${tenant.slug}/settings/shipping/printing#printing`} />
@@ -267,7 +266,6 @@ export default async function ShippingPage({
           </Button>
         )}
       </PageHeader>
-      <ShippingTabs slug={tenant.slug} />
 
       {justSent && (
         <p role="status" className="bg-mint-soft text-mint-ink rounded-md px-4 py-2.5 text-sm">
@@ -279,7 +277,7 @@ export default async function ShippingPage({
       )}
 
       <div className="flex flex-wrap items-start gap-x-4 gap-y-2">
-        <nav aria-label="Queues" className="flex min-w-0 flex-1 flex-wrap gap-1">
+        <nav aria-label="Queues" className="flex min-w-0 flex-[1_1_26rem] flex-wrap gap-1">
           {QUEUE_VIEWS.map((chip) => {
             const active = chip.key === view && !q;
             return (

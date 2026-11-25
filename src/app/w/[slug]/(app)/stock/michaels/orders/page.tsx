@@ -6,7 +6,7 @@ import { buildOrderResolver, orderPreview } from "@/lib/michaels/orders";
 import { createClient } from "@/lib/supabase/server";
 import { loadMichaels, loadOrders } from "../data";
 import { michaelsAccess } from "../gate";
-import { MichaelsTabs, WatchingBanner } from "../tabs";
+import { WatchingBanner } from "../watching";
 
 export const metadata: Metadata = { title: "Michaels orders" };
 
@@ -50,11 +50,10 @@ export default async function MichaelsOrdersPage({
   return (
     <>
       <PageHeader
-        title="Michaels Marketplace"
+        title="Michaels orders"
         description="Recent Michaels orders, and what bringing each into your shop would make."
         back={{ href: `/w/${tenant.slug}/stock`, label: "Stock" }}
       />
-      <MichaelsTabs slug={tenant.slug} />
       <WatchingBanner />
 
       {orders.length === 0 ? (

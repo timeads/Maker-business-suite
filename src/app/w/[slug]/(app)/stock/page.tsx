@@ -24,7 +24,6 @@ import { RequestKey, StartOrderButton } from "./forms";
 import { CheckAllButton, ParcelButtons, SyncShopButton } from "./home-parts";
 import { SubmitButton } from "@/components/ui/submit-button";
 import { stockAccess } from "./gate";
-import { StockTabs } from "./tabs";
 
 export const metadata: Metadata = { title: "Stock" };
 
@@ -145,7 +144,7 @@ export default async function StockPage({ params }: { params: Promise<{ slug: st
   return (
     <>
       <PageHeader
-        title="Stock"
+        title="To order"
         description="What to reorder and when, worked out from what you sell and how long things take to arrive."
       >
         {link.connected && (
@@ -157,7 +156,6 @@ export default async function StockPage({ params }: { params: Promise<{ slug: st
           </>
         )}
       </PageHeader>
-      <StockTabs slug={tenant.slug} tenantId={tenant.id} manager={canManage(role)} />
 
       {rows.length === 0 ? (
         <Card>

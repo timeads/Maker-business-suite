@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { FormMessage } from "@/components/ui/form-message";
+import { PageHeader } from "@/components/ui/page-header";
 import { requireUser } from "@/lib/auth";
 import { loadDashboardConfig, loadDashboardData } from "@/lib/dashboard/data";
 import { resolveRange } from "@/lib/dashboard/range";
@@ -74,13 +75,10 @@ export default async function DashboardPage({
 
   return (
     <>
-      <header className="flex flex-wrap items-end justify-between gap-3">
-        <div className="flex flex-col gap-1">
-          <h1 className="text-2xl font-semibold tracking-tight">Money</h1>
-          <p className="text-muted-foreground text-sm">
-            Times and totals follow your workspace timezone and currency ({tenant.currency}).
-          </p>
-        </div>
+      <PageHeader
+        title="Money"
+        description={`Times and totals follow your workspace timezone and currency (${tenant.currency}).`}
+      >
         {canManage(role) && entitlements.canWrite && (
           <TemplatePicker
             slug={tenant.slug}
@@ -92,7 +90,7 @@ export default async function DashboardPage({
             }))}
           />
         )}
-      </header>
+      </PageHeader>
 
       {source === "invalid" && (
         <FormMessage>

@@ -1,6 +1,7 @@
 "use client";
 
-import { Hash, Pencil, Plus, Trash2 } from "lucide-react";
+import Link from "next/link";
+import { Hash, PanelLeftClose, Pencil, Plus, Settings, Trash2 } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -10,6 +11,17 @@ import {
   useSyncExternalStore,
   useTransition,
 } from "react";
+import {
+  PANEL_GROUP,
+  PANEL_HEAD,
+  PANEL_ICON_BUTTON,
+  PANEL_ROW,
+  PANEL_ROW_OFF,
+  PANEL_SURFACE,
+  PANEL_TITLE,
+  PanelButton,
+} from "@/components/shell/menu-panel";
+import { useShell } from "@/components/shell/nav-context";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import {
@@ -97,6 +109,9 @@ export function ChatApp({
   /** The server's clock when the page was made, so "Today" matches on both sides. */
   nowIso: string;
 }) {
+  const shell = useShell();
+  const collapsed = Boolean(shell?.collapsed);
+  const settingsTo = shell?.menuOf?.settings?.to;
   const [conversations, setConversations] = useState(initialConversations);
   const [people, setPeople] = useState(initialPeople);
   const [threads, setThreads] = useState<Record<string, Thread>>({});
@@ -384,8 +399,7 @@ export function ChatApp({
   const me = personById.get(myId);
   const channels = conversations.filter((c) => c.kind === "channel");
   const dms = conversations.filter((c) => c.kind === "dm");
-  const groupLabel =
-    "text-muted-foreground flex items-center justify-between px-2.5 pt-4 pb-1 text-[10.5px] font-semibold tracking-[0.16em] uppercase";
+  const groupLabel = cn(PANEL_GROUP, "flex items-center justify-between pr-1.5");
   const sheet =
     "border-border bg-card text-foreground m-auto w-[min(26rem,calc(100vw-2rem))] rounded-2xl border p-5 shadow-lg backdrop:bg-teal/40";
 
@@ -399,7 +413,9 @@ export function ChatApp({
           aria-current={c.channel_id === shownId ? "true" : undefined}
           className={cn(
             "focus-visible:ring-ochre flex w-full items-center gap-2 rounded-sm px-2.5 py-1.5 text-left text-sm outline-none focus-visible:ring-2",
-            c.channel_id === shownId ? "bg-card md:shadow-xs" : "hover:bg-hover",
+            c.channel_id === shownId
+              ? "bg-mint-soft text-foreground"
+              : "text-text-2 hover:bg-hover hover:text-foreground",
             c.unread > 0 && "font-bold",
           )}
         >
@@ -430,20 +446,33 @@ export function ChatApp({
 
   return (
     <main className="flex h-dvh min-w-0 flex-1 pb-[57px] md:pb-0">
-      {/* Conversation list */}
+      {/* Conversation list: Messages' own list, in the menu panel's place and look. */}
       <section
         aria-label="Conversations"
         className={cn(
-          "border-border bg-panel flex w-full flex-col border-r md:w-[280px] md:shrink-0",
+          PANEL_SURFACE,
+          "flex w-full flex-col md:w-[232px] md:shrink-0",
           activeId && "max-md:hidden",
+          collapsed && "md:hidden",
         )}
       >
-        <header className="flex items-center justify-between px-4 pt-5 pb-2">
-          <h1 className="text-lg font-bold tracking-[-0.01em]">Messages</h1>
-          <span
-            className={cn("size-2 rounded-full", live ? "bg-mint-ink" : "bg-input")}
-            title={live ? "Live" : "Reconnecting…"}
-          />
+        <header className={PANEL_HEAD}>
+          <h1 className={cn(PANEL_TITLE, "flex items-center gap-2")}>
+            Messages
+            <span
+              className={cn("size-2 rounded-full", live ? "bg-mint-ink" : "bg-input")}
+              title={live ? "Live" : "Reconnecting…"}
+            />
+          </h1>
+          <button
+            type="button"
+            onClick={() => shell?.setCollapsed(true)}
+            aria-label="Hide the Messages menu"
+            title="Hide this menu"
+            className={cn(PANEL_ICON_BUTTON, "max-md:hidden")}
+          >
+            <PanelLeftClose aria-hidden />
+          </button>
         </header>
         <nav className="flex-1 overflow-y-auto px-1.5 pb-3">
           <p className={groupLabel}>
@@ -480,6 +509,18 @@ export function ChatApp({
             </p>
           )}
         </nav>
+        {settingsTo && (
+          <div className="border-border shrink-0 border-t p-1.5">
+            <Link
+              href={`/w/${slug}/${settingsTo}`}
+              aria-label="Messages settings"
+              className={cn(PANEL_ROW, PANEL_ROW_OFF)}
+            >
+              <Settings aria-hidden className="text-muted-foreground size-4 shrink-0" />
+              Settings
+            </Link>
+          </div>
+        )}
         <footer className="border-border flex items-center gap-2 border-t px-3 py-2.5">
           <Avatar name={nameOf(me)} tone="me" />
           <span className="min-w-0 flex-1 truncate text-sm font-semibold">{nameOf(me)}</span>
@@ -499,6 +540,7 @@ export function ChatApp({
         className={cn("bg-card flex min-w-0 flex-1 flex-col", !activeId && "max-md:hidden")}
       >
         <header className="border-border flex items-center gap-3 border-b px-4 py-3">
+          <PanelButton />
           <button
             type="button"
             onClick={() => setHash("")}

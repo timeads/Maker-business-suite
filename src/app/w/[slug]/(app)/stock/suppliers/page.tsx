@@ -11,7 +11,6 @@ import { cn } from "@/lib/utils";
 import { loadIncoming, loadStock } from "../data";
 import { stockAccess } from "../gate";
 import { Importer } from "../../settings/stock/import/importer";
-import { StockTabs } from "../tabs";
 import { closureWords } from "./closure-words";
 import { AddSupplier, SuppliersTable, type SupplierLine } from "./table";
 
@@ -90,14 +89,13 @@ export default async function SuppliersPage({
   return (
     <>
       <PageHeader
-        title="Stock"
+        title="Suppliers"
         description="Who you buy from, how long they take, and the smallest order they'll accept."
       >
         {canEdit && (
           <AddSupplier slug={tenant.slug} usualLeadDays={settings.default_lead_time_days} />
         )}
       </PageHeader>
-      <StockTabs slug={tenant.slug} tenantId={tenant.id} manager={canManage(role)} />
 
       <nav aria-label="Which suppliers" className="flex flex-wrap items-center gap-1.5">
         {(

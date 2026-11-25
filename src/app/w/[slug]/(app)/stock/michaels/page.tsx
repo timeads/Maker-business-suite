@@ -12,7 +12,7 @@ import { canManage } from "@/lib/tenants";
 import { loadMichaels, type RunRow } from "./data";
 import { LookNowButton } from "./forms";
 import { michaelsAccess } from "./gate";
-import { MichaelsTabs, WatchingBanner } from "./tabs";
+import { WatchingBanner } from "./watching";
 
 export const metadata: Metadata = { title: "Michaels" };
 
@@ -168,7 +168,6 @@ export default async function MichaelsPage({ params }: { params: Promise<{ slug:
       >
         {canLook && <LookNowButton slug={tenant.slug} busy={openRun !== null} />}
       </PageHeader>
-      <MichaelsTabs slug={tenant.slug} />
       <WatchingBanner />
 
       {michaels.status === "needs_reconnect" && (

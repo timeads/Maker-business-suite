@@ -12,7 +12,6 @@ import { loadShippingSetup } from "../data";
 import { undoWords } from "@/lib/shipping/shop-steps";
 import { ParcelForm, VoidButton } from "../forms";
 import { shippingAccess } from "../gate";
-import { ShippingTabs } from "../tabs";
 
 export const metadata: Metadata = { title: "Sent parcels" };
 
@@ -110,10 +109,9 @@ export default async function SentParcelsPage({
   return (
     <>
       <PageHeader
-        title="Shipping"
+        title="Sent"
         description="What shipping cost you against what shoppers paid, and every parcel you've recorded, newest first."
       />
-      <ShippingTabs slug={tenant.slug} />
 
       {report && (
         <section aria-labelledby="report-title" className="flex flex-col gap-3">
