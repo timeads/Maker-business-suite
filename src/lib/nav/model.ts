@@ -20,6 +20,8 @@ export type ToolKey = "home" | "assistant" | ModuleKey | "connections" | "settin
 export type NavViewer = SettingsViewer & {
   /** Whether this workspace has connected a Michaels seller account. */
   michaels: boolean;
+  /** What the workspace calls its help desk manual ("Repair manual"). "Manual" when not given. */
+  manualName?: string;
 };
 
 export type NavMatch = {
@@ -38,6 +40,7 @@ export type NavMatch = {
 
 export type ItemIcon =
   | "chart"
+  | "book"
   | "tag"
   | "user"
   | "help"
@@ -215,7 +218,14 @@ function helpdeskMenu(viewer: NavViewer, attention: Attention): NavGroup[] {
   return [
     {
       id: "helpdesk.top",
-      items: [place("helpdesk.reports", "How we're doing", "helpdesk/reports", { icon: "chart" })],
+      items: [
+        place("helpdesk.reports", "How we're doing", "helpdesk/reports", { icon: "chart" }),
+        // Topics written up from finished conversations, under the workspace's own name for it.
+        place("helpdesk.manual", viewer.manualName?.trim() || "Manual", "helpdesk/manual", {
+          icon: "book",
+          keywords: ["manual", "topics", "knowledge base", "articles", "how to"],
+        }),
+      ],
     },
     {
       id: "helpdesk.tickets",

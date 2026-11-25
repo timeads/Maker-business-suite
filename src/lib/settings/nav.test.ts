@@ -69,6 +69,7 @@ describe("settingsNav", () => {
       "shipping.slip",
       "shipping.printing",
     ]);
+    expect(kids(nav, "helpdesk")).toEqual(["helpdesk.desk", "helpdesk.manual"]);
     expect(kids(nav, "stock")).toEqual([
       "stock.planning",
       "stock.seasons",

@@ -17,6 +17,8 @@ import {
 import { BRAND_MODULE, KIT_KEY, parseBrandKit } from "@/lib/brand/kit";
 import { googleMailConfigured } from "@/lib/connections/providers/google-mail";
 import { getEntitlements } from "@/lib/entitlements";
+import { HELPDESK_MODULE } from "@/lib/helpdesk/config";
+import { MANUAL_KEY, parseManual } from "@/lib/helpdesk/manual/config";
 import { PANEL_COOKIE, buildNav } from "@/lib/nav/model";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext, listMyTenants } from "@/lib/tenants";
@@ -62,6 +64,16 @@ export default async function WorkspaceLayout({
         .eq("provider", "michaels")
         .maybeSingle()
     : { data: null };
+  // The help desk's manual goes by the workspace's own name for it in the menu.
+  const { data: manual } = entitlements.can("module.helpdesk")
+    ? await supabase
+        .from("configs")
+        .select("body")
+        .eq("tenant_id", ctx.tenant.id)
+        .eq("module", HELPDESK_MODULE)
+        .eq("key", MANUAL_KEY)
+        .maybeSingle()
+    : { data: null };
   // The rail and every tool's menu, decided in one place for this person.
   const tools = buildNav(
     {
@@ -70,6 +82,7 @@ export default async function WorkspaceLayout({
       canWrite: entitlements.canWrite,
       gmailOrders: googleMailConfigured(),
       michaels: michaels?.status === "active" || michaels?.status === "needs_reconnect",
+      manualName: parseManual(manual?.body).name,
     },
     attention,
   );

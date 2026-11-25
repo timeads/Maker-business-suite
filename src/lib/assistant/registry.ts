@@ -24,6 +24,7 @@ import {
   SAVED_VIEWS_KEY as DESK_VIEWS_KEY,
   savedViewsSchema as deskViewsSchema,
 } from "../helpdesk/saved-views";
+import { DEFAULT_MANUAL, MANUAL_KEY, manualConfigSchema } from "../helpdesk/manual/config";
 import { DEFAULT_DESK_SETTINGS, DESK_SETTINGS_KEY, deskSettingsSchema } from "../helpdesk/settings";
 import { DEFAULT_TAG_GROUPS, TAG_GROUPS_KEY, tagGroupsSchema } from "../helpdesk/tag-groups";
 import {
@@ -153,6 +154,16 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
       "Headings that arrange the help desk's tag picker. Each group has a name and the tags under it; a tag in no group still works.",
     schema: tagGroupsSchema,
     defaultBody: () => DEFAULT_TAG_GROUPS,
+  },
+  {
+    module: HELPDESK_MODULE,
+    key: MANUAL_KEY,
+    feature: "helpdesk",
+    name: "Help desk manual",
+    description:
+      "The help desk's manual of topics and articles: its name and the first tab's name, a sentence on what belongs in it, the labels topics are sorted by (id and label, up to four), the headings a topic is written under, which conversations feed it (folder ids, saved view ids, tags), whether it updates by itself (auto) and how often (day or week), the most conversations read in a month (monthly_cap), whether Claude is shown customers' photos (read_photos) and whether reply drafts may lean on published topics (use_in_drafts).",
+    schema: manualConfigSchema,
+    defaultBody: () => DEFAULT_MANUAL,
   },
   {
     module: BOOKINGS_MODULE,

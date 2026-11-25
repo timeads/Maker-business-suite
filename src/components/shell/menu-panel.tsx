@@ -23,6 +23,7 @@ import {
   Trash2,
   User,
   X,
+  BookOpen,
 } from "lucide-react";
 import { filterMenu, hrefFor, type ItemIcon, type NavItem } from "@/lib/nav/model";
 import { cn } from "@/lib/utils";
@@ -47,6 +48,7 @@ export const PANEL_ICON_BUTTON =
 
 const ITEM_ICONS: Record<ItemIcon, typeof Tag> = {
   chart: BarChart3,
+  book: BookOpen,
   tag: Tag,
   user: User,
   help: CircleHelp,

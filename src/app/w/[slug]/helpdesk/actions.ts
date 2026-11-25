@@ -21,6 +21,7 @@ import {
 } from "@/lib/helpdesk/config";
 import { sendPayloadSchema, summaryOf } from "@/lib/helpdesk/outbox";
 import { draftReply } from "@/lib/helpdesk/draft";
+import { loadDraftTopics } from "@/lib/helpdesk/manual/match";
 import { readInsights } from "@/lib/helpdesk/insights";
 import {
   FILES_BUCKET,
@@ -202,10 +203,19 @@ export async function draftTicketReply(
     ctx.tenant.id,
     messages.map((m) => String(m.id)),
   );
+  // What the team has written down about problems like this one, when the
+  // workspace lets drafts lean on its manual. Found by words; no model asked.
+  const manual = await loadDraftTopics(
+    ctx.supabase,
+    ctx.tenant.id,
+    ticket.subject,
+    messages.map((m) => ({ direction: String(m.direction), body: String(m.body) })),
+  );
   try {
     const draft = await draftReply({
       hint,
       stock,
+      manual,
       workspaceName: ctx.tenant.name,
       customerName: contact?.name ?? null,
       subject: ticket.subject,

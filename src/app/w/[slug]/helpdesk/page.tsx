@@ -53,6 +53,7 @@ import {
 import { isPicture } from "@/lib/helpdesk/files";
 import { fileSize, replyAllCopies } from "@/lib/helpdesk/outbound";
 import { parseRichDoc, type RichDoc } from "@/lib/helpdesk/rich";
+import { loadRailTopics } from "@/lib/helpdesk/manual/match";
 import { SAVED_VIEWS_KEY, matchesConditions, parseSavedViews } from "@/lib/helpdesk/saved-views";
 import { DESK_SETTINGS_KEY, parseDeskSettings } from "@/lib/helpdesk/settings";
 import { TAG_GROUPS_KEY, parseTagGroups } from "@/lib/helpdesk/tag-groups";
@@ -86,6 +87,8 @@ import { loadStockForBought, type BoughtItemStock, type BoughtLine } from "@/lib
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
 import { cn } from "@/lib/utils";
+import { addTicketToManual } from "../(app)/helpdesk/manual/actions";
+import { AskButton } from "../(app)/helpdesk/manual/editor";
 import { MessageFiles, type ShownFile } from "./attachments";
 import { AutoOpen, BulkBar, BulkBox, BulkProvider, ExportList, NewFolderDialog } from "./bulk";
 import { Composer } from "./composer";
@@ -584,6 +587,11 @@ export default async function HelpdeskPage({
     : [null, null, null, null, null, null, null];
 
   const thread = (messages?.data ?? []) as unknown as Message[];
+  // Topics from the manual that fit this conversation, found by its words.
+  // Read on its own and allowed to fail.
+  const railManual = ticket
+    ? await loadRailTopics(supabase, tenant.id, ticket.subject, thread)
+    : { name: "Manual", topics: [] };
   // The pictures and files on these messages. Read on its own, and allowed to
   // fail: a conversation is still readable without them.
   const { data: fileRows } =
@@ -1346,6 +1354,7 @@ export default async function HelpdeskPage({
                       .filter((p) => p.handle)}
                     forwardFiles={forwardFiles}
                     templates={templates}
+                    manualName={railManual.name}
                     snoozeChoices={choices}
                     canDraft={canDraft}
                     canSend={canSend}
@@ -1588,6 +1597,57 @@ export default async function HelpdeskPage({
                 counts against your plan&apos;s AI allowance.
               </p>
             )}
+          </section>
+        )}
+
+        {(railManual.topics.length > 0 || (canDraft && editable && canManage(role))) && (
+          <section className={card}>
+            <div className="flex flex-wrap items-center justify-between gap-x-2">
+              <h3 className={heading}>{railManual.name}</h3>
+              <Link
+                href={`/w/${tenant.slug}/helpdesk/manual`}
+                className="text-muted-foreground text-xs hover:underline"
+              >
+                Open
+              </Link>
+            </div>
+            {railManual.topics.length > 0 ? (
+              <ul className="mt-1.5 flex flex-col gap-1.5">
+                {railManual.topics.map((topic) => (
+                  <li key={topic.id}>
+                    <Link
+                      href={`/w/${tenant.slug}/helpdesk/manual/${topic.id}`}
+                      className="hover:bg-hover -mx-1.5 block rounded-sm px-1.5 py-1"
+                    >
+                      <span className="block text-sm font-semibold">{topic.title}</span>
+                      {topic.summary && (
+                        <span className="text-muted-foreground font-read line-clamp-2 text-xs">
+                          {topic.summary}
+                        </span>
+                      )}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-muted-foreground mt-1.5 text-[13px]">
+                No published topic matches this one yet.
+              </p>
+            )}
+            {canDraft &&
+              editable &&
+              canManage(role) &&
+              thread.some((m) => m.direction === "outbound") && (
+                <div className="mt-2">
+                  <AskButton
+                    action={addTicketToManual.bind(null, tenant.slug, ticket.id)}
+                    label="Add this conversation"
+                    pendingLabel="Asking…"
+                    variant="ghost"
+                    size="sm"
+                  />
+                </div>
+              )}
           </section>
         )}
 

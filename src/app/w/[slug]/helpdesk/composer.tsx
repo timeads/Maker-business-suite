@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   Bold,
+  BookOpen,
   ChevronDown,
   Eraser,
   Forward,
@@ -27,18 +28,11 @@ import { Button } from "@/components/ui/button";
 import { describeActions, mergeActions, type TemplateActions } from "@/lib/helpdesk/config";
 import { draftKey, readDraft, type ComposerMode } from "@/lib/helpdesk/drafts";
 import { fileSize, filesProblem, parseRecipients } from "@/lib/helpdesk/outbound";
-import {
-  isSafeLink,
-  richToHtml,
-  richToText,
-  textToRich,
-  tidyDoc,
-  type RichBlock,
-  type RichDoc,
-  type RichRun,
-} from "@/lib/helpdesk/rich";
+import { isSafeLink, richToHtml, richToText, textToRich, type RichDoc } from "@/lib/helpdesk/rich";
+import { readEditor } from "@/lib/helpdesk/rich-dom";
 import { cn } from "@/lib/utils";
 import { addTicketNote, draftTicketReply, sendMail } from "./actions";
+import { ManualPicker } from "./manual-picker";
 
 type Template = { id: string; name: string; body: string; actions?: TemplateActions };
 type Teammate = { id: string; name: string; handle: string };
@@ -51,77 +45,6 @@ export const FOCUS_EVENT = "helpdesk:focus";
 export const QUEUED_EVENT = "helpdesk:queued";
 /** A taken-back email's words are in this browser's drafts again: `{ ticketId }`. */
 export const RESTORE_EVENT = "helpdesk:restore";
-
-// ---- The editor's contents as a small document ------------------------------
-
-type Marks = Omit<RichRun, "text">;
-const BLOCKS = new Set(["P", "DIV", "UL", "OL", "LI", "BLOCKQUOTE", "H1", "H2", "H3", "PRE"]);
-
-/** Reads what is typed into a document of our own kind; tags we don't know are just their text. */
-export function readEditor(root: HTMLElement): RichDoc {
-  const doc: RichDoc = [];
-  let open: RichRun[] | null = null;
-  const para = () => {
-    if (!open) {
-      open = [];
-      doc.push({ t: "p", runs: open });
-    }
-    return open;
-  };
-  const inline = (node: Node, marks: Marks, into: () => RichRun[]) => {
-    if (node.nodeType === Node.TEXT_NODE) {
-      const text = (node.textContent ?? "").replace(/ /g, " ");
-      if (text) into().push({ text, ...marks });
-      return;
-    }
-    if (!(node instanceof HTMLElement)) return;
-    const tag = node.tagName;
-    if (tag === "BR") {
-      into().push({ text: "\n", ...marks });
-      return;
-    }
-    const next: Marks = { ...marks };
-    if (tag === "B" || tag === "STRONG") next.b = true;
-    if (tag === "I" || tag === "EM") next.i = true;
-    if (tag === "U") next.u = true;
-    if (tag === "S" || tag === "STRIKE" || tag === "DEL") next.s = true;
-    if (tag === "A") {
-      const href = node.getAttribute("href") ?? "";
-      if (isSafeLink(href)) next.href = href.trim();
-    }
-    for (const child of node.childNodes) walk(child, next, into);
-  };
-  const walk = (node: Node, marks: Marks, into: () => RichRun[]) => {
-    if (node instanceof HTMLElement && (node.tagName === "UL" || node.tagName === "OL")) {
-      const items: RichRun[][] = [];
-      for (const li of node.children) {
-        const item: RichRun[] = [];
-        for (const child of li.childNodes) inline(child, marks, () => item);
-        items.push(item);
-      }
-      const block: RichBlock = { t: node.tagName === "UL" ? "ul" : "ol", items };
-      doc.push(block);
-      open = null;
-      return;
-    }
-    if (node instanceof HTMLElement && BLOCKS.has(node.tagName)) {
-      open = null;
-      for (const child of node.childNodes) walk(child, marks, into);
-      open = null;
-      return;
-    }
-    inline(node, marks, into);
-  };
-  for (const child of root.childNodes) walk(child, {}, para);
-  // A line break that only ends a paragraph isn't part of its words.
-  for (const block of doc) {
-    if (block.t === "p") {
-      const last = block.runs[block.runs.length - 1];
-      if (last && last.text === "\n") block.runs.pop();
-    }
-  }
-  return tidyDoc(doc);
-}
 
 /** Puts a document into the editor. The HTML is ours, built from the checked document. */
 function fillEditor(root: HTMLElement, doc: RichDoc) {
@@ -172,6 +95,7 @@ export function Composer({
   team = [],
   afterClose = "next",
   templates,
+  manualName = "Manual",
   snoozeChoices,
   canDraft,
   canSend,
@@ -190,6 +114,8 @@ export function Composer({
   /** After "Send & close": the next conversation, the list, or stay here. */
   afterClose?: "next" | "list" | "stay";
   templates: Template[];
+  /** What the workspace calls its manual; the picker beside Macros goes by it. */
+  manualName?: string;
   snoozeChoices: Snooze[];
   canDraft: boolean;
   canSend: boolean;
@@ -208,7 +134,7 @@ export function Composer({
   const [dropped, setDropped] = useState<string[]>([]);
   const [extras, setExtras] = useState<TemplateActions>({});
   const [mention, setMention] = useState<{ query: string; at: number } | null>(null);
-  const [menu, setMenu] = useState<"macros" | "ai" | "send" | null>(null);
+  const [menu, setMenu] = useState<"macros" | "manual" | "ai" | "send" | null>(null);
   const [macroSearch, setMacroSearch] = useState("");
   const [hint, setHint] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
@@ -879,6 +805,29 @@ export function Composer({
                       </li>
                     ))}
                   </ul>
+                </div>
+              )}
+            </div>
+            <div className="relative" data-pop>
+              <button
+                type="button"
+                onClick={() => setMenu(menu === "manual" ? null : "manual")}
+                aria-expanded={menu === "manual"}
+                className={quiet}
+              >
+                <BookOpen aria-hidden />
+                {manualName}
+              </button>
+              {menu === "manual" && (
+                <div className={cn(pop, "left-0 w-[min(24rem,88vw)]")}>
+                  <ManualPicker
+                    slug={slug}
+                    name={manualName}
+                    onPick={(text) => {
+                      setMenu(null);
+                      insert(text);
+                    }}
+                  />
                 </div>
               )}
             </div>

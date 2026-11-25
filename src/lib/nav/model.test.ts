@@ -135,6 +135,10 @@ describe("buildNav: each tool's menu", () => {
       "Tags",
     ]);
     expect(desk.menu[0].items[0].to).toBe("helpdesk/reports");
+    // The manual sits beside the numbers, under a neutral name until the workspace gives it one.
+    expect(desk.menu[0].items[1]).toMatchObject({ label: "Manual", to: "helpdesk/manual" });
+    const named = tool(buildNav(viewer({ manualName: "Care guide" })), "helpdesk");
+    expect(named.menu[0].items[1].label).toBe("Care guide");
     expect(desk.menu[1].items.map((item) => item.label)).toEqual([
       "Your tickets",
       "Unassigned",

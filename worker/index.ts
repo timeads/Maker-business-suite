@@ -12,6 +12,7 @@
  *  - ask UPS where incoming stock orders are, a few parcels at a time
  *  - look at Michaels for workspaces that sell there (reads only: nothing is sent)
  *  - read supplier emails into supplier balances (Gmail looks, and bills forwarded in)
+ *  - write up finished help desk conversations into the workspace's manual
  *  - run sync jobs for connected accounts (first sync, webhooks, scheduled pulls)
  *  - every few minutes, queue pulls for providers that don't push changes
  *  - once an hour, delete workspaces whose retention window has passed
@@ -67,6 +68,8 @@ import {
 } from "../src/lib/stock/mail/forward";
 import { runClaimedRead, type ClaimedRead } from "../src/lib/stock/mail/gmail-run";
 import { readMail } from "../src/lib/stock/mail/reader";
+import { readConversation } from "../src/lib/helpdesk/manual/reader";
+import { runClaimedManual, type ClaimedRun } from "../src/lib/helpdesk/manual/run";
 import { carrierResult } from "../src/lib/stock/tracking";
 import { getAdminClient, withTenant } from "../src/lib/supabase/admin";
 
@@ -885,6 +888,32 @@ async function drainEmailReads(): Promise<number> {
   return reads.length;
 }
 
+/**
+ * Brings a workspace's help desk manual up to date: by itself for workspaces
+ * that switched it on (daily or weekly), or when a manager presses "Update
+ * now" or adds one conversation. The database decides who is due and hands
+ * each update to one worker; one that never finishes is marked failed, not
+ * run again. What Claude returns is only data: the code decides what is
+ * written, new topics are drafts, and nothing goes to a customer.
+ */
+async function drainManualRuns(): Promise<number> {
+  // Without a key there is nobody to ask; a claimed run would only fail.
+  if (!process.env.ANTHROPIC_API_KEY) return 0;
+  const admin = getAdminClient();
+  const { data, error } = await admin.rpc("claim_manual_runs", { p_limit: 2 });
+  if (error) throw new Error(`Could not claim manual updates: ${error.message}`);
+  const runs = (data ?? []) as ClaimedRun[];
+  for (const run of runs) {
+    const outcome = await runClaimedManual(run, {
+      admin,
+      read: (input) => readConversation(input),
+      now: () => new Date(),
+    });
+    console.log(`manual update ${run.id} (${run.source}): ${outcome}`);
+  }
+  return runs.length;
+}
+
 /** Sends scheduled social posts whose time has come. */
 async function drainSocialPosts(): Promise<number> {
   const admin = getAdminClient();
@@ -983,7 +1012,8 @@ async function main() {
       (await attempt(drainPickupSteps, 0)) +
       (await attempt(drainShipmentChecks, 0)) +
       (await attempt(drainMichaelsLooks, 0)) +
-      (await attempt(drainEmailReads, 0));
+      (await attempt(drainEmailReads, 0)) +
+      (await attempt(drainManualRuns, 0));
 
     if (Date.now() - lastSchedule > SCHEDULE_EVERY_MS) {
       lastSchedule = Date.now();
