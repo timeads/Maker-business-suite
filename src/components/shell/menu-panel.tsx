@@ -13,6 +13,7 @@ import {
   Inbox,
   Layers,
   Moon,
+  MessagesSquare,
   OctagonAlert,
   PanelLeft,
   PanelLeftClose,
@@ -61,6 +62,7 @@ const ITEM_ICONS: Record<ItemIcon, typeof Tag> = {
   folder: Folder,
   archive: Archive,
   spam: OctagonAlert,
+  chat: MessagesSquare,
   trash: Trash2,
 };
 

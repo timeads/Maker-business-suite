@@ -244,6 +244,20 @@ const TOOLS: Def[] = [
         ],
       },
       {
+        id: "helpdesk.channels",
+        name: "Channels",
+        path: "helpdesk/channels",
+        keywords: [
+          "instagram",
+          "facebook",
+          "messenger",
+          "direct messages",
+          "dms",
+          "social messages",
+          "24 hours",
+        ],
+      },
+      {
         id: "helpdesk.manual",
         name: "Manual",
         path: "helpdesk/manual",

@@ -51,6 +51,7 @@ export type ListRow = {
   last_inbound_at: string | null;
   tags: string[];
   unread: boolean;
+  channel?: string | null;
 };
 
 export type ListFilters = {
@@ -59,6 +60,8 @@ export type ListFilters = {
   assignee?: string;
   priority?: string;
   unread?: boolean;
+  /** "email", "instagram", "facebook", or "social" for the last two together. */
+  channel?: string;
 };
 
 /** The filter row above the list: every filter that is set must hold. */
@@ -71,6 +74,14 @@ export function passesFilters(row: ListRow, filters: ListFilters, me: string): b
   }
   if (filters.priority && row.priority !== filters.priority) return false;
   if (filters.unread && !row.unread) return false;
+  if (filters.channel) {
+    const is = row.channel ?? "email";
+    const hit =
+      filters.channel === "social"
+        ? is === "instagram" || is === "facebook"
+        : is === filters.channel;
+    if (!hit) return false;
+  }
   return true;
 }
 

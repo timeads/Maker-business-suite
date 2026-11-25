@@ -1,3 +1,4 @@
+import { CHANNELS_KEY, parseChannelSettings } from "@/lib/helpdesk/social/channels";
 import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
 import { BillingBanner } from "@/components/shell/billing-banner";
@@ -64,16 +65,19 @@ export default async function WorkspaceLayout({
         .eq("provider", "michaels")
         .maybeSingle()
     : { data: null };
-  // The help desk's manual goes by the workspace's own name for it in the menu.
-  const { data: manual } = entitlements.can("module.helpdesk")
+  // The help desk's manual goes by the workspace's own name for it in the menu,
+  // and "Instagram & Facebook" is a place only where those messages are on.
+  const { data: deskRows } = entitlements.can("module.helpdesk")
     ? await supabase
         .from("configs")
-        .select("body")
+        .select("key, body")
         .eq("tenant_id", ctx.tenant.id)
         .eq("module", HELPDESK_MODULE)
-        .eq("key", MANUAL_KEY)
-        .maybeSingle()
+        .in("key", [MANUAL_KEY, CHANNELS_KEY])
     : { data: null };
+  const deskSetting = (key: string) => (deskRows ?? []).find((row) => row.key === key)?.body;
+  const manual = { body: deskSetting(MANUAL_KEY) };
+  const channels = parseChannelSettings(deskSetting(CHANNELS_KEY));
   // The rail and every tool's menu, decided in one place for this person.
   const tools = buildNav(
     {
@@ -83,6 +87,7 @@ export default async function WorkspaceLayout({
       gmailOrders: googleMailConfigured(),
       michaels: michaels?.status === "active" || michaels?.status === "needs_reconnect",
       manualName: parseManual(manual?.body).name,
+      socialInbox: channels.instagram || channels.facebook,
     },
     attention,
   );

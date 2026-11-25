@@ -26,6 +26,11 @@ import {
 } from "../helpdesk/saved-views";
 import { DEFAULT_MANUAL, MANUAL_KEY, manualConfigSchema } from "../helpdesk/manual/config";
 import { DEFAULT_DESK_SETTINGS, DESK_SETTINGS_KEY, deskSettingsSchema } from "../helpdesk/settings";
+import {
+  CHANNELS_KEY,
+  DEFAULT_CHANNEL_SETTINGS,
+  channelSettingsSchema,
+} from "../helpdesk/social/channels";
 import { DEFAULT_TAG_GROUPS, TAG_GROUPS_KEY, tagGroupsSchema } from "../helpdesk/tag-groups";
 import {
   DEFAULT_MICHAELS_SETTINGS,
@@ -144,6 +149,16 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
       "How the help desk behaves: the business's own support addresses (never copied in by Reply all), how many seconds a sent email waits so it can be undone (0, 5, 10 or 20), what happens after closing a conversation (next, list or stay), and whether the first conversation opens by itself.",
     schema: deskSettingsSchema,
     defaultBody: () => DEFAULT_DESK_SETTINGS,
+  },
+  {
+    module: HELPDESK_MODULE,
+    key: CHANNELS_KEY,
+    feature: "helpdesk",
+    name: "Help desk channels",
+    description:
+      "Which messages besides email come into the help desk: Instagram messages (instagram) and Facebook messages (facebook), each on or off. They only work once Facebook & Instagram is connected with the messaging permissions, which a person does under Settings → Help desk → Channels. human_agent is only for a Meta app approved for the Human Agent feature (replies up to seven days after the customer's last message) and should stay off otherwise.",
+    schema: channelSettingsSchema,
+    defaultBody: () => DEFAULT_CHANNEL_SETTINGS,
   },
   {
     module: HELPDESK_MODULE,

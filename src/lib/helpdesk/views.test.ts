@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { actionsFor, autoTagRulesSchema } from "./config";
 import { describeEvent } from "./activity";
-import { matchesConditions } from "./saved-views";
+import { passesFilters } from "./list";
+import { describeConditions, matchesConditions } from "./saved-views";
 import {
   byUrgency,
   formatDuration,
@@ -203,5 +204,60 @@ describe("report figures", () => {
     expect(median([])).toBeNull();
     expect(median([5, 1, 9])).toBe(5);
     expect(median([4, 2])).toBe(3);
+  });
+});
+
+describe("Instagram and Facebook conversations", () => {
+  const insta = { ...base, channel: "instagram" };
+  it("have a view of their own: open or in progress, not snoozed, not filed", () => {
+    expect(inView(insta, "social", ME, NOW)).toBe(true);
+    expect(inView({ ...insta, channel: "facebook", status: "pending" }, "social", ME, NOW)).toBe(
+      true,
+    );
+    expect(inView({ ...base, channel: "email" }, "social", ME, NOW)).toBe(false);
+    expect(inView(base, "social", ME, NOW)).toBe(false);
+    expect(inView({ ...insta, status: "closed" }, "social", ME, NOW)).toBe(false);
+    expect(inView({ ...insta, snoozed_until: "2026-11-21T15:00:00Z" }, "social", ME, NOW)).toBe(
+      false,
+    );
+    expect(inView({ ...insta, folder_id: "f1" }, "social", ME, NOW)).toBe(false);
+    expect(inView({ ...insta, shelf: "spam" }, "social", ME, NOW)).toBe(false);
+    // They sit in the ordinary views too, beside email.
+    expect(inView(insta, "open", ME, NOW)).toBe(true);
+    expect(inView(insta, "unassigned", ME, NOW)).toBe(true);
+  });
+
+  it("can be what a saved view or the filter row asks for", () => {
+    const facts = {
+      ...base,
+      priority: "normal" as const,
+      tags: [],
+      subject: "",
+      customer: "",
+      unread: false,
+    };
+    const view = (channel: "email" | "instagram" | "facebook" | "social") =>
+      ({ status: "active", channel }) as const;
+    expect(matchesConditions({ ...facts, channel: "instagram" }, view("instagram"), ME, NOW)).toBe(
+      true,
+    );
+    expect(matchesConditions({ ...facts, channel: "instagram" }, view("facebook"), ME, NOW)).toBe(
+      false,
+    );
+    expect(matchesConditions({ ...facts, channel: "facebook" }, view("social"), ME, NOW)).toBe(
+      true,
+    );
+    expect(matchesConditions({ ...facts, channel: "email" }, view("social"), ME, NOW)).toBe(false);
+    // A conversation from before channels existed is an email.
+    expect(matchesConditions(facts, view("email"), ME, NOW)).toBe(true);
+    expect(describeConditions(view("social"), { person: () => "", folder: () => "" })).toBe(
+      "open or in progress · from Instagram & Facebook",
+    );
+    const row = { ...facts, last_message_at: "", created_at: "", last_inbound_at: null };
+    expect(passesFilters({ ...row, channel: "facebook" }, { channel: "social" }, ME)).toBe(true);
+    expect(passesFilters({ ...row, channel: "facebook" }, { channel: "instagram" }, ME)).toBe(
+      false,
+    );
+    expect(passesFilters(row, { channel: "email" }, ME)).toBe(true);
   });
 });

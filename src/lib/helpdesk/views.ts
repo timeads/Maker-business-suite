@@ -13,6 +13,8 @@ export const VIEWS = [
   { key: "pending", label: "In progress" },
   { key: "snoozed", label: "Snoozed" },
   { key: "mentions", label: "Mentions" },
+  // Shown in the menu only where a workspace has switched these messages on.
+  { key: "social", label: "Instagram & Facebook" },
   { key: "closed", label: "Closed" },
   { key: "all", label: "All tickets" },
   { key: "archived", label: "Archived" },
@@ -64,6 +66,8 @@ export type TicketFacts = {
   mentioned?: boolean;
   /** Archived, in Spam or in the Trash: out of every working view. */
   shelf?: Shelf | null;
+  /** Where it came from: "email", "instagram" or "facebook". */
+  channel?: string | null;
 };
 
 export const isSnoozed = (ticket: Pick<TicketFacts, "snoozed_until">, now: number) =>
@@ -98,6 +102,13 @@ export function inView(ticket: TicketFacts, view: ViewKey, me: string, now: numb
       return ticket.status === "pending" && !snoozed;
     case "snoozed":
       return ticket.status !== "closed" && snoozed;
+    case "social":
+      // Instagram and Facebook conversations being worked: open or in progress.
+      return (
+        ticket.status !== "closed" &&
+        !snoozed &&
+        (ticket.channel === "instagram" || ticket.channel === "facebook")
+      );
     default:
       return false;
   }

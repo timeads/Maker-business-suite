@@ -9,7 +9,20 @@ import { isSnoozed, type TicketFacts } from "./views";
  */
 export const SAVED_VIEWS_KEY = "saved_views";
 
-export const CHANNELS = ["email"] as const;
+/** "social" is Instagram and Facebook together. */
+export const CHANNELS = ["email", "instagram", "facebook", "social"] as const;
+export const CHANNEL_CHOICES: Record<(typeof CHANNELS)[number], string> = {
+  email: "Email",
+  instagram: "Instagram",
+  facebook: "Facebook",
+  social: "Instagram & Facebook",
+};
+
+/** Whether a conversation's channel meets a channel condition or filter. */
+export function channelMatches(channel: string | null | undefined, want: string): boolean {
+  const is = channel ?? "email";
+  return want === "social" ? is === "instagram" || is === "facebook" : is === want;
+}
 
 export const viewConditionsSchema = z.object({
   /** active: open or in progress, not snoozed, not filed. any: everything not joined away. */
@@ -108,7 +121,7 @@ export function matchesConditions(
     if ((ticket.folder_id ?? null) !== want) return false;
   }
   if (conditions.priority?.length && !conditions.priority.includes(ticket.priority)) return false;
-  // Email is the only channel there is, so a channel condition always holds.
+  if (conditions.channel && !channelMatches(ticket.channel, conditions.channel)) return false;
   if (conditions.text) {
     const hay = `${ticket.subject} ${ticket.customer}`.toLowerCase();
     if (!hay.includes(conditions.text.toLowerCase())) return false;
@@ -148,6 +161,7 @@ export function describeConditions(
     );
   }
   if (conditions.priority?.length) parts.push(`${conditions.priority.join(" or ")} priority`);
+  if (conditions.channel) parts.push(`from ${CHANNEL_CHOICES[conditions.channel]}`);
   if (conditions.text) parts.push(`mentions “${conditions.text}”`);
   if (conditions.unread) parts.push("unread");
   return parts.join(" · ");

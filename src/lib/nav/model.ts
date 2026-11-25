@@ -22,6 +22,8 @@ export type NavViewer = SettingsViewer & {
   michaels: boolean;
   /** What the workspace calls its help desk manual ("Repair manual"). "Manual" when not given. */
   manualName?: string;
+  /** Instagram or Facebook messages are switched on for the help desk. */
+  socialInbox?: boolean;
 };
 
 export type NavMatch = {
@@ -53,7 +55,8 @@ export type ItemIcon =
   | "folder"
   | "archive"
   | "spam"
-  | "trash";
+  | "trash"
+  | "chat";
 
 export type NavItem = {
   id: string;
@@ -179,6 +182,7 @@ const VIEW_ICONS: Record<(typeof VIEWS)[number]["key"], ItemIcon> = {
   pending: "clock",
   snoozed: "moon",
   mentions: "at",
+  social: "chat",
   closed: "check",
   all: "layers",
   archived: "archive",
@@ -230,7 +234,11 @@ function helpdeskMenu(viewer: NavViewer, attention: Attention): NavGroup[] {
     {
       id: "helpdesk.tickets",
       name: "Tickets",
-      items: built.filter((item) => !HELPDESK_MORE.has(item.id)),
+      // Instagram & Facebook is a place only where those messages are switched on.
+      items: built.filter(
+        (item) =>
+          !HELPDESK_MORE.has(item.id) && (item.id !== "helpdesk.social" || viewer.socialInbox),
+      ),
     },
     {
       // Everything, and the three shelves: archived, spam and the Trash.

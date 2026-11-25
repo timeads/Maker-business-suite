@@ -415,9 +415,12 @@ export function ListTools({
   canSend,
   manageHref,
   extra,
+  channels = false,
 }: {
   /** One more button for the row (the export, for owners and admins). */
   extra?: React.ReactNode;
+  /** Instagram or Facebook messages are on, so the list can be narrowed by channel. */
+  channels?: boolean;
   slug: string;
   base: string;
   /** The address's own words, so a filter changes only itself. */
@@ -431,7 +434,7 @@ export function ListTools({
   manageHref: string;
 }) {
   const router = useRouter();
-  const filters = ["tag", "assignee", "priority", "unread"].filter((key) => params[key]);
+  const filters = ["tag", "assignee", "priority", "unread", "channel"].filter((key) => params[key]);
   const [open, setOpen] = useState(filters.length > 0 || Boolean(params.sort));
   const [spinning, startRefresh] = useTransition();
   const [saving, setSaving] = useState(false);
@@ -532,6 +535,13 @@ export function ListTools({
             { value: "low", label: "Low" },
           ])}
           {select("sort", "Newest activity", sorts)}
+          {(channels || params.channel) &&
+            select("channel", "Any channel", [
+              { value: "email", label: "Email" },
+              { value: "social", label: "Instagram & Facebook" },
+              { value: "instagram", label: "Instagram" },
+              { value: "facebook", label: "Facebook" },
+            ])}
           <span className="col-span-2 flex flex-wrap items-center gap-2 text-xs">
             <label className="flex items-center gap-1.5">
               <input
@@ -545,7 +555,9 @@ export function ListTools({
               <>
                 <button
                   type="button"
-                  onClick={() => go({ tag: null, assignee: null, priority: null, unread: null })}
+                  onClick={() =>
+                    go({ tag: null, assignee: null, priority: null, unread: null, channel: null })
+                  }
                   className="text-ochre-text ml-auto font-semibold hover:underline"
                 >
                   Clear
@@ -567,6 +579,7 @@ export function ListTools({
               <input type="hidden" name="tags" value={params.tag ?? ""} />
               <input type="hidden" name="assignee" value={params.assignee ?? ""} />
               <input type="hidden" name="priority" value={params.priority ?? ""} />
+              <input type="hidden" name="channel" value={params.channel ?? ""} />
               {params.unread === "1" && <input type="hidden" name="unread" value="1" />}
               <Label htmlFor="view-name" className="sr-only">
                 Name the view

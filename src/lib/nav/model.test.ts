@@ -458,3 +458,21 @@ describe("placeName", () => {
     expect(placeName(tool(tools, "helpdesk"), at("helpdesk", { q: "x" }))).toBeNull();
   });
 });
+
+describe("buildNav: Instagram & Facebook in the help desk", () => {
+  const tickets = (v: NavViewer) =>
+    tool(buildNav(v), "helpdesk")
+      .menu.find((group) => group.id === "helpdesk.tickets")!
+      .items.map((item) => item.id);
+
+  it("is a place only where those messages are switched on", () => {
+    expect(tickets(viewer())).not.toContain("helpdesk.social");
+    expect(tickets(viewer({ socialInbox: true }))).toContain("helpdesk.social");
+  });
+
+  it("carries the count the inbox hands over, and lights for its view", () => {
+    const desk = tool(buildNav(viewer({ socialInbox: true })), "helpdesk");
+    const row = desk.menu.flatMap((group) => group.items).find((i) => i.id === "helpdesk.social")!;
+    expect(row).toMatchObject({ label: "Instagram & Facebook", to: "helpdesk?view=social" });
+  });
+});

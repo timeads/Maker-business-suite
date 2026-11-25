@@ -123,7 +123,7 @@ export async function draftTicketReply(
     await Promise.all([
       ctx.supabase
         .from("tickets")
-        .select("id, subject, contacts(email, name)")
+        .select("id, subject, contacts(email, name, known_email)")
         .eq("id", ticketId)
         .eq("tenant_id", ctx.tenant.id)
         .maybeSingle(),
@@ -159,17 +159,20 @@ export async function draftTicketReply(
   }
 
   const contact = (Array.isArray(ticket.contacts) ? ticket.contacts[0] : ticket.contacts) as {
-    email: string;
+    email: string | null;
     name: string | null;
+    known_email: string | null;
   } | null;
-  const { data: orders } = contact
+  // Someone who messaged has orders to show only once the team wrote their email down.
+  const orderEmail = contact?.email ?? contact?.known_email ?? null;
+  const { data: orders } = orderEmail
     ? await ctx.supabase
         .from("orders")
         .select(
           "name, processed_at, total, currency, financial_status, fulfillment_status, order_lines(title, quantity, sku, variant_title, product_external_id)",
         )
         .eq("tenant_id", ctx.tenant.id)
-        .eq("email", contact.email)
+        .eq("email", orderEmail)
         .order("processed_at", { ascending: false })
         .limit(5)
     : { data: [] };
@@ -1087,6 +1090,7 @@ export async function saveView(slug: string, _prev: HelpdeskState, formData: For
             tags_any: tags.length > 0 ? tags : undefined,
             folder: text("folder"),
             priority: priority.length > 0 ? priority : undefined,
+            channel: text("channel"),
             text: text("text"),
             unread: formData.get("unread") ? true : undefined,
           },

@@ -109,16 +109,19 @@ export function buildActivity(
       direction: string;
       kind?: string | null;
       from_name: string | null;
-      from_email: string;
+      from_email: string | null;
       author_id: string | null;
       created_at: string;
     }[];
+    /** "Instagram" or "Facebook" for a conversation that isn't email. */
+    channelName?: string | null;
     notes: { author_id: string | null; created_at: string }[];
     events: TicketEvent[];
   },
   names: Names,
 ): ActivityEntry[] {
   const first = input.messages[0];
+  const how = input.channelName ? `on ${input.channelName}` : "by email";
   const entries: ActivityEntry[] = [
     {
       at: input.createdAt,
@@ -127,20 +130,24 @@ export function buildActivity(
       text:
         first && first.direction === "outbound"
           ? `${names.person(first.author_id) ?? "Someone"} started this ticket by email`
-          : "Ticket created from email",
+          : input.channelName
+            ? `Ticket created from ${input.channelName === "Instagram" ? "an" : "a"} ${input.channelName} message`
+            : "Ticket created from email",
     },
-    ...input.messages.map((m): ActivityEntry => {
-      const inbound = m.direction === "inbound";
-      const by = names.person(m.author_id);
-      return {
-        at: m.created_at,
-        group: "messages",
-        icon: inbound ? "mail" : "send",
-        text: inbound
-          ? `Message received by email from ${m.from_name || m.from_email}`
-          : `${m.kind === "forward" ? "Forward" : "Message"} sent by email${by ? ` by ${by}` : ""}`,
-      };
-    }),
+    ...input.messages
+      .filter((m) => m.kind !== "reaction")
+      .map((m): ActivityEntry => {
+        const inbound = m.direction === "inbound";
+        const by = names.person(m.author_id);
+        return {
+          at: m.created_at,
+          group: "messages",
+          icon: inbound ? "mail" : "send",
+          text: inbound
+            ? `Message received ${how}${m.from_name || m.from_email ? ` from ${m.from_name || m.from_email}` : ""}`
+            : `${m.kind === "forward" ? "Forward" : "Message"} sent ${how}${by ? ` by ${by}` : m.from_name ? ` from the ${m.from_name}` : ""}`,
+        };
+      }),
     ...input.notes.map((n): ActivityEntry => ({
       at: n.created_at,
       group: "messages",
