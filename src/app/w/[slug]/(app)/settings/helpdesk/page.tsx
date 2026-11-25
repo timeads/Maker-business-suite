@@ -17,8 +17,10 @@ import { canManage } from "@/lib/tenants";
 import { helpdeskAccess } from "@/app/w/[slug]/helpdesk/gate";
 import { SAVED_VIEWS_KEY, describeConditions, parseSavedViews } from "@/lib/helpdesk/saved-views";
 import { DESK_SETTINGS_KEY, parseDeskSettings } from "@/lib/helpdesk/settings";
+import { TAG_GROUPS_KEY, parseTagGroups } from "@/lib/helpdesk/tag-groups";
 import {
   AddRuleForm,
+  AddTagGroupForm,
   AddTemplateForm,
   AddViewForm,
   DeleteButton,
@@ -64,6 +66,7 @@ export default async function HelpdeskSettingsPage({
   const rules = parseRules(stored.get(RULES_KEY)).rules;
   const views = parseSavedViews(stored.get(SAVED_VIEWS_KEY)).views;
   const desk = parseDeskSettings(stored.get(DESK_SETTINGS_KEY));
+  const tagGroups = parseTagGroups(stored.get(TAG_GROUPS_KEY)).groups;
   const domain = inboundDomain();
   const personName = (id: string) => people.find((p) => p.id === id)?.name ?? "someone who left";
 
@@ -274,6 +277,47 @@ export default async function HelpdeskSettingsPage({
             </ul>
           )}
           {canEdit && <FolderForm slug={tenant.slug} />}
+        </CardContent>
+      </Card>
+
+      <Card id="tag-groups" className="scroll-mt-6">
+        <CardHeader>
+          <CardTitle>Tag groups</CardTitle>
+          <CardDescription>
+            Arrange your tags under headings, like “Product” or “Problem”, so the right one is
+            quicker to find when tagging a conversation. A tag in no group still works.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          {tagGroups.length === 0 ? (
+            <p className="text-muted-foreground text-sm">No groups yet.</p>
+          ) : (
+            <ul className="divide-border flex flex-col divide-y">
+              {tagGroups.map((group) => (
+                <li key={group.id} className="flex items-start justify-between gap-3 py-2">
+                  <span className="min-w-0">
+                    <span className="block text-sm font-semibold">{group.name}</span>
+                    <span className="mt-1 flex flex-wrap gap-1">
+                      {group.tags.map((tag) => (
+                        <Badge key={tag} tone="open">
+                          {tag}
+                        </Badge>
+                      ))}
+                    </span>
+                  </span>
+                  {canEdit && (
+                    <DeleteButton
+                      slug={tenant.slug}
+                      id={group.id}
+                      kind="tag-group"
+                      label={`Remove the ${group.name} group`}
+                    />
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+          {canEdit && <AddTagGroupForm slug={tenant.slug} />}
         </CardContent>
       </Card>
 

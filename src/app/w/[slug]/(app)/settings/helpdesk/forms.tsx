@@ -8,12 +8,14 @@ import {
   deleteAutoTagRule,
   deleteFolder,
   deleteReplyTemplate,
+  deleteTagGroup,
   deleteView,
   saveFolder,
   saveView,
   saveAutoTagRule,
   saveDeskSettings,
   saveReplyTemplate,
+  saveTagGroup,
   type HelpdeskState,
 } from "@/app/w/[slug]/helpdesk/actions";
 
@@ -182,7 +184,7 @@ export function DeleteButton({
 }: {
   slug: string;
   id: string;
-  kind: "template" | "rule" | "folder" | "view";
+  kind: "template" | "rule" | "folder" | "view" | "tag-group";
   label: string;
 }) {
   const [state, action] = useSettingsAction(
@@ -191,6 +193,7 @@ export function DeleteButton({
       rule: deleteAutoTagRule,
       folder: deleteFolder,
       view: deleteView,
+      "tag-group": deleteTagGroup,
     }[kind],
     slug,
   );
@@ -398,6 +401,33 @@ export function DeskBehaviourForm({
         <SubmitButton variant="outline" size="default" pendingText="Saving…" className="w-fit">
           Save
         </SubmitButton>
+      </div>
+    </form>
+  );
+}
+
+/** A group of tags, to arrange the tag picker. */
+export function AddTagGroupForm({ slug }: { slug: string }) {
+  const [state, action, saves] = useSettingsAction(saveTagGroup, slug);
+  return (
+    <form
+      action={action}
+      key={saves}
+      className="grid gap-3 sm:grid-cols-[1fr_2fr_auto] sm:items-end"
+    >
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="group-name">Group</Label>
+        <Input id="group-name" name="name" maxLength={40} placeholder="Problem" required />
+      </div>
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="group-tags">Its tags</Label>
+        <Input id="group-tags" name="tags" placeholder="jammed, broken needle, noise" required />
+      </div>
+      <SubmitButton variant="outline" size="default" pendingText="Saving…" className="w-fit">
+        Add group
+      </SubmitButton>
+      <div className="sm:col-span-3">
+        <FormMessage>{state.error}</FormMessage>
       </div>
     </form>
   );

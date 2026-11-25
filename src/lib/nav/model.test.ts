@@ -157,7 +157,7 @@ describe("buildNav: each tool's menu", () => {
       "helpdesk?view=spam",
       "helpdesk?view=trash",
     ]);
-    expect(desk.menu[3].add?.to).toBe("settings/helpdesk#folders");
+    expect(desk.menu[3].add?.to).toBe("helpdesk?new=folder");
     const member = tool(buildNav(viewer({ manager: false })), "helpdesk");
     expect(member.menu[3].add).toBeUndefined();
   });

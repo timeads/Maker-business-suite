@@ -233,7 +233,8 @@ function helpdeskMenu(viewer: NavViewer, attention: Attention): NavGroup[] {
       name: "Folders",
       items: [],
       // Folders are made by owners and admins; anyone files into them.
-      ...(viewer.manager ? { add: { label: "New folder", to: "settings/helpdesk#folders" } } : {}),
+      // Made where you are: the inbox opens a small "New folder" box.
+      ...(viewer.manager ? { add: { label: "New folder", to: "helpdesk?new=folder" } } : {}),
     },
     { id: HELPDESK_VIEWS_GROUP, name: "Views", items: [] },
     { id: HELPDESK_TAGS_GROUP, name: "Tags", items: [] },

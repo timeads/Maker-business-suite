@@ -25,6 +25,7 @@ import {
   savedViewsSchema as deskViewsSchema,
 } from "../helpdesk/saved-views";
 import { DEFAULT_DESK_SETTINGS, DESK_SETTINGS_KEY, deskSettingsSchema } from "../helpdesk/settings";
+import { DEFAULT_TAG_GROUPS, TAG_GROUPS_KEY, tagGroupsSchema } from "../helpdesk/tag-groups";
 import {
   DEFAULT_MICHAELS_SETTINGS,
   MICHAELS_MODULE,
@@ -142,6 +143,16 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
       "How the help desk behaves: the business's own support addresses (never copied in by Reply all), how many seconds a sent email waits so it can be undone (0, 5, 10 or 20), what happens after closing a conversation (next, list or stay), and whether the first conversation opens by itself.",
     schema: deskSettingsSchema,
     defaultBody: () => DEFAULT_DESK_SETTINGS,
+  },
+  {
+    module: HELPDESK_MODULE,
+    key: TAG_GROUPS_KEY,
+    feature: "helpdesk",
+    name: "Help desk tag groups",
+    description:
+      "Headings that arrange the help desk's tag picker. Each group has a name and the tags under it; a tag in no group still works.",
+    schema: tagGroupsSchema,
+    defaultBody: () => DEFAULT_TAG_GROUPS,
   },
   {
     module: BOOKINGS_MODULE,

@@ -117,7 +117,12 @@ describe("several conversations at once", () => {
     expect((await row(ids[0])).status).toBe("closed");
     expect((await row(ids[0])).snoozed_until).toBeNull();
     // Each change left its line in the log.
-    expect((await events(ids[1], "tags")).map((e) => e.detail)).toEqual(["+old", "-old", "+vip"]);
+    // (Two lines written in one request carry the same time, so the order between them isn't fixed.)
+    expect((await events(ids[1], "tags")).map((e) => e.detail).sort()).toEqual([
+      "+old",
+      "+vip",
+      "-old",
+    ]);
     expect(await events(ids[0], "assigned")).toHaveLength(1);
     await bulk(amy, tenantA, ids, { assignee: null, folder: null });
     expect(await row(ids[0])).toMatchObject({ assignee_id: null, folder_id: null });

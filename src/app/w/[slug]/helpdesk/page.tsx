@@ -55,6 +55,7 @@ import { fileSize, replyAllCopies } from "@/lib/helpdesk/outbound";
 import { parseRichDoc, type RichDoc } from "@/lib/helpdesk/rich";
 import { SAVED_VIEWS_KEY, matchesConditions, parseSavedViews } from "@/lib/helpdesk/saved-views";
 import { DESK_SETTINGS_KEY, parseDeskSettings } from "@/lib/helpdesk/settings";
+import { TAG_GROUPS_KEY, parseTagGroups } from "@/lib/helpdesk/tag-groups";
 import { foldThread, placeInline, splitQuote } from "@/lib/helpdesk/thread";
 import {
   PRIORITY_LABELS,
@@ -86,6 +87,7 @@ import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
 import { cn } from "@/lib/utils";
 import { MessageFiles, type ShownFile } from "./attachments";
+import { AutoOpen, BulkBar, BulkBox, BulkProvider, ExportList, NewFolderDialog } from "./bulk";
 import { Composer } from "./composer";
 import { loadCustomerSide, type CustomerSide } from "./data";
 import {
@@ -252,6 +254,8 @@ export default async function HelpdeskPage({
       : undefined;
   const priority = (["low", "normal", "high", "urgent"] as const).find((p) => p === query.priority);
   const unreadOnly = query.unread === "1";
+  // "Show more": each step reads further back, up to a thousand conversations.
+  const pages = /^[2-5]$/.test(query.n ?? "") ? Number(query.n) : 1;
   const side = query.side === "activity" || query.side === "details" ? query.side : null;
   const act = isActivityGroup(query.act) ? query.act : "all";
   const now = new Date();
@@ -283,7 +287,8 @@ export default async function HelpdeskPage({
       .eq("tenant_id", tenant.id)
       .neq("status", "closed")
       .order("last_message_at", { ascending: false })
-      .limit(500),
+      // The database hands back a thousand rows at most in one go.
+      .limit(Math.min(1000, 500 * pages)),
     wantsClosed
       ? supabase
           .from("tickets")
@@ -293,7 +298,7 @@ export default async function HelpdeskPage({
           // Spam and the Trash are read only when someone is looking at them.
           .or("shelf.is.null,shelf.eq.archived")
           .order("last_message_at", { ascending: false })
-          .limit(150)
+          .limit(Math.min(1000, 250 * pages))
       : Promise.resolve({ data: [] }),
     supabase
       .from("tickets")
@@ -309,7 +314,7 @@ export default async function HelpdeskPage({
       .select("key, body")
       .eq("tenant_id", tenant.id)
       .eq("module", HELPDESK_MODULE)
-      .in("key", [SAVED_VIEWS_KEY, DESK_SETTINGS_KEY]),
+      .in("key", [SAVED_VIEWS_KEY, DESK_SETTINGS_KEY, TAG_GROUPS_KEY]),
     // This person's own read marks, newest first.
     supabase
       .from("ticket_reads")
@@ -334,7 +339,7 @@ export default async function HelpdeskPage({
           .eq("tenant_id", tenant.id)
           .eq("shelf", shelfView)
           .order("last_message_at", { ascending: false })
-          .limit(300)
+          .limit(Math.min(1000, 250 * pages))
       : Promise.resolve({ data: [] }),
     supabase
       .from("tickets")
@@ -350,6 +355,7 @@ export default async function HelpdeskPage({
     ((deskConfigs ?? []) as { key: string; body: unknown }[]).find((row) => row.key === key)?.body;
   const savedViews = parseSavedViews(configOf(SAVED_VIEWS_KEY)).views;
   const deskSettings = parseDeskSettings(configOf(DESK_SETTINGS_KEY));
+  const tagGroups = parseTagGroups(configOf(TAG_GROUPS_KEY)).groups;
   const savedView = choice.kind === "saved" ? savedViews.find((v) => v.id === choice.id) : null;
   const folder = choice.kind === "folder" ? folders.find((f) => f.id === choice.id) : null;
   const readAt = new Map((readRows ?? []).map((r) => [r.ticket_id as string, r.read_at as string]));
@@ -399,7 +405,7 @@ export default async function HelpdeskPage({
   const candidates = all
     .filter((row) => (q ? searchable(row) : inChoice(row)))
     .filter(matchesSearch)
-    .slice(0, 300);
+    .slice(0, 300 * pages);
   const { data: factRows } =
     candidates.length > 0
       ? await supabase.rpc("ticket_list_facts", { p_ticket_ids: candidates.map((row) => row.id) })
@@ -429,8 +435,13 @@ export default async function HelpdeskPage({
     : mixed || (choice.kind === "built" && choice.key === "closed")
       ? filtered
       : [...filtered].sort(byUrgency);
-  const list = ordered.slice(0, 200);
-  const more = ordered.length > list.length || candidates.length === 300;
+  const list = ordered.slice(0, 200 * pages);
+  // More to show: the list was cut, or one of the reads came back full.
+  const readFull =
+    (live ?? []).length >= Math.min(1000, 500 * pages) ||
+    (closed ?? []).length >= Math.min(1000, 250 * pages) ||
+    (shelved ?? []).length >= Math.min(1000, 250 * pages);
+  const more = ordered.length > list.length || candidates.length === 300 * pages || readFull;
   const allTags = [...new Set(all.flatMap(tagsOf))].sort().slice(0, 30);
 
   const counts: Record<string, number> = {};
@@ -468,6 +479,7 @@ export default async function HelpdeskPage({
     assignee: assignee ?? "",
     priority: priority ?? "",
     unread: unreadOnly ? "1" : "",
+    n: pages > 1 ? String(pages) : "",
   };
   const href = (changes: Record<string, string | number | null>) => {
     const next = new URLSearchParams();
@@ -881,6 +893,12 @@ export default async function HelpdeskPage({
         latest={entries.at(-1)?.id ?? null}
       />
       <SendWatch slug={tenant.slug} base={base} />
+      {query.new === "folder" && canWrite && canManage(role) && (
+        <NewFolderDialog slug={tenant.slug} base={base} />
+      )}
+      {!selected && !q && query.new !== "folder" && deskSettings.auto_open && list.length > 0 && (
+        <AutoOpen href={href({ t: list[0].number, side: null })} />
+      )}
       {/* The menu panel's counts, folders, views and tags: what the inbox has already read. */}
       <PanelExtras
         tool="helpdesk"
@@ -893,230 +911,267 @@ export default async function HelpdeskPage({
       />
 
       {/* ---- The list ---- */}
-      <section
-        aria-label="Conversations"
-        className={cn(
-          "border-border bg-panel flex min-h-0 w-full shrink-0 flex-col border-r md:w-[300px] 2xl:w-[330px]",
-          ticket && "max-md:hidden",
-        )}
-      >
-        <header className="flex flex-wrap items-center gap-x-2 px-4 pt-3.5 pb-2">
-          <PanelButton />
-          <h1 className="min-w-0 truncate text-lg leading-tight font-bold tracking-[-0.015em]">
-            {title}
-          </h1>
-          <span className="text-muted-foreground text-xs font-semibold tabular-nums">
-            {listTotal(list.length, more)}
-          </span>
-          <ListTools
-            slug={tenant.slug}
-            base={base}
-            params={Object.fromEntries(
-              Object.entries({ ...kept, view: view === "open" ? "" : view }).filter(([, v]) => v),
-            )}
-            tags={allTags}
-            people={peopleOptions.filter((p) => p.value !== user.id)}
-            sorts={SORTS.filter((s) => s.key !== "newest").map((s) => ({
-              value: s.key,
-              label: s.label,
-            }))}
-            canWrite={canWrite}
-            canSaveView={canWrite && canManage(role)}
-            canSend={canSend}
-            manageHref={`/w/${tenant.slug}/settings/helpdesk#folders`}
-          />
-        </header>
-        <form className="relative px-4 pb-2.5" role="search" action={base}>
-          {view !== "open" && <input type="hidden" name="view" value={view} />}
-          <Search
-            aria-hidden
-            className="text-muted-foreground pointer-events-none absolute top-[9px] left-[26px] size-4"
-          />
-          <input
-            id="desk-search"
-            name="q"
-            type="search"
-            defaultValue={q}
-            placeholder="Search tickets and messages"
-            aria-label="Search tickets and messages"
-            title="Names, emails, subjects, what was said, or #number"
-            className="border-input bg-card focus-visible:border-ochre focus-visible:ring-ochre/25 h-[34px] w-full rounded-sm border pr-2 pl-8 text-sm outline-none focus-visible:ring-2"
-          />
-        </form>
-        {tag && (
-          <p className="flex px-4 pb-2">
-            <Link
-              href={href({ tag: null, t: null })}
-              className="border-ochre bg-ochre-soft text-ochre-text flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold"
-            >
-              Tagged {tag}
-              <X aria-hidden className="size-3" />
-              <span className="sr-only">: show every tag</span>
-            </Link>
-          </p>
-        )}
-        {shelfView && (
-          <p className="text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1 px-4 pb-2 text-xs">
-            {shelfView === "trash"
-              ? "Deleted conversations stay here until an owner or admin removes them for good."
-              : shelfView === "spam"
-                ? "More mail on a conversation in Spam stays in Spam."
-                : "Archived conversations come back to the inbox if the customer writes again."}
-            {shelfView === "trash" && canWrite && canManage(role) && list.length > 0 && (
-              <EmptyTrash slug={tenant.slug} />
-            )}
-          </p>
-        )}
-        <ul className="border-border min-h-0 flex-1 overflow-y-auto border-t px-1.5 py-1.5">
-          {list.length === 0 && (
-            <li className="text-muted-foreground p-5 text-sm">
-              {all.length === 0 && (closedCount ?? 0) === 0 ? (
-                domain ? (
-                  <>
-                    No conversations yet. Email sent to{" "}
-                    <span className="bg-sunken rounded px-1 py-0.5 font-mono text-xs break-all">
-                      {supportAddress(tenant.slug, domain)}
-                    </span>{" "}
-                    shows up here.
-                  </>
-                ) : (
-                  "Incoming email isn't switched on for this environment yet."
-                )
-              ) : q ? (
-                `Nothing matches “${q}” in names, emails, subjects, what was said or ticket numbers.`
-              ) : tag || assignee || priority || unreadOnly ? (
-                "No conversations match these filters."
-              ) : choice.kind === "built" && ["open", "mine", "unassigned"].includes(choice.key) ? (
-                "Inbox zero. Nothing needs a reply."
-              ) : shelfView === "trash" ? (
-                "The Trash is empty."
-              ) : shelfView === "spam" ? (
-                "No spam. Lovely."
-              ) : shelfView === "archived" ? (
-                "Nothing has been archived yet."
-              ) : (
-                "Nothing here."
+      <BulkProvider>
+        <section
+          aria-label="Conversations"
+          className={cn(
+            "border-border bg-panel flex min-h-0 w-full shrink-0 flex-col border-r md:w-[300px] 2xl:w-[330px]",
+            ticket && "max-md:hidden",
+          )}
+        >
+          <header className="flex flex-wrap items-center gap-x-2 px-4 pt-3.5 pb-2">
+            <PanelButton />
+            <h1 className="min-w-0 truncate text-lg leading-tight font-bold tracking-[-0.015em]">
+              {title}
+            </h1>
+            <span className="text-muted-foreground text-xs font-semibold tabular-nums">
+              {listTotal(list.length, more)}
+            </span>
+            <ListTools
+              slug={tenant.slug}
+              base={base}
+              params={Object.fromEntries(
+                Object.entries({ ...kept, view: view === "open" ? "" : view }).filter(([, v]) => v),
               )}
-            </li>
+              tags={allTags}
+              people={peopleOptions.filter((p) => p.value !== user.id)}
+              sorts={SORTS.filter((s) => s.key !== "newest").map((s) => ({
+                value: s.key,
+                label: s.label,
+              }))}
+              canWrite={canWrite}
+              canSaveView={canWrite && canManage(role)}
+              canSend={canSend}
+              manageHref={`/w/${tenant.slug}/settings/helpdesk#folders`}
+              extra={
+                canManage(role) && canWrite ? (
+                  <ExportList slug={tenant.slug} ids={list.map((row) => row.id)} />
+                ) : null
+              }
+            />
+          </header>
+          <form className="relative px-4 pb-2.5" role="search" action={base}>
+            {view !== "open" && <input type="hidden" name="view" value={view} />}
+            <Search
+              aria-hidden
+              className="text-muted-foreground pointer-events-none absolute top-[9px] left-[26px] size-4"
+            />
+            <input
+              id="desk-search"
+              name="q"
+              type="search"
+              defaultValue={q}
+              placeholder="Search tickets and messages"
+              aria-label="Search tickets and messages"
+              title="Names, emails, subjects, what was said, or #number"
+              className="border-input bg-card focus-visible:border-ochre focus-visible:ring-ochre/25 h-[34px] w-full rounded-sm border pr-2 pl-8 text-sm outline-none focus-visible:ring-2"
+            />
+          </form>
+          {tag && (
+            <p className="flex px-4 pb-2">
+              <Link
+                href={href({ tag: null, t: null })}
+                className="border-ochre bg-ochre-soft text-ochre-text flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold"
+              >
+                Tagged {tag}
+                <X aria-hidden className="size-3" />
+                <span className="sr-only">: show every tag</span>
+              </Link>
+            </p>
           )}
-          {list.map((row) => {
-            const who = one(row.contacts);
-            const active = ticket?.id === row.id;
-            const owner = person(row.assignee_id);
-            const rowFolder = row.folder_id ? folders.find((f) => f.id === row.folder_id) : null;
-            const showStatus = mixed || isSnoozed(row, nowMs);
-            return (
-              <li key={row.id}>
-                <Link
-                  href={href({ t: row.number, side: null })}
-                  aria-current={active ? "true" : undefined}
-                  className={cn(
-                    "relative flex flex-col gap-0.5 rounded-md border py-2.5 pr-3 pl-6 transition-colors duration-150",
-                    active
-                      ? "bg-card border-border shadow-sm"
-                      : "hover:bg-hover border-transparent",
-                  )}
-                >
-                  {row.unread && (
-                    <span className="bg-ochre absolute top-[15px] left-2 size-2 rounded-full">
-                      <span className="sr-only">Unread</span>
-                    </span>
-                  )}
-                  <span className="flex items-baseline justify-between gap-2">
-                    <span
-                      className={cn(
-                        "font-read truncate text-sm",
-                        row.unread ? "font-bold" : "font-semibold",
-                      )}
-                    >
-                      {who?.name ?? who?.email ?? "Unknown sender"}
-                    </span>
-                    <time
-                      dateTime={row.last_message_at}
-                      title={when.format(new Date(row.last_message_at))}
-                      className={cn(
-                        "shrink-0 text-xs tabular-nums",
-                        row.unread ? "text-ochre-text font-semibold" : "text-muted-foreground",
-                      )}
-                    >
-                      {timeAgo(row.last_message_at, nowMs)}
-                    </time>
-                  </span>
-                  <span className="text-foreground flex items-center gap-1.5 truncate text-[13px]">
-                    {row.priority === "urgent" && <Badge tone="bad">Urgent</Badge>}
-                    {row.priority === "high" && <Badge tone="waiting">High</Badge>}
-                    <span className="truncate">{row.subject}</span>
-                  </span>
-                  {row.preview && (
-                    <span className="font-read text-muted-foreground line-clamp-2 text-xs leading-snug">
-                      {row.preview}
-                    </span>
-                  )}
-                  <span className="flex flex-wrap items-center gap-1 pt-1">
-                    {rowFolder && choice.kind !== "folder" && (
-                      <span className="border-border text-text-2 flex items-center gap-1 rounded-sm border px-1.5 py-0.5 text-[11px] font-semibold">
-                        <Folder aria-hidden className="size-3" />
-                        {rowFolder.name}
-                      </span>
-                    )}
-                    {row.shelf && !shelfView ? (
-                      <Badge>{SHELF_LABELS[row.shelf]}</Badge>
-                    ) : row.shelf ? null : isSnoozed(row, nowMs) ? (
-                      <Badge>Snoozed · {when.format(new Date(row.snoozed_until!))}</Badge>
-                    ) : (
-                      showStatus && (
-                        <Badge
-                          tone={
-                            row.status === "open"
-                              ? "open"
-                              : row.status === "pending"
-                                ? "waiting"
-                                : "closed"
-                          }
-                        >
-                          {STATUS_LABELS[row.status]}
-                        </Badge>
-                      )
-                    )}
-                    {owner ? (
-                      <span
-                        title={`Assigned to ${nameOf(owner)}`}
-                        className="text-text-2 flex items-center gap-1 text-[11px] font-semibold"
-                      >
-                        {avatar(nameOf(owner), true, "size-[18px] text-[8px]")}
-                        {nameOf(owner).split(/\s+/)[0]}
-                      </span>
-                    ) : (
-                      row.status === "open" && <Badge tone="waiting">Unassigned</Badge>
-                    )}
-                    {row.tags.slice(0, 2).map((name) => (
-                      <Badge key={name} tone="open">
-                        {name}
-                      </Badge>
-                    ))}
-                    {row.tags.length > 2 && <Badge>+{row.tags.length - 2}</Badge>}
-                    {row.messages > 1 && (
-                      <span
-                        title={`${row.messages} messages`}
-                        className="text-muted-foreground ml-auto flex items-center gap-1 text-[11px] tabular-nums"
-                      >
-                        <MessageSquare aria-hidden className="size-3" />
-                        {row.messages}
-                        <span className="sr-only"> messages</span>
-                      </span>
-                    )}
-                  </span>
-                </Link>
+          {shelfView && (
+            <p className="text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1 px-4 pb-2 text-xs">
+              {shelfView === "trash"
+                ? "Deleted conversations stay here until an owner or admin removes them for good."
+                : shelfView === "spam"
+                  ? "More mail on a conversation in Spam stays in Spam."
+                  : "Archived conversations come back to the inbox if the customer writes again."}
+              {shelfView === "trash" && canWrite && canManage(role) && list.length > 0 && (
+                <EmptyTrash slug={tenant.slug} />
+              )}
+            </p>
+          )}
+          <ul className="border-border min-h-0 flex-1 overflow-y-auto border-t px-1.5 py-1.5">
+            {list.length === 0 && (
+              <li className="text-muted-foreground p-5 text-sm">
+                {all.length === 0 && (closedCount ?? 0) === 0 ? (
+                  domain ? (
+                    <>
+                      No conversations yet. Email sent to{" "}
+                      <span className="bg-sunken rounded px-1 py-0.5 font-mono text-xs break-all">
+                        {supportAddress(tenant.slug, domain)}
+                      </span>{" "}
+                      shows up here.
+                    </>
+                  ) : (
+                    "Incoming email isn't switched on for this environment yet."
+                  )
+                ) : q ? (
+                  `Nothing matches “${q}” in names, emails, subjects, what was said or ticket numbers.`
+                ) : tag || assignee || priority || unreadOnly ? (
+                  "No conversations match these filters."
+                ) : choice.kind === "built" &&
+                  ["open", "mine", "unassigned"].includes(choice.key) ? (
+                  "Inbox zero. Nothing needs a reply."
+                ) : shelfView === "trash" ? (
+                  "The Trash is empty."
+                ) : shelfView === "spam" ? (
+                  "No spam. Lovely."
+                ) : shelfView === "archived" ? (
+                  "Nothing has been archived yet."
+                ) : (
+                  "Nothing here."
+                )}
               </li>
-            );
-          })}
-          {more && (
-            <li className="text-muted-foreground px-4 py-3 text-xs">
-              Showing the first {list.length}. Search or filter to find older ones.
-            </li>
+            )}
+            {list.map((row) => {
+              const who = one(row.contacts);
+              const active = ticket?.id === row.id;
+              const owner = person(row.assignee_id);
+              const rowFolder = row.folder_id ? folders.find((f) => f.id === row.folder_id) : null;
+              const showStatus = mixed || isSnoozed(row, nowMs);
+              return (
+                <li key={row.id} className="group relative">
+                  {canWrite && (
+                    <BulkBox
+                      id={row.id}
+                      label={`#${row.number} from ${who?.name ?? who?.email ?? "an unknown sender"}`}
+                    />
+                  )}
+                  <Link
+                    href={href({ t: row.number, side: null })}
+                    aria-current={active ? "true" : undefined}
+                    className={cn(
+                      "relative flex flex-col gap-0.5 rounded-md border py-2.5 pr-3 pl-6 transition-colors duration-150",
+                      active
+                        ? "bg-card border-border shadow-sm"
+                        : "hover:bg-hover border-transparent",
+                    )}
+                  >
+                    {row.unread && (
+                      <span className="bg-ochre absolute top-[15px] left-2 size-2 rounded-full">
+                        <span className="sr-only">Unread</span>
+                      </span>
+                    )}
+                    <span className="flex items-baseline justify-between gap-2">
+                      <span
+                        className={cn(
+                          "font-read truncate text-sm",
+                          row.unread ? "font-bold" : "font-semibold",
+                        )}
+                      >
+                        {who?.name ?? who?.email ?? "Unknown sender"}
+                      </span>
+                      <time
+                        dateTime={row.last_message_at}
+                        title={when.format(new Date(row.last_message_at))}
+                        className={cn(
+                          "shrink-0 text-xs tabular-nums",
+                          row.unread ? "text-ochre-text font-semibold" : "text-muted-foreground",
+                        )}
+                      >
+                        {timeAgo(row.last_message_at, nowMs)}
+                      </time>
+                    </span>
+                    <span className="text-foreground flex items-center gap-1.5 truncate text-[13px]">
+                      {row.priority === "urgent" && <Badge tone="bad">Urgent</Badge>}
+                      {row.priority === "high" && <Badge tone="waiting">High</Badge>}
+                      <span className="truncate">{row.subject}</span>
+                    </span>
+                    {row.preview && (
+                      <span className="font-read text-muted-foreground line-clamp-2 text-xs leading-snug">
+                        {row.preview}
+                      </span>
+                    )}
+                    <span className="flex flex-wrap items-center gap-1 pt-1">
+                      {rowFolder && choice.kind !== "folder" && (
+                        <span className="border-border text-text-2 flex items-center gap-1 rounded-sm border px-1.5 py-0.5 text-[11px] font-semibold">
+                          <Folder aria-hidden className="size-3" />
+                          {rowFolder.name}
+                        </span>
+                      )}
+                      {row.shelf && !shelfView ? (
+                        <Badge>{SHELF_LABELS[row.shelf]}</Badge>
+                      ) : row.shelf ? null : isSnoozed(row, nowMs) ? (
+                        <Badge>Snoozed · {when.format(new Date(row.snoozed_until!))}</Badge>
+                      ) : (
+                        showStatus && (
+                          <Badge
+                            tone={
+                              row.status === "open"
+                                ? "open"
+                                : row.status === "pending"
+                                  ? "waiting"
+                                  : "closed"
+                            }
+                          >
+                            {STATUS_LABELS[row.status]}
+                          </Badge>
+                        )
+                      )}
+                      {owner ? (
+                        <span
+                          title={`Assigned to ${nameOf(owner)}`}
+                          className="text-text-2 flex items-center gap-1 text-[11px] font-semibold"
+                        >
+                          {avatar(nameOf(owner), true, "size-[18px] text-[8px]")}
+                          {nameOf(owner).split(/\s+/)[0]}
+                        </span>
+                      ) : (
+                        row.status === "open" && <Badge tone="waiting">Unassigned</Badge>
+                      )}
+                      {row.tags.slice(0, 2).map((name) => (
+                        <Badge key={name} tone="open">
+                          {name}
+                        </Badge>
+                      ))}
+                      {row.tags.length > 2 && <Badge>+{row.tags.length - 2}</Badge>}
+                      {row.messages > 1 && (
+                        <span
+                          title={`${row.messages} messages`}
+                          className="text-muted-foreground ml-auto flex items-center gap-1 text-[11px] tabular-nums"
+                        >
+                          <MessageSquare aria-hidden className="size-3" />
+                          {row.messages}
+                          <span className="sr-only"> messages</span>
+                        </span>
+                      )}
+                    </span>
+                  </Link>
+                </li>
+              );
+            })}
+            {more && (
+              <li className="text-muted-foreground flex flex-wrap items-center gap-2 px-4 py-3 text-xs">
+                Showing the first {list.length}.
+                {pages < 5 ? (
+                  <Link
+                    href={href({ n: pages + 1 })}
+                    scroll={false}
+                    className="text-ochre-text font-semibold hover:underline"
+                  >
+                    Show more
+                  </Link>
+                ) : (
+                  "Search or filter to find older ones."
+                )}
+              </li>
+            )}
+          </ul>
+          {canWrite && (
+            <BulkBar
+              slug={tenant.slug}
+              listIds={list.map((row) => row.id)}
+              people={peopleOptions}
+              folders={folders.map((f) => ({ value: f.id, label: f.name }))}
+              snoozeChoices={choices}
+              shelf={shelfView}
+              closedView={choice.kind === "built" && choice.key === "closed"}
+              canExport={canManage(role)}
+            />
           )}
-        </ul>
-      </section>
+        </section>
+      </BulkProvider>
 
       {/* ---- The conversation and its details ---- */}
       <RailFrame startClosed={railClosed}>
@@ -1482,6 +1537,7 @@ export default async function HelpdeskPage({
                   ticketId={ticket.id}
                   tags={tagsOf(ticket)}
                   known={allTags}
+                  groups={tagGroups}
                   canEdit={editable}
                 />
               </dd>

@@ -47,13 +47,15 @@ import { isPlain, parseRichDoc, richToText, tidyDoc, type RichDoc } from "@/lib/
 import { SAVED_VIEWS_KEY, parseSavedViews, savedViewsSchema } from "@/lib/helpdesk/saved-views";
 import { DESK_SETTINGS_KEY, deskSettingsSchema, parseDeskSettings } from "@/lib/helpdesk/settings";
 import { isShelf } from "@/lib/helpdesk/views";
+import { exportName, ticketsCsv, type ExportRow } from "@/lib/helpdesk/export";
+import { TAG_GROUPS_KEY, parseTagGroups, tagGroupsSchema } from "@/lib/helpdesk/tag-groups";
 import { postAlert } from "@/lib/messages/alerts";
 import { handlesFor, nameOf, type Person } from "@/lib/messages/format";
 import { getAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
 
-export type HelpdeskState = { error?: string; message?: string; draft?: string };
+export type HelpdeskState = { error?: string; message?: string; draft?: string; id?: string };
 
 const NO_ACCESS = "The help desk isn't part of this workspace's plan right now.";
 const READ_ONLY =
@@ -1030,13 +1032,13 @@ export async function saveFolder(slug: string, _prev: HelpdeskState, formData: F
   const name = String(formData.get("name") ?? "").trim();
   if (!name || name.length > 40) return { error: "A folder needs a name of up to 40 characters." };
   const id = String(formData.get("id") ?? "");
-  const { error } = id
+  const { data: made, error } = id
     ? await ctx.supabase.rpc("rename_ticket_folder", { p_folder_id: id, p_name: name })
     : await ctx.supabase.rpc("create_ticket_folder", { p_tenant_id: ctx.tenant.id, p_name: name });
   if (error) return { error: folderProblem(error.message) };
   done(slug);
   revalidatePath(`/w/${slug}/settings`, "layout");
-  return { message: id ? "Renamed." : "Folder made." };
+  return id ? { message: "Renamed." } : { message: "Folder made.", id: String(made ?? "") };
 }
 
 export async function deleteFolder(slug: string, _prev: HelpdeskState, formData: FormData) {
@@ -1193,4 +1195,180 @@ export async function discardEmptyTicket(slug: string, ticketId: string): Promis
   }
   done(slug);
   return { message: "Removed." };
+}
+
+// ---------------------------------------------------------------------------
+// Several conversations at once, and the list as a spreadsheet
+// ---------------------------------------------------------------------------
+
+const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export type BulkChange =
+  | { status: "open" | "pending" | "closed" }
+  | { snooze_until: string }
+  | { assignee: string | null }
+  | { folder: string | null }
+  | { shelf: "archived" | "spam" | "trash" | null }
+  | { add_tags: string[] }
+  | { remove_tags: string[] };
+
+/**
+ * One change to every ticked conversation, in one request. The browser only
+ * names them: the database checks each is this workspace's, that the person
+ * is on its team, and that the teammate or folder named belongs to it too.
+ */
+export async function bulkUpdate(
+  slug: string,
+  ids: string[],
+  change: BulkChange,
+): Promise<HelpdeskState & { count?: number }> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const clean = [...new Set(ids.filter((id) => ID.test(id)))];
+  if (clean.length === 0) return { error: "Tick at least one conversation." };
+  if (clean.length > 200) return { error: "200 at a time is the most. Untick a few." };
+  const safe: Record<string, unknown> = {};
+  if ("status" in change && ["open", "pending", "closed"].includes(change.status)) {
+    safe.status = change.status;
+  } else if ("snooze_until" in change && Date.parse(change.snooze_until) > Date.now()) {
+    safe.snooze_until = new Date(change.snooze_until).toISOString();
+  } else if ("assignee" in change && (change.assignee === null || ID.test(change.assignee))) {
+    safe.assignee = change.assignee;
+  } else if ("folder" in change && (change.folder === null || ID.test(change.folder))) {
+    safe.folder = change.folder;
+  } else if ("shelf" in change && (change.shelf === null || isShelf(change.shelf))) {
+    safe.shelf = change.shelf;
+  } else if ("add_tags" in change || "remove_tags" in change) {
+    const key = "add_tags" in change ? "add_tags" : "remove_tags";
+    const tags = ("add_tags" in change ? change.add_tags : change.remove_tags)
+      .map((tag) => tag.trim().toLowerCase())
+      .filter(Boolean)
+      .slice(0, 10);
+    const bad = tags.find((tag) => !TAG_PATTERN.test(tag));
+    if (bad) return { error: `“${bad}” can't be a tag. Use letters, numbers, spaces and dashes.` };
+    if (tags.length === 0) return { error: "Type a tag first." };
+    safe[key] = tags;
+  }
+  if (Object.keys(safe).length === 0) return { error: "That change couldn't be read." };
+  const { data, error } = await ctx.supabase.rpc("bulk_update_tickets", {
+    p_tenant_id: ctx.tenant.id,
+    p_ticket_ids: clean,
+    p_change: safe,
+  });
+  if (error) {
+    return {
+      error: error.message.includes("coming year") ? "Pick a time in the coming year." : TRY_AGAIN,
+    };
+  }
+  done(slug);
+  return { count: Number(data ?? 0) };
+}
+
+/**
+ * The conversations named, as a spreadsheet: who, what about, where it stands
+ * and when. No message text. Owners and admins only; each row is read as this
+ * person, so only what they can see comes out.
+ */
+export async function exportTickets(
+  slug: string,
+  ids: string[],
+): Promise<{ error?: string; csv?: string; name?: string }> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  if (!canManage(ctx.role)) return { error: "Only owners and admins can export conversations." };
+  const clean = [...new Set(ids.filter((id) => ID.test(id)))].slice(0, 2000);
+  if (clean.length === 0) return { error: "There is nothing in this list to export." };
+  const { data: people } = await ctx.supabase.rpc("chat_people", { p_tenant_id: ctx.tenant.id });
+  const team = (people ?? []) as Person[];
+  const rows: ExportRow[] = [];
+  for (let at = 0; at < clean.length; at += 200) {
+    const chunk = clean.slice(at, at + 200);
+    const [{ data: tickets, error }, { data: facts }] = await Promise.all([
+      ctx.supabase
+        .from("tickets")
+        .select(
+          "id, number, subject, status, shelf, priority, assignee_id, created_at, last_message_at, first_reply_at, closed_at, ai_kind, ai_mood, contacts(email, name), ticket_tags(tags(name))",
+        )
+        .eq("tenant_id", ctx.tenant.id)
+        .in("id", chunk),
+      ctx.supabase.rpc("ticket_list_facts", { p_ticket_ids: chunk }),
+    ]);
+    if (error) return { error: "The export couldn't be made. Try again in a moment." };
+    const counts = new Map(
+      ((facts ?? []) as { ticket_id: string; message_count: number }[]).map((f) => [
+        f.ticket_id,
+        f.message_count,
+      ]),
+    );
+    for (const t of (tickets ?? []) as unknown as Record<string, unknown>[]) {
+      const contact = (Array.isArray(t.contacts) ? t.contacts[0] : t.contacts) as {
+        email: string;
+        name: string | null;
+      } | null;
+      const owner = team.find((person) => person.user_id === t.assignee_id);
+      rows.push({
+        number: Number(t.number),
+        subject: String(t.subject),
+        customer_name: contact?.name ?? null,
+        customer_email: contact?.email ?? null,
+        status: String(t.shelf ?? (t.status === "pending" ? "in progress" : t.status)),
+        priority: String(t.priority),
+        assignee: owner ? nameOf(owner) : null,
+        tags: ((t.ticket_tags as { tags: { name: string } | { name: string }[] | null }[]) ?? [])
+          .map((tt) => (Array.isArray(tt.tags) ? tt.tags[0]?.name : tt.tags?.name))
+          .filter((name): name is string => Boolean(name)),
+        messages: counts.get(String(t.id)) ?? 0,
+        created_at: String(t.created_at),
+        last_message_at: String(t.last_message_at),
+        first_reply_at: (t.first_reply_at as string | null) ?? null,
+        closed_at: (t.closed_at as string | null) ?? null,
+        kind: (t.ai_kind as string | null) ?? null,
+        mood: (t.ai_mood as string | null) ?? null,
+      });
+    }
+  }
+  // Newest first, as the owner's help desk exports them.
+  rows.sort((a, b) => b.created_at.localeCompare(a.created_at));
+  return {
+    csv: ticketsCsv(rows),
+    name: exportName(localDay(new Date(), ctx.tenant.timezone)),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Tags in groups (a config)
+// ---------------------------------------------------------------------------
+
+export async function saveTagGroup(slug: string, _prev: HelpdeskState, formData: FormData) {
+  return saveHelpdeskConfig(slug, TAG_GROUPS_KEY, (current) => {
+    const existing = parseTagGroups(current).groups;
+    const name = String(formData.get("name") ?? "").trim();
+    const tags = [
+      ...new Set(
+        String(formData.get("tags") ?? "")
+          .split(",")
+          .map((tag) => tag.trim().toLowerCase())
+          .filter(Boolean),
+      ),
+    ];
+    const parsed = tagGroupsSchema.safeParse({
+      version: 1,
+      groups: [...existing, { id: `${slugify(name)}-${Date.now().toString(36)}`, name, tags }],
+    });
+    return parsed.success
+      ? { body: parsed.data }
+      : {
+          error:
+            "A group needs a name and at least one tag. Tags are letters, numbers, spaces or dashes.",
+        };
+  });
+}
+
+export async function deleteTagGroup(slug: string, _prev: HelpdeskState, formData: FormData) {
+  return saveHelpdeskConfig(slug, TAG_GROUPS_KEY, (current) => {
+    const id = formData.get("id");
+    return {
+      body: { version: 1, groups: parseTagGroups(current).groups.filter((g) => g.id !== id) },
+    };
+  });
 }

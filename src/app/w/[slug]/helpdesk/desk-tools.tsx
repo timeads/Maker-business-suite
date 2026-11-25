@@ -35,6 +35,7 @@ import { Input, Label } from "@/components/ui/input";
 import { SubmitButton } from "@/components/ui/submit-button";
 import { TAG_PATTERN } from "@/lib/helpdesk/config";
 import { textToRich } from "@/lib/helpdesk/rich";
+import { groupTags, type TagGroups } from "@/lib/helpdesk/tag-groups";
 import { cn } from "@/lib/utils";
 import {
   assignTicket,
@@ -413,7 +414,10 @@ export function ListTools({
   canSaveView,
   canSend,
   manageHref,
+  extra,
 }: {
+  /** One more button for the row (the export, for owners and admins). */
+  extra?: React.ReactNode;
   slug: string;
   base: string;
   /** The address's own words, so a filter changes only itself. */
@@ -486,6 +490,7 @@ export function ListTools({
         >
           <RefreshCw aria-hidden className={cn(spinning && "animate-spin")} />
         </button>
+        {extra}
         <Menu label="More" button={<MoreHorizontal aria-hidden />} className={icon}>
           {(close) => (
             <>
@@ -1221,12 +1226,15 @@ export function TagEditor({
   ticketId,
   tags,
   known,
+  groups = [],
   canEdit,
 }: {
   slug: string;
   ticketId: string;
   tags: string[];
   known: string[];
+  /** The workspace's tag groups, which arrange what is offered. */
+  groups?: TagGroups["groups"];
   canEdit: boolean;
 }) {
   const [adding, setAdding] = useState(false);
@@ -1248,6 +1256,7 @@ export function TagEditor({
     setAdding(false);
     if (!tags.includes(name)) save([...tags, name]);
   };
+  const offered = adding ? groupTags(groups, known, { on: tags, find: text }) : [];
   return (
     <div className={cn("flex min-w-0 flex-col items-end gap-1", pending && "opacity-60")}>
       <span className="flex flex-wrap justify-end gap-1">
@@ -1310,6 +1319,33 @@ export function TagEditor({
             Add
           </Button>
         </span>
+      )}
+      {adding && offered.length > 0 && (
+        <div className="border-border bg-card flex max-h-44 w-full flex-col gap-1.5 overflow-y-auto rounded-md border p-2 text-left">
+          {offered.map((group) => (
+            <div key={group.name}>
+              <p className="text-muted-foreground mb-1 text-[11px] font-semibold tracking-wide uppercase">
+                {group.name}
+              </p>
+              <span className="flex flex-wrap gap-1">
+                {group.tags.slice(0, 30).map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => {
+                      setText("");
+                      setAdding(false);
+                      save([...tags, tag]);
+                    }}
+                    className="border-border hover:bg-hover rounded-full border px-2 py-0.5 text-[11px] font-semibold"
+                  >
+                    {tag}
+                  </button>
+                ))}
+              </span>
+            </div>
+          ))}
+        </div>
       )}
       {problem && <p className="text-brick text-xs">{problem}</p>}
     </div>
