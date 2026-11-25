@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/ui/page-header";
 import { notFound } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { loadSeatFigures, sharedWords } from "@/lib/bookings/seats";
 import { formatWhen } from "@/lib/bookings/slots";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
@@ -66,6 +67,10 @@ export default async function ServicePage({
       .select("weekday, start_minute, end_minute")
       .eq("service_id", service.id),
   ]);
+  const figures = await loadSeatFigures(
+    supabase,
+    (sessions ?? []).map((s) => s.id as string),
+  );
   const hours: Record<number, [string, string]> = {};
   for (const rule of rules ?? []) {
     hours[rule.weekday as number] = [clock(rule.start_minute), clock(rule.end_minute)];
@@ -108,6 +113,9 @@ export default async function ServicePage({
                       </span>
                       {s.private && <Badge tone="waiting">Private</Badge>}
                       {s.bookings_closed && <Badge>Not taking bookings</Badge>}
+                      {sharedWords(figures.get(s.id)) && (
+                        <Badge>{sharedWords(figures.get(s.id))}</Badge>
+                      )}
                       <span className="text-muted-foreground tabular-nums">
                         {(s.bookings as { seats: number; status: string }[])
                           .filter((b) => b.status === "confirmed")

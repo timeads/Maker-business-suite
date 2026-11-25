@@ -12,6 +12,7 @@ import {
   zonedTimeToUtc,
 } from "@/lib/bookings/slots";
 import { createClient } from "@/lib/supabase/server";
+import { loadSeatFigures } from "@/lib/bookings/seats";
 import { cn } from "@/lib/utils";
 import { bookingsAccess } from "../gate";
 
@@ -74,6 +75,10 @@ export default async function BookingsCalendarPage({
     const day = localDay(new Date(row.starts_at), tenant.timezone);
     byDay.set(day, [...(byDay.get(day) ?? []), row]);
   }
+  const figures = await loadSeatFigures(
+    supabase,
+    [...byDay.values()].flat().map((row) => row.id),
+  );
   const base = `/w/${tenant.slug}/bookings`;
   const taken = (row: Row) =>
     row.bookings.filter((b) => b.status === "confirmed").reduce((n, b) => n + b.seats, 0);
@@ -93,6 +98,8 @@ export default async function BookingsCalendarPage({
       <span className="block tabular-nums opacity-80">
         {taken(row)} of {row.capacity}
         {row.private && " · private"}
+        {figures.get(row.id)?.seat_group_id &&
+          ` · room ${figures.get(row.id)?.shared_taken} of ${figures.get(row.id)?.shared_capacity}`}
       </span>
     </Link>
   );

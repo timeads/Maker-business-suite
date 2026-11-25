@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
+import { isFull, loadSeatFigures, overShared, sharedWords } from "@/lib/bookings/seats";
 import { daysFromNow, formatDay, formatTime, localDay } from "@/lib/bookings/slots";
 import { formatMoney } from "@/lib/dashboard/format";
 import { getSiteUrl } from "@/lib/site-url";
@@ -93,6 +94,11 @@ export default async function BookingsPage({ params }: { params: Promise<{ slug:
   ]);
   const upcoming = ((sessions ?? []) as unknown as SessionRow[]).filter(
     (s) => s.bookings.some((b) => b.status === "confirmed") || s.capacity > 1,
+  );
+  // Places as the database counts them, shared rooms included.
+  const figures = await loadSeatFigures(
+    supabase,
+    upcoming.map((s) => s.id),
   );
   const confirmed = (s: SessionRow) => s.bookings.filter((b) => b.status === "confirmed");
   const seats = (s: SessionRow) => confirmed(s).reduce((sum, b) => sum + b.seats, 0);
@@ -231,7 +237,9 @@ export default async function BookingsPage({ params }: { params: Promise<{ slug:
                   <ul className="mt-1 flex flex-col">
                     {list.map((s) => {
                       const taken = seats(s);
-                      const full = taken >= s.capacity;
+                      const fig = figures.get(s.id);
+                      const full = isFull(fig, taken, s.capacity);
+                      const room = sharedWords(fig);
                       return (
                         <li key={s.id}>
                           <Link
@@ -246,7 +254,9 @@ export default async function BookingsPage({ params }: { params: Promise<{ slug:
                             </span>
                             {s.private && <Badge tone="waiting">Private</Badge>}
                             {s.bookings_closed && <Badge>Not taking bookings</Badge>}
-                            {s.bookings.some((b) => b.oversold && b.status === "confirmed") ? (
+                            {room && <Badge>{room}</Badge>}
+                            {s.bookings.some((b) => b.oversold && b.status === "confirmed") ||
+                            overShared(fig) ? (
                               <Badge tone="bad">Over its limit</Badge>
                             ) : (
                               full && s.capacity > 1 && <Badge tone="good">Full</Badge>

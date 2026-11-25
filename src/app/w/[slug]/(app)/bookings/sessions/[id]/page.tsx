@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
+import { loadSeatFigures, overShared, sharedWords } from "@/lib/bookings/seats";
 import { formatWhen, isUpcoming } from "@/lib/bookings/slots";
 import { formatMoney } from "@/lib/dashboard/format";
 import { createClient } from "@/lib/supabase/server";
@@ -20,6 +21,7 @@ import {
   SessionSettingsForm,
   type RosterPerson,
 } from "../../roster";
+import { SharedLimitForms, ShareSeatsForm, type SharedDate } from "../../shared-seats";
 import { AddShopOrderForm } from "../../shop-orders";
 
 export const metadata: Metadata = { title: "Who's coming" };
@@ -64,7 +66,7 @@ export default async function SessionPage({
   const { data: session } = await supabase
     .from("sessions")
     .select(
-      "id, starts_at, ends_at, capacity, cancelled_at, bookings_closed, private, notes, service_id, services(name, kind)",
+      "id, starts_at, ends_at, capacity, cancelled_at, bookings_closed, private, notes, service_id, seat_group_id, services(name, kind)",
     )
     .eq("id", id)
     .eq("tenant_id", tenant.id)
@@ -78,6 +80,7 @@ export default async function SessionPage({
     { data: sent },
     { count: shopWorkshops },
     { data: mailRows },
+    { data: sameTime },
   ] = await Promise.all([
     supabase
       .from("bookings")
@@ -119,7 +122,39 @@ export default async function SessionPage({
       .select("booking_id, kind, status")
       .eq("session_id", id)
       .in("status", ["failed", "unsure"]),
+    // Other classes running at the same time: they may share this room's places.
+    supabase
+      .from("sessions")
+      .select("id, starts_at, ends_at, capacity, seat_group_id, services(name, kind)")
+      .eq("tenant_id", tenant.id)
+      .is("cancelled_at", null)
+      .neq("id", id)
+      .lt("starts_at", session.ends_at)
+      .gt("ends_at", session.starts_at)
+      .order("starts_at")
+      .limit(20),
   ]);
+  const overlapping = (
+    (sameTime ?? []) as unknown as {
+      id: string;
+      starts_at: string;
+      ends_at: string;
+      capacity: number;
+      seat_group_id: string | null;
+      services: { name: string; kind: string } | null;
+    }[]
+  ).filter((s) => s.services?.kind === "workshop");
+  const groupId = session.seat_group_id as string | null;
+  const figures = await loadSeatFigures(supabase, [id, ...overlapping.map((s) => s.id)]);
+  const mine = figures.get(id);
+  const sharedDate = (s: (typeof overlapping)[number]): SharedDate => ({
+    id: s.id,
+    label: `${s.services?.name ?? "Class"}, ${formatWhen(s.starts_at, s.ends_at, tenant.timezone)}`,
+    taken: figures.get(s.id)?.taken ?? 0,
+    capacity: s.capacity,
+  });
+  const sharing = groupId ? overlapping.filter((s) => s.seat_group_id === groupId) : [];
+  const candidates = groupId ? [] : overlapping.filter((s) => !s.seat_group_id);
   const bookings = (bookingRows ?? []) as BookingRow[];
   const coming = bookings.filter((b) => b.status === "confirmed");
   // After a date is called off, keep showing who had booked.
@@ -176,7 +211,7 @@ export default async function SessionPage({
           <>
             {service.name} ·{" "}
             {live
-              ? `${taken} of ${session.capacity} places booked${here ? ` · ${here} checked in` : ""}`
+              ? `${taken} of ${session.capacity} places booked${here ? ` · ${here} checked in` : ""}${sharedWords(mine) ? ` · ${sharedWords(mine)}` : ""}`
               : "This date was cancelled."}
           </>
         }
@@ -184,6 +219,7 @@ export default async function SessionPage({
         {session.private && <Badge tone="waiting">Private</Badge>}
         {live && session.bookings_closed && <Badge>Not taking bookings</Badge>}
         {live && taken > session.capacity && <Badge tone="bad">Over its limit</Badge>}
+        {live && overShared(mine) && <Badge tone="bad">Over the shared limit</Badge>}
         {shown.length > 0 && (
           <>
             <PrintButton />
@@ -274,6 +310,48 @@ export default async function SessionPage({
               />
             </CardContent>
           </Card>
+
+          {service.kind === "workshop" && upcoming && (groupId || candidates.length > 0) && (
+            <Card className="lg:col-span-2">
+              <CardHeader>
+                <CardTitle>Shared places</CardTitle>
+                <CardDescription>
+                  {groupId
+                    ? `Shares one room with ${sharing.map((s) => s.services?.name ?? "another class").join(", ") || "no other class"}. Bookings on any of them count towards the same number; each class still keeps its own limit too.`
+                    : "Running another class at the same time in the same room? Share one number of places between them, so the two together can't take more than the room holds."}
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-3">
+                {groupId && mine?.shared_capacity != null ? (
+                  <>
+                    <ul className="text-sm">
+                      {sharing.map((s) => (
+                        <li key={s.id}>
+                          <Link href={`${base}/sessions/${s.id}`} className="underline">
+                            {sharedDate(s).label}
+                          </Link>{" "}
+                          · {sharedDate(s).taken} of {s.capacity} booked
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="text-sm font-semibold">{sharedWords(mine)}</p>
+                    <SharedLimitForms
+                      slug={tenant.slug}
+                      groupId={groupId}
+                      capacity={mine.shared_capacity}
+                    />
+                  </>
+                ) : (
+                  <ShareSeatsForm
+                    slug={tenant.slug}
+                    sessionId={session.id}
+                    candidates={candidates.map(sharedDate)}
+                    suggested={session.capacity}
+                  />
+                )}
+              </CardContent>
+            </Card>
+          )}
 
           {service.kind === "workshop" && Boolean(shopWorkshops) && (
             <Card className="lg:col-span-2">

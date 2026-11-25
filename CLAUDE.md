@@ -307,6 +307,17 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   `configs` (bookings / emails) and is read by `claim_booking_emails` in the
   database; the worker only adds the words. A tool's several places are
   rows in its menu panel (`lib/nav/model.ts`), not tabs.
+  Classes that run at the same time can share one room's places
+  (`session_seat_groups`, `sessions.seat_group_id`; manager-only
+  `share_session_seats` / `set_shared_limit` / `unshare_session_seats`, from
+  the date's page): a booking needs room under the date's own limit AND the
+  shared one (`private.has_room`), seats left are `private.seats_left`
+  everywhere (public pages, the picker, `session_seat_figures` for the
+  team's pages via `lib/bookings/seats.ts`). Anything that gives out seats
+  locks through `private.lock_seats` first: shared limits by id, then dates
+  by id, re-reading if a date moved between limits; never lock a date and
+  then reach for a limit. Keep `tests/db/booking-shared-limits.test.ts`
+  passing.
   A workshop can instead be sold through the business's own shop
   (`services.shop_product_id`): the date picker on the product page
   (`public/booking-widget.js`, plain JS in a shadow root, reads

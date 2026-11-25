@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
+import { loadSeatFigures } from "@/lib/bookings/seats";
 import { daysFromNow, formatWhen } from "@/lib/bookings/slots";
 import { formatMoney } from "@/lib/dashboard/format";
 import { createClient } from "@/lib/supabase/server";
@@ -162,14 +163,21 @@ export default async function NeedsDatePage({ params }: { params: Promise<{ slug
   );
 
   const dates = (dateRows ?? []) as unknown as DateRow[];
+  // Places left as the database counts them, shared rooms included.
+  const figures = await loadSeatFigures(
+    supabase,
+    dates.map((d) => d.id),
+  );
   const choice = (d: DateRow): DateChoice => ({
     id: d.id,
     label: formatWhen(d.starts_at, d.ends_at, tenant.timezone),
-    left: Math.max(
-      0,
-      d.capacity -
-        d.bookings.filter((b) => b.status === "confirmed").reduce((n, b) => n + b.seats, 0),
-    ),
+    left:
+      figures.get(d.id)?.seats_left ??
+      Math.max(
+        0,
+        d.capacity -
+          d.bookings.filter((b) => b.status === "confirmed").reduce((n, b) => n + b.seats, 0),
+      ),
   });
   const workshopName = new Map(
     ((workshopRows ?? []) as { id: string; name: string }[]).map((w) => [w.id, w.name]),
