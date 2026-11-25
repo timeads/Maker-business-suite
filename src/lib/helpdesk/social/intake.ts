@@ -105,6 +105,13 @@ export type IntakeDeps = {
     who: string | null,
   ): Promise<void>;
   /**
+   * Looks at a filed message for the automatic first reply (fixed words from
+   * Settings; the rules live in `auto-reply/rules.ts`). Only ever called for
+   * a real message from a person: never for an echo, a reaction, an unsend,
+   * a change of hands or a comment. Trouble here never stops the filing.
+   */
+  autoReply?(where: SocialWhere, event: MessageEvent, result: FileResult): Promise<void>;
+  /**
    * Comments. Null when no workspace takes comments from this account
    * (not connected for them, or switched off). Without these, comments in a
    * delivery are simply dropped.
@@ -277,6 +284,11 @@ export async function processMetaPayload(payload: unknown, deps: IntakeDeps): Pr
       }
       if (result.result === "created") {
         await deps.onCreated?.(where, event, result, outcome, who);
+      }
+      // Asked for a message seen before as well: the claim is once per message,
+      // so a retry only finishes what the first try didn't get to.
+      if (result.message_id && result.result !== "ignored" && result.result !== "retry") {
+        await deps.autoReply?.(where, event, result).catch(() => undefined);
       }
       // A message seen before still gets its files, so a retry can finish the job.
       if (result.message_id && event.media.length > 0 && deps.fetchFiles && deps.keepFiles) {

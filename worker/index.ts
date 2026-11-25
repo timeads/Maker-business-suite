@@ -41,6 +41,7 @@ import { getProviderToken, vaultTokenStore, type TokenDeps } from "../src/lib/co
 import { ReconnectRequiredError } from "../src/lib/connections/types";
 import { sendEmail } from "../src/lib/email";
 import { inboundDomain } from "../src/lib/helpdesk/addresses";
+import { autoReplyDeps, considerAutoReply } from "../src/lib/helpdesk/auto-reply/worker";
 import { HELPDESK_MODULE, RULES_KEY, parseRules } from "../src/lib/helpdesk/config";
 import {
   processInboundEmail,
@@ -282,6 +283,26 @@ async function drainInboundEmails(): Promise<number> {
       );
       if (kept + notKept > 0) console.log(`kept ${kept} file(s), left ${notKept}`);
     },
+    async autoReply(email, result) {
+      // Without the mail service nothing could be sent, so nothing is queued.
+      if (!result.tenant_id || !result.message_id || !process.env.POSTMARK_SERVER_TOKEN) return;
+      try {
+        const outcome = await considerAutoReply(
+          {
+            tenantId: result.tenant_id,
+            messageId: result.message_id,
+            mail: { automated: email.noAutoReply, fromEmail: email.fromEmail },
+          },
+          autoReplyDeps(admin, {
+            moduleOpen: (tenantId) => moduleOpen(tenantId, "helpdesk", admin),
+            mailDomain: domain,
+          }),
+        );
+        if (outcome !== "off") console.log(`automatic reply: ${outcome}`);
+      } catch (err) {
+        console.error("automatic reply not queued", err instanceof Error ? err.message : err);
+      }
+    },
     async onCreated(email, result, outcome) {
       if (!result.tenant_id || !result.ticket_id) return;
       if (outcome.priority || outcome.assignTo) {
@@ -359,7 +380,13 @@ function metaTokenDeps(): TokenDeps {
 async function drainMetaMessages(): Promise<number> {
   if (!process.env.META_APP_SECRET) return 0;
   const admin = getAdminClient();
-  return (await drainMetaEvents(admin, metaTokenDeps())) + (await runMetaDeletions(admin));
+  const autoReply = autoReplyDeps(admin, {
+    moduleOpen: (tenantId) => moduleOpen(tenantId, "helpdesk", admin),
+    mailDomain: inboundDomain(),
+  });
+  return (
+    (await drainMetaEvents(admin, metaTokenDeps(), autoReply)) + (await runMetaDeletions(admin))
+  );
 }
 
 /**
@@ -381,7 +408,8 @@ async function drainOutbound(): Promise<number> {
     id: string;
     tenant_id: string;
     ticket_id: string;
-    author_id: string;
+    /** Null for the automatic first reply, which nobody wrote. */
+    author_id: string | null;
     payload: unknown;
   }[];
   for (const row of rows) {

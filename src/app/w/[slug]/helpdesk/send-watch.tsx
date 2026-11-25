@@ -154,15 +154,19 @@ export function OutboxNotices({
     <ul className="flex flex-col gap-2">
       {rows.map((row) => {
         const bad = row.state === "failed" || row.state === "unsure";
+        // The automatic first reply not going is worth a line, not an alarm.
+        const quiet = row.summary?.automatic === true;
         const who = row.author_id ? names[row.author_id] : null;
         return (
           <li
             key={row.id}
-            role={bad ? "alert" : "status"}
+            role={bad && !quiet ? "alert" : "status"}
             className={
-              bad
-                ? "bg-brick-soft border-brick/30 ml-auto w-full max-w-[76ch] rounded-lg border px-4 py-3 text-sm"
-                : "bg-out border-out-border ml-auto w-full max-w-[76ch] rounded-lg border border-dashed px-4 py-3 text-sm"
+              bad && quiet
+                ? "bg-sunken border-border text-muted-foreground ml-auto w-full max-w-[76ch] rounded-lg border px-4 py-3 text-sm"
+                : bad
+                  ? "bg-brick-soft border-brick/30 ml-auto w-full max-w-[76ch] rounded-lg border px-4 py-3 text-sm"
+                  : "bg-out border-out-border ml-auto w-full max-w-[76ch] rounded-lg border border-dashed px-4 py-3 text-sm"
             }
           >
             <p>
@@ -182,7 +186,7 @@ export function OutboxNotices({
               </p>
             )}
             <p className="mt-2 flex flex-wrap gap-1.5">
-              {row.state === "waiting" && (
+              {row.state === "waiting" && !quiet && (
                 <Button
                   type="button"
                   variant="outline"

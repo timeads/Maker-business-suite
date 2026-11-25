@@ -1,4 +1,5 @@
 import { parseSupportAddress } from "./addresses";
+import { looksAutomated } from "./auto-reply/rules";
 import { actionsFor, type AutoTagRules, type RuleOutcome } from "./config";
 import { contentId, fromBase64, type IncomingFile } from "./files";
 
@@ -43,6 +44,11 @@ export type InboundEmail = {
   references: string[];
   /** Mail sent by a machine (auto-replies, bounces): filed, but must never trigger a reply loop. */
   automated: boolean;
+  /**
+   * Wider than `automated`: anything the automatic first reply must stay
+   * away from (bulk and list mail, bounces, no-reply senders as well).
+   */
+  noAutoReply: boolean;
 };
 
 const MAX_BODY = 50_000;
@@ -226,6 +232,12 @@ export function parseInboundEmail(email: PostmarkInbound, domain: string): Inbou
     messageId: messageIds(header(email, "Message-ID"))[0] ?? null,
     references: [...new Set(references)],
     automated,
+    noAutoReply:
+      automated ||
+      looksAutomated(
+        Object.fromEntries((email.Headers ?? []).map((h) => [h.Name ?? "", h.Value ?? ""])),
+        fromEmail,
+      ),
   };
 }
 
@@ -247,6 +259,12 @@ export type InboundDeps = {
   onCreated?(email: InboundEmail, result: IngestResult, outcome: RuleOutcome): Promise<void>;
   /** Keeps the email's files. Called for a filed email, and again for one seen before, so a retry can finish the job. */
   keepFiles?(result: IngestResult, files: IncomingFile[]): Promise<void>;
+  /**
+   * Looks at a filed email for the automatic first reply (fixed words from
+   * Settings; the rules live in `auto-reply/rules.ts`). Trouble here never
+   * stops the email being filed.
+   */
+  autoReply?(email: InboundEmail, result: IngestResult): Promise<void>;
 };
 
 /** Files one queued inbound email. Returns what happened, for the worker's log. */
@@ -266,6 +284,11 @@ export async function processInboundEmail(
   // Rules and the heads-up first: if keeping the files fails, the retry finds
   // the email already filed ("duplicate") and only finishes the files.
   if (result.result === "created") await deps.onCreated?.(email, result, outcome);
+  // Asked for an email seen before as well: the claim is once per email, so a
+  // retry only finishes what the first try didn't get to.
+  if (result.result !== "unknown_workspace" && result.message_id && deps.autoReply) {
+    await deps.autoReply(email, result).catch(() => undefined);
+  }
   if (result.result !== "unknown_workspace" && result.message_id && deps.keepFiles) {
     const files = inboundFiles(payload);
     if (files.length > 0) await deps.keepFiles(result, files);

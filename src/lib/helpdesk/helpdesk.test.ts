@@ -71,6 +71,7 @@ describe("reading inbound email", () => {
       messageId: "<abc@mail.example.com>",
       references: [],
       automated: false,
+      noAutoReply: false,
     });
   });
 

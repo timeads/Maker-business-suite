@@ -41,6 +41,24 @@ export function localDay(instant: Date, timeZone: string): string {
 }
 
 /**
+ * What a timezone's clocks read at an instant: the calendar date, the weekday
+ * (0 is Sunday) and the minutes past midnight. It follows the clocks through
+ * daylight-saving changes, so "inside the opening hours" can be asked of it
+ * directly.
+ */
+export function localClock(
+  instant: Date,
+  timeZone: string,
+): { day: string; weekday: number; minute: number } {
+  const p = wallClock(instant, timeZone);
+  return {
+    day: `${p.year}-${pad(p.month)}-${pad(p.day)}`,
+    weekday: new Date(Date.UTC(p.year, p.month - 1, p.day)).getUTCDay(),
+    minute: p.hour * 60 + p.minute,
+  };
+}
+
+/**
  * The instant at which a timezone's clocks read `day` + `minutes` past
  * midnight. Returns null for a time that doesn't exist there (the hour skipped
  * when clocks go forward). When clocks go back and a time happens twice, the

@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getProviderToken, type TokenDeps } from "../../connections/tokens";
 import { postAlert } from "../../messages/alerts";
 import { withTenant } from "../../supabase/admin";
+import { considerAutoReply, type AutoReplyDeps } from "../auto-reply/worker";
 import { HELPDESK_MODULE, RULES_KEY, parseRules } from "../config";
 import { fromBase64 } from "../files";
 import { keepMessageFiles } from "../keep-files";
@@ -18,7 +19,7 @@ import {
   type IntakeDeps,
 } from "./intake";
 import { fetchMessageMedia } from "./media";
-import { SocialNotSent, sendCommentReply, sendSocialReply } from "./server";
+import { SocialNotSent, sendCommentReply, sendSocialReply, type SocialSendDeps } from "./server";
 
 /**
  * The worker's side of Instagram and Facebook messages: filing what Meta
@@ -29,7 +30,11 @@ const check = (what: string, error: { message: string } | null) => {
   if (error) throw new Error(`${what}: ${error.message}`);
 };
 
-function intakeDeps(admin: SupabaseClient, tokenDeps: TokenDeps): IntakeDeps {
+function intakeDeps(
+  admin: SupabaseClient,
+  tokenDeps: TokenDeps,
+  autoReply?: AutoReplyDeps,
+): IntakeDeps {
   const token = async (tenantId: string) =>
     (await getProviderToken(tenantId, "meta", tokenDeps)).token.access_token;
   return {
@@ -126,6 +131,18 @@ function intakeDeps(admin: SupabaseClient, tokenDeps: TokenDeps): IntakeDeps {
       });
       check("could not keep a profile", error);
       return profile.handle ? `@${profile.handle}` : profile.name;
+    },
+    async autoReply(where, event, result) {
+      if (!autoReply || !result.message_id) return;
+      try {
+        const outcome = await considerAutoReply(
+          { tenantId: where.tenantId, messageId: result.message_id, standby: event.standby },
+          autoReply,
+        );
+        if (outcome !== "off") console.log(`automatic reply: ${outcome}`);
+      } catch (err) {
+        console.error("automatic reply not queued", err instanceof Error ? err.message : err);
+      }
     },
     fetchFiles: (event) => fetchMessageMedia(event.media),
     async keepFiles(where, result, files) {
@@ -283,11 +300,13 @@ function intakeDeps(admin: SupabaseClient, tokenDeps: TokenDeps): IntakeDeps {
 export async function drainMetaEvents(
   admin: SupabaseClient,
   tokenDeps: TokenDeps,
+  /** The automatic first reply's reads and its claim; left out, none is ever queued. */
+  autoReply?: AutoReplyDeps,
 ): Promise<number> {
   const { data, error } = await admin.rpc("claim_meta_events", { p_limit: 5 });
   check("Could not claim Meta deliveries", error);
   const events = (data ?? []) as { id: string; payload: unknown; attempts: number }[];
-  const deps = intakeDeps(admin, tokenDeps);
+  const deps = intakeDeps(admin, tokenDeps, autoReply);
   for (const event of events) {
     let failure: string | null = null;
     try {
@@ -327,6 +346,8 @@ export async function sendQueuedSocial(
   admin: SupabaseClient,
   row: { id: string; tenant_id: string; ticket_id: string; payload: unknown },
   tokenDeps: TokenDeps,
+  /** For tests: a stand-in for Meta, the clock and the workspace's switches. */
+  send: Pick<SocialSendDeps, "fetchImpl" | "now" | "facts"> = {},
 ): Promise<void> {
   const finish = (args: Record<string, unknown>) =>
     admin.rpc("finish_social_outbound", { p_id: row.id, ...args });
@@ -343,6 +364,7 @@ export async function sendQueuedSocial(
   let went: Awaited<ReturnType<typeof sendSocialReply>>;
   try {
     went = await sendSocialReply({ tenantId: row.tenant_id, ticketId: row.ticket_id }, payload, {
+      ...send,
       admin,
       tokenDeps,
     });

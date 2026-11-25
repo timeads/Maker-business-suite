@@ -188,6 +188,8 @@ type Facts = {
 type Message = {
   id: string;
   direction: string;
+  /** The automatic first reply: fixed words from Settings, sent by nobody in particular. */
+  automatic: boolean | null;
   kind: string | null;
   from_email: string | null;
   from_name: string | null;
@@ -616,7 +618,7 @@ export default async function HelpdeskPage({
         supabase
           .from("messages")
           .select(
-            "id, direction, kind, from_email, from_name, body, summary, sent_at, removed_at, edited_at, hidden, private_reply, parent_external_id, provider_message_id, created_at, author_id, to_emails, cc_emails, format, attachments",
+            "id, direction, automatic, kind, from_email, from_name, body, summary, sent_at, removed_at, edited_at, hidden, private_reply, parent_external_id, provider_message_id, created_at, author_id, to_emails, cc_emails, format, attachments",
           )
           .eq("tenant_id", tenant.id)
           .eq("ticket_id", ticket.id)
@@ -1007,14 +1009,16 @@ export default async function HelpdeskPage({
     const m = entry.m;
     const ours = m.direction === "outbound";
     const who = ours
-      ? m.author_id
-        ? nameOf(person(m.author_id))
-        : tenant.name
+      ? m.automatic
+        ? "Automatic reply"
+        : m.author_id
+          ? nameOf(person(m.author_id))
+          : tenant.name
       : channel
         ? customerLabel
         : (m.from_name ?? m.from_email ?? "Unknown sender");
     // A reply sent from the Instagram or Facebook app itself, not from here.
-    const fromApp = ours && !m.author_id && channel ? m.from_name : null;
+    const fromApp = ours && !m.author_id && !m.automatic && channel ? m.from_name : null;
     const KIND_WORDS: Record<string, string> = {
       story_reply: "replied to your story",
       story_mention: "mentioned you in their story",
@@ -1056,10 +1060,10 @@ export default async function HelpdeskPage({
                   ? `Private ${CHANNEL_LABELS[channel]} message to ${customerLabel} about their comment`
                   : channel
                     ? ours
-                      ? `${CHANNEL_LABELS[channel]} message to ${customerLabel}${fromApp ? ` · sent from the ${fromApp}` : ""}`
+                      ? `${CHANNEL_LABELS[channel]} message to ${customerLabel}${fromApp ? ` · sent from the ${fromApp}` : ""}${m.automatic ? " · sent by itself, with your saved words" : ""}`
                       : `${CHANNEL_LABELS[channel]} message${KIND_WORDS[m.kind ?? ""] ? ` · ${KIND_WORDS[m.kind ?? ""]}` : ""}`
                     : ours
-                      ? `${m.kind === "forward" ? "forwarded to" : "to"} ${to.join(", ")}${(m.cc_emails ?? []).length > 0 ? ` · cc ${(m.cc_emails ?? []).join(", ")}` : ""}`
+                      ? `${m.kind === "forward" ? "forwarded to" : "to"} ${to.join(", ")}${(m.cc_emails ?? []).length > 0 ? ` · cc ${(m.cc_emails ?? []).join(", ")}` : ""}${m.automatic ? " · sent by itself, with your saved words" : ""}`
                       : `${m.from_email ?? ""}${copied.length > 0 ? ` · also to ${copied.join(", ")}` : ""}`}
             </p>
           </div>
@@ -1937,7 +1941,7 @@ export default async function HelpdeskPage({
             {canDraft &&
               editable &&
               canManage(role) &&
-              thread.some((m) => m.direction === "outbound") && (
+              thread.some((m) => m.direction === "outbound" && !m.automatic) && (
                 <div className="mt-2">
                   <AskButton
                     action={addTicketToManual.bind(null, tenant.slug, ticket.id)}

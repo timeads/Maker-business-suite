@@ -40,6 +40,11 @@ export const sendPayloadSchema = z.object({
     .default([]),
   add_tags: z.array(z.string().regex(TAG_PATTERN)).max(10).default([]),
   assign_to: z.string().uuid().nullable().default(null),
+  /**
+   * The automatic first reply: fixed words from Settings, queued by the
+   * worker with no author. Only the database sets this (`claim_auto_reply`).
+   */
+  automatic: z.boolean().default(false),
 });
 export type SendPayload = z.infer<typeof sendPayloadSchema>;
 
@@ -73,6 +78,7 @@ export function outgoingFrom(
     doc: payload.doc,
     appendix: payload.appendix,
     files: payload.files,
+    automatic: payload.automatic,
   };
 }
 
@@ -89,7 +95,7 @@ export type OutboxRow = {
   id: string;
   state: "waiting" | "sending" | "failed" | "unsure";
   send_at: string;
-  summary: { kind?: string; to?: string[]; preview?: string } | null;
+  summary: { kind?: string; to?: string[]; preview?: string; automatic?: boolean } | null;
   error: string | null;
   author_id: string | null;
   created_at: string;
@@ -100,6 +106,22 @@ export type OutboxRow = {
 export function outboxWords(row: Pick<OutboxRow, "state" | "error" | "summary">): string {
   const to = (row.summary?.to ?? []).join(", ") || "the customer";
   const social = row.summary?.kind === "social";
+  // The automatic first reply: said plainly, and never as something to send again.
+  if (row.summary?.automatic) {
+    if (row.state === "waiting" || row.state === "sending") {
+      return `The automatic reply to ${to} is going out now.`;
+    }
+    if (row.state === "unsure") {
+      return row.error === "sent_not_filed"
+        ? `The automatic reply to ${to} went out, but couldn't be filed in this conversation.`
+        : `We never heard whether the automatic reply to ${to} went. It isn't sent again.`;
+    }
+    const mailCode = /^postmark:\d+:(\d+)$/.exec(row.error ?? "")?.[1];
+    const why = social
+      ? metaRefusalWords(row.error)
+      : refusalWords(mailCode ? Number(mailCode) : null);
+    return `The automatic reply to ${to} wasn't sent, and isn't tried again. ${why}`;
+  }
   const an = row.summary?.kind === "forward" ? "A forward" : social ? "A message" : "An email";
   if (row.state === "waiting") return `${an} to ${to} is about to go.`;
   if (row.state === "sending") return `${an} to ${to} is going out now.`;

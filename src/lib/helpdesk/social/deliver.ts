@@ -45,6 +45,12 @@ export const socialPayloadSchema = z.object({
   via: z.enum(["message", "public", "private"]).default("message"),
   /** Meta's id for the comment being answered (public and private only). */
   comment_id: z.string().min(1).max(200).nullable().default(null),
+  /**
+   * The automatic first reply: fixed words from Settings, queued by the
+   * worker with no author. Only the database sets this (`claim_auto_reply`);
+   * a person's own reply has it taken off when it is queued.
+   */
+  automatic: z.boolean().default(false),
 });
 export type SocialPayload = z.infer<typeof socialPayloadSchema>;
 

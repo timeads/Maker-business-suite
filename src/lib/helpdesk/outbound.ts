@@ -125,6 +125,8 @@ export type Outgoing = {
   appendix?: string;
   inReplyTo: string | null;
   files: OutgoingFile[];
+  /** The automatic first reply: marked so that no other machine answers it. */
+  automatic?: boolean;
 };
 
 const escapeHtml = (text: string) =>
@@ -161,13 +163,21 @@ export function buildOutboundRequest(mail: Outgoing) {
     TextBody: text,
     ...(html ? { HtmlBody: html } : {}),
     MessageStream: "outbound",
-    Headers:
-      mail.kind === "reply" && mail.inReplyTo
+    Headers: [
+      ...(mail.kind === "reply" && mail.inReplyTo
         ? [
             { Name: "In-Reply-To", Value: mail.inReplyTo },
             { Name: "References", Value: mail.inReplyTo },
           ]
-        : [],
+        : []),
+      // RFC 3834: say it was sent by a machine, so autoresponders don't answer it.
+      ...(mail.automatic
+        ? [
+            { Name: "Auto-Submitted", Value: "auto-replied" },
+            { Name: "X-Auto-Response-Suppress", Value: "All" },
+          ]
+        : []),
+    ],
     ...(mail.files.length > 0
       ? {
           Attachments: mail.files.map((file) => ({

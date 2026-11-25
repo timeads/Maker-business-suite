@@ -266,7 +266,14 @@ const topicEntry = (topic: TopicState): Entry & { topic: TopicState } => ({
   topic,
 });
 
-type MessageRow = { id: string; direction: string; body: string; created_at: string; kind: string };
+type MessageRow = {
+  id: string;
+  direction: string;
+  body: string;
+  created_at: string;
+  kind: string;
+  automatic?: boolean | null;
+};
 type FileRow = {
   id: string;
   message_id: string;
@@ -303,11 +310,15 @@ export async function buildInput(
     tenantId,
     async (scope) => {
       const { data: rows } = await scope
-        .select("messages", "id, direction, body, created_at, kind")
+        .select("messages", "id, direction, body, created_at, kind, automatic")
         .eq("ticket_id", ticket.id)
         .order("created_at", { ascending: true })
         .limit(MAX_MESSAGES * 2);
-      const list = ((rows ?? []) as unknown as MessageRow[]).filter((m) => m.kind !== "forward");
+      // The automatic first reply is nobody's answer: it is neither read nor
+      // counted as the team having replied.
+      const list = ((rows ?? []) as unknown as MessageRow[]).filter(
+        (m) => m.kind !== "forward" && m.automatic !== true,
+      );
       const ids = list.map((m) => m.id);
       const { data: attached } =
         ids.length > 0
