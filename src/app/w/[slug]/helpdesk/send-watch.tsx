@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { draftKey } from "@/lib/helpdesk/drafts";
-import { outboxWords, secondsLeft, type OutboxRow } from "@/lib/helpdesk/outbox";
+import { outboxDetails, outboxWords, secondsLeft, type OutboxRow } from "@/lib/helpdesk/outbox";
 import { richToText, type RichDoc } from "@/lib/helpdesk/rich";
 import { discardEmptyTicket, dismissSend, undoSend } from "./actions";
 import { INSERT_EVENT, QUEUED_EVENT, RESTORE_EVENT } from "./composer";
@@ -170,6 +170,12 @@ export function OutboxNotices({
               {row.state === "waiting" && ` (${secondsLeft(row.send_at, now)}s)`}
               {who ? ` Written by ${who}.` : ""}
             </p>
+            {outboxDetails(row) && (
+              <details className="text-muted-foreground mt-1 text-xs">
+                <summary className="w-fit cursor-pointer">Details</summary>
+                <p className="font-read mt-1">{outboxDetails(row)}</p>
+              </details>
+            )}
             {row.summary?.preview && (
               <p className="font-read text-muted-foreground mt-1 line-clamp-2 text-xs">
                 {row.summary.preview}

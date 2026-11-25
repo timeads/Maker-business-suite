@@ -78,6 +78,7 @@ import {
   privateReplyWords,
 } from "@/lib/helpdesk/social/comments";
 import { connectionFacts } from "@/lib/helpdesk/social/server";
+import { controlWords } from "@/lib/helpdesk/social/control";
 import { lastInboundAt, replyWindow, windowWords } from "@/lib/helpdesk/social/window";
 import { TAG_GROUPS_KEY, parseTagGroups } from "@/lib/helpdesk/tag-groups";
 import { foldThread, placeInline, splitQuote } from "@/lib/helpdesk/thread";
@@ -677,6 +678,17 @@ export default async function HelpdeskPage({
           .eq("id", ticket.comment_post_id)
           .maybeSingle()
       : { data: null };
+  // Who was answering this person at Meta when we last heard. Read on its
+  // own and allowed to fail: the conversation works without it.
+  const { data: controlRow } =
+    ticket && ticket.kind !== "comment" && isSocialChannel(ticket.channel) && ticket.contact_id
+      ? await supabase
+          .from("contacts")
+          .select("thread_control, thread_control_app, thread_control_at")
+          .eq("tenant_id", tenant.id)
+          .eq("id", ticket.contact_id)
+          .maybeSingle()
+      : { data: null };
   // Topics from the manual that fit this conversation, found by its words.
   // Read on its own and allowed to fail.
   const railManual = ticket
@@ -915,6 +927,17 @@ export default async function HelpdeskPage({
           unit: TEXT_LIMITS[channel].unit,
           open: socialWindow.open,
           words: windowWords(channel, socialWindow, (at) => windowTime.format(new Date(at))),
+          control: controlWords(
+            controlRow
+              ? {
+                  state: controlRow.thread_control as string | null,
+                  appId: controlRow.thread_control_app as string | null,
+                  at: controlRow.thread_control_at as string | null,
+                }
+              : null,
+            channel,
+            (at) => when.format(new Date(at)),
+          ),
           blocked: !(process.env.META_APP_SECRET && process.env.SUPABASE_SECRET_KEY)
             ? `${CHANNEL_LABELS[channel]} messages aren't switched on for this environment yet. Notes still work.`
             : socialState.state === "on"

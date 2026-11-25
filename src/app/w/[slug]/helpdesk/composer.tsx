@@ -51,6 +51,8 @@ export type SocialReply = {
   words: string;
   /** Why nothing can be sent at all (not connected, switched off), or null. */
   blocked: string | null;
+  /** Another inbox tool had this conversation at Meta when we last heard: a heads-up, or null. */
+  control?: string | null;
   /**
    * Set on a conversation about a comment on a post: the two ways to answer.
    * A public reply sits under the comment for everyone to read; a private
@@ -962,6 +964,9 @@ export function Composer({
             </button>
           )}
         </p>
+      )}
+      {social?.control && !note && !social.blocked && social.open && (
+        <p className="text-ochre-text px-3 pb-1 text-xs">{social.control}</p>
       )}
       {(problem || notice) && (
         <p

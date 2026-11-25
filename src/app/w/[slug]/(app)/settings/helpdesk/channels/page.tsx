@@ -205,6 +205,7 @@ export default async function ChannelsPage({
                   instagram={settings.instagram}
                   facebook={settings.facebook}
                   humanAgent={settings.human_agent}
+                  takeControl={settings.take_control}
                   canInstagram={Boolean(connection?.instagramId)}
                 />
               )}
@@ -346,6 +347,18 @@ export default async function ChannelsPage({
             Facebook” in the help desk within a minute. If nothing arrives on Instagram, open the
             Instagram app and check Settings → Messages and story replies → Message requests → Allow
             access to messages.
+          </p>
+          <p>
+            <strong>Using another inbox tool as well.</strong> Instagram and Facebook let only one
+            tool at a time answer a conversation: this one, another help desk, or Meta&apos;s own
+            inbox. If a reply from here is refused with “another inbox tool is answering this
+            conversation”, that tool has it. You choose which tool answers first in Meta Business
+            Suite → Settings → Conversation routing (also under your Page&apos;s Settings → Page
+            setup → Advanced messaging, and for Instagram → Instagram conversation routing): set the
+            default app there, one for Instagram and one for Messenger. Whichever you don&apos;t
+            choose still sees messages but can&apos;t reply, unless you allow it to “Take control of
+            conversations” on the same screen. A reply Meta refuses is kept here to try again; it is
+            never sent again by itself.
           </p>
           <p>
             <strong>What goes out.</strong> Plain words, and JPEG or PNG pictures. Replies sent from

@@ -33,6 +33,7 @@ import {
   MetaRefused,
   deleteComment,
   refusalText,
+  refusalWithDetails,
   refusalWords,
   setCommentHidden,
   subscribePage,
@@ -238,7 +239,7 @@ export async function sendSocialMessage(
     went = await sendSocialReply({ tenantId: ctx.tenant.id, ticketId }, payload.data, { admin });
   } catch (err) {
     if (err instanceof SocialNotSent) return { error: refusalWords(err.code) };
-    if (err instanceof MetaRefused) return { error: refusalWords(refusalText(err)) };
+    if (err instanceof MetaRefused) return { error: refusalWithDetails(refusalText(err)) };
     console.error("A message got no clear answer from Meta");
     return {
       error: `We never heard back from ${name}, so we can't say whether that went. Look at the conversation in the ${name} app before sending it again.`,
@@ -647,6 +648,7 @@ export async function saveChannelSwitches(
     instagram: has("instagram") ? formData.get("instagram") === "1" : now.instagram,
     facebook: has("facebook") ? formData.get("facebook") === "1" : now.facebook,
     human_agent: has("human_agent") ? formData.get("human_agent") === "1" : now.human_agent,
+    take_control: has("take_control") ? formData.get("take_control") === "1" : now.take_control,
     instagram_comments: ticked("instagram_comments"),
     facebook_comments: ticked("facebook_comments"),
     comment_filter: filter ?? now.comment_filter,

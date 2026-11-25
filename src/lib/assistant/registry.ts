@@ -161,7 +161,7 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
     feature: "helpdesk",
     name: "Help desk channels",
     description:
-      "Which messages besides email come into the help desk: Instagram messages (instagram) and Facebook messages (facebook), each on or off. They only work once Facebook & Instagram is connected with the messaging permissions, which a person does under Settings → Help desk → Channels. human_agent is only for a Meta app approved for the Human Agent feature (replies up to seven days after the customer's last message) and should stay off otherwise.",
+      "Which messages besides email come into the help desk: Instagram messages (instagram) and Facebook messages (facebook), each on or off. They only work once Facebook & Instagram is connected with the messaging permissions, which a person does under Settings → Help desk → Channels. human_agent is only for a Meta app approved for the Human Agent feature (replies up to seven days after the customer's last message) and should stay off otherwise. take_control is for a business that also uses another inbox tool on the same account: when Meta refuses a reply because that tool has the conversation, the help desk takes it over and tries once more. It pulls conversations away from the other tool, so it stays off unless the owner asks for exactly that.",
     schema: channelSettingsSchema,
     defaultBody: () => DEFAULT_CHANNEL_SETTINGS,
   },

@@ -50,12 +50,15 @@ export function ChannelSwitches({
   instagram,
   facebook,
   humanAgent,
+  takeControl,
   canInstagram,
 }: {
   slug: string;
   instagram: boolean;
   facebook: boolean;
   humanAgent: boolean;
+  /** Pull a conversation over from another inbox tool when Meta refuses a reply. */
+  takeControl: boolean;
   /** An Instagram professional account is linked to the connected Page. */
   canInstagram: boolean;
 }) {
@@ -99,6 +102,32 @@ export function ChannelSwitches({
           </span>
         </span>
       </label>
+      <details className="text-sm" open={takeControl}>
+        <summary className="text-muted-foreground w-fit cursor-pointer text-xs">
+          If you also answer from another inbox tool
+        </summary>
+        <label className="mt-2 flex items-start gap-2">
+          <input type="hidden" name="take_control_set" value="1" />
+          <input
+            type="checkbox"
+            name="take_control"
+            value="1"
+            defaultChecked={takeControl}
+            className="mt-0.5"
+          />
+          <span>
+            Take the conversation over when another tool has it
+            <span className="text-muted-foreground block text-xs">
+              Instagram and Facebook let one tool at a time answer a conversation. With this ticked,
+              when a reply from here is refused because another tool has the conversation, we ask
+              Meta to move it here and try once more. The other tool then can&apos;t answer that
+              conversation until it goes quiet. Leave it off if your team still answers from the
+              other tool. Meta only allows it once you have let this app take over conversations in
+              Meta Business Suite → Settings → Conversation routing.
+            </span>
+          </span>
+        </label>
+      </details>
       <details className="text-sm">
         <summary className="text-muted-foreground w-fit cursor-pointer text-xs">
           For apps approved for Meta&apos;s Human Agent feature
