@@ -87,7 +87,8 @@ describe("the product page snippet", () => {
     expect(snippet).toContain("Please get in touch and we'll book you in.");
     // Shown by the style sheet alone after a few seconds, so a script that never loads still leaves it.
     expect(snippet).toMatch(/animation: mbs-fallback 0s linear \d+s forwards/);
-    expect(snippet).toContain("[data-mbs-booking].mbs-failed .mbs-fallback { opacity: 1");
+    expect(snippet).toContain("visibility: hidden; animation: mbs-fallback");
+    expect(snippet).toContain("[data-mbs-booking].mbs-failed .mbs-fallback { visibility: visible");
 
     const linked = pageSnippet(
       { ...DEFAULT_SHOP_PAGE, contact_url: "https://shop.example.com/pages/contact?a=1&b=2" },

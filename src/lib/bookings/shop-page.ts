@@ -96,9 +96,10 @@ export function hideRule(settings: ShopPage): string {
  *  - the theme's own buy buttons are hidden, so nobody can buy a workshop
  *    with no date, whether the picker has loaded, is loading or never does;
  *  - a box of the button's height is kept, so nothing jumps when it arrives;
- *  - a plain message with a way to reach the business waits, unseen, and
- *    shows by itself after a few seconds if the picker never takes over,
- *    script or no script. The picker shows it at once when it knows it failed.
+ *  - a plain message with a way to reach the business waits, unseen and
+ *    unread by screen readers, and shows by itself after a few seconds if the
+ *    picker never takes over, script or no script. The picker shows it at
+ *    once when it knows it failed.
  */
 export function pageSnippet(settings: ShopPage, where: { slug: string; site: string }): string {
   const words = noLiquid(html(settings.fallback_message || DEFAULT_FALLBACK));
@@ -108,10 +109,10 @@ export function pageSnippet(settings: ShopPage, where: { slug: string; site: str
   :is(${hideRule(settings)}) { display: none !important; }
   [data-mbs-booking] { display: block; min-height: 52px; }
   [data-mbs-booking] .mbs-fallback {
-    margin: 0; opacity: 0; animation: mbs-fallback 0s linear 6s forwards;
+    margin: 0; visibility: hidden; animation: mbs-fallback 0s linear 6s forwards;
   }
-  [data-mbs-booking].mbs-failed .mbs-fallback { opacity: 1; animation: none; }
-  @keyframes mbs-fallback { to { opacity: 1; } }
+  [data-mbs-booking].mbs-failed .mbs-fallback { visibility: visible; animation: none; }
+  @keyframes mbs-fallback { to { visibility: visible; } }
 </style>
 <div data-mbs-booking
      data-workspace="${html(where.slug)}"

@@ -3,7 +3,7 @@ import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
-import { formatWhen } from "@/lib/bookings/slots";
+import { daysFromNow, formatWhen } from "@/lib/bookings/slots";
 import { formatMoney } from "@/lib/dashboard/format";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
@@ -68,6 +68,24 @@ export default async function NeedsDatePage({ params }: { params: Promise<{ slug
     .eq("order_cancelled", false)
     .order("created_at")
     .limit(200);
+  // What was put on a date lately, so a press leaves something to see.
+  const { data: placedRows } = await supabase
+    .from("shop_undated_lines")
+    .select("id, shop_order_id, shop_order_name, placed_at, bookings(session_id, status)")
+    .eq("tenant_id", tenant.id)
+    .not("booking_id", "is", null)
+    .gte("placed_at", daysFromNow(-14))
+    .order("placed_at", { ascending: false })
+    .limit(8);
+  const placed = (
+    (placedRows ?? []) as unknown as {
+      id: string;
+      shop_order_id: string;
+      shop_order_name: string;
+      placed_at: string;
+      bookings: { session_id: string; status: string } | null;
+    }[]
+  ).filter((row) => row.bookings);
   const markers = (markerRows ?? []) as unknown as Marker[];
   const waiting = markers.filter((m) => !m.dismissed_at);
   const aside = markers.filter((m) => m.dismissed_at);
@@ -86,7 +104,7 @@ export default async function NeedsDatePage({ params }: { params: Promise<{ slug
       .select("id, service_id, starts_at, ends_at, capacity, bookings(seats, status)")
       .eq("tenant_id", tenant.id)
       .is("cancelled_at", null)
-      .gte("starts_at", new Date().toISOString())
+      .gte("starts_at", daysFromNow(0))
       .order("starts_at")
       .limit(300),
     supabase
@@ -254,6 +272,41 @@ export default async function NeedsDatePage({ params }: { params: Promise<{ slug
             </Card>
           );
         })
+      )}
+
+      {placed.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Put on a date lately</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ul className="flex flex-col gap-1 text-sm">
+              {placed.map((row) => {
+                const date = dates.find((d) => d.id === row.bookings!.session_id);
+                return (
+                  <li key={row.id} className="flex flex-wrap items-center gap-x-2">
+                    <span className="font-semibold">
+                      Order {row.shop_order_name || row.shop_order_id}
+                    </span>
+                    {row.bookings!.status === "cancelled" ? (
+                      <Badge>Cancelled since</Badge>
+                    ) : (
+                      <Link
+                        href={`${base}/sessions/${row.bookings!.session_id}`}
+                        className="underline"
+                      >
+                        {date
+                          ? formatWhen(date.starts_at, date.ends_at, tenant.timezone)
+                          : "See who's coming"}
+                      </Link>
+                    )}
+                    <span className="text-muted-foreground">· {day(row.placed_at)}</span>
+                  </li>
+                );
+              })}
+            </ul>
+          </CardContent>
+        </Card>
       )}
 
       {aside.length > 0 && (
