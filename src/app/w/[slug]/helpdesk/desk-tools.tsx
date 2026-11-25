@@ -255,6 +255,7 @@ export function DeskKeys({
   ticket,
   me,
   unread,
+  latest,
 }: {
   slug: string;
   previous: string | null;
@@ -267,6 +268,8 @@ export function DeskKeys({
   me: string;
   /** Whether the open conversation is unread for this person. */
   unread: string | null;
+  /** The newest thing in the open conversation, so the thread can follow it. */
+  latest: string | null;
 }) {
   const router = useRouter();
   const help = useRef<HTMLDialogElement>(null);
@@ -275,6 +278,12 @@ export function DeskKeys({
   useEffect(() => {
     if (unread) void markRead(slug, unread, true);
   }, [slug, unread]);
+
+  // A conversation opens on its newest message, and stays there as more arrive.
+  useEffect(() => {
+    const thread = document.getElementById("desk-thread");
+    if (thread) thread.scrollTop = thread.scrollHeight;
+  }, [ticket?.id, latest]);
 
   // New mail shows up without a reload, while nobody is typing.
   useEffect(() => {

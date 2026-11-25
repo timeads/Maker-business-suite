@@ -256,25 +256,41 @@ export function Composer({
     [customerEmail, save],
   );
 
+  // A saved reply, an order's summary or anything else dropped in goes under what is already there.
   const insert = useCallback(
     (text: string) => {
       const root = editor.current;
       if (!root) return;
+      fillEditor(root, [...readEditor(root), ...textToRich(text)]);
       root.focus();
-      // To the end, unless the caret is already in the box.
+      const range = document.createRange();
+      range.selectNodeContents(root);
+      range.collapse(false);
       const selection = window.getSelection();
-      if (!selection || !selection.anchorNode || !root.contains(selection.anchorNode)) {
-        const range = document.createRange();
-        range.selectNodeContents(root);
-        range.collapse(false);
-        selection?.removeAllRanges();
-        selection?.addRange(range);
-      }
-      document.execCommand("insertHTML", false, richToHtml(textToRich(text)));
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      root.scrollTop = root.scrollHeight;
       save();
     },
     [save],
   );
+
+  // The little menus close on Escape and on a press anywhere else.
+  useEffect(() => {
+    if (!menu) return;
+    const onDown = (event: MouseEvent) => {
+      if (!(event.target as HTMLElement | null)?.closest?.("[data-pop]")) setMenu(null);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenu(null);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menu]);
 
   useEffect(() => {
     const onInsert = (event: Event) => {
@@ -471,11 +487,13 @@ export function Composer({
               type="button"
               role="tab"
               aria-selected={mode === tab.key}
+              title={tab.label}
               onClick={() => setMode(tab.key)}
               className={cn(quiet, mode === tab.key && "bg-sunken text-foreground")}
             >
               <tab.icon aria-hidden />
-              {tab.label}
+              {/* Where the column is narrow, only the tab you are on spells its name out. */}
+              <span className={cn(mode !== tab.key && "max-2xl:sr-only")}>{tab.label}</span>
             </button>
           ))}
         </div>
@@ -568,7 +586,7 @@ export function Composer({
           event.preventDefault();
           document.execCommand("insertText", false, event.clipboardData.getData("text/plain"));
         }}
-        className="composer-box font-read max-h-[38vh] min-h-[92px] overflow-y-auto px-3 py-2 text-sm break-words outline-none"
+        className="composer-box font-read max-h-[34vh] min-h-[56px] overflow-y-auto px-3 py-2 text-sm break-words outline-none lg:min-h-[92px]"
       />
 
       {files.length > 0 && (
@@ -605,7 +623,7 @@ export function Composer({
       <div className="flex flex-wrap items-center gap-x-0.5 gap-y-1.5 px-2 pb-2">
         {!note && (
           <>
-            <div className="relative">
+            <div className="relative" data-pop>
               <button
                 type="button"
                 onClick={() => setMenu(menu === "macros" ? null : "macros")}
@@ -665,7 +683,7 @@ export function Composer({
               onChange={(event) => pickFiles(event.target.files)}
             />
             {canDraft && mode !== "forward" && (
-              <div className="relative">
+              <div className="relative" data-pop>
                 <button
                   type="button"
                   onClick={() => setMenu(menu === "ai" ? null : "ai")}
@@ -727,7 +745,7 @@ export function Composer({
             </Button>
           ) : (
             <>
-              <span className="relative flex">
+              <span className="relative flex" data-pop>
                 <Button
                   type="button"
                   variant="outline"

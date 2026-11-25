@@ -727,7 +727,7 @@ export default async function HelpdeskPage({
   };
 
   return (
-    <main className="relative flex h-dvh min-w-0 flex-1 overflow-hidden pb-[57px] md:pb-0">
+    <main className="relative flex h-dvh max-h-dvh min-w-0 flex-1 overflow-hidden pb-[57px] md:pb-0">
       <DeskKeys
         slug={tenant.slug}
         previous={neighbour(-1)}
@@ -737,6 +737,7 @@ export default async function HelpdeskPage({
         ticket={ticket && editable ? { id: ticket.id, closed: ticket.status === "closed" } : null}
         me={user.id}
         unread={ticket && ticketUnread ? ticket.id : null}
+        latest={entries.at(-1)?.id ?? null}
       />
       {/* The menu panel's counts, folders, views and tags: what the inbox has already read. */}
       <PanelExtras
@@ -1048,7 +1049,10 @@ export default async function HelpdeskPage({
                 </div>
               </header>
 
-              <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-4 md:px-6">
+              <div
+                id="desk-thread"
+                className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-4 md:px-6"
+              >
                 {ticket.merged_into && (
                   <p className="bg-sunken rounded-md px-4 py-3 text-sm">
                     This conversation was joined into{" "}
