@@ -6,8 +6,10 @@
  *
  * Plain JavaScript on purpose: no build step, no libraries, drawn inside a
  * shadow root so the shop's styles and ours never touch. Every piece of text
- * from outside is set with textContent, never as markup. If anything fails,
- * the page is left exactly as the theme drew it.
+ * from outside is set with textContent, never as markup. It never moves the
+ * page: the snippet keeps a box of the button's height from the first paint.
+ * If the dates can't be shown, the shopper sees the snippet's plain message
+ * and a way to reach the business, never a buy button with no date.
  */
 (function () {
   "use strict";
@@ -55,7 +57,7 @@
     ".time.sel{border-color:var(--action);box-shadow:inset 0 0 0 1px var(--action)}" +
     ".left{color:var(--muted);font-size:13px}.left.low{color:var(--error);font-weight:700}" +
     ".note{color:var(--muted);font-size:14px;margin:14px 0 0}" +
-    ".err{color:var(--error);font-size:14px;margin:12px 0 0}" +
+    ".err{color:var(--error);font-size:14px;margin:12px 0 0}.err a{color:var(--action)}" +
     ".foot{margin-top:16px;padding-top:14px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:12px}" +
     ".seats{display:flex;align-items:center;justify-content:space-between;font-weight:700}" +
     ".stepper{display:flex;align-items:center;gap:10px}" +
@@ -68,22 +70,50 @@
     "@keyframes mbs-in{from{transform:translateY(8px);opacity:0}to{transform:none;opacity:1}}" +
     "@media (prefers-reduced-motion:no-preference){.box.fresh{animation:mbs-in .16s ease-out}}";
 
+  /*
+   * The snippet marks a workshop's page by putting a plain message with a way
+   * to reach the business (.mbs-fallback) inside the host, and hides the
+   * theme's buy button from the first paint. If the dates can't be shown, for
+   * whatever reason, that message is shown and the buy button stays hidden:
+   * a workshop is never sold without a date. A host without the message is
+   * an older snippet on any product page: there the page is left as the
+   * theme drew it.
+   */
+  function failed(host) {
+    if (!host.querySelector(".mbs-fallback")) return;
+    host.classList.add("mbs-failed");
+    var root = host.shadowRoot;
+    if (!root) return;
+    // Already drawn into: hand the box back to the message.
+    while (root.firstChild) root.removeChild(root.firstChild);
+    root.appendChild(document.createElement("slot"));
+  }
+
   function mount(host) {
     var slug = host.getAttribute("data-workspace") || "";
     var product = host.getAttribute("data-product-id") || "";
-    if (!base || !slug || !/^[0-9]+$/.test(product) || host.shadowRoot) return;
-    var cutoffHours = Number(host.getAttribute("data-cutoff-hours") || 0) || 0;
+    if (host.shadowRoot || host.getAttribute("data-mbs-state")) return;
+    if (!base || !slug || !/^[0-9]+$/.test(product)) return failed(host);
+    host.setAttribute("data-mbs-state", "loading");
+    var cutoff = host.getAttribute("data-cutoff-hours");
     var hideSelector = host.getAttribute("data-hide") || "";
 
     fetch(base + "/api/book/shop?workspace=" + encodeURIComponent(slug) + "&product=" + product)
       .then(function (res) {
-        return res.ok ? res.json() : null;
+        if (!res.ok) throw new Error("dates");
+        return res.json();
       })
       .then(function (data) {
-        if (data && data.found) start(host, data, cutoffHours, hideSelector);
+        if (!data || !data.found) throw new Error("none");
+        var page = data.page || {};
+        // The snippet's own number wins, for snippets pasted before this was a setting.
+        var hours = cutoff === null || cutoff === "" ? page.cutoff_hours : cutoff;
+        start(host, data, Number(hours) || 0, hideSelector);
+        host.setAttribute("data-mbs-state", "ready");
       })
       .catch(function () {
-        /* Leave the page as the theme drew it. */
+        host.setAttribute("data-mbs-state", "failed");
+        failed(host);
       });
   }
 
@@ -107,12 +137,24 @@
       var k = dayKey(date);
       return k.year + "-" + k.month + "-" + k.day;
     };
-    var timeOf = function (date) {
-      return fmt({ hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(date);
+    // "1:00 PM ET": the label comes with each date, worked out for the
+    // workspace's own clock. Without one, the browser's short name stands in.
+    var timeOf = function (date, zoneName) {
+      return zoneName
+        ? fmt({ hour: "numeric", minute: "2-digit" }).format(date) + " " + zoneName
+        : fmt({ hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(date);
     };
     var longDay = function (date) {
       return fmt({ weekday: "long", month: "short", day: "numeric", year: "numeric" }).format(date);
     };
+    // Where a shopper can turn if the cart won't take the booking: only ever
+    // a web page or an email address the business gave.
+    var page = data.page || {};
+    var contact = /^https:\/\//.test(page.contact_url || "")
+      ? page.contact_url
+      : /^[^\s@]+@[^\s@]+$/.test(page.contact_email || "")
+        ? "mailto:" + page.contact_email
+        : "";
     var now = Date.now();
     var sessions = data.sessions.map(function (s) {
       var at = new Date(s.starts_at);
@@ -120,6 +162,7 @@
       return {
         id: s.id,
         at: at,
+        zone: typeof s.zone === "string" ? s.zone.slice(0, 12) : "",
         key: keyOf(at),
         left: s.seats_left,
         closed: closed,
@@ -145,9 +188,6 @@
     } catch {
       /* A selector the browser doesn't like changes nothing. */
     }
-    var fallback = host.querySelector(".mbs-fallback");
-    if (fallback) fallback.style.display = "none";
-
     var root = host.attachShadow({ mode: "open" });
     var accent = /^#[0-9a-fA-F]{6}$/.test(host.getAttribute("data-accent") || "")
       ? host.getAttribute("data-accent")
@@ -183,7 +223,7 @@
       return (
         fmt({ month: "short", day: "numeric" }).format(state.pick.at) +
         " · " +
-        timeOf(state.pick.at) +
+        timeOf(state.pick.at, state.pick.zone) +
         " · " +
         state.seats +
         (state.seats === 1 ? " seat" : " seats") +
@@ -245,7 +285,7 @@
           properties: {
             "Session ID": state.pick.id,
             "Workshop Date": longDay(state.pick.at),
-            "Workshop Time": timeOf(state.pick.at),
+            "Workshop Time": timeOf(state.pick.at, state.pick.zone),
           },
         }),
       })
@@ -342,7 +382,7 @@
             },
           },
           [
-            el("span", { text: timeOf(s.at) }),
+            el("span", { text: timeOf(s.at, s.zone) }),
             el("span", { class: "left" + (s.open && s.left <= 3 ? " low" : ""), text: words }),
           ],
         );
@@ -469,7 +509,12 @@
                     )
                   : el("p", { class: "note", text: "Pick a day with a dot to see its times." }),
               ]),
-          state.error ? el("p", { class: "err", role: "alert", text: state.error }) : null,
+          state.error
+            ? el("p", { class: "err", role: "alert" }, [
+                el("span", { text: state.error + " " }),
+                contact ? el("a", { href: contact, text: "Contact us" }) : null,
+              ])
+            : null,
           foot,
         ],
       );

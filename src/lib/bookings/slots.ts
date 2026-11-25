@@ -151,6 +151,34 @@ export function isOfferedSlot(
   return generateSlots({ ...input, days }).some((s) => Date.parse(s.startsAt) === target);
 }
 
+const zoneName = (locale: string, timeZone: string, at: Date, style: "short" | "shortGeneric") =>
+  new Intl.DateTimeFormat(locale, { timeZone, hour: "numeric", timeZoneName: style })
+    .formatToParts(at)
+    .find((part) => part.type === "timeZoneName")?.value ?? "";
+
+/**
+ * A plain short label for a workspace's clock at a moment, for a shopper:
+ * "ET", "CT", "MT", "PT" across North America (the same all year, the way
+ * people say it), and elsewhere the name people there use ("BST", "CEST",
+ * "AEDT"), or "GMT+9" where there isn't one. Empty for a zone we can't read.
+ */
+export function zoneLabel(timeZone: string, at: Date | string): string {
+  const when = typeof at === "string" ? new Date(at) : at;
+  const plain = (name: string) => /^[A-Z]{2,5}$/.test(name);
+  try {
+    const generic = zoneName("en-US", timeZone, when, "shortGeneric");
+    if (plain(generic)) return generic;
+    // Short names are only spelled out for the places a locale knows well.
+    for (const locale of ["en-GB", "en-AU", "en-NZ", "en-IN", "en-US"]) {
+      const name = zoneName(locale, timeZone, when, "short");
+      if (plain(name)) return name;
+    }
+    return zoneName("en-US", timeZone, when, "short");
+  } catch {
+    return "";
+  }
+}
+
 /** "Sat, Mar 14, 10:00 AM – 12:00 PM EDT" in the workspace's timezone. */
 export function formatWhen(startsAt: string, endsAt: string, timeZone: string): string {
   const day = new Intl.DateTimeFormat("en-US", {

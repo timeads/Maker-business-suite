@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import Link from "next/link";
+import { useActionState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { FormMessage } from "@/components/ui/form-message";
@@ -10,7 +11,7 @@ import { setShopProduct } from "./actions";
 
 /**
  * Sell a workshop through the business's own Shopify shop: pick the product,
- * then paste the snippet into the theme. The shop takes the payment and the
+ * then set up the product page (Settings → Bookings → Shop product page). The shop takes the payment and the
  * order arrives here as a booking.
  */
 export function ShopProductCard({
@@ -18,29 +19,18 @@ export function ShopProductCard({
   serviceId,
   productId,
   variantId,
-  site,
   products,
 }: {
   slug: string;
   serviceId: string;
   productId: string | null;
   variantId: string | null;
-  site: string;
   /** The shop's products, as "product:variant" values. */
   products: { value: string; label: string }[];
 }) {
   const [state, action] = useActionState(setShopProduct.bind(null, slug, serviceId), {});
-  const [copied, setCopied] = useState(false);
   const current = productId ? `${productId}:${variantId ?? ""}` : "";
   const known = products.some((p) => p.value === current);
-  const snippet = `{% comment %} Workshop date picker {% endcomment %}
-<div data-mbs-booking
-     data-workspace="${slug}"
-     data-product-id="{{ product.id }}"
-     data-accent="#edc2ff"
-     data-cutoff-hours="12"></div>
-<script src="${site}/booking-widget.js" defer></script>`;
-
   return (
     <Card>
       <CardHeader>
@@ -117,35 +107,15 @@ export function ShopProductCard({
         {productId && (
           <div className="flex flex-col gap-2">
             <p className="text-sm font-semibold">Add the date picker to your product page</p>
-            <ol className="text-muted-foreground list-decimal pl-5 text-sm">
-              <li>
-                In Shopify, open Online Store → Themes → Customize, and go to the product page.
-              </li>
-              <li>
-                Add a &ldquo;Custom liquid&rdquo; block above the buy button and paste this in. One
-                paste covers every workshop product.
-              </li>
-              <li>
-                In Settings → Inventory for the product, turn &ldquo;Track quantity&rdquo; off: the
-                seats here are the limit.
-              </li>
-            </ol>
-            <pre className="bg-sunken overflow-x-auto rounded-sm p-3 text-xs">{snippet}</pre>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="w-fit"
-              onClick={async () => {
-                try {
-                  await navigator.clipboard.writeText(snippet);
-                  setCopied(true);
-                } catch {
-                  setCopied(false);
-                }
-              }}
-            >
-              {copied ? "Copied" : "Copy the snippet"}
+            <p className="text-muted-foreground text-sm">
+              Tag the product in your shop, then paste two short snippets into your theme: the
+              picker for the product page, and a check on the cart so nobody pays for a workshop
+              with no date. One paste covers every workshop.
+            </p>
+            <Button asChild variant="outline" size="sm" className="w-fit">
+              <Link href={`/w/${slug}/settings/bookings/shop-page`}>
+                Get the snippets and set it up
+              </Link>
             </Button>
           </div>
         )}

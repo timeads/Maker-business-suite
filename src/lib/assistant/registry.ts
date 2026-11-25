@@ -8,6 +8,7 @@ import {
   bookingEmailsSchema,
   bookingFormSchema,
 } from "../bookings/config";
+import { DEFAULT_SHOP_PAGE, SHOP_PAGE_KEY, shopPageSchema } from "../bookings/shop-page";
 import { DASHBOARD_KEY, DASHBOARD_MODULE, dashboardSchema } from "../dashboard/schema";
 import { DEFAULT_TEMPLATE, templateConfig } from "../dashboard/templates";
 import {
@@ -242,6 +243,16 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
       "How many hours ahead the reminder goes out (reminder_hours), whether a second short reminder goes out on the day (day_of_on, off unless switched on) and how many hours before the start (day_of_hours, 1 to 24, only sent when shorter than reminder_hours), whether a thank-you is sent afterwards, whether the customer is emailed when a refund or cancellation in the shop cancels their booking (shop_cancel_email), and the business's own note added to the confirmation, reminder, day-of reminder and thank-you emails.",
     schema: bookingEmailsSchema,
     defaultBody: () => DEFAULT_EMAILS,
+  },
+  {
+    module: BOOKINGS_MODULE,
+    key: SHOP_PAGE_KEY,
+    feature: "bookings",
+    name: "Shop product page",
+    description:
+      "The date picker on the business's own shop product pages, for workshops sold through the shop: the shop tag that marks a workshop product (product_tag), how many hours before the start bookings stop (cutoff_hours), the button colour (accent, a # and six hex digits), where a shopper is sent when the dates can't be shown (contact_url, https only, and contact_email), the business's own words for that message (fallback_message) and, for a theme whose buy button the usual rule misses, a CSS selector for what to hide (hide_selector). The cut-off, contact details and message take effect at once; a changed tag, colour or selector needs the snippets pasted into the shop theme again.",
+    schema: shopPageSchema,
+    defaultBody: () => DEFAULT_SHOP_PAGE,
   },
   {
     module: STOCK_MODULE,

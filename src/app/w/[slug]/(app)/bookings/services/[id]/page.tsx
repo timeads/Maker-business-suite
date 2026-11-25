@@ -156,7 +156,6 @@ export default async function ServicePage({
           serviceId={service.id}
           productId={service.shop_product_id}
           variantId={service.shop_variant_id}
-          site={(process.env.NEXT_PUBLIC_SITE_URL ?? "").replace(/\/+$/, "")}
           products={shopProducts}
         />
       )}

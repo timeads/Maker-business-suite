@@ -13,8 +13,13 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const slug = url.searchParams.get("workspace") ?? "";
   const product = url.searchParams.get("product") ?? "";
+  // "We can't tell" is never answered as "not a workshop": the picker shows
+  // its plain message instead of leaving a shopper with nothing.
   if (!bookingsConfigured()) {
-    return new Response(JSON.stringify({ found: false }), { status: 200, headers: HEADERS });
+    return new Response(JSON.stringify({ error: "unavailable" }), {
+      status: 503,
+      headers: { ...HEADERS, "Cache-Control": "no-store" },
+    });
   }
   try {
     const dates = await getShopBookingDates(slug, product);
@@ -26,7 +31,7 @@ export async function GET(request: Request) {
     console.error(`Shop dates failed: ${err instanceof Error ? err.message : "unknown"}`);
     return new Response(JSON.stringify({ error: "unavailable" }), {
       status: 503,
-      headers: HEADERS,
+      headers: { ...HEADERS, "Cache-Control": "no-store" },
     });
   }
 }

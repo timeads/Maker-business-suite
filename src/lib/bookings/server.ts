@@ -24,9 +24,17 @@ import {
 } from "./emails";
 import type { CheckoutInfo, PaymentDeps } from "./payments";
 import {
+  SHOP_PAGE_KEY,
+  parseShopPage,
+  shopPageFacts,
+  type ShopPage,
+  type ShopPageFacts,
+} from "./shop-page";
+import {
   formatWhen,
   generateSlots,
   isOfferedSlot,
+  zoneLabel,
   type AvailabilityRule,
   type Busy,
 } from "./slots";
@@ -302,17 +310,33 @@ export type ReserveInput = {
 export type ShopBookingDates = {
   workspace: { name: string; timezone: string };
   service: { name: string; duration_minutes: number; variant_id: string | null };
-  sessions: { id: string; starts_at: string; seats_left: number }[];
+  /** `zone` is the short label for the workspace's clock at that moment ("ET"). */
+  sessions: { id: string; starts_at: string; seats_left: number; zone: string }[];
+  /** The business's own settings for the picker, and where a shopper can turn. */
+  page: ShopPageFacts;
 };
+
+export async function getShopPage(tenantId: string): Promise<ShopPage> {
+  return withTenant(tenantId, async (scope) => {
+    const { data } = await scope
+      .select("configs", "body")
+      .eq("module", BOOKINGS_MODULE)
+      .eq("key", SHOP_PAGE_KEY)
+      .maybeSingle();
+    return parseShopPage((data as { body?: unknown } | null)?.body);
+  });
+}
 
 /**
  * What the date picker on a shop's product page shows: the workshop sold by
- * that product and its coming dates. Null when there is no such workshop.
+ * that product and its coming dates. Null when there is no such workshop
+ * (or no such workspace, or its plan doesn't include bookings right now).
  */
 export async function getShopBookingDates(
   slug: string,
   productId: string,
   admin: SupabaseClient = getAdminClient(),
+  deps: { page?: (tenantId: string) => Promise<ShopPage> } = {},
 ): Promise<ShopBookingDates | null> {
   if (!/^[0-9]{1,20}$/.test(productId)) return null;
   const tenant = await getPublicWorkspace(slug, admin);
@@ -322,9 +346,18 @@ export async function getShopBookingDates(
     p_product_id: productId,
   });
   if (error) throw new Error(`Could not load dates: ${error.message}`);
-  const found = data as Omit<ShopBookingDates, "workspace"> | null;
+  const found = data as {
+    service: ShopBookingDates["service"];
+    sessions: { id: string; starts_at: string; seats_left: number }[];
+  } | null;
   if (!found?.service) return null;
-  return { workspace: { name: tenant.name, timezone: tenant.timezone }, ...found };
+  const page = await (deps.page ?? getShopPage)(tenant.id);
+  return {
+    workspace: { name: tenant.name, timezone: tenant.timezone },
+    service: found.service,
+    sessions: found.sessions.map((s) => ({ ...s, zone: zoneLabel(tenant.timezone, s.starts_at) })),
+    page: shopPageFacts(page),
+  };
 }
 
 export type ReserveResult =

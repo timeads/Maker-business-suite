@@ -315,6 +315,47 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   `book_from_shop` (once per order and date; the seats follow refunds; a
   full or closed date is still booked and flagged). Such a workshop can't
   be booked or paid for on our own pages.
+  The emails that go out by themselves (reminder, day-of reminder,
+  thank-you, "a refund in your shop cancelled your booking") follow the
+  once-only pattern (`lib/bookings/email-sends.ts`, `booking_emails`):
+  `claim_booking_email_sends` hands each out once, the worker tries it once
+  and `finish_booking_email_send` writes down how it went. A refusal is tried
+  again (three tries in all, counted in the database), a send we never heard
+  back about is "unsure" and never resent by itself, and
+  `bookings.reminder_sent_at` / `followup_sent_at` are stamped only once the
+  email went: never stamp before sending. `deliverEmail()` in `lib/email.ts`
+  tells those outcomes apart; the older `claim_booking_emails` and
+  `claim_booking_reminders` stay but hand nothing out. The day-of reminder
+  is off unless `day_of_on` is set. "Send the confirmation again" gives the
+  booking a new link (`renew_booking_link`: only the hash is kept), so the
+  earlier one stops working. Keep `tests/db/booking-emails.test.ts` passing.
+  A shop order for a workshop with no usable date on its line ("Buy again"
+  strips it) is never dropped: the sync hands every order line to
+  `note_shop_undated_lines` (`lib/bookings/undated.ts`), which writes a
+  marker in `shop_undated_lines` once per order line, and the team is told
+  once (only for orders placed since the workshop was linked to its product,
+  `services.shop_linked_at`, so a first sync of a shop's history doesn't
+  flood the list). Markers hold no shopper: who bought is read from what the sync
+  stored (`orders`, `order_lines`, `customers`), by the shop's own ids
+  because the sync rewrites `order_lines` rows. A manager puts a line on a
+  date with `place_shop_order_line` (from Bookings → Needs a date, or from a
+  roster by the order's number with `find_shop_order_for_session`; no call
+  to the shop): under the date's row lock, one booking per line, a full date
+  booked and flagged oversold, never refused. From then on the sync keeps
+  that booking in step with the order (fewer places, cancelled on a refund).
+  Keep `tests/db/booking-undated.test.ts` passing.
+  What a business can vary about the product-page picker is a config
+  (`bookings` / `shop_page`, `lib/bookings/shop-page.ts`), set under Settings
+  → Bookings → Shop product page, where the two theme snippets are built
+  (`pageSnippet`, `cartGuardSnippet`: pure, tested). The page snippet draws
+  only for products with the workspace's workshop tag and hides the theme's
+  buy button with a style rule from the first paint; the picker never brings
+  it back. If dates can't be shown (script blocked, our server down, no such
+  workshop) the shopper sees the snippet's own message and contact link:
+  never a buy button with no date. A host without `.mbs-fallback` is a
+  snippet pasted before this and is left as the theme drew it. Times carry a
+  plain label worked out on the server per date (`zoneLabel` in `slots.ts`:
+  "ET", "PT", "BST"); keep its daylight-saving tests passing.
 - Social: members write posts through `save_social_post`; the worker claims
   due posts (`claim_due_social_posts`) and records each channel's answer with
   `finish_social_post`, which merges results so a channel that went out is

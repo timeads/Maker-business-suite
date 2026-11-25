@@ -10,6 +10,7 @@ import {
   questionsFromText,
 } from "@/lib/bookings/config";
 import { sessionCancelledEmail, type BookingDetails } from "@/lib/bookings/emails";
+import { SHOP_PAGE_KEY, shopPageSchema } from "@/lib/bookings/shop-page";
 import { parseClock, zonedTimeToUtc } from "@/lib/bookings/slots";
 import { sendEmail } from "@/lib/email";
 import { getEntitlements } from "@/lib/entitlements";
@@ -244,6 +245,49 @@ export async function saveBookingForm(
     p_tenant_id: ctx.tenant.id,
     p_module: BOOKINGS_MODULE,
     p_key: FORM_KEY,
+    p_body: parsed.data,
+  });
+  if (error) return { error: OOPS };
+  revalidatePath(`/w/${slug}/bookings`, "layout");
+  revalidatePath(`/w/${slug}/settings`, "layout");
+  return { message: "Saved." };
+}
+
+/** Saves how the date picker on the shop's product pages behaves. */
+export async function saveShopPage(
+  slug: string,
+  _prev: BookingsState,
+  formData: FormData,
+): Promise<BookingsState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const parsed = shopPageSchema.safeParse({
+    version: 1,
+    product_tag: text(formData, "product_tag"),
+    cutoff_hours: Number.parseInt(text(formData, "cutoff_hours") || "0", 10),
+    accent: text(formData, "accent"),
+    contact_url: text(formData, "contact_url"),
+    contact_email: text(formData, "contact_email"),
+    fallback_message: text(formData, "fallback_message"),
+    hide_selector: text(formData, "hide_selector"),
+  });
+  if (!parsed.success) {
+    const field = String(parsed.error.issues[0]?.path[0] ?? "");
+    const words: Record<string, string> = {
+      product_tag: "The tag can use letters, numbers, spaces, dashes and underscores.",
+      cutoff_hours: "The cut-off is a number of hours, from 0 to 336 (two weeks).",
+      accent: "The colour is six letters and numbers after a #, like #edc2ff.",
+      contact_url: "The contact page needs a full address starting with https://.",
+      contact_email: "That email address doesn't look right.",
+      fallback_message: "Keep the message under 200 characters.",
+      hide_selector: "That doesn't look like a CSS selector we can use.",
+    };
+    return { error: words[field] ?? OOPS };
+  }
+  const { error } = await ctx.supabase.rpc("save_config", {
+    p_tenant_id: ctx.tenant.id,
+    p_module: BOOKINGS_MODULE,
+    p_key: SHOP_PAGE_KEY,
     p_body: parsed.data,
   });
   if (error) return { error: OOPS };

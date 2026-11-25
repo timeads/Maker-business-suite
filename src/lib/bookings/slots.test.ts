@@ -6,6 +6,7 @@ import {
   isOfferedSlot,
   localDay,
   parseClock,
+  zoneLabel,
   zonedTimeToUtc,
 } from "./slots";
 import { formatMonth, monthGrid } from "./slots";
@@ -137,5 +138,45 @@ describe("monthGrid", () => {
     expect(monthGrid("2026-12").next).toBe("2027-01");
     expect(monthGrid("2027-01").previous).toBe("2026-12");
     expect(formatMonth("2026-12")).toBe("December 2026");
+  });
+});
+
+describe("zoneLabel", () => {
+  it("says ET, CT, MT and PT all year, on either side of a clock change", () => {
+    // US clocks went forward on 8 Mar 2026 and back on 1 Nov 2026, at 2am local.
+    const moments = [
+      "2026-03-08T06:59:00Z", // 1:59am EST, the last minute of winter time
+      "2026-03-08T07:00:00Z", // 3:00am EDT
+      "2026-07-04T16:00:00Z",
+      "2026-11-01T05:59:00Z", // 1:59am EDT, the last minute of summer time
+      "2026-11-01T06:00:00Z", // 1:00am EST
+      "2026-12-25T16:00:00Z",
+    ];
+    for (const at of moments) {
+      expect(zoneLabel("America/New_York", at), at).toBe("ET");
+      expect(zoneLabel("America/Chicago", at), at).toBe("CT");
+      expect(zoneLabel("America/Denver", at), at).toBe("MT");
+      expect(zoneLabel("America/Los_Angeles", at), at).toBe("PT");
+    }
+    expect(zoneLabel("America/Toronto", new Date("2026-07-04T16:00:00Z"))).toBe("ET");
+    expect(zoneLabel("America/Vancouver", "2026-01-04T16:00:00Z")).toBe("PT");
+  });
+
+  it("elsewhere uses the name people there use, which follows the clock change", () => {
+    // UK clocks: forward 29 Mar 2026 at 01:00 UTC, back 25 Oct 2026 at 01:00 UTC.
+    expect(zoneLabel("Europe/London", "2026-03-29T00:59:00Z")).toBe("GMT");
+    expect(zoneLabel("Europe/London", "2026-03-29T01:00:00Z")).toBe("BST");
+    expect(zoneLabel("Europe/London", "2026-10-25T00:59:00Z")).toBe("BST");
+    expect(zoneLabel("Europe/London", "2026-10-25T01:00:00Z")).toBe("GMT");
+    expect(zoneLabel("Europe/Berlin", "2026-07-04T10:00:00Z")).toBe("CEST");
+    expect(zoneLabel("Europe/Berlin", "2026-01-04T10:00:00Z")).toBe("CET");
+    expect(zoneLabel("Australia/Sydney", "2026-01-04T10:00:00Z")).toBe("AEDT");
+    expect(zoneLabel("Australia/Sydney", "2026-07-04T10:00:00Z")).toBe("AEST");
+    expect(zoneLabel("UTC", "2026-07-04T10:00:00Z")).toBe("UTC");
+  });
+
+  it("falls back to an offset where there is no short name, and to nothing for a bad zone", () => {
+    expect(zoneLabel("Asia/Tokyo", "2026-07-04T10:00:00Z")).toBe("GMT+9");
+    expect(zoneLabel("Not/AZone", "2026-07-04T10:00:00Z")).toBe("");
   });
 });
