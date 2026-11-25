@@ -107,6 +107,130 @@ Notes:
   A message the customer **unsends** is marked as removed: its words and files
   are deleted here too.
 
+## Using this alongside another inbox tool
+
+Meta lets **one app at a time** answer a conversation. It calls this _thread
+control_, and the rules _Conversation Routing_ (the older "Handover Protocol"
+is retired: "Meta no longer supports the Handover Protocol for Instagram. All
+businesses have been migrated to Conversation Routing"). It matters as soon as
+a business's Page or Instagram account is connected to this suite **and** to
+anything else that answers messages: another help desk, a chatbot, or Meta
+Business Suite's own inbox, which Meta counts as a connected app (app id
+`263902037430900` for the Page inbox, `1217981644879628` for the Instagram
+inbox).
+
+What Meta's pages say (read on 25 November 2026: "Conversation Routing for
+Instagram", its "Conversation Control APIs" page, Messenger's "Conversation
+Routing", the `standby` and `messaging_handovers` webhook references, and the
+Messenger Platform error codes):
+
+- **The thread owner** is the app allowed to answer a conversation. A
+  conversation is _active_ while a customer has written in the last 24 hours
+  and _idle_ otherwise, or once its owner releases it. Control lapses after 24
+  hours of inactivity (an owner can extend it to 7 days; a conversation that
+  starts from a click-to-message ad can be held for up to 30).
+- **With a default app set** (this is what switches Conversation Routing on),
+  only the thread owner can send while a conversation is active, and "only the
+  default app can send messages" while it is idle. An app that is neither gets
+  the customer's messages on the **`standby`** webhook channel instead of
+  `messaging`, and its sends are refused: on Instagram `(#100)`, subcode
+  `2534037`, "The action is invalid because your app is not the thread owner";
+  on Messenger `(#10)`, subcode `2018300`, "another app controls the
+  conversation". **Waiting does not help such an app**: when the conversation
+  goes idle it belongs to the default app again.
+- **With no default app** ("default" or "zero config" behaviour) every
+  connected app receives `messaging` webhooks and "all connected applications
+  can respond to the same user message without restrictions", until one of
+  them asks for or is passed control.
+- **Meta Business Suite's inbox** "takes control of the conversation" when
+  someone answers there, or moves a message to its Main folder, in a
+  conversation it didn't control. (Said on Messenger's page; Instagram's says
+  only that the inbox is a connected app and can be the default.)
+- **Meta's Business Agent** (its AI assistant), where a business has switched
+  it on, also owns conversations; the same refusal results.
+- **Take thread control** (`POST /{page-id}/take_thread_control`) is "only
+  supported when conversation routing is enabled", and only for an app the
+  business has allowed to "Take control of conversations". **Request thread
+  control** (`POST /{page-id}/request_thread_control`) is the opposite: "only
+  available when conversation routing is not enabled"; an idle conversation is
+  handed over at once, otherwise the owner is told and may pass it on.
+  **Pass** and **release** are for the app that has the conversation.
+
+### What the business owner chooses, and where
+
+Meta's pages give two routes to the same settings:
+
+- **Meta Business Suite → Settings → Conversation routing**, or
+- the Facebook Page (logged in as the Page) → **Settings → Page setup →
+  Advanced messaging** → Connected apps; for Instagram, **Page setup →
+  Instagram conversation routing**.
+
+There the owner assigns the **default app**, separately for Messenger and for
+Instagram, and, per connected app, whether it may **"Take control of
+conversations"**. (There is a second switch, "Take control of conversations
+with your Business Agent", off by default.) The menu names are as Meta's
+developer pages give them; the Business Help Centre page could not be opened
+from here, so check them against the screen.
+
+Three ways to run, in the order we'd suggest them:
+
+1. **One tool per channel.** Leave the other tool as the default for a
+   channel and answer that channel there; or make this suite's app the default
+   and answer here. Whichever app is _not_ the default for a channel can no
+   longer reply on it (and only sees messages if it listens on `standby`).
+   The owner's older help desk reads `messaging` only and subscribes to
+   `feed,messages,message_echoes`, so once this suite is the default for
+   Instagram that help desk will most likely stop receiving Instagram messages
+   as well as being refused when it replies.
+2. **Both, during a move.** Keep the usual tool as the default. In Meta's
+   settings allow this suite's app to "Take control of conversations". In the
+   workspace tick **Settings → Help desk → Channels → "If you also answer from
+   another inbox tool" → "Take the conversation over when another tool has
+   it"**. A reply from here that Meta refuses for thread control then takes
+   that one conversation and is sent; the other tool gets it back when it goes
+   idle. Replies from the other tool to a conversation this suite has taken
+   are refused in the same way, unless it can take control too.
+3. **No default app at all.** Meta's pages say every app can then answer. The
+   two tools must not both answer the same message.
+
+### What the suite does
+
+- **A refusal for thread control is recognised** by Meta's numbers or its
+  words (`ownedElsewhere` in `graph.ts`) and shown to the team as: "Another
+  inbox tool is answering this conversation just now…", with what to do and
+  Meta's own sentence under "Details". The reply stays in the outbox as
+  failed, with "Put the words back in the box", and is **never sent again by
+  itself**.
+- **Nothing is taken by default.** Only with the workspace's `take_control`
+  setting on (`helpdesk` / `channels`, owners and admins) does a refused reply
+  lead to `take_thread_control`, then, if Meta refuses that,
+  `request_thread_control`, and **one** more try at the reply, which is safe
+  because the first try was refused outright. No clear answer is still "we
+  don't know if it went" and is never retried.
+- **Messages that arrive on `standby` are filed** exactly like those on
+  `messaging` (`events.ts` reads both lists), so a conversation another tool
+  is answering still shows here. Whether a message is filed never depends on
+  who has control.
+- **Who has the conversation** is noted on the person
+  (`contacts.thread_control`, `_app`, `_at`, written only by
+  `note_thread_control`): "other" from a standby message, a
+  `take_thread_control` notice or a refused reply; "ours" from a
+  `pass_thread_control` notice or a reply that went. The reply box shows a
+  line when another tool had it at the last word from Meta, naming Meta's own
+  inboxes and no other app. It is a heads-up with a time on it; it never
+  blocks a reply. A `request_thread_control` notice (another app asking this
+  one to hand over) is logged and nothing is handed over.
+- **Webhook fields.** With messages switched on, a Page is now subscribed to
+  `standby` and `messaging_handovers` as well; if Meta refuses those two, the
+  Page is subscribed without them. Workspaces connected before this change
+  get them the next time an owner presses Save on the Channels screen (or
+  reconnects). Tick the same fields in the Meta app (below).
+- Not done: passing or releasing control from here, extending control, and
+  asking Meta who the owner is (`GET /{page-id}/thread_owner`, which only
+  names the app to the owner or the default app). A private message about a
+  comment that is refused for thread control gets the same explanation but is
+  not retried.
+
 ## Comments on posts
 
 - **What comes in.** A comment on one of the business's own posts: on a
@@ -190,10 +314,14 @@ the app).
      Meta calls the address once to check it; the web service must already be
      running with that variable set. Then subscribe to these fields:
    - **Page** object: `messages`, `message_echoes`, `message_reactions` for
-     messages; **`feed`** for Facebook comments
-   - **Instagram** object: `messages`, `message_reactions` for messages;
-     **`comments`** for Instagram comments. Leave `live_comments` and
-     `mentions` unticked (they are ignored).
+     messages, plus **`standby`** and **`messaging_handovers`** so a business
+     that also uses another inbox tool still gets its messages here (see
+     "Using this alongside another inbox tool"); **`feed`** for Facebook
+     comments
+   - **Instagram** object: `messages`, `message_reactions` for messages, plus
+     **`standby`** and the hand-over field (the dashboard lists it as
+     `messaging_handover`); **`comments`** for Instagram comments. Leave
+     `live_comments` and `mentions` unticked (they are ignored).
      (On Instagram, replies sent from the app arrive on `messages`; there is no
      separate echoes field.) Other fields are ignored if they arrive. The suite
      itself asks each connected Page to send the fields its workspace has
@@ -363,6 +491,21 @@ call to Meta faked in tests. Not yet seen working against Meta:
 - Hiding and deleting through the Page's token, and Meta's exact refusal when
   a comment has already had its private reply (the suite recognises the
   sentence, and otherwise shows Meta's own words).
+- Thread control, end to end. Seen on staging: an Instagram message filed
+  from `messaging` and the reply refused with "(#100) The action is invalid
+  since it's not the thread owner." (no subcode was noted). Not seen: a
+  delivery on `standby`, a `messaging_handovers` notice, `take_thread_control`
+  or `request_thread_control` answered by Meta, whether a Page can be
+  subscribed to `standby` and `messaging_handovers` before the app has those
+  fields ticked (the suite falls back to subscribing without them), and the
+  name of the hand-over field on the Instagram object (`messaging_handover` in
+  Meta's routing page, `messaging_handovers` in its webhook reference; the
+  suite reads the events by their content, not the field's name). Why that
+  staging message came on `messaging` although another app owned the
+  conversation isn't settled by Meta's pages: either no default app is set
+  and the other app or Meta's inbox had taken the conversation, or this app is
+  the default and Meta's inbox took it when someone opened or answered it
+  there. The payload isn't kept once filed, so it can't be looked at again.
 - Which optional permissions each use case really offers in the owner's app
   dashboard. The table at the top is Meta's documentation on the day; the
   dashboard is the authority.

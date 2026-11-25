@@ -283,8 +283,32 @@ export const HELP_TOPICS: HelpTopic[] = [
       "Photos, videos and voice messages people send are kept with the conversation. A shared post or a story reply is noted in words; the post itself isn't copied.",
       "If someone unsends a message, it is removed here too.",
       "Replies you send from the Instagram or Facebook app show up in the conversation as well.",
+      "If a reply is refused because “another inbox tool is answering this conversation”, see “Use the help desk beside another inbox tool”.",
       "On Facebook you may see “Facebook user” instead of a name; Facebook only shares names with apps it has approved for that.",
       "An owner or admin can delete everything held about a person with “Forget this customer” in the details rail.",
+    ],
+  },
+  {
+    slug: "helpdesk-other-inbox",
+    group: "helpdesk",
+    title: "Use the help desk beside another inbox tool",
+    summary:
+      "Why a reply on Instagram or Facebook can be refused, and how to choose which tool answers.",
+    intro:
+      "Instagram and Facebook let only one tool at a time answer a conversation. If your account is also connected to another help desk, a chatbot, or you answer in Meta Business Suite's own inbox, that tool may have the conversation, and a reply from here is refused. Nothing is lost: the reply is kept, and you choose in Meta's settings which tool answers.",
+    steps: [
+      "When it happens, the conversation says “Another inbox tool is answering this conversation just now…”, with Meta's own words under “Details”. Your reply wasn't sent, your words are kept, and it is never sent again by itself.",
+      "The quickest way through is to answer that customer from the tool that has the conversation (Meta's own inbox counts as one).",
+      "To answer from here instead, an owner of the Facebook Page opens Meta Business Suite → Settings → Conversation routing. The same settings are under the Page's own Settings → Page setup → Advanced messaging, and for Instagram under Page setup → Instagram conversation routing.",
+      "There, choose the default app: the tool that answers first. Instagram and Messenger each have their own, so you can move one and leave the other. Choose this suite's app to answer from here.",
+      "Back in the conversation, send it again: your words are still in the box, or press “Put the words back in the box” on the red notice.",
+    ],
+    notes: [
+      "Whichever tool is not the default can still see messages, but Meta refuses its replies. So if you make this suite the default, your other tool stops being able to reply on that channel, and the other way round. Move one channel at a time, when your team is ready.",
+      "To use both for a while, keep your usual tool as the default and, on the same Meta screen, allow this suite's app to “Take control of conversations”. Then tick “Take the conversation over when another tool has it” under Settings → Help desk → Channels. A reply from here then takes that one conversation over and is sent; the other tool can't answer it until the conversation goes quiet again. It is off until you tick it.",
+      "Answering a conversation in Meta Business Suite's inbox, or moving it to the Main folder there, hands that conversation to Meta's inbox. A reply from here can then be refused until it goes quiet or you choose this app as the default.",
+      "Waiting doesn't help on its own: where a default app is chosen, Meta only lets that app write once a conversation has gone quiet.",
+      "When we hear from Meta that another tool has a conversation, the reply box says so before you write.",
     ],
   },
   {

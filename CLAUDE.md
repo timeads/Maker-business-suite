@@ -236,6 +236,16 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   Meta's 24-hour window is worked out on read (`replyWindow`) and re-checked
   on the server, and the HUMAN_AGENT tag is used only where the config says
   the app is approved (off by default).
+  Meta lets one tool at a time answer a conversation ("thread control";
+  docs/meta-messages.md, "Using this alongside another inbox tool"). A send
+  refused for it (`ownedElsewhere`) is explained in our words with Meta's
+  under "Details", stays failed and is never resent by itself; only with the
+  workspace's `take_control` setting (off by default) does `sendSocialReply`
+  take or ask for the conversation and try once more. Messages on Meta's
+  `standby` list are filed like any other; who has a conversation is a note
+  on the person (`contacts.thread_control`, written only by
+  `note_thread_control`), a heads-up that never blocks a reply. Never take
+  control without that setting.
   Comments on posts ride on the same connection, webhook and queue
   (`comments.ts`, `tickets.kind = 'comment'`, `comment_posts`): one
   conversation per person per post (`file_social_comment`), never mixed or
