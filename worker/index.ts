@@ -4,7 +4,8 @@
  * Jobs:
  *  - on start, make sure Stripe has the plans from plans.ts
  *  - apply queued Stripe events to the subscriptions table
- *  - file inbound emails into help desk tickets
+ *  - file inbound emails into help desk tickets, keeping their pictures and files
+ *  - take help desk files out of storage once their conversation is gone
  *  - confirm booking payments and send booking reminders
  *  - publish scheduled social posts
  *  - ask UPS where incoming stock orders are, a few parcels at a time
@@ -45,6 +46,7 @@ import {
   type IngestResult,
   type PostmarkInbound,
 } from "../src/lib/helpdesk/inbound";
+import { keepMessageFiles, removeQueuedFiles } from "../src/lib/helpdesk/keep-files";
 import { postAlert } from "../src/lib/messages/alerts";
 import { runClaimedLook, type ClaimedLook } from "../src/lib/michaels/worker";
 import { moduleOpen } from "../src/lib/module-access";
@@ -212,7 +214,8 @@ async function drainInboundEmails(): Promise<number> {
   const domain = inboundDomain();
   if (!domain) return 0;
   const admin = getAdminClient();
-  const { data, error } = await admin.rpc("claim_inbound_emails", { p_limit: 10 });
+  // A few at a time: an email can carry 35 MB of files.
+  const { data, error } = await admin.rpc("claim_inbound_emails", { p_limit: 4 });
   if (error) throw new Error(`Could not claim inbound emails: ${error.message}`);
   const emails = (data ?? []) as { id: string; payload: PostmarkInbound; attempts: number }[];
 
@@ -235,7 +238,7 @@ async function drainInboundEmails(): Promise<number> {
       );
     },
     async ingest(email, tags) {
-      const { data: result, error: ingestError } = await admin.rpc("ingest_inbound_email", {
+      const { data: result, error: ingestError } = await admin.rpc("file_inbound_email", {
         p_slug: email.slug,
         p_provider_message_id: email.providerMessageId,
         p_from_email: email.fromEmail,
@@ -246,9 +249,20 @@ async function drainInboundEmails(): Promise<number> {
         p_reply_key: email.replyKey,
         p_references: email.references,
         p_tags: tags,
+        p_to: email.to,
+        p_cc: email.cc,
       });
       if (ingestError) throw new Error(ingestError.message);
       return result as IngestResult;
+    },
+    async keepFiles(result, files) {
+      if (!result.tenant_id || !result.ticket_id || !result.message_id) return;
+      const { kept, notKept } = await keepMessageFiles(
+        admin,
+        { tenantId: result.tenant_id, ticketId: result.ticket_id, messageId: result.message_id },
+        files,
+      );
+      if (kept + notKept > 0) console.log(`kept ${kept} file(s), left ${notKept}`);
     },
     async onCreated(email, result, outcome) {
       if (!result.tenant_id || !result.ticket_id) return;
@@ -858,6 +872,7 @@ async function main() {
       (await attempt(drainStripeEvents, 0)) +
       (await attempt(drainSyncJobs, 0)) +
       (await attempt(drainInboundEmails, 0)) +
+      (await attempt(() => removeQueuedFiles(getAdminClient()), 0)) +
       (await attempt(drainSocialPosts, 0)) +
       (await attempt(drainStockReceipts, 0)) +
       (await attempt(drainShipmentUndos, 0)) +

@@ -12,6 +12,7 @@ import {
   saveFolder,
   saveView,
   saveAutoTagRule,
+  saveDeskSettings,
   saveReplyTemplate,
   type HelpdeskState,
 } from "@/app/w/[slug]/helpdesk/actions";
@@ -282,6 +283,32 @@ export function AddViewForm({
           Add view
         </SubmitButton>
       </div>
+    </form>
+  );
+}
+
+/** The business's own support addresses, which "Reply all" must never copy in. */
+export function OwnAddressesForm({ slug, addresses }: { slug: string; addresses: string[] }) {
+  const [state, action] = useSettingsAction(saveDeskSettings, slug);
+  return (
+    <form action={action} className="flex flex-col gap-2">
+      <Label htmlFor="own-addresses">Your own support addresses</Label>
+      <Input
+        id="own-addresses"
+        name="own_addresses"
+        defaultValue={addresses.join(", ")}
+        placeholder="hello@yourstudio.com"
+        autoComplete="off"
+      />
+      <p className="text-muted-foreground text-xs">
+        The addresses you forward from. “Reply all” leaves them out, so a reply doesn&apos;t come
+        straight back here as a new email.
+      </p>
+      <FormMessage>{state.error}</FormMessage>
+      <FormMessage kind="success">{state.message}</FormMessage>
+      <SubmitButton variant="outline" size="default" pendingText="Saving…" className="w-fit">
+        Save addresses
+      </SubmitButton>
     </form>
   );
 }

@@ -161,6 +161,8 @@ export function Composer({
   ticketId,
   customerEmail,
   customerFirstName,
+  replyAllCc = [],
+  forwardFiles = [],
   templates,
   snoozeChoices,
   canDraft,
@@ -171,6 +173,10 @@ export function Composer({
   ticketId: string;
   customerEmail: string;
   customerFirstName: string | null;
+  /** Who else the customer's last email went to; "Reply all" copies them in. */
+  replyAllCc?: string[];
+  /** The conversation's kept pictures and files, which a forward takes along. */
+  forwardFiles?: { id: string; name: string; size: number }[];
   templates: Template[];
   snoozeChoices: Snooze[];
   canDraft: boolean;
@@ -187,6 +193,7 @@ export function Composer({
   const [bcc, setBcc] = useState("");
   const [editing, setEditing] = useState(false);
   const [files, setFiles] = useState<File[]>([]);
+  const [dropped, setDropped] = useState<string[]>([]);
   const [menu, setMenu] = useState<"macros" | "ai" | "send" | null>(null);
   const [macroSearch, setMacroSearch] = useState("");
   const [hint, setHint] = useState("");
@@ -249,11 +256,17 @@ export function Composer({
         setTo(customerEmail);
         setEditing(next === "reply_all");
       }
-      state.current = { ...state.current, mode: next };
+      // "Reply all" brings in everyone on the customer's last email; plain "Reply" lets them go again.
+      const copies = replyAllCc.join(", ");
+      let nextCc = state.current.cc;
+      if (next === "reply_all" && !nextCc.trim()) nextCc = copies;
+      else if (next !== "reply_all" && nextCc === copies) nextCc = "";
+      setCc(nextCc);
+      state.current = { ...state.current, mode: next, cc: nextCc };
       save();
       if (focus) requestAnimationFrame(() => editor.current?.focus());
     },
-    [customerEmail, save],
+    [customerEmail, replyAllCc, save],
   );
 
   // A saved reply, an order's summary or anything else dropped in goes under what is already there.
@@ -328,6 +341,7 @@ export function Composer({
   const clear = () => {
     if (editor.current) editor.current.innerHTML = "";
     setFiles([]);
+    setDropped([]);
     setHint("");
     try {
       localStorage.removeItem(key);
@@ -372,6 +386,10 @@ export function Composer({
     data.set("then", mode === "forward" && then === "pending" ? "keep" : then);
     if (until) data.set("snooze_until", until);
     for (const file of files) data.append("files", file);
+    if (mode === "forward") {
+      for (const file of forwardFiles)
+        if (!dropped.includes(file.id)) data.append("carry", file.id);
+    }
     setProblem(null);
     start(async () => {
       const result = await sendMail(slug, ticketId, data);
@@ -456,6 +474,7 @@ export function Composer({
   };
 
   const note = mode === "note";
+  const carried = mode === "forward" ? forwardFiles.filter((f) => !dropped.includes(f.id)) : [];
   const people = {
     to: parseRecipients(to).ok,
     cc: parseRecipients(cc).ok,
@@ -603,6 +622,31 @@ export function Composer({
                 type="button"
                 aria-label={`Remove ${file.name}`}
                 onClick={() => setFiles(files.filter((_, at) => at !== i))}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <X aria-hidden className="size-3" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {carried.length > 0 && (
+        <ul
+          aria-label="Files from this conversation going with the forward"
+          className="flex flex-wrap gap-1.5 px-3 pb-1"
+        >
+          {carried.map((file) => (
+            <li
+              key={file.id}
+              className="border-border bg-panel flex items-center gap-1.5 rounded-sm border px-2 py-1 text-xs"
+            >
+              <Paperclip aria-hidden className="text-muted-foreground size-3" />
+              <span className="font-read max-w-[16ch] truncate font-semibold">{file.name}</span>
+              <span className="text-muted-foreground">{fileSize(file.size)}</span>
+              <button
+                type="button"
+                aria-label={`Don't forward ${file.name}`}
+                onClick={() => setDropped((was) => [...was, file.id])}
                 className="text-muted-foreground hover:text-foreground"
               >
                 <X aria-hidden className="size-3" />

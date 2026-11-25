@@ -21,8 +21,19 @@ import {
 import { draftReply } from "@/lib/helpdesk/draft";
 import { readInsights } from "@/lib/helpdesk/insights";
 import {
+  FILES_BUCKET,
+  displayName,
+  filesNote,
+  fromBase64,
+  isKeptType,
+  type IncomingFile,
+} from "@/lib/helpdesk/files";
+import { keepMessageFiles } from "@/lib/helpdesk/keep-files";
+import {
   MAX_RECIPIENTS,
+  fileSize,
   filesProblem,
+  pickCarried,
   forwardedThread,
   outgoingText,
   parseRecipients,
@@ -32,6 +43,7 @@ import {
 import { replyProblem } from "@/lib/helpdesk/reply";
 import { isPlain, parseRichDoc, richToText, tidyDoc, type RichDoc } from "@/lib/helpdesk/rich";
 import { SAVED_VIEWS_KEY, parseSavedViews, savedViewsSchema } from "@/lib/helpdesk/saved-views";
+import { DESK_SETTINGS_KEY, deskSettingsSchema, parseDeskSettings } from "@/lib/helpdesk/settings";
 import { postAlert } from "@/lib/messages/alerts";
 import { handlesFor, nameOf, type Person } from "@/lib/messages/format";
 import { getAdminClient } from "@/lib/supabase/admin";
@@ -58,6 +70,27 @@ async function context(slug: string) {
     entitlements,
     supabase: await createClient(),
   } as const;
+}
+
+/** For a prompt: which messages carried files, by name and kind only. Trouble reading them costs nothing. */
+async function fileNotes(
+  supabase: Ctx["supabase"],
+  tenantId: string,
+  messageIds: string[],
+): Promise<Map<string, string>> {
+  const notes = new Map<string, string>();
+  if (messageIds.length === 0) return notes;
+  const { data } = await supabase
+    .from("message_attachments")
+    .select("message_id, name, mime_type")
+    .eq("tenant_id", tenantId)
+    .in("message_id", messageIds);
+  const by = new Map<string, { name: string; mime_type: string }[]>();
+  for (const row of (data ?? []) as { message_id: string; name: string; mime_type: string }[]) {
+    by.set(row.message_id, [...(by.get(row.message_id) ?? []), row]);
+  }
+  for (const [id, files] of by) notes.set(id, filesNote(files));
+  return notes;
 }
 
 /** Asks Claude for a draft. It lands in the reply box; a person decides whether to send it. */
@@ -90,7 +123,7 @@ export async function draftTicketReply(
         .maybeSingle(),
       ctx.supabase
         .from("messages")
-        .select("direction, body, created_at")
+        .select("id, direction, body, created_at")
         .eq("ticket_id", ticketId)
         .eq("tenant_id", ctx.tenant.id)
         .order("created_at", { ascending: true })
@@ -159,6 +192,11 @@ export async function draftTicketReply(
     }
   }
 
+  const notes = await fileNotes(
+    ctx.supabase,
+    ctx.tenant.id,
+    messages.map((m) => String(m.id)),
+  );
   try {
     const draft = await draftReply({
       hint,
@@ -168,7 +206,7 @@ export async function draftTicketReply(
       subject: ticket.subject,
       thread: messages.map((m) => ({
         from: m.direction === "inbound" ? ("customer" as const) : ("us" as const),
-        body: String(m.body).slice(0, 6000),
+        body: String(m.body).slice(0, 6000) + (notes.get(String(m.id)) ?? ""),
         at: String(m.created_at).slice(0, 10),
       })),
       templates: parseTemplates(templates?.body).templates.map((t) => ({
@@ -530,8 +568,8 @@ async function deliver(
   if (then === "snoozed" && !(Date.parse(snooze) > Date.now())) {
     return { error: "Pick when it should come back." };
   }
-  const files = await readFiles(formData);
-  if ("error" in files) return { error: files.error };
+  const picked = await readFiles(formData);
+  if ("error" in picked) return { error: picked.error };
   const domain = inboundDomain();
   if (!domain || !process.env.POSTMARK_SERVER_TOKEN || !process.env.SUPABASE_SECRET_KEY) {
     return { error: "Sending email isn't switched on for this environment yet." };
@@ -546,6 +584,59 @@ async function deliver(
     .maybeSingle();
   if (!ticket) return { error: "That conversation couldn't be found." };
   if (ticket.merged_into) return { error: "This conversation was joined into another one." };
+
+  // A forward takes the conversation's own kept files along. Which ones is
+  // re-read here as this member (so only files they can see, on this ticket),
+  // and each is fetched from the private bucket by the server.
+  const files: OutgoingFile[] = [...picked];
+  const notCarried: string[] = [];
+  const carryIds = formData
+    .getAll("carry")
+    .map(String)
+    .filter((id) => /^[0-9a-f-]{36}$/i.test(id))
+    .slice(0, 20);
+  if (kind === "forward" && carryIds.length > 0) {
+    const { data: rows } = await ctx.supabase
+      .from("message_attachments")
+      .select("id, name, mime_type, bytes, storage_path, messages!inner(ticket_id)")
+      .eq("tenant_id", ctx.tenant.id)
+      .eq("state", "kept")
+      .eq("messages.ticket_id", ticketId)
+      .in("id", carryIds);
+    const kept = (
+      (rows ?? []) as unknown as {
+        id: string;
+        name: string;
+        mime_type: string;
+        bytes: number;
+        storage_path: string | null;
+      }[]
+    )
+      .filter(
+        (row) => row.storage_path?.startsWith(`${ctx.tenant.id}/`) && isKeptType(row.mime_type),
+      )
+      .sort((a, b) => carryIds.indexOf(a.id) - carryIds.indexOf(b.id))
+      .map((row) => ({ ...row, size: Number(row.bytes) }));
+    const { carried, left } = pickCarried(
+      kept,
+      picked.reduce((sum, file) => sum + file.size, 0),
+    );
+    const bucket = getAdminClient().storage.from(FILES_BUCKET);
+    for (const row of carried) {
+      const { data: blob } = await bucket.download(row.storage_path!);
+      if (!blob) {
+        notCarried.push(row.name);
+        continue;
+      }
+      files.push({
+        name: displayName(row.name),
+        type: row.mime_type,
+        size: blob.size,
+        base64: Buffer.from(await blob.arrayBuffer()).toString("base64"),
+      });
+    }
+    notCarried.push(...left.map((row) => `${row.name} (${fileSize(row.size)})`));
+  }
 
   let appendix: string | undefined;
   if (kind === "forward") {
@@ -573,6 +664,9 @@ async function deliver(
         body: String(m.body),
       })),
     );
+    if (notCarried.length > 0) {
+      appendix += `\n\nNot attached (too big to forward together): ${notCarried.join(", ")}`;
+    }
   }
 
   try {
@@ -597,7 +691,7 @@ async function deliver(
       inReplyTo: info.last_message_id,
       files,
     });
-    const { error: recordError } = await ctx.supabase.rpc("record_outbound", {
+    const { data: messageId, error: recordError } = await ctx.supabase.rpc("record_outbound", {
       p_ticket_id: ticketId,
       p_body: outgoingText(doc, kind === "forward" ? undefined : appendix) || "(forwarded)",
       p_from_email: `support-${ctx.tenant.slug}@${domain}`,
@@ -611,6 +705,24 @@ async function deliver(
       p_snooze_until: then === "snoozed" ? new Date(snooze).toISOString() : null,
     });
     if (recordError) throw new Error(recordError.message);
+    // Keep what was sent, so the conversation shows it. The email has gone
+    // either way: trouble here never turns a sent email into a failure.
+    if (messageId && files.length > 0) {
+      try {
+        await keepMessageFiles(
+          getAdminClient(),
+          { tenantId: ctx.tenant.id, ticketId, messageId: String(messageId) },
+          files.map((file): IncomingFile => ({
+            name: file.name,
+            claimed: file.type,
+            bytes: fromBase64(file.base64),
+            contentId: null,
+          })),
+        );
+      } catch (err) {
+        console.error("Sent files weren't kept", err instanceof Error ? err.message : err);
+      }
+    }
   } catch (err) {
     console.error("Send failed", err instanceof Error ? err.message : err);
     return { error: replyProblem(err) };
@@ -741,7 +853,7 @@ export async function summarizeTicket(slug: string, ticketId: string): Promise<H
       .maybeSingle(),
     ctx.supabase
       .from("messages")
-      .select("direction, body, created_at")
+      .select("id, direction, body, created_at")
       .eq("ticket_id", ticketId)
       .eq("tenant_id", ctx.tenant.id)
       .order("created_at", { ascending: true })
@@ -761,12 +873,17 @@ export async function summarizeTicket(slug: string, ticketId: string): Promise<H
         "You've used this month's AI allowance. It resets next month, or you can upgrade your plan for more.",
     };
   }
+  const notes = await fileNotes(
+    ctx.supabase,
+    ctx.tenant.id,
+    messages.map((m) => String(m.id)),
+  );
   try {
     const result = await readInsights({
       subject: ticket.subject,
       thread: messages.map((m) => ({
         from: m.direction === "inbound" ? ("customer" as const) : ("us" as const),
-        body: String(m.body).slice(0, 6000),
+        body: String(m.body).slice(0, 6000) + (notes.get(String(m.id)) ?? ""),
         at: String(m.created_at).slice(0, 10),
       })),
     });
@@ -874,5 +991,25 @@ export async function deleteView(slug: string, _prev: HelpdeskState, formData: F
     return {
       body: { version: 1, views: parseSavedViews(current).views.filter((v) => v.id !== id) },
     };
+  });
+}
+
+/** How the desk behaves: the business's own addresses, the undo wait, what follows a close. */
+export async function saveDeskSettings(slug: string, _prev: HelpdeskState, formData: FormData) {
+  return saveHelpdeskConfig(slug, DESK_SETTINGS_KEY, (current) => {
+    const now = parseDeskSettings(current);
+    const own = parseRecipients(String(formData.get("own_addresses") ?? ""));
+    if (own.bad.length > 0) return { error: `“${own.bad[0]}” isn't an email address.` };
+    const has = (key: string) => formData.get(key) !== null;
+    const parsed = deskSettingsSchema.safeParse({
+      ...now,
+      own_addresses: has("own_addresses") ? own.ok : now.own_addresses,
+      undo_seconds: has("undo_seconds") ? Number(formData.get("undo_seconds")) : now.undo_seconds,
+      after_close: has("after_close") ? formData.get("after_close") : now.after_close,
+      auto_open: has("auto_open_set") ? formData.get("auto_open") === "1" : now.auto_open,
+    });
+    return parsed.success
+      ? { body: parsed.data }
+      : { error: "Up to ten addresses, and choices from the lists." };
   });
 }

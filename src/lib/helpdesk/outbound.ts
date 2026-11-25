@@ -24,10 +24,56 @@ export function parseRecipients(text: string): { ok: string[]; bad: string[] } {
   return { ok, bad };
 }
 
+/**
+ * Who "Reply all" copies in: everyone the customer's last email was written
+ * to, less the customer themselves and every address that is the business's
+ * own (the desk's addresses on our mail domain, and the support addresses it
+ * forwards from), which would only send the reply straight back to the desk.
+ */
+export function replyAllCopies(
+  last: { from_email: string; to_emails?: string[] | null; cc_emails?: string[] | null } | null,
+  own: { domain: string | null; addresses: string[] },
+): string[] {
+  if (!last) return [];
+  const mine = new Set(own.addresses.map((address) => address.trim().toLowerCase()));
+  const sender = last.from_email.trim().toLowerCase();
+  const out: string[] = [];
+  for (const raw of [...(last.to_emails ?? []), ...(last.cc_emails ?? [])]) {
+    const address = raw.trim().toLowerCase();
+    if (!ADDRESS.test(address) || address === sender || mine.has(address)) continue;
+    if (own.domain && address.endsWith(`@${own.domain.toLowerCase()}`)) continue;
+    if (!out.includes(address)) out.push(address);
+  }
+  return out.slice(0, MAX_RECIPIENTS - 1);
+}
+
 export const MAX_RECIPIENTS = 10;
 export const MAX_FILES = 5;
 /** All files on one email together. The page's own upload limit is a little above this. */
 export const MAX_FILES_BYTES = 4 * 1024 * 1024;
+/** A forward: what was picked plus the conversation's own kept files, together. The mail service takes 10 MB. */
+export const MAX_FORWARD_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Which of a conversation's kept files ride along on a forward: in the order
+ * given, each while it still fits. What doesn't fit is named so the email can
+ * say so.
+ */
+export function pickCarried<T extends { name: string; size: number }>(
+  files: T[],
+  alreadyBytes: number,
+): { carried: T[]; left: T[] } {
+  let total = alreadyBytes;
+  const carried: T[] = [];
+  const left: T[] = [];
+  for (const file of files) {
+    if (carried.length < 10 && total + file.size <= MAX_FORWARD_BYTES) {
+      carried.push(file);
+      total += file.size;
+    } else left.push(file);
+  }
+  return { carried, left };
+}
 /** Kinds of file the mail service refuses, or that nobody should be emailing a customer. */
 const REFUSED = /\.(exe|bat|cmd|com|scr|js|vbs|msi|jar|ps1|sh|app|dll|lnk)$/i;
 

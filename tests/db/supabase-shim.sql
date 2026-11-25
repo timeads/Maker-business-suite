@@ -65,5 +65,15 @@ create table storage.buckets (
   allowed_mime_types text[]
 );
 
+-- Stored files: enough of the table for a migration to put a policy on it.
+create table storage.objects (
+  id uuid primary key default gen_random_uuid(),
+  bucket_id text references storage.buckets (id),
+  name text not null
+);
+alter table storage.objects enable row level security;
+grant usage on schema storage to anon, authenticated, service_role;
+grant all on storage.objects to anon, authenticated, service_role;
+
 -- Supabase Realtime announces changes to tables in this publication.
 create publication supabase_realtime;

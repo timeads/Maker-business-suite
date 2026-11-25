@@ -66,13 +66,15 @@ describe("reading inbound email", () => {
       fromName: "Sam Shopper",
       subject: "Where is my rug?",
       body: "Hi, I ordered two weeks ago. Any news on shipping?",
+      to: [],
+      cc: [],
       messageId: "<abc@mail.example.com>",
       references: [],
       automated: false,
     });
   });
 
-  it("uses just the new text of a reply, and finds the ticket key and earlier message ids", () => {
+  it("keeps the whole text of a reply (the thread folds the quote), and finds the ticket key and earlier message ids", () => {
     const email = parseInboundEmail(
       inbound({
         ToFull: [{ Email: `support-wild-thread+${KEY}@${DOMAIN}` }],
@@ -89,7 +91,7 @@ describe("reading inbound email", () => {
     );
     expect(email).toMatchObject({
       replyKey: KEY,
-      body: "Thanks, that helps!",
+      body: "Thanks, that helps!\n\nOn Tue, Wild Thread wrote:\n> long quoted thread",
       references: ["<ours@pm.test>", "<abc@mail.example.com>"],
     });
   });
@@ -102,7 +104,7 @@ describe("reading inbound email", () => {
       }),
       DOMAIN,
     );
-    expect(email?.body).toBe("Hello there\nIs it ready?");
+    expect(email?.body).toBe("Hello there\n\nIs it ready?");
   });
 
   it("finds our address when the studio was only cc'd or the mail was forwarded", () => {

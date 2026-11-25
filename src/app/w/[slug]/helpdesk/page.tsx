@@ -50,10 +50,12 @@ import {
   sortRows,
   timeAgo,
 } from "@/lib/helpdesk/list";
-import { fileSize } from "@/lib/helpdesk/outbound";
+import { isPicture } from "@/lib/helpdesk/files";
+import { fileSize, replyAllCopies } from "@/lib/helpdesk/outbound";
 import { parseRichDoc, type RichDoc } from "@/lib/helpdesk/rich";
 import { SAVED_VIEWS_KEY, matchesConditions, parseSavedViews } from "@/lib/helpdesk/saved-views";
-import { foldThread, splitQuote } from "@/lib/helpdesk/thread";
+import { DESK_SETTINGS_KEY, parseDeskSettings } from "@/lib/helpdesk/settings";
+import { foldThread, placeInline, splitQuote } from "@/lib/helpdesk/thread";
 import {
   PRIORITY_LABELS,
   STATUS_LABELS,
@@ -79,6 +81,7 @@ import { loadStockForBought, type BoughtItemStock, type BoughtLine } from "@/lib
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
 import { cn } from "@/lib/utils";
+import { MessageFiles, type ShownFile } from "./attachments";
 import { Composer } from "./composer";
 import { loadCustomerSide, type CustomerSide } from "./data";
 import {
@@ -101,6 +104,16 @@ import { helpdeskAccess } from "./gate";
 export const metadata: Metadata = { title: "Help desk" };
 
 type Contact = { email: string; name: string | null };
+type FileRow = {
+  id: string;
+  message_id: string;
+  name: string;
+  mime_type: string;
+  bytes: number;
+  content_id: string | null;
+  state: string;
+  reason: string | null;
+};
 type Row = {
   id: string;
   number: number;
@@ -248,7 +261,7 @@ export default async function HelpdeskPage({
     { count: closedCount },
     { data: team },
     { data: folderRows },
-    { data: viewsConfig },
+    { data: deskConfigs },
     { data: readRows },
     { data: mentionRows },
     { data: found },
@@ -280,11 +293,10 @@ export default async function HelpdeskPage({
     supabase.from("ticket_folders").select("id, name").eq("tenant_id", tenant.id).order("name"),
     supabase
       .from("configs")
-      .select("body")
+      .select("key, body")
       .eq("tenant_id", tenant.id)
       .eq("module", HELPDESK_MODULE)
-      .eq("key", SAVED_VIEWS_KEY)
-      .maybeSingle(),
+      .in("key", [SAVED_VIEWS_KEY, DESK_SETTINGS_KEY]),
     // This person's own read marks, newest first.
     supabase
       .from("ticket_reads")
@@ -307,7 +319,10 @@ export default async function HelpdeskPage({
   const people = (team ?? []) as Person[];
   const person = (id: string | null) => people.find((p) => p.user_id === id);
   const folders = (folderRows ?? []) as { id: string; name: string }[];
-  const savedViews = parseSavedViews(viewsConfig?.body).views;
+  const configOf = (key: string) =>
+    ((deskConfigs ?? []) as { key: string; body: unknown }[]).find((row) => row.key === key)?.body;
+  const savedViews = parseSavedViews(configOf(SAVED_VIEWS_KEY)).views;
+  const deskSettings = parseDeskSettings(configOf(DESK_SETTINGS_KEY));
   const savedView = choice.kind === "saved" ? savedViews.find((v) => v.id === choice.id) : null;
   const folder = choice.kind === "folder" ? folders.find((f) => f.id === choice.id) : null;
   const readAt = new Map((readRows ?? []).map((r) => [r.ticket_id as string, r.read_at as string]));
@@ -514,6 +529,48 @@ export default async function HelpdeskPage({
     : [null, null, null, null, null, null, null];
 
   const thread = (messages?.data ?? []) as unknown as Message[];
+  // The pictures and files on these messages. Read on its own, and allowed to
+  // fail: a conversation is still readable without them.
+  const { data: fileRows } =
+    thread.length > 0
+      ? await supabase
+          .from("message_attachments")
+          .select("id, message_id, name, mime_type, bytes, content_id, state, reason")
+          .eq("tenant_id", tenant.id)
+          .in(
+            "message_id",
+            thread.map((m) => m.id),
+          )
+          .order("created_at")
+      : { data: [] };
+  const filesOf = new Map<string, FileRow[]>();
+  for (const row of (fileRows ?? []) as FileRow[]) {
+    filesOf.set(row.message_id, [...(filesOf.get(row.message_id) ?? []), row]);
+  }
+  const shown = (row: FileRow): ShownFile => ({
+    id: row.id,
+    name: row.name,
+    type: row.mime_type,
+    size: Number(row.bytes),
+    kept: row.state === "kept",
+    reason: row.reason,
+  });
+  // What a forward can carry: the conversation's kept files, newest first.
+  const forwardFiles = ((fileRows ?? []) as FileRow[])
+    .filter((row) => row.state === "kept")
+    .reverse()
+    .slice(0, 20)
+    .map((row) => ({ id: row.id, name: row.name, size: Number(row.bytes) }));
+  const replyAllCc = replyAllCopies(
+    thread.filter((m) => m.direction === "inbound").at(-1) ?? null,
+    {
+      domain,
+      addresses: [
+        ...(domain ? [supportAddress(tenant.slug, domain)] : []),
+        ...deskSettings.own_addresses,
+      ],
+    },
+  );
   const eventRows = (events?.data ?? []) as TicketEvent[];
   const latestOrder = customer?.recent[0];
   // "When is this back?": for what they bought, what is on the shelf and what
@@ -672,6 +729,16 @@ export default async function HelpdeskPage({
     const text = ours ? { own: m.body, quoted: null } : splitQuote(m.body);
     const to =
       (m.to_emails ?? []).length > 0 ? (m.to_emails ?? []) : contact ? [contact.email] : [];
+    const files = filesOf.get(m.id) ?? [];
+    const body = ours
+      ? { pieces: [{ kind: "text" as const, text: text.own }], placed: new Set<string>() }
+      : placeInline(
+          text.own,
+          files
+            .filter((file) => file.state === "kept" && isPicture(file.mime_type))
+            .map((file) => ({ id: file.id, contentId: file.content_id, name: file.name })),
+        );
+    const copied = ours ? [] : [...(m.to_emails ?? []), ...(m.cc_emails ?? [])];
     return (
       <li
         key={entry.id}
@@ -687,18 +754,34 @@ export default async function HelpdeskPage({
             <p className="text-muted-foreground truncate text-xs">
               {ours
                 ? `${m.kind === "forward" ? "forwarded to" : "to"} ${to.join(", ")}${(m.cc_emails ?? []).length > 0 ? ` · cc ${(m.cc_emails ?? []).join(", ")}` : ""}`
-                : m.from_email}
+                : `${m.from_email}${copied.length > 0 ? ` · also to ${copied.join(", ")}` : ""}`}
             </p>
           </div>
           <time className="text-muted-foreground shrink-0 text-xs" dateTime={m.created_at}>
             {when.format(new Date(m.created_at))}
           </time>
         </div>
-        {/* Plain text only: customer email is never rendered as HTML. */}
+        {/* Plain text only: customer email is never rendered as HTML. A picture set
+            into the email is our own element, placed where the email's text marks it. */}
         {doc ? (
           <RichView doc={doc} />
         ) : (
-          <p className="font-read text-sm break-words whitespace-pre-wrap">{text.own}</p>
+          body.pieces.map((piece, i) =>
+            piece.kind === "text" ? (
+              <p key={i} className="font-read text-sm break-words whitespace-pre-wrap">
+                {piece.text}
+              </p>
+            ) : (
+              <MessageFiles
+                key={i}
+                inline
+                files={files.filter((file) => file.id === piece.id).map(shown)}
+              />
+            ),
+          )
+        )}
+        {!doc && body.pieces.length === 0 && files.length > 0 && (
+          <p className="text-muted-foreground text-xs">No words, just what&apos;s attached.</p>
         )}
         {text.quoted && (
           <details className="mt-2">
@@ -710,7 +793,9 @@ export default async function HelpdeskPage({
             </p>
           </details>
         )}
-        {(m.attachments ?? []).length > 0 && (
+        <MessageFiles files={files.filter((file) => !body.placed.has(file.id)).map(shown)} />
+        {/* Mail sent before files were kept: only their names were written down. */}
+        {files.length === 0 && (m.attachments ?? []).length > 0 && (
           <ul className="mt-3 flex flex-wrap gap-1.5">
             {(m.attachments ?? []).map((file, i) => (
               <li
@@ -1098,6 +1183,8 @@ export default async function HelpdeskPage({
                     ticketId={ticket.id}
                     customerEmail={contact?.email ?? ""}
                     customerFirstName={firstName}
+                    replyAllCc={replyAllCc}
+                    forwardFiles={forwardFiles}
                     templates={templates}
                     snoozeChoices={choices}
                     canDraft={canDraft}

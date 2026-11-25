@@ -24,6 +24,7 @@ import {
   SAVED_VIEWS_KEY as DESK_VIEWS_KEY,
   savedViewsSchema as deskViewsSchema,
 } from "../helpdesk/saved-views";
+import { DEFAULT_DESK_SETTINGS, DESK_SETTINGS_KEY, deskSettingsSchema } from "../helpdesk/settings";
 import {
   DEFAULT_MICHAELS_SETTINGS,
   MICHAELS_MODULE,
@@ -131,6 +132,16 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
       "Named filters in the help desk's menu. Each has conditions a conversation must meet: status (active, open, pending, snoozed, closed, any), assignee (me, none or a user id), any of some tags, a folder id or none, priorities, words in the subject or customer, and unread only.",
     schema: deskViewsSchema,
     defaultBody: () => DEFAULT_DESK_VIEWS,
+  },
+  {
+    module: HELPDESK_MODULE,
+    key: DESK_SETTINGS_KEY,
+    feature: "helpdesk",
+    name: "Help desk behaviour",
+    description:
+      "How the help desk behaves: the business's own support addresses (never copied in by Reply all), how many seconds a sent email waits so it can be undone (0, 5, 10 or 20), what happens after closing a conversation (next, list or stay), and whether the first conversation opens by itself.",
+    schema: deskSettingsSchema,
+    defaultBody: () => DEFAULT_DESK_SETTINGS,
   },
   {
     module: BOOKINGS_MODULE,

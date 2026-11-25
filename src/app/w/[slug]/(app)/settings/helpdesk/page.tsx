@@ -15,7 +15,15 @@ import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
 import { helpdeskAccess } from "@/app/w/[slug]/helpdesk/gate";
 import { SAVED_VIEWS_KEY, describeConditions, parseSavedViews } from "@/lib/helpdesk/saved-views";
-import { AddRuleForm, AddTemplateForm, AddViewForm, DeleteButton, FolderForm } from "./forms";
+import { DESK_SETTINGS_KEY, parseDeskSettings } from "@/lib/helpdesk/settings";
+import {
+  AddRuleForm,
+  AddTemplateForm,
+  AddViewForm,
+  DeleteButton,
+  FolderForm,
+  OwnAddressesForm,
+} from "./forms";
 
 export const metadata: Metadata = { title: "Help desk settings" };
 
@@ -53,6 +61,7 @@ export default async function HelpdeskSettingsPage({
   const templates = parseTemplates(stored.get(TEMPLATES_KEY)).templates;
   const rules = parseRules(stored.get(RULES_KEY)).rules;
   const views = parseSavedViews(stored.get(SAVED_VIEWS_KEY)).views;
+  const desk = parseDeskSettings(stored.get(DESK_SETTINGS_KEY));
   const domain = inboundDomain();
 
   return (
@@ -81,6 +90,15 @@ export default async function HelpdeskSettingsPage({
                 customers, and set it to forward to the address above. In Gmail that&apos;s Settings
                 → Forwarding; other mail providers have the same setting under a similar name.
               </p>
+              {canEdit ? (
+                <OwnAddressesForm slug={tenant.slug} addresses={desk.own_addresses} />
+              ) : (
+                desk.own_addresses.length > 0 && (
+                  <p className="text-muted-foreground">
+                    Your own addresses: {desk.own_addresses.join(", ")}
+                  </p>
+                )
+              )}
             </>
           ) : (
             <p className="text-muted-foreground">
