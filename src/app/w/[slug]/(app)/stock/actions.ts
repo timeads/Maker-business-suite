@@ -16,6 +16,7 @@ import {
   STOCK_SETTINGS_KEY,
   STOCK_VIEWS_KEY,
   parseSavedViews,
+  parseStockSettings,
   parseSeasons,
   savedViewsSchema,
   seasonsSchema,
@@ -33,6 +34,7 @@ import {
   type DraftOrder,
   type StockRow,
 } from "@/lib/stock/plan";
+import { parseEmailList, parseWhole } from "@/lib/stock/suppliers/table";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
 import { loadIncoming, loadStock } from "./data";
@@ -107,6 +109,29 @@ const names = (rows: StockRow[]) =>
     ? rows.map((row) => row.name).join(" and ")
     : `${rows[0].name} and ${rows.length - 1} more`;
 
+/** The workspace's usual lead time and cover (Stock → Settings), read as the member. */
+async function usualFigures(ctx: Ctx) {
+  const { data } = await ctx.supabase
+    .from("configs")
+    .select("body")
+    .eq("tenant_id", ctx.tenant.id)
+    .eq("module", STOCK_MODULE)
+    .eq("key", STOCK_SETTINGS_KEY)
+    .maybeSingle();
+  const settings = parseStockSettings(data?.body);
+  return { lead: settings.default_lead_time_days, cover: settings.default_coverage_days };
+}
+
+/** Said when 0 was typed as a lead time: it is kept empty, never "arrives the same day". */
+const zeroLead = (usual: number) =>
+  `0 days isn't a lead time, so it's left empty and follows your usual ${usual} days.`;
+
+/**
+ * Adds a supplier, or saves the form on a supplier's own page. The words are
+ * the table's: Name, Contact, Email (one box, the first address being where
+ * orders go), Lead time, MOQ, MOQ applies, Notes. "Each order covers" is only
+ * on the supplier's page; a new supplier starts on the workspace's figure.
+ */
 export async function saveSupplier(
   slug: string,
   supplierId: string | null,
@@ -115,45 +140,43 @@ export async function saveSupplier(
 ): Promise<StockState> {
   const ctx = await context(slug);
   if ("error" in ctx) return { error: ctx.error };
+  if (supplierId !== null && !UUID.test(supplierId)) return { error: OOPS };
   const name = text(formData, "name");
-  const email = text(formData, "email");
-  const lead = whole(formData, "lead");
-  const cover = whole(formData, "cover");
-  const moq = whole(formData, "moq") ?? 1;
   if (!name || name.length > 120) return { error: "Give the supplier a name." };
-  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    return { error: "That email doesn't look right." };
+  const contact = text(formData, "contact_name");
+  if (contact.length > 120) return { error: "That contact name is too long." };
+  const emails = parseEmailList(text(formData, "emails"));
+  if ("error" in emails) return { error: emails.error };
+  // Empty, or a typed 0, follows the workspace's usual figure (Stock → Settings).
+  const typedLead = text(formData, "lead");
+  const lead = parseWhole(typedLead, { min: 0, max: 365, empty: null });
+  if ("error" in lead) {
+    return {
+      error: "Lead time is a whole number of days, up to 365. Leave it empty to use your usual.",
+    };
   }
-  const moreEmails = [
-    ...new Set(
-      text(formData, "more_emails")
-        .split(/[\s,;]+/)
-        .map((value) => value.trim().toLowerCase())
-        .filter(Boolean),
-    ),
-  ];
-  if (
-    moreEmails.length > 5 ||
-    moreEmails.some((value) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value))
-  ) {
-    return { error: "Check the other emails: up to five, with commas between them." };
-  }
-  // Empty follows the workspace's usual figure (Stock → Settings).
-  if (lead !== null && !(lead >= 0 && lead <= 365)) {
-    return { error: "How many days from ordering to arriving? (0 to 365, or leave it empty)" };
-  }
-  if (cover === null || !(cover >= 1 && cover <= 365)) {
+  const moq = parseWhole(text(formData, "moq"), { min: 1, max: 1_000_000, empty: 1 });
+  if ("error" in moq) return { error: "MOQ, the smallest order, is a whole number, at least 1." };
+  const usual = await usualFigures(ctx);
+  // "Each order covers" is only on the supplier's own page; a new one starts on the usual figure.
+  const cover = formData.has("cover")
+    ? parseWhole(text(formData, "cover"), { min: 1, max: 365, empty: usual.cover })
+    : {
+        value: supplierId
+          ? ((await supplierNow(ctx, supplierId))?.coverage_days ?? usual.cover)
+          : usual.cover,
+      };
+  if ("error" in cover) {
     return { error: "How many days of sales should one order cover? (1 to 365)" };
   }
-  if (!(moq >= 1 && moq <= 1_000_000)) return { error: "The smallest order is at least 1." };
   const { data: savedId, error } = await ctx.supabase.rpc("save_supplier", {
     p_tenant_id: ctx.tenant.id,
     p_supplier_id: supplierId,
     p_name: name,
-    p_email: email,
-    p_lead_time_days: lead,
-    p_coverage_days: cover,
-    p_moq: moq,
+    p_email: emails.email ?? "",
+    p_lead_time_days: lead.value === 0 ? null : lead.value,
+    p_coverage_days: cover.value ?? usual.cover,
+    p_moq: moq.value ?? 1,
     p_moq_applies_to: text(formData, "moq_applies_to") === "sku" ? "sku" : "order",
     p_notes: text(formData, "notes"),
     p_archived: formData.get("archived") === "on",
@@ -164,24 +187,20 @@ export async function saveSupplier(
   const { error: contactError } = await ctx.supabase.rpc("save_supplier_contact", {
     p_tenant_id: ctx.tenant.id,
     p_supplier_id: (savedId as string | null) ?? supplierId,
-    p_contact_name: text(formData, "contact_name").slice(0, 120),
-    p_more_emails: moreEmails,
+    p_contact_name: contact,
+    p_more_emails: emails.more,
   });
   if (contactError) return { error: OOPS };
   done(slug);
-  return { message: supplierId ? "Saved." : `${name} is added.` };
+  const saved = supplierId ? "Saved." : `${name} is added.`;
+  return { message: lead.value === 0 ? `${saved} ${zeroLead(usual.lead)}` : saved };
 }
 
 /**
  * Sets a supplier's days-to-arrive to how long their past orders really took.
  * The figure is worked out again here, on the server, not taken from the page.
  */
-export async function adoptLeadTime(
-  slug: string,
-  supplierId: string,
-  _prev: StockState,
-  _formData: FormData,
-): Promise<StockState> {
+export async function adoptLeadTime(slug: string, supplierId: string): Promise<StockState> {
   const ctx = await context(slug);
   if ("error" in ctx) return { error: ctx.error };
   if (!UUID.test(supplierId)) return { error: OOPS };
@@ -196,6 +215,170 @@ export async function adoptLeadTime(
   if (error) return { error: OOPS };
   done(slug);
   return { message: `Set to ${observed.days} days. Order-by dates for their items have moved.` };
+}
+
+/** The boxes of the Suppliers table. Each saves by itself as it is left. */
+export type SupplierField = "name" | "lead" | "moq" | "moq_applies_to" | "contact" | "emails";
+
+type SupplierNow = {
+  id: string;
+  name: string;
+  email: string | null;
+  contact_name: string | null;
+  more_emails: string[] | null;
+  lead_time_days: number | null;
+  coverage_days: number;
+  moq: number;
+  moq_applies_to: "order" | "sku";
+  notes: string;
+  archived_at: string | null;
+};
+
+type Ctx = Exclude<Awaited<ReturnType<typeof context>>, { error: string }>;
+
+/** A supplier as it is saved right now, read as the member. */
+async function supplierNow(ctx: Ctx, supplierId: string): Promise<SupplierNow | null> {
+  const { data } = await ctx.supabase
+    .from("suppliers")
+    .select(
+      "id, name, email, contact_name, more_emails, lead_time_days, coverage_days, moq, moq_applies_to, notes, archived_at",
+    )
+    .eq("tenant_id", ctx.tenant.id)
+    .eq("id", supplierId)
+    .maybeSingle();
+  return (data as SupplierNow | null) ?? null;
+}
+
+/**
+ * `save_supplier` takes the whole supplier, so one changed box is sent with
+ * everything else as it is saved now.
+ */
+const saveWhole = (ctx: Ctx, now: SupplierNow, changes: Partial<SupplierNow> = {}) => {
+  const next = { ...now, ...changes };
+  return ctx.supabase.rpc("save_supplier", {
+    p_tenant_id: ctx.tenant.id,
+    p_supplier_id: now.id,
+    p_name: next.name,
+    p_email: next.email ?? "",
+    p_lead_time_days: next.lead_time_days,
+    p_coverage_days: next.coverage_days,
+    p_moq: next.moq,
+    p_moq_applies_to: next.moq_applies_to,
+    p_notes: next.notes,
+    p_archived: next.archived_at !== null,
+  });
+};
+
+/**
+ * One box of one supplier, changed right in the table. Lead time and the
+ * contact have their own functions; the rest go through `save_supplier`.
+ * The page is read again afterwards, so order-by dates move with a new
+ * lead time.
+ */
+export async function saveSupplierField(
+  slug: string,
+  supplierId: string,
+  field: SupplierField,
+  typed: string,
+): Promise<StockState & { emptied?: boolean }> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  if (!UUID.test(supplierId)) return { error: OOPS };
+  const value = String(typed ?? "").trim();
+  let failed: { code?: string } | null = null;
+
+  if (field === "lead") {
+    // Empty follows the workspace's usual figure (Stock → Settings).
+    const parsed = parseWhole(value, { min: 0, max: 365, empty: null });
+    if ("error" in parsed) {
+      return { error: "A whole number of days, up to 365. Leave it empty to use your usual." };
+    }
+    ({ error: failed } = await ctx.supabase.rpc("set_supplier_lead_time", {
+      p_tenant_id: ctx.tenant.id,
+      p_supplier_id: supplierId,
+      p_days: parsed.value === 0 ? null : parsed.value,
+    }));
+    if (!failed && parsed.value === 0) {
+      done(slug);
+      return { message: zeroLead((await usualFigures(ctx)).lead), emptied: true };
+    }
+  } else {
+    // What was typed is checked before anything is read or written.
+    const emails = field === "emails" ? parseEmailList(value) : null;
+    if (emails && "error" in emails) return { error: emails.error };
+    const moq = field === "moq" ? parseWhole(value, { min: 1, max: 1_000_000, empty: 1 }) : null;
+    if (moq && "error" in moq) {
+      return { error: "The smallest order is a whole number, at least 1." };
+    }
+    if (field === "name" && (!value || value.length > 120)) {
+      return { error: "A supplier needs a name." };
+    }
+    if (field === "contact" && value.length > 120) return { error: "That name is too long." };
+    if (field === "moq_applies_to" && value !== "order" && value !== "sku") return { error: OOPS };
+    const now = await supplierNow(ctx, supplierId);
+    if (!now) return { error: "That supplier isn't here any more." };
+    if (field === "name") {
+      ({ error: failed } = await saveWhole(ctx, now, { name: value }));
+    } else if (moq) {
+      ({ error: failed } = await saveWhole(ctx, now, { moq: moq.value ?? 1 }));
+    } else if (field === "moq_applies_to") {
+      ({ error: failed } = await saveWhole(ctx, now, { moq_applies_to: value as "order" | "sku" }));
+    } else if (field === "contact") {
+      ({ error: failed } = await ctx.supabase.rpc("save_supplier_contact", {
+        p_tenant_id: ctx.tenant.id,
+        p_supplier_id: supplierId,
+        p_contact_name: value,
+        p_more_emails: now.more_emails ?? [],
+      }));
+    } else if (emails) {
+      if (emails.email !== now.email) {
+        ({ error: failed } = await saveWhole(ctx, now, { email: emails.email }));
+      }
+      if (!failed) {
+        ({ error: failed } = await ctx.supabase.rpc("save_supplier_contact", {
+          p_tenant_id: ctx.tenant.id,
+          p_supplier_id: supplierId,
+          p_contact_name: now.contact_name ?? "",
+          p_more_emails: emails.more,
+        }));
+      }
+    } else {
+      return { error: OOPS };
+    }
+  }
+  if (failed) {
+    return {
+      error: failed.code === "23505" ? "You already have a supplier with that name." : OOPS,
+    };
+  }
+  done(slug);
+  return { message: "Saved" };
+}
+
+/**
+ * Archives a supplier ("not used any more") or brings them back. Archived,
+ * they get no suggested order anywhere; their items, orders and account stay.
+ */
+export async function setSupplierArchived(
+  slug: string,
+  supplierId: string,
+  archived: boolean,
+): Promise<StockState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  if (!UUID.test(supplierId)) return { error: OOPS };
+  const now = await supplierNow(ctx, supplierId);
+  if (!now) return { error: "That supplier isn't here any more." };
+  const { error } = await saveWhole(ctx, now, {
+    archived_at: archived ? (now.archived_at ?? new Date().toISOString()) : null,
+  });
+  if (error) return { error: OOPS };
+  done(slug);
+  return {
+    message: archived
+      ? `${now.name} is archived. We won't suggest orders for their items; their orders and account stay as they are.`
+      : `${now.name} is back with your suppliers, and we'll plan for their items again.`,
+  };
 }
 
 /** The "Don't reorder" switch on one item: still listed, never suggested. */

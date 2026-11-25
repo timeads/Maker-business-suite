@@ -1,29 +1,41 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
-import { Button } from "@/components/ui/button";
-import { closedOn, planBuildAhead, type Closure } from "@/lib/stock/engine/closures";
+import { type Closure } from "@/lib/stock/engine/closures";
+import { IMPORT_GUIDE } from "@/lib/stock/import/guide";
 import { orderCountsBySupplier } from "@/lib/stock/po/list";
+import { joinEmails, supplierTab, suppliersFor } from "@/lib/stock/suppliers/table";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
+import { cn } from "@/lib/utils";
 import { loadIncoming, loadStock } from "../data";
-import { removeSupplierClosure } from "../actions";
-import { AdoptLeadTimeButton, ClosureForm, SupplierForm } from "../forms";
 import { stockAccess } from "../gate";
+import { Importer } from "../settings/import/importer";
 import { StockTabs } from "../tabs";
+import { closureWords } from "./closure-words";
+import { AddSupplier, SuppliersTable, type SupplierLine } from "./table";
 
 export const metadata: Metadata = { title: "Suppliers" };
 
-export default async function SuppliersPage({ params }: { params: Promise<{ slug: string }> }) {
+const chip = "rounded-full px-2.5 py-1 text-xs whitespace-nowrap transition-colors duration-150";
+const chipOn = "bg-teal font-semibold text-white";
+const chipOff = "bg-sunken text-text-2 hover:bg-hover";
+
+export default async function SuppliersPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ slug: string }>;
+  searchParams: Promise<{ show?: string }>;
+}) {
   const { slug } = await params;
+  const tab = supplierTab((await searchParams).show);
   const access = await stockAccess(slug, `/w/${slug}/stock/suppliers`);
   if (!access.ok) return access.upsell;
   const { tenant, role, entitlements } = access;
   const canEdit = canManage(role) && entitlements.canWrite;
   const supabase = await createClient();
-  const [{ suppliers, rows, closures, today, settings }, { leadTimes }, { data: orderRows }] =
+  const [{ suppliers, closures, today, settings }, { leadTimes }, { data: orderRows }] =
     await Promise.all([
       loadStock(supabase, tenant),
       loadIncoming(supabase, tenant),
@@ -40,188 +52,103 @@ export default async function SuppliersPage({ params }: { params: Promise<{ slug
       status: order.status as string,
     })),
   );
-  // An empty "days to arrive" follows the workspace's own default.
-  const leadOf = (s: { lead_time_days: number | null }) =>
-    s.lead_time_days ?? settings.default_lead_time_days;
-  const itemCount = (id: string) => rows.filter((row) => row.item.supplier_id === id).length;
   const closuresOf = (id: string): Closure[] =>
     closures
       .filter((c) => c.supplier_id === id)
       .map((c) => ({ id: c.id, name: c.name, startsOn: c.starts_on, endsOn: c.ends_on }));
-  const day = (value: string) =>
-    new Intl.DateTimeFormat("en-US", {
-      timeZone: "UTC",
-      month: "short",
-      day: "numeric",
-      ...(value.slice(0, 4) === today.slice(0, 4) ? {} : { year: "numeric" }),
-    }).format(new Date(`${value}T12:00:00Z`));
-  /** What a supplier's closures mean for ordering, using their own days to arrive. */
-  const closureWords = (shut: Closure[], leadDays: number) => {
-    const now = closedOn(today, shut);
-    const ahead = planBuildAhead({ today, leadDays, closures: shut });
-    return {
-      now: now ? `Shut for ${now.name} until ${day(now.endsOn)}` : null,
-      ahead: ahead
-        ? ahead.missed
-          ? `Shut for ${ahead.closure.name} from ${day(ahead.closure.startsOn)}. The last day to order and have it before then was ${day(ahead.orderBefore)}.`
-          : `Shut for ${ahead.closure.name} from ${day(ahead.closure.startsOn)}. Order by ${day(ahead.orderBefore)} to have it before then.`
-        : null,
-      aheadShort: ahead
-        ? ahead.missed
-          ? `Shuts ${day(ahead.closure.startsOn)}`
-          : `Order by ${day(ahead.orderBefore)}, before ${ahead.closure.name}`
-        : null,
-      missed: ahead?.missed ?? false,
-    };
+  const counts = {
+    active: suppliersFor(suppliers, "active").length,
+    archived: suppliersFor(suppliers, "archived").length,
   };
+  const rows: SupplierLine[] = suppliersFor(suppliers, tab).map((s) => {
+    // An empty "days to arrive" follows the workspace's own default.
+    const words = closureWords(
+      closuresOf(s.id),
+      s.lead_time_days ?? settings.default_lead_time_days,
+      today,
+    );
+    return {
+      id: s.id,
+      name: s.name,
+      leadDays: s.lead_time_days,
+      observed: leadTimes.get(s.id) ?? null,
+      moq: s.moq,
+      moqAppliesTo: s.moq_applies_to,
+      contact: s.contact_name ?? "",
+      emails: joinEmails(s.email, s.more_emails),
+      orders: orderCounts.get(s.id) ?? 0,
+      status: words.now
+        ? { tone: "bad", words: words.now }
+        : words.aheadShort
+          ? { tone: words.missed ? "bad" : "waiting", words: words.aheadShort }
+          : null,
+    };
+  });
+  const base = `/w/${tenant.slug}/stock`;
+  const guide = IMPORT_GUIDE.suppliers;
 
   return (
     <>
       <PageHeader
         title="Stock"
         description="Who you buy from, how long they take, and the smallest order they'll accept."
-      />
+      >
+        {canEdit && (
+          <AddSupplier slug={tenant.slug} usualLeadDays={settings.default_lead_time_days} />
+        )}
+      </PageHeader>
       <StockTabs slug={tenant.slug} tenantId={tenant.id} manager={canManage(role)} />
 
-      {suppliers.length > 0 && (
-        <Card>
-          <CardContent className="pt-5">
-            <ul className="divide-border flex flex-col divide-y">
-              {suppliers.map((s) => (
-                <li key={s.id} className="py-3 first:pt-0 last:pb-0">
-                  <details>
-                    <summary className="flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-                      <span className="font-semibold">{s.name}</span>
-                      {s.archived_at && <Badge>Not used any more</Badge>}
-                      <span className="text-muted-foreground">
-                        {itemCount(s.id)} item{itemCount(s.id) === 1 ? "" : "s"} · arrives in{" "}
-                        {leadOf(s)} days{s.lead_time_days === null ? " (your usual)" : ""} · covers{" "}
-                        {s.coverage_days} days
-                        {s.moq > 1 &&
-                          ` · smallest order ${s.moq}${s.moq_applies_to === "sku" ? " per item" : ""}`}
-                      </span>
-                      {closureWords(closuresOf(s.id), leadOf(s)).now ? (
-                        <Badge tone="bad">{closureWords(closuresOf(s.id), leadOf(s)).now}</Badge>
-                      ) : (
-                        closureWords(closuresOf(s.id), leadOf(s)).aheadShort && (
-                          <Badge
-                            tone={
-                              closureWords(closuresOf(s.id), leadOf(s)).missed ? "bad" : "waiting"
-                            }
-                          >
-                            {closureWords(closuresOf(s.id), leadOf(s)).aheadShort}
-                          </Badge>
-                        )
-                      )}
-                      {leadTimes.has(s.id) && (
-                        <Badge
-                          tone={leadTimes.get(s.id)!.days > leadOf(s) + 3 ? "waiting" : "closed"}
-                        >
-                          Really takes about {leadTimes.get(s.id)!.days} days (
-                          {leadTimes.get(s.id)!.sampleSize} order
-                          {leadTimes.get(s.id)!.sampleSize === 1 ? "" : "s"})
-                        </Badge>
-                      )}
-                      {(orderCounts.get(s.id) ?? 0) > 0 && (
-                        <Link
-                          href={`/w/${tenant.slug}/stock/orders?show=all&supplier=${s.id}`}
-                          className="text-ochre-text text-xs font-semibold underline-offset-2 hover:underline"
-                        >
-                          {orderCounts.get(s.id)} order{orderCounts.get(s.id) === 1 ? "" : "s"}
-                        </Link>
-                      )}
-                    </summary>
-                    {canEdit &&
-                      leadTimes.has(s.id) &&
-                      leadTimes.get(s.id)!.days !== s.lead_time_days && (
-                        <div className="pt-3">
-                          <AdoptLeadTimeButton
-                            slug={tenant.slug}
-                            supplierId={s.id}
-                            days={leadTimes.get(s.id)!.days}
-                          />
-                        </div>
-                      )}
-                    {canEdit ? (
-                      <div className="pt-4">
-                        <SupplierForm
-                          slug={tenant.slug}
-                          supplier={{ ...s, archived: Boolean(s.archived_at) }}
-                        />
-                      </div>
-                    ) : (
-                      s.notes && <p className="font-read pt-2 text-sm">{s.notes}</p>
-                    )}
-                    {(canEdit || closuresOf(s.id).length > 0) && (
-                      <div className="border-border mt-4 flex flex-col gap-3 border-t pt-4">
-                        <div>
-                          <h3 className="text-sm font-semibold">When they&apos;re shut</h3>
-                          <p className="text-muted-foreground font-read text-sm">
-                            {closureWords(closuresOf(s.id), leadOf(s)).ahead ??
-                              closureWords(closuresOf(s.id), leadOf(s)).now ??
-                              "Holidays and shutdowns, when an order would just sit. We move the order-by dates for their items earlier, so each order arrives before they shut."}
-                          </p>
-                        </div>
-                        {closuresOf(s.id).length > 0 && (
-                          <ul className="divide-border flex flex-col divide-y text-sm">
-                            {closuresOf(s.id).map((c) => (
-                              <li
-                                key={c.id}
-                                className="flex flex-wrap items-center justify-between gap-2 py-1.5"
-                              >
-                                <span>
-                                  <span className="font-semibold">{c.name}</span>{" "}
-                                  <span className="text-muted-foreground">
-                                    {c.startsOn === c.endsOn
-                                      ? day(c.startsOn)
-                                      : `${day(c.startsOn)} to ${day(c.endsOn)}`}
-                                  </span>
-                                </span>
-                                {canEdit && (
-                                  <form
-                                    action={removeSupplierClosure.bind(null, tenant.slug, c.id!)}
-                                  >
-                                    <Button type="submit" variant="ghost" size="sm">
-                                      Take off
-                                    </Button>
-                                  </form>
-                                )}
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                        {canEdit && <ClosureForm slug={tenant.slug} supplierId={s.id} />}
-                      </div>
-                    )}
-                  </details>
-                </li>
-              ))}
-            </ul>
-          </CardContent>
-        </Card>
+      <nav aria-label="Which suppliers" className="flex flex-wrap items-center gap-1.5">
+        {(
+          [
+            ["active", "Active"],
+            ["archived", "Archived"],
+          ] as const
+        ).map(([key, label]) => (
+          <Link
+            key={key}
+            href={key === "active" ? `${base}/suppliers` : `${base}/suppliers?show=archived`}
+            aria-current={tab === key ? "page" : undefined}
+            className={cn(chip, tab === key ? chipOn : chipOff)}
+          >
+            {label} <span className="tabular-nums opacity-80">{counts[key]}</span>
+          </Link>
+        ))}
+      </nav>
+
+      <SuppliersTable
+        slug={tenant.slug}
+        rows={rows}
+        tab={tab}
+        usualLeadDays={settings.default_lead_time_days}
+        canEdit={canEdit}
+      />
+      {canEdit && rows.length > 0 && (
+        <p className="text-muted-foreground font-read -mt-2 text-sm">
+          Type in a box and move on: it saves by itself. An empty lead time follows your usual{" "}
+          {settings.default_lead_time_days} days from Settings. The arrow beside a name opens
+          everything else about that supplier: when they&apos;re shut, how long an order should
+          last, days to pay and notes.
+        </p>
       )}
 
-      {canEdit ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Add a supplier</CardTitle>
-            <CardDescription>
-              &quot;Days to arrive&quot; is from placing the order to having it on the shelf; leave
-              it empty to use your usual figure from Settings ({settings.default_lead_time_days}{" "}
-              days). &quot;Each order covers&quot; is how long you want one order to last. Once
-              orders have arrived, we show how long each supplier really took, so you can match it.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <SupplierForm slug={tenant.slug} />
-          </CardContent>
-        </Card>
-      ) : (
-        suppliers.length === 0 && (
-          <p className="text-muted-foreground text-sm">
-            An owner or admin can add the first supplier.
+      {canEdit && (
+        <section className="flex flex-col gap-2 pt-2">
+          <h2 className="text-sm font-semibold">Import suppliers (CSV)</h2>
+          <p className="text-muted-foreground font-read text-sm">
+            Columns: {guide.columns.map((column) => column.name).join(", ")}. {guide.matchedBy}{" "}
+            You&apos;ll see what the file would change before anything is saved.{" "}
+            <Link
+              href={`${base}/settings/import`}
+              className="text-ochre-text underline-offset-2 hover:underline"
+            >
+              What each column means, and the other files you can bring in
+            </Link>
+            .
           </p>
-        )
+          <Importer slug={tenant.slug} only="suppliers" />
+        </section>
       )}
     </>
   );

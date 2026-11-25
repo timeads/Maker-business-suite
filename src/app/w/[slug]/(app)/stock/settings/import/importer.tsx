@@ -12,10 +12,11 @@ import { lookAtImport, runImport, type ImportState } from "./actions";
 /**
  * Choose a kind of file, pick the file, look at what it would do, then bring
  * it in. The file is read here in the browser and sent as text with each
- * step; it isn't kept anywhere.
+ * step; it isn't kept anywhere. With `only`, it takes that one kind of file
+ * (the Suppliers page keeps it under its table).
  */
-export function Importer({ slug }: { slug: string }) {
-  const [kind, setKind] = useState<ImportKind>("suppliers");
+export function Importer({ slug, only }: { slug: string; only?: ImportKind }) {
+  const [kind, setKind] = useState<ImportKind>(only ?? "suppliers");
   const [file, setFile] = useState<{ name: string; text: string } | null>(null);
   const [state, setState] = useState<ImportState>({});
   const [key, setKey] = useState("");
@@ -52,25 +53,27 @@ export function Importer({ slug }: { slug: string }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="grid gap-3 sm:grid-cols-[14rem_1fr]">
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="import-kind">What&apos;s in the file</Label>
-          <Select
-            id="import-kind"
-            value={kind}
-            disabled={busy}
-            onChange={(event) => {
-              setKind(event.target.value as ImportKind);
-              reset();
-            }}
-          >
-            {IMPORT_ORDER.map((value, index) => (
-              <option key={value} value={value}>
-                {index + 1}. {IMPORT_GUIDE[value].title}
-              </option>
-            ))}
-          </Select>
-        </div>
+      <div className={only ? "flex flex-col" : "grid gap-3 sm:grid-cols-[14rem_1fr]"}>
+        {!only && (
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="import-kind">What&apos;s in the file</Label>
+            <Select
+              id="import-kind"
+              value={kind}
+              disabled={busy}
+              onChange={(event) => {
+                setKind(event.target.value as ImportKind);
+                reset();
+              }}
+            >
+              {IMPORT_ORDER.map((value, index) => (
+                <option key={value} value={value}>
+                  {index + 1}. {IMPORT_GUIDE[value].title}
+                </option>
+              ))}
+            </Select>
+          </div>
+        )}
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="import-file">The file (CSV)</Label>
           <input
@@ -84,9 +87,11 @@ export function Importer({ slug }: { slug: string }) {
           />
         </div>
       </div>
-      <p className="text-muted-foreground font-read text-sm">
-        {guide.about} {guide.matchedBy}
-      </p>
+      {!only && (
+        <p className="text-muted-foreground font-read text-sm">
+          {guide.about} {guide.matchedBy}
+        </p>
+      )}
 
       {busy && !done && (
         <p className="text-muted-foreground text-sm" role="status">

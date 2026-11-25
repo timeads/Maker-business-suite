@@ -95,14 +95,20 @@ export function OrderEmail({
           <span className="text-muted-foreground text-sm">From</span>
           <span className="font-read text-sm">{compose.from}</span>
           <Label htmlFor="po-email-to">To</Label>
-          <Input
-            id="po-email-to"
-            name="to"
-            value={to}
-            onChange={(event) => setTo(event.target.value)}
-            placeholder="name@supplier.example, other@supplier.example"
-            maxLength={1000}
-          />
+          <div className="flex flex-col gap-1">
+            <Input
+              id="po-email-to"
+              name="to"
+              value={to}
+              onChange={(event) => setTo(event.target.value)}
+              placeholder="name@supplier.example, other@supplier.example"
+              maxLength={1000}
+              aria-describedby="po-email-to-hint"
+            />
+            <span id="po-email-to-hint" className="text-muted-foreground font-read text-xs">
+              The supplier&apos;s email. Add more than one with commas.
+            </span>
+          </div>
           <Label htmlFor="po-email-subject">Subject</Label>
           <Input
             id="po-email-subject"
@@ -114,8 +120,8 @@ export function OrderEmail({
         </div>
         {!compose.hasSavedEmail && (
           <p className="text-muted-foreground text-xs">
-            {compose.supplierName} has no email saved yet. Whoever you send this to is saved as
-            their contact for next time. Put a comma between several addresses.
+            {compose.supplierName} has no email saved yet. The address you send this to is saved as
+            the supplier&apos;s email for next time.
           </p>
         )}
         <textarea

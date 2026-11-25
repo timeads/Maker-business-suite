@@ -6,8 +6,8 @@ import { Button } from "@/components/ui/button";
 import { FormMessage } from "@/components/ui/form-message";
 import { Input, Label, Select } from "@/components/ui/input";
 import { SubmitButton } from "@/components/ui/submit-button";
+import { joinEmails } from "@/lib/stock/suppliers/table";
 import {
-  adoptLeadTime,
   archiveOrder,
   deleteDraftOrder,
   receiveDelivery,
@@ -185,36 +185,26 @@ export type SupplierValues = {
   archived: boolean;
 };
 
-/** One press to set a supplier's days-to-arrive to what their past orders really took. */
-export function AdoptLeadTimeButton({
+const hint = "text-muted-foreground font-read text-xs";
+
+/**
+ * Adding a supplier, or changing one on its own page, in the table's words:
+ * Name, Contact, Email, Lead time, MOQ, MOQ applies, Notes. A supplier that
+ * already exists also gets "Each order covers" and the archive tick.
+ */
+export function SupplierForm({
   slug,
-  supplierId,
-  days,
+  supplier,
+  usualLeadDays,
+  onCancel,
 }: {
   slug: string;
-  supplierId: string;
-  days: number;
+  supplier?: SupplierValues;
+  /** The workspace's usual lead time, which an empty box follows. */
+  usualLeadDays: number;
+  /** Shown as "Not now" beside the button (the Add supplier dialog). */
+  onCancel?: () => void;
 }) {
-  const [state, action] = useActionState(adoptLeadTime.bind(null, slug, supplierId), {});
-  return (
-    <form action={action} className="flex flex-wrap items-center gap-2">
-      <SubmitButton variant="outline" size="sm" pendingText="Saving…">
-        Use the {days} days they really take
-      </SubmitButton>
-      <span className="text-xs" aria-live="polite">
-        {state.error ? (
-          <span className="text-brick">{state.error}</span>
-        ) : (
-          <span className="text-muted-foreground">
-            {state.message ?? "Worked out from when their past orders arrived."}
-          </span>
-        )}
-      </span>
-    </form>
-  );
-}
-
-export function SupplierForm({ slug, supplier }: { slug: string; supplier?: SupplierValues }) {
   const [state, action] = useActionState(saveSupplier.bind(null, slug, supplier?.id ?? null), {});
   const id = supplier?.id ?? "new";
   return (
@@ -228,86 +218,81 @@ export function SupplierForm({ slug, supplier }: { slug: string; supplier?: Supp
             maxLength={120}
             defaultValue={supplier?.name}
             placeholder="Hill Mill Yarns"
+            autoComplete="off"
             required
           />
         </div>
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor={`${id}-email`}>Where orders go (email)</Label>
-          <Input
-            id={`${id}-email`}
-            name="email"
-            type="email"
-            maxLength={200}
-            defaultValue={supplier?.email ?? ""}
-          />
-        </div>
-      </div>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor={`${id}-contact`}>Who you deal with</Label>
+          <Label htmlFor={`${id}-contact`}>Contact</Label>
           <Input
             id={`${id}-contact`}
             name="contact_name"
             maxLength={120}
             defaultValue={supplier?.contact_name ?? ""}
             placeholder="Dana Reyes"
+            autoComplete="off"
+            aria-describedby={`${id}-contact-hint`}
           />
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor={`${id}-more`}>Other emails for orders</Label>
-          <Input
-            id={`${id}-more`}
-            name="more_emails"
-            maxLength={600}
-            defaultValue={(supplier?.more_emails ?? []).join(", ")}
-            placeholder="accounts@hillmill.example, …"
-          />
+          <span id={`${id}-contact-hint`} className={hint}>
+            The person you deal with there.
+          </span>
         </div>
       </div>
-      <div className="grid gap-3 sm:grid-cols-4">
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor={`${id}-emails`}>Email</Label>
+        <Input
+          id={`${id}-emails`}
+          name="emails"
+          inputMode="email"
+          maxLength={1300}
+          defaultValue={joinEmails(supplier?.email ?? null, supplier?.more_emails ?? null)}
+          placeholder="dana@hillmill.example"
+          autoComplete="off"
+          aria-describedby={`${id}-emails-hint`}
+        />
+        <span id={`${id}-emails-hint`} className={hint}>
+          The supplier&apos;s email. Purchase orders are sent here. Add more than one with commas.
+        </span>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-3">
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor={`${id}-lead`}>Days to arrive</Label>
+          <Label htmlFor={`${id}-lead`}>Lead time (days)</Label>
           <Input
             id={`${id}-lead`}
             name="lead"
-            type="number"
-            min={0}
-            max={365}
+            inputMode="numeric"
+            maxLength={3}
             defaultValue={supplier ? (supplier.lead_time_days ?? "") : ""}
-            placeholder="Your usual"
+            placeholder={`${usualLeadDays} (your usual)`}
+            aria-describedby={`${id}-lead-hint`}
           />
+          <span id={`${id}-lead-hint`} className={hint}>
+            From ordering to on the shelf; leave empty to use your usual {usualLeadDays} days.
+          </span>
         </div>
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor={`${id}-cover`}>Each order covers (days)</Label>
-          <Input
-            id={`${id}-cover`}
-            name="cover"
-            type="number"
-            min={1}
-            max={365}
-            defaultValue={supplier?.coverage_days ?? 30}
-            required
-          />
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor={`${id}-moq`}>Smallest order</Label>
+          <Label htmlFor={`${id}-moq`}>MOQ</Label>
           <Input
             id={`${id}-moq`}
             name="moq"
-            type="number"
-            min={1}
+            inputMode="numeric"
+            maxLength={7}
             defaultValue={supplier?.moq ?? 1}
+            aria-describedby={`${id}-moq-hint`}
           />
+          <span id={`${id}-moq-hint`} className={hint}>
+            Smallest order.
+          </span>
         </div>
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor={`${id}-applies`}>Counted</Label>
+          <Label htmlFor={`${id}-applies`}>MOQ applies</Label>
           <Select
             id={`${id}-applies`}
             name="moq_applies_to"
             defaultValue={supplier?.moq_applies_to ?? "order"}
           >
-            <option value="order">Across the order</option>
-            <option value="sku">Per item</option>
+            <option value="order">Per order</option>
+            <option value="sku">Each SKU</option>
           </Select>
         </div>
       </div>
@@ -319,20 +304,47 @@ export function SupplierForm({ slug, supplier }: { slug: string; supplier?: Supp
           rows={2}
           maxLength={2000}
           defaultValue={supplier?.notes}
-          placeholder="Ask for Dana. Pays the freight on orders over 500."
+          placeholder="Pays the freight on orders over 500."
           className={textarea}
         />
       </div>
       {supplier && (
-        <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" name="archived" defaultChecked={supplier.archived} />
-          We don&apos;t order from them any more
-        </label>
+        <>
+          <div className="flex flex-col gap-1.5 sm:w-1/3">
+            <Label htmlFor={`${id}-cover`}>Each order covers (days)</Label>
+            <Input
+              id={`${id}-cover`}
+              name="cover"
+              inputMode="numeric"
+              maxLength={3}
+              defaultValue={supplier.coverage_days}
+              aria-describedby={`${id}-cover-hint`}
+            />
+            <span id={`${id}-cover-hint`} className={hint}>
+              How many days of sales one order should last.
+            </span>
+          </div>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" name="archived" defaultChecked={supplier.archived} />
+            Archived: we don&apos;t order from them any more
+          </label>
+        </>
       )}
       <Result state={state} />
-      <SubmitButton variant="outline" pendingText="Saving…" className="sm:w-fit">
-        {supplier ? "Save" : "Add supplier"}
-      </SubmitButton>
+      <div className="flex flex-wrap gap-2">
+        <SubmitButton
+          variant={supplier ? "outline" : "dark"}
+          pendingText="Saving…"
+          className="sm:w-fit"
+        >
+          {supplier ? "Save" : "Add supplier"}
+        </SubmitButton>
+        {onCancel && (
+          <Button type="button" variant="ghost" onClick={onCancel}>
+            {state.message ? "Done" : "Not now"}
+          </Button>
+        )}
+      </div>
     </form>
   );
 }
