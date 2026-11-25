@@ -427,8 +427,8 @@ export const HELP_TOPICS: HelpTopic[] = [
       "Suggestions round up to whole cases, and respect the smallest order you or your supplier set.",
     ],
     notes: [
-      "Lead time and days of cover come from the supplier unless an item has its own. A supplier whose “days to arrive” is left empty uses your usual figure from Stock → Settings.",
-      "Once a supplier's orders have arrived, Stock → Suppliers shows how long they really take, with a button to use that figure.",
+      "Lead time and days of cover come from the supplier unless an item has its own. A supplier whose lead time is left empty uses your usual figure from Stock → Settings.",
+      "Once a supplier's orders have arrived, Stock → Suppliers shows how long they really take (“Observed”), with “Use” to make that the lead time.",
       "Days an item was sold out don't count against it: a day with none on the shelf isn't a day nobody wanted it. We note each item's count once a day from the day Stock is switched on, so this gets better with time.",
       "Every figure is worked out fresh each time you look; nothing is stored, so it's never stale.",
     ],
@@ -487,7 +487,7 @@ export const HELP_TOPICS: HelpTopic[] = [
       "The PDF is for owners and admins, like placing the order itself.",
       "Your address is the one parcels are sent from, in Shipping → Settings.",
       "For your logo, upload it under Social → Assets and tag it “logo”. It needs to be a PNG or a JPEG.",
-      "Add the contact name and any extra email addresses on the supplier, under Stock → Suppliers.",
+      "The contact and the supplier's email (one address, or several with commas) are on their row under Stock → Suppliers.",
       "Dates are shown on your own calendar, whatever timezone the supplier is in.",
       "You can also email the order straight from your own Gmail, with this PDF attached: see “Email an order to your supplier from your own Gmail”.",
       "A name written in Chinese, Japanese or Korean characters prints as written.",
@@ -567,6 +567,30 @@ export const HELP_TOPICS: HelpTopic[] = [
     ],
   },
   {
+    slug: "suppliers",
+    group: "stock",
+    title: "Add and change your suppliers",
+    summary: "One table of who you buy from. Type in a box and it saves.",
+    intro:
+      "Stock → Suppliers is a table with a row for each supplier. Owners and admins can change any box right where it sits; everyone else can read it.",
+    steps: [
+      "Press “Add supplier”. Only the name is needed; the rest can wait.",
+      "Contact is the person you deal with there. Email is the supplier's email: purchase orders are sent there. Add more than one with commas between them; the first is the main address and the others get a copy.",
+      "Lead time (d) is the days from ordering to having it on the shelf. Leave it empty to use your usual figure from Stock → Settings, shown in grey. A 0 is treated as empty.",
+      "MOQ is the smallest order they'll take. “MOQ applies” says how it's counted: “Per order” across the whole order, or “Each SKU” for every item on it.",
+      "To change anything later, type in the box and move on (or press Enter). A tick shows it saved; if something's wrong, the box says what.",
+      "Observed (d) is how long their orders have really taken to arrive, with the number of orders that's worked out from in brackets. Press “Use” to make it the lead time.",
+      "POs is how many orders they've had. Press the number to see them.",
+      "The arrow beside a name opens the rest: how many days of sales one order should cover, when they're shut, days to pay, and notes.",
+    ],
+    notes: [
+      "“Archive” is for a supplier you don't order from any more. We stop suggesting orders for their items; their orders and account are kept. They move to the Archived tab, where “Bring back” undoes it.",
+      "A supplier can't be deleted, so nothing that leans on them is ever lost.",
+      "To bring in many at once, use “Import suppliers (CSV)” under the table. You see what the file would change before anything is saved.",
+      "On a phone the table slides sideways; the name stays put.",
+    ],
+  },
+  {
     slug: "supplier-closures",
     group: "stock",
     title: "Plan around a supplier's holidays and shutdowns",
@@ -575,7 +599,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     intro:
       "Some suppliers shut for weeks at a time: a factory's month off at Spring Festival, a summer break. An order that would still be on its way when they shut needs placing earlier.",
     steps: [
-      "Open Stock → Suppliers and press the supplier's name.",
+      "Open Stock → Suppliers and press the arrow beside the supplier's name.",
       "Under “When they're shut”, give the closure a name and its first and last day, and press “Add closure”. Add as many as you need.",
       "From then on, the “Reorder” date of that supplier's items moves earlier whenever an order's days to arrive would run through a closure. The row is marked “Before Spring Festival” (hover it for the reason).",
       "On Stock → To order you'll see “Order before Spring Festival” with the last day to order, the items and how many of each. Press “Start this order” to draft it.",
