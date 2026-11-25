@@ -7,9 +7,12 @@ import { FILES_BUCKET, fromBase64, sniffType } from "../files";
 import { richToText } from "../rich";
 import {
   CHANNELS_KEY,
+  COMMENT_LIMITS,
   MAX_SOCIAL_IMAGE_BYTES,
   SOCIAL_IMAGE_TYPES,
   channelState,
+  commentAbilities,
+  commentState,
   isSocialChannel,
   parseChannelSettings,
   textFits,
@@ -17,7 +20,9 @@ import {
   type MetaConnectionFacts,
   type SocialChannel,
 } from "./channels";
+import { privateReplyState } from "./comments";
 import { deliverSocial, type Delivered, type SocialPayload } from "./deliver";
+import { MetaRefused, replyToComment, sendPrivateReply } from "./graph";
 import { replyWindow } from "./window";
 
 /**
@@ -33,7 +38,19 @@ import { replyWindow } from "./window";
 /** Why nothing was sent, as the outbox writes it down. */
 export class SocialNotSent extends Error {
   constructor(
-    public code: "no_conversation" | "not_connected" | "window_closed" | "too_long" | "files",
+    public code:
+      | "no_conversation"
+      | "not_connected"
+      | "window_closed"
+      | "too_long"
+      | "files"
+      | "no_comment"
+      | "comment_changed"
+      | "comment_hidden"
+      | "private_used"
+      | "private_expired"
+      | "not_allowed"
+      | "comments_off",
   ) {
     super(code);
     this.name = "SocialNotSent";
@@ -89,6 +106,8 @@ export type SocialSendDeps = {
   tokenDeps?: TokenDeps;
   fetchImpl?: typeof fetch;
   now?: () => number;
+  /** For tests: the workspace's switches and connection, instead of reading them. */
+  facts?: () => Promise<ChannelFacts>;
 };
 
 /**
@@ -174,4 +193,130 @@ export async function sendSocialReply(
     },
   );
   return { ...went, channel };
+}
+
+/** The customer's latest standing comment on a conversation, as the database tells it. */
+export type CommentContext = {
+  channel: SocialChannel;
+  externalId: string;
+  label: string | null;
+  commentId: string | null;
+  commentMessageId: string | null;
+  commentAt: string | null;
+  commentHidden: boolean;
+  privateReply: string | null;
+};
+
+export async function loadCommentContext(
+  admin: SupabaseClient,
+  where: { tenantId: string; ticketId: string },
+): Promise<CommentContext | null> {
+  const { data: rows, error } = await admin.rpc("comment_reply_context", {
+    p_tenant_id: where.tenantId,
+    p_ticket_id: where.ticketId,
+  });
+  const row = (rows as Record<string, unknown>[] | null)?.[0];
+  if (error || !row || !isSocialChannel(row.channel) || typeof row.external_id !== "string") {
+    return null;
+  }
+  const text = (value: unknown) => (typeof value === "string" && value ? value : null);
+  return {
+    channel: row.channel,
+    externalId: row.external_id,
+    label: text(row.label),
+    commentId: text(row.comment_id),
+    commentMessageId: text(row.comment_message_id),
+    commentAt: text(row.comment_at),
+    commentHidden: row.comment_hidden === true,
+    privateReply: text(row.private_reply),
+  };
+}
+
+/**
+ * Answers a comment: a public reply under it, or the one private message
+ * about it. As with messages, everything is re-read from what is stored
+ * before Meta is asked. For a private message the comment is claimed first
+ * (`claim_private_reply`), which is what holds Meta's one-per-comment rule
+ * here; a refusal gives the claim back, and no clear answer leaves it taken,
+ * because the message may have gone.
+ *
+ * Returns Meta's id for what was sent. Throws `SocialNotSent` when we stopped
+ * before asking Meta, `MetaRefused` when Meta said no, and anything else when
+ * there was no clear answer.
+ */
+export async function sendCommentReply(
+  where: { tenantId: string; ticketId: string },
+  payload: SocialPayload,
+  deps: SocialSendDeps,
+): Promise<{ externalId: string; via: "public" | "private"; channel: SocialChannel }> {
+  const { admin } = deps;
+  const via = payload.via;
+  if (via !== "public" && via !== "private") throw new SocialNotSent("no_conversation");
+  const context = await loadCommentContext(admin, where);
+  if (!context) throw new SocialNotSent("no_conversation");
+  if (!context.commentId) throw new SocialNotSent("no_comment");
+  // The reply was written under one comment: it never lands under another.
+  if (payload.comment_id !== context.commentId) throw new SocialNotSent("comment_changed");
+  const channel = context.channel;
+  const facts = await (deps.facts?.() ?? loadChannelFacts(admin, where.tenantId));
+  if (commentState(channel, facts.settings, facts.connection).state !== "on") {
+    throw new SocialNotSent("comments_off");
+  }
+  const can = commentAbilities(channel, facts.connection?.scopes ?? null);
+  const text = richToText(payload.doc).trim();
+  if (!text) throw new SocialNotSent("too_long");
+
+  if (via === "public") {
+    if (!can.reply) throw new SocialNotSent("not_allowed");
+    if ([...text].length > COMMENT_LIMITS[channel].max) throw new SocialNotSent("too_long");
+    // Instagram refuses a reply to a hidden comment; say so in our own words first.
+    if (channel === "instagram" && context.commentHidden) {
+      throw new SocialNotSent("comment_hidden");
+    }
+    const stored = await getProviderToken(where.tenantId, "meta", deps.tokenDeps);
+    const externalId = await replyToComment(
+      channel,
+      stored.token.access_token,
+      context.commentId,
+      text,
+      deps.fetchImpl,
+    );
+    return { externalId, via, channel };
+  }
+
+  if (!textFits(channel, text)) throw new SocialNotSent("too_long");
+  const state = privateReplyState(
+    { at: context.commentAt, privateReply: context.privateReply },
+    (deps.now ?? Date.now)(),
+    can.privately,
+  ).state;
+  if (state === "not_allowed") throw new SocialNotSent("not_allowed");
+  if (state === "expired") throw new SocialNotSent("private_expired");
+  if (state !== "available") throw new SocialNotSent("private_used");
+  const stored = await getProviderToken(where.tenantId, "meta", deps.tokenDeps);
+  const { data: claimed, error } = await admin.rpc("claim_private_reply", {
+    p_tenant_id: where.tenantId,
+    p_ticket_id: where.ticketId,
+    p_comment_id: context.commentId,
+  });
+  if (error) throw new SocialNotSent("no_conversation");
+  if (claimed !== true) throw new SocialNotSent("private_used");
+  try {
+    const went = await sendPrivateReply(
+      { pageId: stored.externalAccountId, token: stored.token.access_token },
+      context.commentId,
+      text,
+      deps.fetchImpl,
+    );
+    return { externalId: went.messageId, via, channel };
+  } catch (err) {
+    // Meta said no, so nothing went: the comment keeps its one private message.
+    if (err instanceof MetaRefused) {
+      await admin.rpc("release_private_reply", {
+        p_tenant_id: where.tenantId,
+        p_comment_id: context.commentId,
+      });
+    }
+    throw err;
+  }
 }

@@ -4,7 +4,8 @@ import { CHANNEL_LABELS, channelOfObject, type SocialChannel } from "./channels"
  * Meta's webhook payload, read into the few things the help desk files.
  * Messenger and Instagram use one shape: `entry[].messaging[]`, each with a
  * sender, a recipient, a timestamp and one of `message`, `reaction`, `read`,
- * `postback`… Everything here is data from outside: nothing is trusted beyond
+ * `postback`… Comments arrive beside them as `entry[].changes[]`: a Page's
+ * `feed` field and an Instagram account's `comments` field. Everything here is data from outside: nothing is trusted beyond
  * its type, and anything we don't file is simply left out.
  */
 
@@ -47,7 +48,45 @@ export type SocialEvent =
       mid: string;
       action: "react" | "unreact";
       emoji: string | null;
-    });
+    })
+  | CommentEvent;
+
+/**
+ * A comment on one of the account's own posts, and what happens to it after.
+ * Facebook says what happened with a verb (add, edited, remove, hide,
+ * unhide); Instagram only ever says "here is a comment".
+ */
+type CommentBase = {
+  channel: SocialChannel;
+  /** The Page's id (Facebook) or the Instagram professional account's id: `entry.id`. */
+  accountId: string;
+  at: string;
+  /** Meta's id for the comment. */
+  commentId: string;
+};
+export type CommentEvent =
+  | (CommentBase & {
+      type: "comment";
+      /** The commenter's id as Meta scopes it to this Page or Instagram account. */
+      personId: string;
+      /** Facebook gives a name, Instagram a username: no profile needs reading. */
+      name: string | null;
+      handle: string | null;
+      /** The post (Facebook) or media (Instagram) it is on. */
+      postId: string;
+      /** The comment it was written under, when it is a reply. */
+      parentId: string | null;
+      text: string;
+      /** A picture or video attached to a Facebook comment, to fetch from Meta's hosts. */
+      media: { kind: MediaKind; url: string }[];
+      summary: string | null;
+      /** Written by the Page or the Instagram account itself. */
+      own: boolean;
+      /** Facebook's "edited": the same comment with new words. */
+      edited: boolean;
+    })
+  | (CommentBase & { type: "comment_removed" })
+  | (CommentBase & { type: "comment_hidden"; hidden: boolean });
 
 const MAX_TEXT = 8000;
 const MAX_MEDIA = 10;
@@ -163,10 +202,103 @@ function readMessage(common: Common, message: Record<string, unknown>): SocialEv
   return { ...common, type: "message", mid, text: body, kind, media, summary };
 }
 
+/** One of a Facebook Page's `feed` changes, when it is about a comment. */
+function readFeedChange(
+  accountId: string,
+  value: Record<string, unknown>,
+  now: number,
+): CommentEvent | null {
+  if (text(value.item) !== "comment") return null;
+  const commentId = id(value.comment_id);
+  if (!commentId) return null;
+  const base: CommentBase = {
+    channel: "facebook",
+    accountId,
+    at: eventTime(value.created_time, now),
+    commentId,
+  };
+  const verb = text(value.verb);
+  if (verb === "remove") return { ...base, type: "comment_removed" };
+  if (verb === "hide" || verb === "unhide") {
+    return { ...base, type: "comment_hidden", hidden: verb === "hide" };
+  }
+  if (verb !== "add" && verb !== "edited" && verb !== "edit") return null;
+  const from = object(value.from);
+  const personId = id(from.id);
+  const postId = id(value.post_id);
+  // Without knowing who wrote it or on what, it can't be put on a conversation.
+  if (!personId || !postId) return null;
+  const parent = id(value.parent_id);
+  const media: { kind: MediaKind; url: string }[] = [];
+  if (text(value.photo)) media.push({ kind: "image", url: text(value.photo) });
+  if (text(value.video)) media.push({ kind: "video", url: text(value.video) });
+  const body = text(value.message)
+    .replace(/\u0000/g, "")
+    .slice(0, MAX_TEXT);
+  const summary = media.length
+    ? media[0].kind === "video"
+      ? "Posted a video"
+      : "Posted a photo"
+    : null;
+  if (!body && !summary) return null;
+  return {
+    ...base,
+    type: "comment",
+    personId,
+    name: text(from.name).replace(/\s+/g, " ").trim().slice(0, 80) || null,
+    handle: null,
+    postId,
+    // A top-level comment names its post as its parent.
+    parentId: parent && parent !== postId ? parent : null,
+    text: body,
+    media,
+    summary,
+    own: personId === accountId,
+    edited: verb !== "add",
+  };
+}
+
+/** One of an Instagram account's `comments` changes. (Live comments and mentions are left out.) */
+function readInstagramComment(
+  accountId: string,
+  value: Record<string, unknown>,
+  at: string,
+): CommentEvent | null {
+  // Meta's reference names the comment's id `id`; its Facebook Login example names it `comment_id`.
+  const commentId = id(value.id) ?? id(value.comment_id);
+  const from = object(value.from);
+  const personId = id(from.id);
+  const postId = id(object(value.media).id);
+  if (!commentId || !personId || !postId) return null;
+  const body = text(value.text)
+    .replace(/\u0000/g, "")
+    .slice(0, MAX_TEXT);
+  if (!body) return null;
+  const username = text(from.username).replace(/^@/, "");
+  return {
+    channel: "instagram",
+    accountId,
+    at,
+    commentId,
+    type: "comment",
+    personId,
+    name: null,
+    handle: /^[A-Za-z0-9._]{1,30}$/.test(username) ? username : null,
+    postId,
+    parentId: id(value.parent_id),
+    text: body,
+    media: [],
+    summary: null,
+    own: personId === accountId,
+    edited: false,
+  };
+}
+
 /**
  * Every event in one webhook delivery that the help desk files, in Meta's
- * order. Reads, deliveries, postbacks, hand-offs and anything unknown are
- * left out.
+ * order. Reads, deliveries, postbacks, hand-offs, a Page's other feed changes
+ * (posts, reactions, shares), Instagram's live comments and mentions, and
+ * anything unknown are left out.
  */
 export function parseMetaPayload(payload: unknown, now: number = Date.now()): SocialEvent[] {
   const root = object(payload);
@@ -176,6 +308,17 @@ export function parseMetaPayload(payload: unknown, now: number = Date.now()): So
   for (const entry of list(root.entry).slice(0, 100)) {
     const accountId = id(entry.id);
     if (!accountId) continue;
+    for (const change of list(entry.changes).slice(0, 100)) {
+      const field = text(change.field);
+      const value = object(change.value);
+      const event =
+        channel === "facebook" && field === "feed"
+          ? readFeedChange(accountId, value, now)
+          : channel === "instagram" && field === "comments"
+            ? readInstagramComment(accountId, value, eventTime(entry.time, now))
+            : null;
+      if (event) events.push(event);
+    }
     for (const item of list(entry.messaging).slice(0, 100)) {
       const sender = id(object(item.sender).id);
       const recipient = id(object(item.recipient).id);

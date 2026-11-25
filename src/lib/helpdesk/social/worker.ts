@@ -6,12 +6,19 @@ import { HELPDESK_MODULE, RULES_KEY, parseRules } from "../config";
 import { fromBase64 } from "../files";
 import { keepMessageFiles } from "../keep-files";
 import { richToText } from "../rich";
-import { CHANNEL_LABELS, isSocialChannel } from "./channels";
+import { CHANNELS_KEY, CHANNEL_LABELS, isSocialChannel, parseChannelSettings } from "./channels";
+import { commentFilterOf, postExcerpt, postLink } from "./comments";
 import { socialPayloadSchema } from "./deliver";
-import { MetaRefused, readProfile, refusalText } from "./graph";
-import { RetryLater, processMetaPayload, type FileResult, type IntakeDeps } from "./intake";
+import { MetaRefused, readPost, readProfile, refusalText } from "./graph";
+import {
+  RetryLater,
+  processMetaPayload,
+  type CommentFiled,
+  type FileResult,
+  type IntakeDeps,
+} from "./intake";
 import { fetchMessageMedia } from "./media";
-import { SocialNotSent, sendSocialReply } from "./server";
+import { SocialNotSent, sendCommentReply, sendSocialReply } from "./server";
 
 /**
  * The worker's side of Instagram and Facebook messages: filing what Meta
@@ -117,6 +124,127 @@ function intakeDeps(admin: SupabaseClient, tokenDeps: TokenDeps): IntakeDeps {
         files,
       );
     },
+    async commentsFor(channel, accountId) {
+      const { data, error } = await admin.rpc("resolve_meta_comments", {
+        p_object: channel === "instagram" ? "instagram" : "page",
+        p_account_id: accountId,
+      });
+      check("could not look up an account", error);
+      const row = (
+        data as { tenant_id: string; page_id: string; own_handle: string | null }[] | null
+      )?.[0];
+      return row
+        ? { tenantId: row.tenant_id, pageId: row.page_id, channel, ownHandle: row.own_handle }
+        : null;
+    },
+    commentFilterFor: (tenantId) =>
+      withTenant(
+        tenantId,
+        async (scope) => {
+          const { data: config } = await scope
+            .select("configs", "body")
+            .eq("module", HELPDESK_MODULE)
+            .eq("key", CHANNELS_KEY)
+            .maybeSingle();
+          return commentFilterOf(parseChannelSettings((config as { body?: unknown } | null)?.body));
+        },
+        admin,
+      ),
+    async fileComment(where, event, subject, tags, start) {
+      const { data, error } = await admin.rpc("file_social_comment", {
+        p_tenant_id: where.tenantId,
+        p_channel: where.channel,
+        p_external_id: event.personId,
+        p_name: event.name,
+        p_handle: event.handle,
+        p_comment_id: event.commentId,
+        p_parent_id: event.parentId,
+        p_post_external_id: event.postId,
+        p_body: event.text,
+        p_summary: event.summary,
+        p_subject: subject,
+        p_sent_at: event.at,
+        p_start: start,
+        p_tags: tags,
+      });
+      check("could not file a comment", error);
+      return data as CommentFiled;
+    },
+    async ownComment(where, event) {
+      const { data, error } = await admin.rpc("file_own_comment", {
+        p_tenant_id: where.tenantId,
+        p_channel: where.channel,
+        p_comment_id: event.commentId,
+        p_parent_id: event.parentId,
+        p_body: event.text,
+        p_sent_at: event.at,
+      });
+      check("could not file a reply", error);
+      return data as FileResult;
+    },
+    async editComment(where, event) {
+      const { data, error } = await admin.rpc("edit_social_comment", {
+        p_tenant_id: where.tenantId,
+        p_comment_id: event.commentId,
+        p_body: event.text,
+        p_edited_at: new Date().toISOString(),
+      });
+      check("could not change a comment", error);
+      return data === true;
+    },
+    async removeComment(where, commentId) {
+      const { error } = await admin.rpc("remove_social_comment", {
+        p_tenant_id: where.tenantId,
+        p_comment_id: commentId,
+      });
+      check("could not remove a comment", error);
+    },
+    async hideComment(where, commentId, hidden) {
+      const { error } = await admin.rpc("set_comment_hidden", {
+        p_tenant_id: where.tenantId,
+        p_comment_id: commentId,
+        p_hidden: hidden,
+      });
+      check("could not note a hidden comment", error);
+    },
+    async refreshPost(where, event, postId) {
+      let post: { permalink: string | null; caption: string };
+      try {
+        post = await readPost(where.channel, await token(where.tenantId), event.postId);
+      } catch (err) {
+        // Meta won't say (the post has gone, or it isn't ours to read): don't ask again.
+        if (!(err instanceof MetaRefused)) throw err;
+        post = { permalink: null, caption: "" };
+      }
+      const { error } = await admin.rpc("set_comment_post", {
+        p_tenant_id: where.tenantId,
+        p_post_id: postId,
+        p_permalink: postLink(where.channel, post.permalink),
+        p_excerpt: postExcerpt(post.caption),
+      });
+      check("could not keep a post", error);
+    },
+    fetchCommentFiles: (event) => fetchMessageMedia(event.media),
+    async onCommentCreated(where, event, result, outcome) {
+      if (!result.ticket_id) return;
+      if (outcome.priority || outcome.assignTo) {
+        const { error } = await admin.rpc("apply_ticket_rules", {
+          p_tenant_id: where.tenantId,
+          p_ticket_id: result.ticket_id,
+          p_priority: outcome.priority,
+          p_assignee_id: outcome.assignTo,
+        });
+        if (error) console.error(`could not apply rules: ${error.message}`);
+      }
+      const who = event.handle ? `@${event.handle}` : event.name;
+      // Who it is from, never what they said.
+      await postAlert(
+        admin,
+        where.tenantId,
+        "helpdesk",
+        `New ${CHANNEL_LABELS[where.channel]} comment, conversation #${result.number}${who ? ` from ${who}` : ""}${outcome.priority === "urgent" ? " (urgent)" : ""}`,
+      );
+    },
     async onCreated(where, _event, result, outcome, who) {
       if (!result.ticket_id) return;
       if (outcome.priority || outcome.assignTo) {
@@ -196,6 +324,10 @@ export async function sendQueuedSocial(
     return;
   }
   const payload = parsed.data;
+  if (payload.via !== "message") {
+    await sendQueuedComment(admin, row, payload, tokenDeps);
+    return;
+  }
   let went: Awaited<ReturnType<typeof sendSocialReply>>;
   try {
     went = await sendSocialReply({ tenantId: row.tenant_id, ticketId: row.ticket_id }, payload, {
@@ -237,6 +369,44 @@ export async function sendQueuedSocial(
       console.error("sent pictures weren't kept", err instanceof Error ? err.message : err);
     }
   }
+}
+
+/**
+ * Sends one queued answer to a comment (a public reply, or the one private
+ * message) and writes down how it went, by the same rules as a message: a
+ * refusal is "failed" with the reason and the words kept; no clear answer is
+ * left claimed and never sent again by itself.
+ */
+async function sendQueuedComment(
+  admin: SupabaseClient,
+  row: { id: string; tenant_id: string; ticket_id: string },
+  payload: ReturnType<typeof socialPayloadSchema.parse>,
+  tokenDeps: TokenDeps,
+): Promise<void> {
+  const finish = (args: Record<string, unknown>) =>
+    admin.rpc("finish_comment_outbound", { p_id: row.id, ...args });
+  let went: Awaited<ReturnType<typeof sendCommentReply>>;
+  try {
+    went = await sendCommentReply({ tenantId: row.tenant_id, ticketId: row.ticket_id }, payload, {
+      admin,
+      tokenDeps,
+    });
+  } catch (err) {
+    if (err instanceof SocialNotSent) await finish({ p_error: err.code });
+    else if (err instanceof MetaRefused) {
+      await finish({ p_error: refusalText(err) });
+      console.error(`help desk reply ${row.id} refused by Meta (${err.code ?? err.status})`);
+    } else {
+      // No clear answer: left claimed, to be marked "unsure". Never resent here.
+      console.error(`help desk reply ${row.id}: no clear answer from Meta`);
+    }
+    return;
+  }
+  const { error } = await finish({
+    p_external_id: went.externalId,
+    p_body: richToText(payload.doc).trim(),
+  });
+  if (error) console.error(`help desk reply ${row.id} went but wasn't filed`);
 }
 
 /** Carries out deletion requests that came through Meta's callback. */

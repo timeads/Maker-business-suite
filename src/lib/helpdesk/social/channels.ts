@@ -48,6 +48,17 @@ export function scopesAllow(channel: SocialChannel, scopes: readonly string[] | 
  * "channels"). Everything is off until a manager says otherwise.
  */
 export const CHANNELS_KEY = "channels";
+/**
+ * Which comments start a conversation:
+ *  - "all": every comment with words or a picture.
+ *  - "skip_noise" (the usual choice): not the ones that are only emoji, a
+ *    tagged friend or a one-word cheer. On a conversation already going,
+ *    those are still kept.
+ *  - "matching": only a comment with a question mark or one of the
+ *    workspace's own words in it.
+ */
+export const COMMENT_FILTERS = ["all", "skip_noise", "matching"] as const;
+export type CommentFilter = (typeof COMMENT_FILTERS)[number];
 export const channelSettingsSchema = z.object({
   version: z.literal(1),
   instagram: z.boolean().default(false),
@@ -58,6 +69,12 @@ export const channelSettingsSchema = z.object({
    * Without that approval Meta refuses such replies, so this stays off.
    */
   human_agent: z.boolean().default(false),
+  /** Comments on the business's own posts, one platform at a time. */
+  instagram_comments: z.boolean().default(false),
+  facebook_comments: z.boolean().default(false),
+  comment_filter: z.enum(COMMENT_FILTERS).default("skip_noise"),
+  /** The workspace's own words: a comment with one of them is always worth a conversation. */
+  comment_words: z.array(z.string().trim().min(2).max(40)).max(30).default([]),
 });
 export type ChannelSettings = z.infer<typeof channelSettingsSchema>;
 export const DEFAULT_CHANNEL_SETTINGS: ChannelSettings = {
@@ -65,6 +82,10 @@ export const DEFAULT_CHANNEL_SETTINGS: ChannelSettings = {
   instagram: false,
   facebook: false,
   human_agent: false,
+  instagram_comments: false,
+  facebook_comments: false,
+  comment_filter: "skip_noise",
+  comment_words: [],
 };
 export function parseChannelSettings(body: unknown): ChannelSettings {
   const parsed = channelSettingsSchema.safeParse(body);
@@ -115,12 +136,82 @@ export function channelState(
 }
 
 /**
+ * Whether the connection's granted permissions let comments on a platform
+ * come in. (The database asks the same question in `meta_comment_channel`.)
+ */
+export function commentScopesAllow(
+  channel: SocialChannel,
+  scopes: readonly string[] | null,
+): boolean {
+  const has = (scope: string) => (scopes ?? []).includes(scope);
+  if (!has("pages_manage_metadata") || !has("pages_read_engagement")) return false;
+  return channel === "facebook"
+    ? has("pages_read_user_content")
+    : has("instagram_manage_comments") && has("instagram_basic");
+}
+
+/** What the team may do with a comment, by what Facebook granted. */
+export function commentAbilities(channel: SocialChannel, scopes: readonly string[] | null) {
+  const has = (scope: string) => (scopes ?? []).includes(scope);
+  const manage =
+    channel === "facebook" ? has("pages_manage_engagement") : has("instagram_manage_comments");
+  return {
+    /** A public reply under the comment. */
+    reply: manage,
+    /** Hide, show again, delete. */
+    moderate: manage,
+    /** The one private message about a comment rides on the messaging permissions. */
+    privately:
+      has("pages_messaging") && (channel === "facebook" || has("instagram_manage_messages")),
+  };
+}
+
+/** Where comments on each platform stand, for Settings and the reply box. */
+export function commentState(
+  channel: SocialChannel,
+  settings: ChannelSettings,
+  connection: MetaConnectionFacts | null,
+): { state: ChannelState; why: string | null } {
+  if (!settings[`${channel}_comments`]) return { state: "off", why: null };
+  if (!connection || connection.status === "disconnected") {
+    return { state: "blocked", why: "Facebook & Instagram isn't connected." };
+  }
+  if (connection.status !== "active") {
+    return { state: "blocked", why: "The Facebook & Instagram connection needs reconnecting." };
+  }
+  if (!commentScopesAllow(channel, connection.scopes)) {
+    return {
+      state: "blocked",
+      why: "Facebook didn't give permission to read comments. Allow comments again and leave every permission ticked.",
+    };
+  }
+  if (channel === "instagram" && !connection.instagramId) {
+    return {
+      state: "blocked",
+      why: "No Instagram professional account is linked to the connected Page.",
+    };
+  }
+  return { state: "on", why: null };
+}
+
+/**
  * How much one message can hold. Instagram counts bytes of UTF-8 (1,000);
  * Messenger counts characters (2,000).
  */
 export const TEXT_LIMITS: Record<SocialChannel, { max: number; unit: "bytes" | "characters" }> = {
   instagram: { max: 1000, unit: "bytes" },
   facebook: { max: 2000, unit: "characters" },
+};
+
+/**
+ * How long a public reply to a comment may be. These are our own caps (an
+ * Instagram comment is the length of a caption; Facebook's are longer than
+ * anyone should answer with): Meta's documentation gives no figure, and if
+ * Meta refuses a reply its own words are shown.
+ */
+export const COMMENT_LIMITS: Record<SocialChannel, { max: number; unit: "characters" }> = {
+  instagram: { max: 2200, unit: "characters" },
+  facebook: { max: 8000, unit: "characters" },
 };
 
 /** How much of the limit some words use, in the unit that channel counts in. */

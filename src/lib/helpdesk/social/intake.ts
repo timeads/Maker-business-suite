@@ -1,11 +1,18 @@
 import { actionsFor, type AutoTagRules, type RuleOutcome } from "../config";
 import type { IncomingFile } from "../files";
-import { CHANNEL_LABELS, type SocialChannel } from "./channels";
-import { parseMetaPayload, reactionId, socialSubject, type SocialEvent } from "./events";
+import { CHANNEL_LABELS, type CommentFilter, type SocialChannel } from "./channels";
+import { commentSubject, startsConversation } from "./comments";
+import {
+  parseMetaPayload,
+  reactionId,
+  socialSubject,
+  type CommentEvent,
+  type SocialEvent,
+} from "./events";
 
 /**
- * Files one queued webhook delivery: each message in it becomes, or lands
- * on, a conversation. Pure orchestration: every read and write is handed in,
+ * Files one queued webhook delivery: each message or comment in it becomes,
+ * or lands on, a conversation. Pure orchestration: every read and write is handed in,
  * so it can be tested without a database or Meta.
  */
 
@@ -22,6 +29,18 @@ export type FileResult = {
   needs_profile?: boolean;
   kept_in?: string | null;
 };
+
+/** A workspace that takes comments from an account, and the account's own Instagram username. */
+export type CommentWhere = SocialWhere & { ownHandle: string | null };
+export type CommentFiled = Omit<FileResult, "result"> & {
+  /** "filtered": not worth a conversation by itself, and none was going. */
+  result: FileResult["result"] | "filtered";
+  /** Our row for the post it is on. */
+  post_id?: string;
+  /** Meta hasn't been asked about that post yet. */
+  needs_post?: boolean;
+};
+export type NewComment = Extract<CommentEvent, { type: "comment" }>;
 
 type MessageEvent = Extract<SocialEvent, { type: "message" }>;
 type EchoEvent = Extract<SocialEvent, { type: "echo" }>;
@@ -56,7 +75,98 @@ export type IntakeDeps = {
     outcome: RuleOutcome,
     who: string | null,
   ): Promise<void>;
+  /**
+   * Comments. Null when no workspace takes comments from this account
+   * (not connected for them, or switched off). Without these, comments in a
+   * delivery are simply dropped.
+   */
+  commentsFor?(channel: SocialChannel, accountId: string): Promise<CommentWhere | null>;
+  /** Which comments start a conversation, from the workspace's settings. */
+  commentFilterFor?(
+    tenantId: string,
+  ): Promise<{ comment_filter: CommentFilter; comment_words: readonly string[] }>;
+  /** Files a customer's comment. `start` false means: only if a conversation is already going. */
+  fileComment?(
+    where: CommentWhere,
+    event: NewComment,
+    subject: string,
+    tags: string[],
+    start: boolean,
+  ): Promise<CommentFiled>;
+  /** Files a comment the Page or account wrote itself, under the comment it answers. */
+  ownComment?(where: CommentWhere, event: NewComment): Promise<FileResult>;
+  /** Changes a comment's words. False when we never had that comment. */
+  editComment?(where: CommentWhere, event: NewComment): Promise<boolean>;
+  removeComment?(where: CommentWhere, commentId: string): Promise<void>;
+  hideComment?(where: CommentWhere, commentId: string, hidden: boolean): Promise<void>;
+  /** Asks Meta once for the post's address and caption, and keeps them. */
+  refreshPost?(where: CommentWhere, event: NewComment, postId: string): Promise<void>;
+  fetchCommentFiles?(event: NewComment): Promise<IncomingFile[]>;
+  onCommentCreated?(
+    where: CommentWhere,
+    event: NewComment,
+    result: CommentFiled,
+    outcome: RuleOutcome,
+  ): Promise<void>;
 };
+
+/** Files one comment event. Returns what happened, in a word. */
+async function processComment(
+  event: CommentEvent,
+  where: CommentWhere,
+  deps: IntakeDeps,
+): Promise<string> {
+  if (event.type === "comment_removed") {
+    await deps.removeComment?.(where, event.commentId);
+    return "comment removed";
+  }
+  if (event.type === "comment_hidden") {
+    await deps.hideComment?.(where, event.commentId, event.hidden);
+    return event.hidden ? "comment hidden" : "comment shown";
+  }
+  // An edit of a comment we hold changes its words. One we never held (it
+  // wasn't worth a conversation before) is looked at afresh, as a new comment.
+  if (event.edited && (await deps.editComment?.(where, event))) return "comment edited";
+  const own =
+    event.own ||
+    (event.handle !== null &&
+      where.ownHandle !== null &&
+      event.handle.toLowerCase() === where.ownHandle.toLowerCase());
+  if (own) {
+    // The team's, written in the app, or the help desk's own reply heard back.
+    if (!event.parentId || !deps.ownComment) return "own comment ignored";
+    const result = await deps.ownComment(where, event);
+    if (result.result === "retry") throw new RetryLater();
+    return `own comment ${result.result}`;
+  }
+  if (!deps.fileComment || !deps.commentFilterFor) return "dropped";
+  const subject = commentSubject(event.channel, event.text, event.summary);
+  const outcome = actionsFor(await deps.rulesFor(where.tenantId), {
+    subject,
+    body: event.text,
+    from: CHANNEL_LABELS[event.channel],
+  });
+  const start = startsConversation(
+    { text: event.text, hasMedia: event.media.length > 0 },
+    await deps.commentFilterFor(where.tenantId),
+  );
+  const result = await deps.fileComment(where, event, subject, outcome.tags, start);
+  if (result.result === "filtered") return "comment not kept";
+  if (result.post_id && result.needs_post && deps.refreshPost) {
+    // What the post says is a nicety: trouble reading it never loses the comment.
+    await deps.refreshPost(where, event, result.post_id).catch(() => undefined);
+  }
+  if (result.result === "created") await deps.onCommentCreated?.(where, event, result, outcome);
+  // A comment seen before still gets its files, so a retry can finish the job.
+  if (result.message_id && event.media.length > 0 && deps.fetchCommentFiles && deps.keepFiles) {
+    await deps.keepFiles(
+      where,
+      { ...result, result: "threaded" },
+      await deps.fetchCommentFiles(event),
+    );
+  }
+  return `comment ${result.result}`;
+}
 
 /** Come back to this delivery later (one of our own sends is still being written down). */
 export class RetryLater extends Error {
@@ -69,8 +179,22 @@ export class RetryLater extends Error {
 export async function processMetaPayload(payload: unknown, deps: IntakeDeps): Promise<string[]> {
   const outcomes: string[] = [];
   const places = new Map<string, SocialWhere | null>();
+  const commentPlaces = new Map<string, CommentWhere | null>();
   for (const event of parseMetaPayload(payload, deps.now())) {
     const key = `${event.channel}:${event.accountId}`;
+    if (
+      event.type === "comment" ||
+      event.type === "comment_removed" ||
+      event.type === "comment_hidden"
+    ) {
+      // Comments have their own switch and their own permissions.
+      if (!commentPlaces.has(key)) {
+        commentPlaces.set(key, (await deps.commentsFor?.(event.channel, event.accountId)) ?? null);
+      }
+      const place = commentPlaces.get(key);
+      outcomes.push(place ? await processComment(event, place, deps) : "dropped");
+      continue;
+    }
     if (!places.has(key)) places.set(key, await deps.whereFor(event.channel, event.accountId));
     const where = places.get(key);
     if (!where) {

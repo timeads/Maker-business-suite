@@ -186,6 +186,113 @@ export async function readProfile(
   }
 }
 
+/**
+ * A public reply under a comment, written as the Page or the Instagram
+ * account. Returns Meta's id for the new comment. Plain words only.
+ */
+export async function replyToComment(
+  channel: SocialChannel,
+  token: string,
+  commentId: string,
+  text: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<string> {
+  const data = await call<{ id?: unknown }>(
+    fetchImpl,
+    token,
+    // Facebook: a comment on the comment. Instagram: the comment's replies.
+    `/${encodeURIComponent(commentId)}/${channel === "instagram" ? "replies" : "comments"}`,
+    { method: "POST", json: { message: text } },
+  );
+  if (typeof data.id !== "string" || !data.id) throw new MetaUnsure();
+  return data.id;
+}
+
+/**
+ * The one private message Meta allows about a comment: the Send API with the
+ * comment as the recipient. Returns Meta's id for the message and the
+ * person's id, under which their answer (if any) will arrive as a message.
+ */
+export async function sendPrivateReply(
+  target: { pageId: string; token: string },
+  commentId: string,
+  text: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ messageId: string; recipientId: string | null }> {
+  const data = await call<{ message_id?: unknown; recipient_id?: unknown }>(
+    fetchImpl,
+    target.token,
+    `/${encodeURIComponent(target.pageId)}/messages`,
+    { method: "POST", json: { recipient: { comment_id: commentId }, message: { text } } },
+  );
+  return {
+    messageId: messageId(data),
+    recipientId:
+      typeof data.recipient_id === "string" && data.recipient_id ? data.recipient_id : null,
+  };
+}
+
+const done = (data: { success?: unknown }) => {
+  if (data.success !== true && data.success !== "true") throw new MetaUnsure();
+};
+
+/** Hides a comment from everyone but its author and their friends, or shows it again. */
+export async function setCommentHidden(
+  channel: SocialChannel,
+  token: string,
+  commentId: string,
+  hidden: boolean,
+  fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+  done(
+    await call<{ success?: unknown }>(
+      fetchImpl,
+      token,
+      `/${encodeURIComponent(commentId)}`,
+      channel === "instagram"
+        ? { method: "POST", query: { hide: String(hidden) } }
+        : { method: "POST", json: { is_hidden: hidden } },
+    ),
+  );
+}
+
+/** Deletes a comment on the platform. There is no undoing it. */
+export async function deleteComment(
+  token: string,
+  commentId: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+  done(
+    await call<{ success?: unknown }>(fetchImpl, token, `/${encodeURIComponent(commentId)}`, {
+      method: "DELETE",
+    }),
+  );
+}
+
+/**
+ * A post's address and caption, so the team can see what a comment is about.
+ * Only those two fields are asked for: never its pictures or video. Throws
+ * `MetaRefused` when Meta won't say (a post that has gone, no permission).
+ */
+export async function readPost(
+  channel: SocialChannel,
+  token: string,
+  postId: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ permalink: string | null; caption: string }> {
+  const data = await call<Record<string, unknown>>(
+    fetchImpl,
+    token,
+    `/${encodeURIComponent(postId)}`,
+    { query: { fields: channel === "instagram" ? "caption,permalink" : "message,permalink_url" } },
+    15_000,
+  );
+  const words = (value: unknown) => (typeof value === "string" ? value : "");
+  return channel === "instagram"
+    ? { permalink: words(data.permalink) || null, caption: words(data.caption) }
+    : { permalink: words(data.permalink_url) || null, caption: words(data.message) };
+}
+
 /** What we ask a Page to send us for messages. Instagram's messages ride on the Page's `messages` field. */
 export const SUBSCRIBED_FIELDS = ["messages", "message_echoes", "message_reactions"] as const;
 /**
@@ -240,6 +347,27 @@ export function refusalWords(stored: string | null): string {
     return "Facebook & Instagram isn't connected for messages just now. Reconnect it in Settings → Help desk → Channels.";
   }
   if (stored === "too_long") return "It was longer than one message can hold.";
+  if (stored === "no_comment") {
+    return "There is no comment left here to answer: it was removed.";
+  }
+  if (stored === "comment_changed") {
+    return "They commented again while this was waiting, so it wasn't sent. Have a look at what they said and send it again.";
+  }
+  if (stored === "comment_hidden") {
+    return "Instagram doesn't allow a public reply to a hidden comment. Show the comment again first, or message them privately.";
+  }
+  if (stored === "private_used") {
+    return "This comment has already had its one private message, which is all Meta allows. If they answer, it arrives as a message conversation.";
+  }
+  if (stored === "private_expired") {
+    return "A private message can only be sent within seven days of the comment, and that has passed. You can still reply publicly.";
+  }
+  if (stored === "not_allowed") {
+    return "Facebook didn't give permission for that. An owner or admin can allow it in Settings → Help desk → Channels.";
+  }
+  if (stored === "comments_off") {
+    return "Comments aren't switched on and connected just now. See Settings → Help desk → Channels.";
+  }
   if (stored === "files") return "The pictures couldn't be read. Attach them again.";
   const match = /^meta:([^:]*):([^:]*):(partial|none):([\s\S]*)$/.exec(stored ?? "");
   if (!match) return "Meta didn't take it. Try again in a moment.";
@@ -260,7 +388,10 @@ export function refusalWords(stored: string | null): string {
   if (code === 200 && subcode === 2534041) {
     return `${start}Instagram isn't letting connected tools read messages. In the Instagram app: Settings → Messages and story replies → Message controls → Connected tools → Allow access to messages.`;
   }
-  if (code === 4 || code === 17 || code === 32 || code === 613) {
+  if (/private repl|already (been )?replied/i.test(reason)) {
+    return `${start}That comment has already had its one private message, which is all Meta allows.`;
+  }
+  if (code === 4 || code === 17 || code === 32 || code === 613 || code === 80001) {
     return `${start}Meta is limiting how fast messages can be sent just now. Try again in a few minutes.`;
   }
   if (code === 10 || code === 200 || code === 230) {

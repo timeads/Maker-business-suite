@@ -37,6 +37,14 @@ export const socialPayloadSchema = z.object({
     .default([]),
   add_tags: z.array(z.string().regex(TAG_PATTERN)).max(10).default([]),
   assign_to: z.string().uuid().nullable().default(null),
+  /**
+   * How it goes: a message in the person's message conversation, or, on a
+   * conversation about a comment, a public reply under the comment or the
+   * one private message about it.
+   */
+  via: z.enum(["message", "public", "private"]).default("message"),
+  /** Meta's id for the comment being answered (public and private only). */
+  comment_id: z.string().min(1).max(200).nullable().default(null),
 });
 export type SocialPayload = z.infer<typeof socialPayloadSchema>;
 
@@ -45,6 +53,7 @@ export function socialSummary(payload: SocialPayload, to: string) {
   return {
     kind: "social",
     channel: payload.channel,
+    via: payload.via,
     to: [to],
     preview: richToText(payload.doc).replace(/\s+/g, " ").slice(0, 200),
   };
