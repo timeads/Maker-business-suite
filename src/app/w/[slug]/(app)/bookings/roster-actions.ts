@@ -7,6 +7,7 @@ import {
   BOOKINGS_MODULE,
   EMAILS_KEY,
   bookingEmailsSchema,
+  parseBookingEmails,
   tagsFromText,
 } from "@/lib/bookings/config";
 import {
@@ -18,7 +19,7 @@ import {
   waitlistEmail,
   type BookingDetails,
 } from "@/lib/bookings/emails";
-import { sendEmail } from "@/lib/email";
+import { emailConfigured, sendEmail } from "@/lib/email";
 import { getEntitlements } from "@/lib/entitlements";
 import { getSiteUrl } from "@/lib/site-url";
 import { createClient } from "@/lib/supabase/server";
@@ -245,6 +246,58 @@ export async function moveBooking(
       ? `Moved. ${before.customer_name} has been emailed the new time.`
       : `Moved. Email isn't switched on here, so let ${before.customer_name} know yourself.`,
   };
+}
+
+/**
+ * Sends the "you're booked" email again. Only the hash of a booking's link is
+ * kept, so the booking gets a new link and the one in the earlier email stops
+ * working. Owners and admins only.
+ */
+export async function resendConfirmation(slug: string, bookingId: string): Promise<BookingsState> {
+  const ctx = await context(slug, true);
+  if ("error" in ctx) return { error: ctx.error };
+  const details = await detailsFor(ctx, bookingId);
+  if (!details || details.status !== "confirmed" || details.session_cancelled) {
+    return { error: "That booking couldn't be found." };
+  }
+  if (!details.customer_email) return { error: "There's no email address on this booking." };
+  if (!emailConfigured()) {
+    return { error: "Email isn't switched on here yet, so nothing was sent." };
+  }
+  const { data: optIn } = await ctx.supabase
+    .from("bookings")
+    .select("email_opt_in")
+    .eq("id", bookingId)
+    .eq("tenant_id", ctx.tenant.id)
+    .maybeSingle();
+  if (optIn?.email_opt_in === false) {
+    return {
+      error: `Emails are switched off for ${details.customer_name}. Tick “Send them reminders and updates” first.`,
+    };
+  }
+  const token = randomBytes(24).toString("base64url");
+  const { error } = await ctx.supabase.rpc("renew_booking_link", {
+    p_booking_id: bookingId,
+    p_manage_token: token,
+  });
+  if (error) return { error: OOPS };
+  const { data: config } = await ctx.supabase
+    .from("configs")
+    .select("body")
+    .eq("tenant_id", ctx.tenant.id)
+    .eq("module", BOOKINGS_MODULE)
+    .eq("key", EMAILS_KEY)
+    .maybeSingle();
+  const note = parseBookingEmails(config?.body).confirmation_note;
+  const sent = await sendEmail(
+    confirmationEmail(details, manageUrl(await getSiteUrl(), token), note),
+  );
+  done(slug);
+  return sent
+    ? {
+        message: `Sent to ${details.customer_email}. The link in their earlier email no longer works.`,
+      }
+    : { error: "The email didn't go. Check the address and press again in a minute." };
 }
 
 /** Cancels one person's booking. Refunds stay in the business's own Stripe. */

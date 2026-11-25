@@ -14,6 +14,7 @@ import {
   cancelBooking,
   emailEveryone,
   moveBooking,
+  resendConfirmation,
   saveBookingContact,
   saveBookingNotes,
   saveSessionSettings,
@@ -56,6 +57,31 @@ export type RosterPerson = {
   /** Automatic emails that didn't go, or may not have, in plain words. */
   mailTrouble?: string[];
 };
+
+/** "Send the confirmation again": one press, and the result said in words. */
+function ResendConfirmation({ slug, person }: { slug: string; person: RosterPerson }) {
+  const [state, setState] = useState<BookingsState>({});
+  const [pending, start] = useTransition();
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-xs font-semibold">Lost their confirmation?</p>
+      <p className="text-muted-foreground text-xs">
+        We&apos;ll email it again with a fresh link to change or cancel. The link in the earlier
+        email stops working.
+      </p>
+      <Result state={state} />
+      <Button
+        variant="outline"
+        size="sm"
+        className="w-fit"
+        disabled={pending}
+        onClick={() => start(async () => setState(await resendConfirmation(slug, person.id)))}
+      >
+        {pending ? "Sending…" : "Send the confirmation again"}
+      </Button>
+    </div>
+  );
+}
 
 /** Two big tap targets: here, or didn't come. Tapping the lit one clears it. */
 function CheckIn({ slug, person }: { slug: string; person: RosterPerson }) {
@@ -192,6 +218,8 @@ function PersonTools({
               </SubmitButton>
             </form>
           )}
+
+          <ResendConfirmation slug={slug} person={person} />
 
           <form action={cancelAction} className="flex flex-col gap-2">
             <p className="text-xs font-semibold">Cancel this booking</p>
