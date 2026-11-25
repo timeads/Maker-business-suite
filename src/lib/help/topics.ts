@@ -164,15 +164,52 @@ export const HELP_TOPICS: HelpTopic[] = [
     steps: [
       "Open a conversation from the list. The conversation is in the middle, with the reply box under it; who the customer is and what they ordered is on the right.",
       "Write your reply. The bar above the box gives bold, italic, underline, strike, lists and links. “Macros” drops in a saved reply, “Attach” adds files (4 MB together at most), and “AI” asks Claude for a first draft; you can tell it what to say.",
-      "“Reply all” and “Forward” are tabs above the box. “Edit” beside the address lets you change who it goes to and add Cc or Bcc.",
+      "“Reply all” and “Forward” are tabs above the box. “Reply all” copies in everyone else the customer wrote to. “Forward” takes the conversation's pictures and files along; take off any you don't want to pass on. “Edit” beside the address lets you change who it goes to and add Cc or Bcc.",
       "Press “Send & close” when that's the end of it. “Send” keeps the conversation as in progress, and the arrow beside it can keep it open or snooze it until later.",
-      "“Internal note” is for your team only. Type @ and a first name to get someone's attention.",
+      "For a few seconds after sending, “Undo” at the foot of the page takes the email back and puts your words in the box again. How long is set under Settings → Help desk.",
+      "“Internal note” is for your team only. Type @ and pick a teammate to get their attention.",
     ],
     notes: [
       "A draft from Claude only fills the reply box. It is never sent unless you press Send.",
+      "A sent email still goes if you close the page before the undo time is up; only “Undo” stops it.",
+      "A saved reply can also do something when it is sent, like add a tag or close the conversation. You'll see it under the box as “On send”, and can take it off.",
       "What you were writing is kept in this browser until you send it or press the bin. It isn't on your other devices.",
       "Notes are for your team only and are never emailed.",
       "Shortcuts: j and k move through the list, r replies, n writes a note, f forwards, e closes, and ? shows them all.",
+    ],
+  },
+  {
+    slug: "desk-files",
+    group: "helpdesk",
+    title: "Pictures and files in a conversation",
+    summary: "What customers send is kept with the conversation; so is what you send.",
+    steps: [
+      "A picture a customer set into their email shows where they put it. Other pictures show as small pictures under the message, and other files as a chip with the name and size.",
+      "Press a picture or a video to see it large. A PDF opens in a new tab; anything else downloads.",
+      "Files you attach to a reply are kept the same way, so the conversation shows what was sent.",
+    ],
+    notes: [
+      "We keep photos (JPEG, PNG, GIF, WebP, HEIC), PDFs, MP4 and MOV videos, and plain text and CSV files. Anything else is listed as “a file we didn't keep” with its name, kind and size; ask the customer for a photo or a PDF instead.",
+      "A file can be up to 25 MB, an email's files 35 MB together, and a workspace keeps up to 500 MB a day.",
+      "An iPhone HEIC photo shows as a picture where the browser can draw it (Safari), and as a download elsewhere.",
+      "Files are private to your team. When a conversation is deleted for good, or a customer asks to be forgotten, its files go too.",
+    ],
+  },
+  {
+    slug: "desk-tidy",
+    group: "helpdesk",
+    title: "Archive, Spam and Trash, and doing several at once",
+    summary: "Clear what you don't need to answer, one conversation or many.",
+    steps: [
+      "The ⋯ menu at the top of a conversation has Archive, Mark as spam and Delete. Each takes it out of your working folders and puts it under “More” in the menu.",
+      "Archived is for things that are done. If the customer writes again it comes back to the inbox by itself.",
+      "Spam and Trash stay where they are even if more mail arrives on them. “Not spam” or “Restore” brings one back as open.",
+      "To act on several at once, tick the box on each row (or “tick all”). A bar under the list can close, assign, move to a folder, snooze, tag, archive, mark as spam or delete them together.",
+    ],
+    notes: [
+      "Nothing empties the Trash by itself. Owners and admins can delete one conversation for good from its ⋯ menu, or press “Empty Trash”. That removes its emails, notes and files and can't be undone.",
+      "Owners and admins can download the list as a spreadsheet with the arrow above it: who, the subject, status, tags and dates, without the words of any message.",
+      "A new email from someone whose earlier message you marked as spam still arrives as a new conversation.",
     ],
   },
   {
@@ -185,7 +222,7 @@ export const HELP_TOPICS: HelpTopic[] = [
       "“AI insights”: press Summarize for a few lines on what the customer wants, their mood and the kind of request. It is for your team only and counts against your plan's AI allowance.",
       "“Customer”: their orders, what they've spent in all and their last order, from your connected shop. “View on Shopify” opens their page in your shop.",
       "Each order shows what was in it, where it's going and its tracking if the parcel was sent from Shipping. “Add to reply” puts the order's details into your reply; “Label” opens it in Shipping when it still has to go.",
-      "The Activity tab lists everything that happened to the conversation: mail in and out, notes, who took it, when it was closed.",
+      "The Activity tab lists everything that happened to the conversation: mail in and out, notes, who took it, tags added or taken off (by a person or by one of your rules), and when it was closed.",
     ],
     notes: [
       "Orders are matched by the customer's email address. Someone who ordered under a different address won't be found.",
@@ -222,6 +259,7 @@ export const HELP_TOPICS: HelpTopic[] = [
       "“Waiting for approval from the mail service”: a new mail account can only write to its own domain until it is approved. Ask for approval, then try again.",
       "“This address has bounced before”: the mail service won't send to that customer's address. Check it with them another way.",
       "Anything else: wait a minute and press Send again. Your words are still in the box.",
+      "With an undo time set, the email is sent a few seconds after you press Send, so a problem shows as a red notice at the foot of the conversation instead. “Put the words back in the box” lets you try again.",
     ],
   },
 

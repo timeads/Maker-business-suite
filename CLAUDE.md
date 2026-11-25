@@ -87,8 +87,13 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   (`--chart-1`) and always offer a table view.
 - Help desk: inbound email is authenticated by a secret in the webhook URL,
   queued (`private.inbound_emails`) and filed by the worker through
-  `ingest_inbound_email`, which threads by the ticket's reply key, then by
-  mail headers. `tickets.reply_key` is never readable by clients. Customer
+  `file_inbound_email` (the older `ingest_inbound_email` hands over to it),
+  which threads by the ticket's reply key, then by mail headers, and keeps
+  who else the email went to (so "Reply all" fills in, never with our own
+  addresses: `replyAllCopies`, the `own_addresses` setting). The whole
+  plain-text part is kept (`chooseBody` in `lib/helpdesk/inbound.ts`; never
+  the mail service's guess at "just the reply") and the quoted part is folded
+  on screen (`splitQuote`), so a note above a signature is never lost. `tickets.reply_key` is never readable by clients. Customer
   email is shown as plain text only. Reply templates and auto-tag rules are
   `configs` (module `helpdesk`). Claude drafts go into the reply box and are
   never sent automatically; customer text in the prompt is marked as data.
@@ -108,8 +113,38 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   facts (`ticket_list_facts`, never stored). `ticket_events` is the activity
   log, written only by a trigger on `tickets` (and a forward); it never holds
   a subject's words. Mail goes out through one path (`sendMail` → `deliver`
-  → `record_outbound`): reply, copies, forward, files (sent, not kept), and
-  what happens next (in progress, open, snoozed, closed). Formatting is a
+  → `record_outbound`): reply, copies, forward, files, and what happens
+  next (in progress, open, snoozed, closed). With an undo wait set
+  (`helpdesk` / `desk_settings`) `deliver` queues the email instead
+  (`queue_outbound`, `private.outbound_queue`) and the worker sends it when
+  due (`drainOutbound` → `finish_outbound`, which files it acting as its
+  author); "Undo" is `cancel_outbound` on the server, never a browser timer.
+  A refusal is kept as failed with its words; a send never finished is
+  "unsure" and never resent. A saved reply can also act when sent
+  (`templateActionsSchema`: tags, then, hand-off; `apply_send_actions`).
+  Pictures and files, in and out (`lib/helpdesk/files.ts`,
+  `keep-files.ts`): kept only when their own first bytes say they are one of
+  the kinds on the list (never by name or claimed type; no html, svg, office
+  files or programs), under caps (25 MB a file, 35 MB an email, 500 MB a
+  workspace a day), in the PRIVATE `helpdesk` bucket at
+  `<workspace>/<ticket>/<message>/<random>`; `message_attachments` lists
+  every file, kept or not, and is written only by the server
+  (`record_message_attachments`). They are served only by
+  `/api/helpdesk/files/[id]`, which reads the row as the member and sets
+  the headers itself (`fileHeaders`); a picture set into an email is our own
+  `<img>` placed by `placeInline`, never the email's markup. Deleting an
+  attachment row, however it happens, queues the file for removal
+  (`private.attachment_removals`, emptied by the worker). Prompts are told a
+  message had files by name and kind only.
+  Archive, Spam and Trash are `tickets.shelf` (`shelve_ticket`): a shelved
+  conversation is closed and in no working view (`inView`); archived comes
+  back when the customer writes, spam and trash stay put, and anything that
+  reopens a conversation takes it off its shelf (a trigger). Deleting for
+  good is manager-only and only from the Trash; nothing empties it by
+  itself. Ticked rows change together through one checked function
+  (`bulk_update_tickets`); the list exports as a spreadsheet without message
+  text (`lib/helpdesk/export.ts`, managers). Tag changes are logged by a
+  trigger on `ticket_tags`. Tag groups are a config (`tag_groups`). Formatting is a
   small document (`lib/helpdesk/rich.ts`): the editor hands it over, the
   server checks it and writes the HTML and plain-text parts itself, and the
   thread draws it as React nodes; no HTML from a browser or a customer is

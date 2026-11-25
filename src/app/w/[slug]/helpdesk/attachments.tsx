@@ -94,8 +94,14 @@ function Thumb({
   inline?: boolean;
 }) {
   const [broken, setBroken] = useState(false);
+  const img = useRef<HTMLImageElement>(null);
+  // A picture that failed before the page woke up never tells us; ask it.
+  useEffect(() => {
+    const el = img.current;
+    if (el && el.complete && el.naturalWidth === 0) setBroken(true);
+  }, []);
   if (broken) return <FileChip file={file} onOpen={onOpen} />;
-  return (
+  const picture = (
     <button
       type="button"
       onClick={onOpen}
@@ -108,6 +114,7 @@ function Thumb({
     >
       {/* eslint-disable-next-line @next/next/no-img-element -- our own element pointing at our own route; never the email's markup */}
       <img
+        ref={img}
         src={fileHref(file.id)}
         alt={file.name}
         loading="lazy"
@@ -116,6 +123,16 @@ function Thumb({
         className={inline ? "max-h-80 max-w-full object-contain" : "size-full object-cover"}
       />
     </button>
+  );
+  if (inline) return picture;
+  return (
+    <span className="flex flex-col gap-0.5">
+      {picture}
+      <span className="w-24 text-[11px] leading-tight">
+        <span className="font-read block truncate font-semibold">{file.name}</span>
+        <span className="text-muted-foreground block">{fileSize(file.size)}</span>
+      </span>
+    </span>
   );
 }
 
@@ -190,11 +207,8 @@ export function MessageFiles({ files, inline }: { files: ShownFile[]; inline?: b
       {pictures.length > 0 && (
         <ul className="flex flex-wrap gap-2">
           {pictures.map((file) => (
-            <li key={file.id} className="flex max-w-full flex-col gap-0.5">
+            <li key={file.id} className="max-w-full">
               <Thumb file={file} onOpen={() => setOpen(file)} />
-              <span className="text-muted-foreground w-24 truncate text-[11px]">
-                {file.name} · {fileSize(file.size)}
-              </span>
             </li>
           ))}
         </ul>
