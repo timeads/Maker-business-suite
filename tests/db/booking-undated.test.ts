@@ -291,6 +291,44 @@ describe("spotting an order with no date", () => {
     expect((await markers(tenantA, "210")).map((m) => m.line_id)).toEqual(["2", "3"]);
   });
 
+  it("orders from before the workshop was sold through the shop here are left alone", async () => {
+    // A product linked just now: the shop's history holds older orders for it.
+    const late = await workshop(alice, tenantA, "9050");
+    const old = async (id: string, lines: Line[]) => {
+      await shopOrder(tenantA, id, `#${id}`, lines, { note: false });
+      await db.query(
+        "update public.orders set processed_at = now() - interval '40 days' where tenant_id = $1 and external_id = $2",
+        [tenantA, id],
+      );
+      return note(tenantA, id, `#${id}`, lines);
+    };
+    expect((await old("220", [{ id: "1", qty: 1, product: "9050" }])).new).toEqual([]);
+    // Nor an old order that carried a date we don't have.
+    expect(
+      (
+        await old("221", [
+          { id: "1", qty: 1, product: "555", session: "99999999-9999-4999-8999-999999999998" },
+        ])
+      ).new,
+    ).toEqual([]);
+    expect(await markers(tenantA, "220")).toEqual([]);
+    // An order placed after the link is caught.
+    expect(
+      (await shopOrder(tenantA, "222", "#222", [{ id: "1", qty: 1, product: "9050" }])).new,
+    ).toHaveLength(1);
+    // Linking again starts the clock again; unlinking clears it.
+    const stamp = async () =>
+      (
+        await db.query<{ at: string | null }>(
+          "select shop_linked_at as at from public.services where id = $1",
+          [late],
+        )
+      ).rows[0].at;
+    expect(await stamp()).not.toBeNull();
+    await as(alice, "select public.set_service_shop_product($1, null, null)", [late]);
+    expect(await stamp()).toBeNull();
+  });
+
   it("a refund before anyone placed it takes it off the waiting list", async () => {
     await shopOrder(tenantA, "202", "#202", [{ id: "1", qty: 2 }]);
     await shopOrder(tenantA, "202", "#202", [{ id: "1", qty: 0 }]);

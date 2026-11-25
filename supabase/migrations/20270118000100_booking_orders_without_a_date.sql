@@ -51,6 +51,29 @@ create policy shop_undated_lines_select on public.shop_undated_lines
   for select to authenticated
   using (tenant_id in (select private.user_tenant_ids()));
 
+-- When a workshop began selling through its shop product here. Orders from
+-- before that belong to whatever took bookings then (a full sync reads months
+-- of history): they are never written down as "needs a date".
+alter table public.services add column shop_linked_at timestamptz;
+update public.services set shop_linked_at = now() where shop_product_id is not null;
+grant select (shop_linked_at) on public.services to authenticated;
+
+create function private.stamp_shop_linked()
+returns trigger
+language plpgsql set search_path = ''
+as $$
+begin
+  if tg_op = 'INSERT' or new.shop_product_id is distinct from old.shop_product_id then
+    new.shop_linked_at := case when new.shop_product_id is not null then now() end;
+  end if;
+  return new;
+end;
+$$;
+revoke all on function private.stamp_shop_linked() from public;
+create trigger services_stamp_shop_linked
+  before insert or update of shop_product_id on public.services
+  for each row execute function private.stamp_shop_linked();
+
 -- The sync hands over every line of an order with the date it carries, if
 -- any. This keeps the ones with no usable date: none at all, or one that
 -- names no date of this workspace (`had_date`).
@@ -96,7 +119,9 @@ revoke all on function private.undated_lines_in(uuid, jsonb) from public;
 --      when the line is refunded or the order cancelled.
 --   2. A line with no usable date that isn't written down yet is, when it is
 --      for a workshop sold through the shop or carried a date we can't find,
---      and is handed back once so the team can be told.
+--      and is handed back once so the team can be told. Only for orders
+--      placed since the workshop was linked to its product: a first sync of
+--      a shop's history never floods the list with old orders.
 -- Returns { "new": [...], "cancelled": [booking ids], "known": n }.
 create function public.note_shop_undated_lines(p_tenant_id uuid, p_provider text, p_orders jsonb)
 returns jsonb
@@ -158,7 +183,13 @@ begin
     from private.undated_lines_in(p_tenant_id, p_orders) i
     left join public.services sv
       on sv.tenant_id = p_tenant_id and sv.shop_product_id = i.product_id and sv.kind = 'workshop'
-    where not i.cancelled and i.seats > 0 and (sv.id is not null or i.had_date)
+    join public.orders o
+      on o.tenant_id = p_tenant_id and o.provider = p_provider and o.external_id = i.order_id
+    where not i.cancelled and i.seats > 0
+      -- Only orders placed since the workshop was sold through the shop
+      -- here; for a stray date on some other product, only recent ones.
+      and ((sv.id is not null and o.processed_at >= sv.shop_linked_at)
+           or (sv.id is null and i.had_date and o.processed_at > now() - interval '30 days'))
     on conflict (tenant_id, provider, shop_order_id, line_id) do nothing
     returning id, shop_order_id, shop_order_name, service_id, seats
   )
