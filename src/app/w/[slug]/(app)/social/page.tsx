@@ -182,6 +182,7 @@ export default async function SocialPage({
                 slug={tenant.slug}
                 access="posting"
                 returnTo="social"
+                variant="outline"
                 label="Allow posting on Facebook"
               />
             ) : (

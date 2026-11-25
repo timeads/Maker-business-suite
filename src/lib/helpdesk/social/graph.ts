@@ -357,7 +357,7 @@ export function refusalWords(stored: string | null): string {
     return "Instagram doesn't allow a public reply to a hidden comment. Show the comment again first, or message them privately.";
   }
   if (stored === "private_used") {
-    return "This comment has already had its one private message, which is all Meta allows. If they answer, it arrives as a message conversation.";
+    return "This comment has already had its one private message, which is all Meta allows. If they answer, it arrives as its own message conversation.";
   }
   if (stored === "private_expired") {
     return "A private message can only be sent within seven days of the comment, and that has passed. You can still reply publicly.";

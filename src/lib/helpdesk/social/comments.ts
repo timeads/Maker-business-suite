@@ -178,11 +178,12 @@ export function privateReplyWords(
   format: (instant: string) => string,
 ): string {
   const name = CHANNEL_LABELS[channel];
+  const a = channel === "instagram" ? "an" : "a";
   switch (state) {
     case "available":
       return `${name} allows one private message about a comment${until ? `, until ${format(until)}` : ""}. If they answer, it carries on as an ordinary ${name} message conversation.`;
     case "used":
-      return `You've sent your one private message about this comment, which is all ${name} allows. If they answer, it arrives as a ${name} message conversation.`;
+      return `You've sent your one private message about this comment, which is all ${name} allows. If they answer, it arrives as ${a} ${name} message conversation.`;
     case "sending":
       return "A private message about this comment is on its way (or was started and we never heard back). It can't be sent twice.";
     case "expired":
