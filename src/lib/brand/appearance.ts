@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { emailRoles } from "./email";
-import { contrast, luminance, type BrandKitConfig } from "./kit";
+import { contrast, luminance, saturation, type BrandKitConfig } from "./kit";
 
 /**
  * How a workspace looks to its own team: a light page, a dark one, or
@@ -46,6 +46,28 @@ function readable(color: string, background: string, toward: string): string {
   return out;
 }
 
+/** A colour's hue in degrees (0 red, 120 green, 240 blue). Greys answer 0. */
+export function hue(hex: string): number {
+  const [r, g, b] = channels(hex).map((value) => value / 255);
+  const max = Math.max(r, g, b);
+  const span = max - Math.min(r, g, b);
+  if (span === 0) return 0;
+  const raw =
+    max === r ? ((g - b) / span) % 6 : max === g ? (b - r) / span + 2 : (r - g) / span + 4;
+  return (raw * 60 + 360) % 360;
+}
+
+/**
+ * Whether a colour would be read as the house's warning colour (brick): a
+ * red or red-orange with some strength to it. On screen red means "this went
+ * wrong" or "this deletes", so it is never the filled button, the one thing
+ * to do next, however much red a brand uses elsewhere.
+ */
+export function readsAsWarning(hex: string): boolean {
+  const h = hue(hex);
+  return (h <= 27 || h >= 345) && saturation(hex) >= 0.35;
+}
+
 /**
  * The brand's colours as the handful of variables the interface is drawn
  * from: the menu, and the one filled button. Everything else (page, cards,
@@ -66,10 +88,20 @@ export function brandThemeVars(kit: BrandKitConfig | null): Record<string, strin
     vars["--tuft-teal-ink"] = mix(menu, "#000000", 0.2);
   }
 
-  // The filled button: the brand's liveliest colour, with words that read on it.
-  const button =
-    roles.accent !== roles.dark && roles.accent !== roles.light ? roles.accent : roles.primary;
-  if (button !== roles.light && contrast(button, "#ffffff") >= 1.6) {
+  // The filled button: the brand's liveliest colour, with words that read on
+  // it. Never a red: where the liveliest colour is one, the next that isn't
+  // is used, and if there is none the button stays the house ochre.
+  const usable = (hex: string) =>
+    hex !== roles.dark &&
+    hex !== roles.light &&
+    contrast(hex, "#ffffff") >= 1.6 &&
+    !readsAsWarning(hex);
+  const button = [
+    roles.accent,
+    roles.primary,
+    ...kit.colors.map((color) => color.hex).sort((a, b) => saturation(b) - saturation(a)),
+  ].find(usable);
+  if (button) {
     const on = contrast(button, "#1a2c2c") >= contrast(button, "#ffffff") ? "#1a2c2c" : "#ffffff";
     vars["--tuft-ochre"] = button;
     vars["--tuft-ochre-hover"] = mix(button, "#000000", 0.12);

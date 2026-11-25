@@ -595,9 +595,18 @@ export function Composer({
               type="button"
               role="tab"
               aria-selected={mode === tab.key}
+              aria-controls="composer"
+              // On a phone only the icon shows, so the name is given outright.
+              aria-label={tab.label}
               title={tab.label}
               onClick={() => setMode(tab.key)}
-              className={cn(quiet, mode === tab.key && "bg-sunken text-foreground")}
+              className={cn(
+                quiet,
+                "max-md:h-10 max-md:min-w-10 max-md:justify-center",
+                // The tab you are on: filled, with the ochre line every selected tab here carries.
+                mode === tab.key &&
+                  "bg-sunken text-foreground shadow-[inset_0_-2px_0_var(--tuft-ochre)]",
+              )}
             >
               <tab.icon aria-hidden />
               {/* Where the column is narrow, only the tab you are on spells its name out. */}

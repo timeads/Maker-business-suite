@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { brandThemeVars, brandThemeVarsDark, mix, parseAppearance } from "./appearance";
+import {
+  brandThemeVars,
+  brandThemeVarsDark,
+  hue,
+  mix,
+  parseAppearance,
+  readsAsWarning,
+} from "./appearance";
 import { brandKitSchema, contrast } from "./kit";
 
 const kit = (colors: [string, string][]) =>
@@ -23,6 +30,39 @@ describe("a workspace's own look", () => {
   it("mixes colours", () => {
     expect(mix("#000000", "#ffffff", 0.5)).toBe("#808080");
     expect(mix("#102030", "#102030", 0.7)).toBe("#102030");
+  });
+
+  it("never makes the filled button a red, which on screen means something went wrong", () => {
+    expect(Math.round(hue("#ff0000"))).toBe(0);
+    expect(Math.round(hue("#00ff00"))).toBe(120);
+    expect(Math.round(hue("#0000ff"))).toBe(240);
+    for (const red of ["#b03424", "#e0705f", "#b5532c", "#d7263d", "#e63946"]) {
+      expect(readsAsWarning(red)).toBe(true);
+    }
+    for (const fine of ["#c78c2b", "#f28c28", "#0051ff", "#1f3d2b", "#8a8a8a", "#f6efe2"]) {
+      expect(readsAsWarning(fine)).toBe(false);
+    }
+    // Rust is the liveliest colour here; the button takes the next one instead.
+    const earthy = brandThemeVars(
+      kit([
+        ["forest", "#1f3d2b"],
+        ["cream", "#f6efe2"],
+        ["rust", "#b5532c"],
+        ["sky", "#9cc4d9"],
+      ]),
+    );
+    expect(earthy["--tuft-ochre"]).toBe("#9cc4d9");
+    // Nothing but red to choose from: the button stays the house ochre.
+    const reds = brandThemeVars(
+      kit([
+        ["ink", "#1a1a1a"],
+        ["paper", "#ffffff"],
+        ["tomato", "#d7263d"],
+      ]),
+    );
+    expect(reds["--tuft-ochre"]).toBeUndefined();
+    expect(reds["--tuft-on-ochre"]).toBeUndefined();
+    expect(reds["--tuft-teal"]).toBeDefined();
   });
 
   const palettes: [string, [string, string][]][] = [
@@ -86,7 +126,9 @@ describe("a workspace's own look", () => {
   it("uses the brand's dark colour for the menu and its accent for the button", () => {
     const vars = brandThemeVars(kit(palettes[0][1]));
     expect(vars["--tuft-teal"]).toBe("#1f3d2b");
-    expect(vars["--tuft-ochre"]).toBe("#b5532c");
+    // Rust is this palette's accent, but a red button reads as a warning: the next colour is used.
+    expect(vars["--tuft-ochre"]).toBe("#9cc4d9");
+    expect(brandThemeVars(kit(palettes[3][1]))["--tuft-ochre"]).toBe("#0051ff");
     expect(brandThemeVars(null)).toEqual({});
   });
 });
