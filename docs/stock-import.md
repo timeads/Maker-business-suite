@@ -2,7 +2,7 @@
 
 Settings → Stock → **Bring your records across** takes CSV files and turns them into suppliers, planning figures, purchase orders, supplier accounts and history. It is for owners and admins.
 
-This page says exactly what each file needs, and how to get each one out of TuftStock. Nothing has to be added to TuftStock: every file is one query against its database.
+This page says exactly what each file needs, and how to get each one out of TuftStock: its own download, or one query against its database.
 
 ## How an import works
 
@@ -34,7 +34,7 @@ Things that hold for every file:
 
 ## Getting the files out of TuftStock
 
-TuftStock has no export buttons for these, so each file is a query run against its Postgres database (the one in its `DATABASE_URL` / `DIRECT_URL`). Two ways to run one:
+TuftStock's Settings → **Move your data** downloads each of these files ready to bring in. Each is also one query against its Postgres database (the one in its `DATABASE_URL` / `DIRECT_URL`), for when you'd rather run it yourself. Two ways to run one:
 
 - **Supabase's SQL editor**: paste the query, run it, and use _Export → Download CSV_.
 - **psql**, with the direct (port 5432) address: `\copy ( <query without the final semicolon> ) to 'suppliers.csv' with (format csv, header)`
@@ -241,13 +241,20 @@ For the Balances tab. Entries are marked as imported.
 | `reference`      |        | Invoice number or payment reference.                                                                           |
 | `description`    |        | A note.                                                                                                        |
 | `paid_on`        |        | For an invoice you had ticked "Paid" before the payment showed up: when.                                       |
+| `reported_by`    |        | For a payment only: `SUPPLIER` when they told you it arrived, `BANK` when your bank or books show it leaving.  |
+| `needs_review`   |        | `yes` for an entry someone should look over. It counts in the balance meanwhile.                               |
+| `review_note`    |        | What to check, for an entry marked that way.                                                                   |
 
 What happens:
 
 - An **invoice or payment that has a reference** corrects the entry on that supplier's account with the same reference (date, amount, note), exactly as typing it in again would.
 - **Anything else** is added unless the very same entry is already there. Two identical rows in one file (two payments of the same amount on the same day) make two entries, once.
 
-From TuftStock (entries a later email corrected are left behind):
+- **The same payment seen from both sides is counted once.** TuftStock writes a wire down twice on purpose: when the bank shows it leaving, and again when the supplier says it arrived. `reported_by` is what tells the Balances tab the two are one payment (same amount, within a week of each other; the supplier's entry is the one counted). Without the column both would be taken off and the balance would come out too low by that payment.
+- **`reported_by`, `needs_review` and `review_note` are set when the file has the column** (an empty cell clears it) and left alone when it doesn't. An entry that came from an earlier spreadsheet and differs from its row only in these is **changed in place**, not added again, so a ledger brought in before these columns existed is put right by bringing the new file in over it: the look says how many entries would change and that none are new. Entries typed in by hand or read from an email keep their own marks.
+- Rows and entries are matched one to one. Two payments of the same amount on the same day that differ only in who reported them stay two entries.
+
+From TuftStock: Settings → **Move your data** → _Supplier ledger_ writes this file with every column. As a query (entries a later email corrected are left behind):
 
 ```sql
 select s.name as supplier,
@@ -257,7 +264,12 @@ select s.name as supplier,
        e."statedBalance" as stated_balance,
        e.reference,
        e.description,
-       to_char(e."paymentSentAt", 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as paid_on
+       to_char(e."paymentSentAt", 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as paid_on,
+       case when e.type = 'PAYMENT' and e.source = 'KARIDA_EMAIL' then 'supplier'
+            when e.type = 'PAYMENT' and e.source in ('WELLS_FARGO_EMAIL', 'QUICKBOOKS') then 'bank'
+       end as reported_by,
+       case when e."needsReview" then 'yes' else 'no' end as needs_review,
+       case when e."needsReview" then left(e."reviewNote", 500) end as review_note
 from "VendorLedgerEntry" e
 join "VendorAccount" a on a.id = e."accountId"
 join "Supplier" s on s.id = a."supplierId"
@@ -265,7 +277,9 @@ where e."supersededById" is null
 order by s.name, e."entryDate", e."createdAt";
 ```
 
-Entries TuftStock had flagged for a second look (`needsReview`) come across like any other; check those accounts on the Balances tab afterwards.
+TuftStock's balance treats a payment as the supplier's own word only when it was read from the supplier's statement email (`KARIDA_EMAIL`), and as the bank's when it came from the bank's notice or the books; a payment typed in says nothing. If the query (unlike the download) leaves two invoices or two payments with the same reference on one account, the second corrects the first here, so give the later one an empty reference.
+
+Entries TuftStock had flagged for a second look come across marked "to check", with its note. Pressing "Looks right" here clears the mark; bringing the file in again while TuftStock still has the flag puts it back.
 
 ## 6. Past daily counts
 

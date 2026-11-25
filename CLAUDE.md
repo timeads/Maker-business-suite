@@ -437,7 +437,12 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   (`purchase_orders.source = 'import'`), an imported delivery is a
   `stock_receipts` row with `source = 'import'` that a table rule pins to
   `skipped`, and `claim_stock_receipt_tries` skips them as well. Keep
-  `tests/db/stock-imports.test.ts` passing when touching receipts.
+  `tests/db/stock-imports.test.ts` passing when touching receipts. The ledger
+  file can say whose word a payment is (`reported_by`) and what is to check;
+  `entrySource()` in `lib/stock/balance/source.ts` reads that off the entry
+  for the balance (a payment seen from both sides counts once, in the
+  history's running balance too: `absorbedPayments`), and a second import
+  changes those marks in place on entries a spreadsheet brought.
   Selling seasons are a config (`stock` / `seasons`): a name, an in-stock
   day, an optional lift and how its card sits (open, folded, hidden). The
   rule is `engine/seasons.ts` (ported from TuftStock with its tests): order

@@ -112,7 +112,7 @@ export const IMPORT_GUIDE: Record<ImportKind, ImportGuide> = {
     title: "Supplier ledger",
     about: "Invoices, payments, the supplier's own statements and credits, for the Balances tab.",
     matchedBy:
-      "An invoice or payment with a number corrects the entry that already has that number. Anything else is added unless the very same entry is already here.",
+      "An invoice or payment with a number corrects the entry that already has that number. Anything else is added unless the very same entry is already here. An entry from an earlier spreadsheet that differs only in who reported it, or in being marked to check, is changed rather than added again.",
     columns: [
       { name: "supplier", needed: true, about: "Whose account it is" },
       { name: "type", needed: true, about: "STATEMENT, INVOICE, PAYMENT or ADJUSTMENT" },
@@ -122,6 +122,13 @@ export const IMPORT_GUIDE: Record<ImportKind, ImportGuide> = {
       { name: "reference", about: "Invoice number or payment reference" },
       { name: "description", about: "A note" },
       { name: "paid_on", about: "For an invoice you have marked as paid: when" },
+      {
+        name: "reported_by",
+        about:
+          "For a payment: SUPPLIER when they told you it arrived, BANK when your bank or books show it leaving. The same payment written down from both sides is counted once",
+      },
+      { name: "needs_review", about: "yes for an entry someone should look over" },
+      { name: "review_note", about: "What to check, for an entry marked that way" },
     ],
   },
   counts: {

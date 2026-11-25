@@ -1,5 +1,5 @@
 import type { AgingResult } from "./aging";
-import type { LedgerEntryInput, LedgerType } from "./balance";
+import { absorbedPayments, type LedgerEntryInput, type LedgerType } from "./balance";
 import { payDay } from "./calendar";
 import { Money } from "./money";
 
@@ -92,6 +92,12 @@ export interface HistoryRow {
   delta: string | null;
   /** False for an entry dated after today: it isn't in the balance yet. */
   counted: boolean;
+  /**
+   * Only ever true: the bank's notice of a payment the supplier also reported
+   * receiving. The two are one payment, counted with the supplier's entry, so
+   * the balance doesn't move here.
+   */
+  sameAsReported?: true;
 }
 
 export interface AccountHistory {
@@ -129,6 +135,9 @@ export function accountHistory(
     )
     .map((x) => x.e);
   const counted = sorted.filter((e) => e.entryDate <= asOf);
+  // A payment seen from the bank's side and reported by the supplier is one
+  // payment (the balance's own rule); the supplier's entry is the one counted.
+  const absorbed = absorbedPayments(counted.filter((e) => e.type !== "STATEMENT"));
   const future = sorted.filter((e) => e.entryDate > asOf);
 
   // The same invoice written down twice (same number and amount) counts once:
@@ -175,8 +184,12 @@ export function accountHistory(
       running = running.add(e.amount);
       sinceStatement++;
     } else if (e.type === "PAYMENT") {
-      running = running.sub(e.amount);
-      sinceStatement++;
+      if (absorbed.has(e.id)) {
+        row.sameAsReported = true;
+      } else {
+        running = running.sub(e.amount);
+        sinceStatement++;
+      }
     }
     row.running = known ? running.toFixed(2) : null;
     rows.push(row);
@@ -272,7 +285,7 @@ export function accountHistory(
       invoicesSoFar.push(e);
       owe(e.amount, e.id);
     } else if (e.type === "PAYMENT") {
-      pay(e.id, e.amount);
+      if (!absorbed.has(e.id)) pay(e.id, e.amount);
     } else if (isCredit(e)) {
       pay(e.id, e.amount.neg());
     } else if (e.amount.gt(0)) {
@@ -330,28 +343,30 @@ export function accountHistory(
     });
   }
 
-  const payments: PaymentUse[] = counted.filter(clears).map((e) => {
-    const cleared = invoices.flatMap((inv) =>
-      inv.clearedBy
-        .filter((c) => c.entryId === e.id)
-        .map((c) => ({
-          invoiceId: inv.id,
-          reference: inv.reference,
-          amount: c.amount,
-          whole: new Money(c.amount).equals(inv.amount),
-        })),
-    );
-    const amount = e.type === "PAYMENT" ? e.amount : e.amount.neg();
-    return {
-      id: e.id,
-      kind: e.type === "PAYMENT" ? "PAYMENT" : "CREDIT",
-      date: iso(e.entryDate),
-      amount: amount.toFixed(2),
-      reference: e.reference,
-      cleared,
-      rest: amount.sub(cleared.reduce((s, c) => s.add(c.amount), ZERO)).toFixed(2),
-    };
-  });
+  const payments: PaymentUse[] = counted
+    .filter((e) => clears(e) && !absorbed.has(e.id))
+    .map((e) => {
+      const cleared = invoices.flatMap((inv) =>
+        inv.clearedBy
+          .filter((c) => c.entryId === e.id)
+          .map((c) => ({
+            invoiceId: inv.id,
+            reference: inv.reference,
+            amount: c.amount,
+            whole: new Money(c.amount).equals(inv.amount),
+          })),
+      );
+      const amount = e.type === "PAYMENT" ? e.amount : e.amount.neg();
+      return {
+        id: e.id,
+        kind: e.type === "PAYMENT" ? "PAYMENT" : "CREDIT",
+        date: iso(e.entryDate),
+        amount: amount.toFixed(2),
+        reference: e.reference,
+        cleared,
+        rest: amount.sub(cleared.reduce((s, c) => s.add(c.amount), ZERO)).toFixed(2),
+      };
+    });
 
   return { rows, invoices, payments };
 }

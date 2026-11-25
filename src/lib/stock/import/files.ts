@@ -714,10 +714,14 @@ function readOrders(rows: Row[], items: ItemRef[]) {
 // ---------------------------------------------------------------------------
 
 const LEDGER_TYPES = ["statement", "invoice", "payment", "adjustment"];
+const REPORTERS = ["supplier", "bank"];
 
 function readLedger(rows: Row[], today: string) {
   const problems: Problem[] = [];
   const latest = shiftDay(today, 366);
+  let fromSupplier = 0;
+  let fromBank = 0;
+  let toCheck = 0;
   const payload = eachRow(rows, problems, (row) => {
     const supplier = row.get("supplier");
     if (!supplier) return bad("This row has no supplier name");
@@ -740,7 +744,7 @@ function readLedger(rows: Row[], today: string) {
       );
     }
     const paid = type === "invoice" ? when(row, "paid_on", "paid_on") : null;
-    return {
+    const out: Record<string, unknown> = {
       supplier,
       type,
       entry_date: date.day,
@@ -750,8 +754,40 @@ function readLedger(rows: Row[], today: string) {
       description: short(row.get("description"), 500),
       paid_on: paid?.at ?? null,
     };
+    // Whose word a payment is, and "to check": set when the file has the
+    // column (an empty cell clears it), left alone when it doesn't.
+    if (row.has("reported_by")) {
+      const by = row.get("reported_by").toLowerCase();
+      if (by !== "" && !REPORTERS.includes(by)) {
+        return bad(`“${row.get("reported_by")}” should be SUPPLIER, BANK or empty (reported_by)`);
+      }
+      if (by !== "" && type !== "payment") {
+        return bad("Only a payment can say who reported it (reported_by)");
+      }
+      out.reported_by = by || null;
+    }
+    if (row.has("needs_review")) {
+      const check = yesNo(row, "needs_review");
+      out.needs_review = check;
+      out.review_note = check ? short(row.get("review_note"), 500) || null : null;
+    }
+    if (out.reported_by === "supplier") fromSupplier += 1;
+    if (out.reported_by === "bank") fromBank += 1;
+    if (out.needs_review === true) toCheck += 1;
+    return out;
   });
-  return { payload, problems, notes: [] as string[] };
+  const notes: string[] = [];
+  if (fromSupplier > 0 && fromBank > 0) {
+    notes.push(
+      "This file says who reported each payment. A payment your bank shows and the supplier also says it received (the same amount, within a week) is counted once.",
+    );
+  }
+  if (toCheck > 0) {
+    notes.push(
+      `${toCheck} ${toCheck === 1 ? "entry is" : "entries are"} marked to check. ${toCheck === 1 ? "It counts" : "They count"} in the balance meanwhile; look ${toCheck === 1 ? "it" : "them"} over on the Balances tab.`,
+    );
+  }
+  return { payload, problems, notes };
 }
 
 // ---------------------------------------------------------------------------

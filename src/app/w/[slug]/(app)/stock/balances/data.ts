@@ -21,6 +21,7 @@ import {
   parseStockSettings,
 } from "@/lib/stock/config";
 import { paidMarks, type PaidMarks } from "@/lib/stock/balance/paid-marks";
+import { entrySource } from "@/lib/stock/balance/source";
 import {
   combineSummaries,
   summarizeVendor,
@@ -48,6 +49,8 @@ type DbLedgerRow = {
   created_at: string;
   created_by: string | null;
   source: EntrySource;
+  /** Payments: whose word it is. It changes the balance, so it is read with the figures. */
+  reported_by: "supplier" | "bank" | null;
 };
 
 /** What an emailed or uploaded entry carries beside the figures. */
@@ -55,7 +58,6 @@ type MailMark = {
   id: string;
   needs_review: boolean;
   review_note: string | null;
-  reported_by: "supplier" | "bank" | null;
   mail_route: "gmail" | "forward" | null;
   mail_message_id: string | null;
 };
@@ -156,22 +158,6 @@ const TYPES: Record<DbLedgerRow["type"], LedgerType> = {
 /** A plain date as the UTC-midnight instant the balance maths works in. */
 const dayDate = (day: string) => new Date(`${day.slice(0, 10)}T00:00:00.000Z`);
 
-/**
- * How the balance maths sees where an entry came from. A payment the supplier
- * says it received is their record; the bank's notice and the books are ours,
- * and the same money seen from both sides is counted once.
- */
-function ledgerSource(row: DbLedgerRow, mark: MailMark | undefined): LedgerEntryInput["source"] {
-  if (row.source === "books") return "QUICKBOOKS";
-  if (row.source !== "email" && row.source !== "upload") return "MANUAL";
-  if (row.type !== "payment") return "VENDOR_EMAIL";
-  return mark?.reported_by === "supplier"
-    ? "KARIDA_EMAIL"
-    : mark?.reported_by === "bank"
-      ? "WELLS_FARGO_EMAIL"
-      : "MANUAL";
-}
-
 function toInput(row: DbLedgerRow, mark: MailMark | undefined): LedgerEntryInput {
   return {
     id: row.id,
@@ -181,7 +167,7 @@ function toInput(row: DbLedgerRow, mark: MailMark | undefined): LedgerEntryInput
     statedBalance: row.stated_balance === null ? null : new Money(row.stated_balance),
     reference: row.reference,
     description: row.description,
-    source: ledgerSource(row, mark),
+    source: entrySource(row),
     needsReview: mark?.needs_review ?? false,
     supersededById: null,
     paymentSentAt: row.payment_sent_at ? new Date(row.payment_sent_at) : null,
@@ -276,7 +262,7 @@ export async function loadBalances(
       const query = supabase
         .from("supplier_ledger")
         .select(
-          "id, supplier_id, type, entry_date, amount, stated_balance, reference, description, payment_sent_at, created_at, created_by, source",
+          "id, supplier_id, type, entry_date, amount, stated_balance, reference, description, payment_sent_at, created_at, created_by, source, reported_by",
         )
         .eq("tenant_id", tenant.id);
       return (supplierId ? query.eq("supplier_id", supplierId) : query)
@@ -296,7 +282,7 @@ export async function loadBalances(
     all<MailMark>("entry marks", (from, to) => {
       const query = supabase
         .from("supplier_ledger")
-        .select("id, needs_review, review_note, reported_by, mail_route, mail_message_id")
+        .select("id, needs_review, review_note, mail_route, mail_message_id")
         .eq("tenant_id", tenant.id)
         .or("needs_review.eq.true,source.in.(email,upload)");
       return (supplierId ? query.eq("supplier_id", supplierId) : query).order("id").range(from, to);

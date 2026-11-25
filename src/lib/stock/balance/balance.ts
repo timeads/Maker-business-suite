@@ -82,11 +82,17 @@ const ZERO = new Money(0);
 /** Payments seen from our bank's side rather than reported by the vendor. */
 const BANK_SOURCES = new Set<LedgerSource>(["WELLS_FARGO_EMAIL", "QUICKBOOKS"]);
 
-function dedupePayments(entries: LedgerEntryInput[], matchDays: number): LedgerEntryInput[] {
+/**
+ * The bank-side payments that are the same money as a payment the vendor
+ * reported, by id. The suite's history uses this too, so its running balance
+ * counts such a pair once, exactly as the estimate does.
+ */
+export function absorbedPayments(entries: LedgerEntryInput[], matchDays = 7): Set<string> {
   const vendorPayments = entries.filter((e) => e.type === "PAYMENT" && e.source === "KARIDA_EMAIL");
   const consumed = new Set<string>();
-  return entries.filter((e) => {
-    if (e.type !== "PAYMENT" || !BANK_SOURCES.has(e.source)) return true;
+  const absorbed = new Set<string>();
+  for (const e of entries) {
+    if (e.type !== "PAYMENT" || !BANK_SOURCES.has(e.source)) continue;
     const match = vendorPayments.find(
       (v) =>
         !consumed.has(v.id) &&
@@ -95,10 +101,15 @@ function dedupePayments(entries: LedgerEntryInput[], matchDays: number): LedgerE
     );
     if (match) {
       consumed.add(match.id);
-      return false;
+      absorbed.add(e.id);
     }
-    return true;
-  });
+  }
+  return absorbed;
+}
+
+function dedupePayments(entries: LedgerEntryInput[], matchDays: number): LedgerEntryInput[] {
+  const absorbed = absorbedPayments(entries, matchDays);
+  return entries.filter((e) => !absorbed.has(e.id));
 }
 
 function view(e: LedgerEntryInput): LedgerEntryView {

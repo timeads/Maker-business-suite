@@ -862,6 +862,198 @@ describe("importing the supplier ledger", () => {
   });
 });
 
+describe("importing a ledger that says who reported each payment", () => {
+  const SUPPLIER = "Pair Mill";
+  const base = (over: object) => ({ supplier: SUPPLIER, ...over });
+  // What the first file said: no word on who reported a payment, nothing to check.
+  const plain = () => [
+    base({ type: "invoice", entry_date: "2026-09-01", amount: "2000.00", reference: "INV-P1" }),
+    base({ type: "invoice", entry_date: "2026-09-02", amount: "100.00", description: "No number" }),
+    base({ type: "payment", entry_date: "2026-09-10", amount: "900.00", description: "Wire sent" }),
+    base({
+      type: "payment",
+      entry_date: "2026-09-11",
+      amount: "900.00",
+      description: "They report receiving it",
+    }),
+    // The same day, amount and words: only who reported them tells them apart.
+    base({ type: "payment", entry_date: "2026-09-20", amount: "250.00" }),
+    base({ type: "payment", entry_date: "2026-09-20", amount: "250.00" }),
+  ];
+  // The same records from a file that has the new columns.
+  const marked = () => {
+    const rows = plain() as Record<string, unknown>[];
+    const marks = [
+      { needs_review: true, review_note: "Check it against the invoice" },
+      { needs_review: true, review_note: null },
+      { reported_by: "bank" },
+      { reported_by: "supplier" },
+      { reported_by: "bank" },
+      { reported_by: "supplier" },
+    ];
+    return rows.map((row, i) => ({
+      reported_by: null,
+      needs_review: false,
+      review_note: null,
+      ...row,
+      ...marks[i],
+    }));
+  };
+  const stored = () =>
+    as<Record<string, unknown>>(
+      alice,
+      `select l.entry_date::text as day, l.type, l.amount::text as amount, l.reported_by,
+              l.needs_review, l.review_note, l.source
+       from public.supplier_ledger l join public.suppliers s on s.id = l.supplier_id
+       where s.name = $1 order by l.entry_date, l.reported_by nulls first, l.id`,
+      [SUPPLIER],
+    );
+
+  it("changes what is already here in place, and says how many before anything is saved", async () => {
+    expect(await run(alice, "import_ledger_entries", tenantA, plain(), randomUUID())).toMatchObject(
+      { new: 6, changed: 0, same: 0 },
+    );
+    // The look: every entry is here already, and all six would change.
+    expect(await run(alice, "import_ledger_entries", tenantA, marked())).toMatchObject({
+      new: 0,
+      changed: 6,
+      same: 0,
+    });
+    expect((await stored()).every((r) => r.reported_by === null && r.needs_review === false)).toBe(
+      true,
+    );
+
+    const key = randomUUID();
+    expect(await run(alice, "import_ledger_entries", tenantA, marked(), key)).toMatchObject({
+      new: 0,
+      changed: 6,
+      same: 0,
+      repeated: false,
+    });
+    expect(
+      (await stored()).map((r) => [r.day, r.type, r.reported_by, r.needs_review, r.review_note]),
+    ).toEqual([
+      ["2026-09-01", "invoice", null, true, "Check it against the invoice"],
+      ["2026-09-02", "invoice", null, true, null],
+      ["2026-09-10", "payment", "bank", false, null],
+      ["2026-09-11", "payment", "supplier", false, null],
+      // Still two payments that day: one from each side.
+      ["2026-09-20", "payment", "bank", false, null],
+      ["2026-09-20", "payment", "supplier", false, null],
+    ]);
+
+    // A second press, and the same file again, change nothing.
+    expect(await run(alice, "import_ledger_entries", tenantA, marked(), key)).toMatchObject({
+      changed: 6,
+      repeated: true,
+    });
+    expect(
+      await run(alice, "import_ledger_entries", tenantA, marked(), randomUUID()),
+    ).toMatchObject({ new: 0, changed: 0, same: 6 });
+    // Nor does the old file, which has nothing to say about the marks.
+    expect(await run(alice, "import_ledger_entries", tenantA, plain(), randomUUID())).toMatchObject(
+      { new: 0, changed: 0, same: 6 },
+    );
+    expect((await stored()).filter((r) => r.reported_by !== null)).toHaveLength(4);
+  });
+
+  it("changes only the entry that is wrong when one of a pair is already right", async () => {
+    // Swap the two rows of the same-day pair in the file: nothing to do.
+    const rows = marked();
+    [rows[4], rows[5]] = [rows[5], rows[4]];
+    expect(await run(alice, "import_ledger_entries", tenantA, rows)).toMatchObject({
+      new: 0,
+      changed: 0,
+      same: 6,
+    });
+    // A file that takes the check mark off one invoice changes just that one.
+    rows[1] = { ...rows[1], needs_review: false };
+    expect(await run(alice, "import_ledger_entries", tenantA, rows)).toMatchObject({
+      new: 0,
+      changed: 1,
+      same: 5,
+    });
+  });
+
+  it("keeps a payment seen from both sides as two entries when it arrives new", async () => {
+    const pair = [
+      { supplier: "Fresh Pair Co", type: "payment", entry_date: "2026-09-20", amount: "75.00" },
+      { supplier: "Fresh Pair Co", type: "payment", entry_date: "2026-09-21", amount: "75.00" },
+      { supplier: "Fresh Pair Co", type: "payment", entry_date: "2026-09-25", amount: "40.00" },
+      { supplier: "Fresh Pair Co", type: "payment", entry_date: "2026-09-25", amount: "40.00" },
+    ].map((row, i) => ({ ...row, reported_by: i % 2 === 0 ? "bank" : "supplier" }));
+    expect(await run(alice, "import_ledger_entries", tenantA, pair, randomUUID())).toMatchObject({
+      new: 4,
+      changed: 0,
+      same: 0,
+    });
+    expect(
+      await as(
+        alice,
+        `select l.entry_date::text as day, l.reported_by from public.supplier_ledger l
+         join public.suppliers s on s.id = l.supplier_id where s.name = 'Fresh Pair Co'
+         order by l.entry_date, l.reported_by`,
+      ),
+    ).toEqual([
+      { day: "2026-09-20", reported_by: "bank" },
+      { day: "2026-09-21", reported_by: "supplier" },
+      { day: "2026-09-25", reported_by: "bank" },
+      { day: "2026-09-25", reported_by: "supplier" },
+    ]);
+    expect(await run(alice, "import_ledger_entries", tenantA, pair, randomUUID())).toMatchObject({
+      new: 0,
+      changed: 0,
+      same: 4,
+    });
+  });
+
+  it("leaves an entry someone typed in as it is, and never adds a second", async () => {
+    const supplier = (
+      await one<{ id: string }>(
+        "select id from public.suppliers where tenant_id = $1 and name = $2",
+        [tenantA, SUPPLIER],
+      )
+    ).id;
+    await as(
+      alice,
+      "select public.save_ledger_entry($1, $2, 'payment', '2026-09-28', 60, null, null, 'Typed in')",
+      [tenantA, supplier],
+    );
+    const row = [
+      base({
+        type: "payment",
+        entry_date: "2026-09-28",
+        amount: "60.00",
+        description: "Typed in",
+        reported_by: "bank",
+      }),
+    ];
+    expect(await run(alice, "import_ledger_entries", tenantA, row, randomUUID())).toMatchObject({
+      new: 0,
+      changed: 0,
+      same: 1,
+    });
+    expect(
+      await one(
+        "select source, reported_by from public.supplier_ledger where supplier_id = $1 and entry_date = '2026-09-28'",
+        [supplier],
+      ),
+    ).toEqual({ source: "manual", reported_by: null });
+  });
+
+  it("refuses a word it doesn't know, and one on anything but a payment", async () => {
+    for (const bad of [
+      base({ type: "payment", entry_date: "2026-09-10", amount: "5", reported_by: "courier" }),
+      base({ type: "invoice", entry_date: "2026-09-10", amount: "5", reported_by: "bank" }),
+    ]) {
+      await expect(
+        run(alice, "import_ledger_entries", tenantA, [bad], randomUUID()),
+      ).rejects.toThrow(/not valid/);
+    }
+    expect(await as(bob, "select id from public.supplier_ledger")).toEqual([]);
+  });
+});
+
 describe("importing past daily counts", () => {
   it("fills in days we didn't see, and never replaces one we did", async () => {
     const seen = await one<{ day: string; on_hand: number }>(

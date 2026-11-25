@@ -356,6 +356,11 @@ export function LedgerTable({
                     ) : (
                       <BalanceValue value={after.running} money={money} />
                     )}
+                    {after?.sameAsReported && (
+                      <span className="text-muted-foreground block text-xs">
+                        same payment as the one they reported
+                      </span>
+                    )}
                     {after?.delta && !new Money(after.delta).isZero() && (
                       <span className="text-brick block text-xs">
                         entries came to {money(after.computedBefore ?? "0")}

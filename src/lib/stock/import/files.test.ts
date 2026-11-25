@@ -495,6 +495,67 @@ describe("the supplier ledger", () => {
     ]);
   });
 
+  it("reads who reported a payment and what is to check, only when the file has those columns", () => {
+    const out = read(
+      "ledger",
+      [
+        "supplier,type,entry_date,amount,reference,description,reported_by,needs_review,review_note",
+        "Hill Mill Yarns,PAYMENT,2026-10-30,1500,,Wire sent,BANK,no,",
+        "Hill Mill Yarns,PAYMENT,2026-10-31,1500,,They report receiving it,supplier,,",
+        "Hill Mill Yarns,PAYMENT,2026-11-02,40,,,,no,a note with nothing to check",
+        "Hill Mill Yarns,INVOICE,2026-10-12,900,INV-7,,,yes,Check it against the invoice",
+      ].join("\n"),
+    );
+    expect(out.problems).toEqual([]);
+    expect(
+      out.payload.map((row) => {
+        const r = row as Record<string, unknown>;
+        return [r.type, r.reported_by, r.needs_review, r.review_note];
+      }),
+    ).toEqual([
+      ["payment", "bank", false, null],
+      ["payment", "supplier", false, null],
+      ["payment", null, false, null],
+      ["invoice", null, true, "Check it against the invoice"],
+    ]);
+    expect(out.notes).toEqual([
+      expect.stringMatching(/is counted once/),
+      expect.stringMatching(/^1 entry is marked to check/),
+    ]);
+
+    // A file without the columns says nothing about them, so nothing is touched.
+    const plain = read(
+      "ledger",
+      "supplier,type,entry_date,amount\nHill Mill Yarns,PAYMENT,2026-10-30,1500\n",
+    );
+    expect(Object.keys(plain.payload[0] as object)).not.toEqual(
+      expect.arrayContaining(["reported_by"]),
+    );
+    expect(Object.keys(plain.payload[0] as object)).not.toEqual(
+      expect.arrayContaining(["needs_review"]),
+    );
+    expect(plain.notes).toEqual([]);
+  });
+
+  it("leaves out a row that names a reporter it doesn't know, or one on anything but a payment", () => {
+    const out = read(
+      "ledger",
+      [
+        "supplier,type,entry_date,amount,reported_by,needs_review",
+        "Hill,PAYMENT,2026-10-30,5,courier,",
+        "Hill,INVOICE,2026-10-30,5,bank,",
+        "Hill,PAYMENT,2026-10-30,5,bank,maybe",
+        "Hill,PAYMENT,2026-10-30,5,bank,",
+      ].join("\n"),
+    );
+    expect(out.payload).toHaveLength(1);
+    expect(out.problems.map((p) => p.reason)).toEqual([
+      "“courier” should be SUPPLIER, BANK or empty (reported_by)",
+      "Only a payment can say who reported it (reported_by)",
+      "“maybe” should be yes or no (needs_review)",
+    ]);
+  });
+
   it("leaves out entries that don't add up", () => {
     const out = read(
       "ledger",
