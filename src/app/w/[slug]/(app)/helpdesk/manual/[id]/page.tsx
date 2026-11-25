@@ -301,7 +301,7 @@ export default async function TopicPage({
                     conversation.
                   </p>
                 </div>
-                <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                   {candidates.map((one) => (
                     <CandidateMedia key={one.id} slug={tenant.slug} media={one} />
                   ))}

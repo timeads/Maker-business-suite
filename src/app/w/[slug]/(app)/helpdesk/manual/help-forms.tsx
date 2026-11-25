@@ -70,7 +70,7 @@ export function ArticleDetailsForm({
             autoCapitalize="none"
             spellCheck={false}
           />
-          <p className={`${hint} break-all`}>
+          <p className={`${hint} break-words`}>
             {addressStart}
             <strong>{initial.slug || "…"}</strong>. An old address keeps working.
           </p>

@@ -185,6 +185,39 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   the "AI" draft as marked reference (`match.ts`: word matching, no model
   call on a page load). Keep `tests/db/helpdesk-manual.test.ts` and
   `manual/run.test.ts` passing.
+  A topic can show the customer's photos and videos (`manual_topic_media`:
+  ids pointing at `message_attachments`, nothing copied, served only by the
+  private file route): a reading only offers a conversation's kept pictures
+  and videos as candidates through `apply_manual_reading`; a person keeps,
+  captions and orders them. Claude's picks (`tidyExtras`, pictures it was
+  shown under our references `P1`…, never a video) are a mark on a
+  candidate. The row goes when the attachment's row goes (a cascade; keep
+  `tests/db/helpdesk-topic-media.test.ts` passing). `manual_topic_cases` is
+  one scrubbed line per source conversation. Joining two topics is done by
+  rule (`manual/join.ts`, manager-only `merge_manual_topics`), never by a
+  model.
+  The help centre (`app/help-centre/[workspace]`, docs in the side by side):
+  public pages for help articles a manager published. An article's
+  `public_state` is internal, draft or published; a published one is changed
+  only by owners and admins. The pages have no database access of their own:
+  they read through `lib/helpdesk/help-centre-server.ts`, which names the
+  workspace, asks `moduleOpen()` and calls the service-role functions
+  `help_centre_list` / `help_centre_article`; those return ONLY published
+  articles of a workspace whose `helpdesk` / `help_centre` config is on
+  (keep `tests/db/helpdesk-help-centre.test.ts` passing; a topic is never
+  public). `src/proxy.ts` asks `helpCentreGate()` before a page is drawn, so
+  a missing page is a real 404 and an old address (`help_article_slugs`) a
+  real redirect; these paths never read a session. Reads are cached under
+  `helpCentreTag(slug)`: every action that changes what a visitor sees calls
+  `updateTag`. Words are drawn as React text (`publicDoc`: https links
+  only); an article's own pictures live in the PUBLIC `help-centre` bucket
+  (`<workspace>/<article>/<id>`, checked by their first bytes in
+  `finishArticlePicture`) and never come from the private `helpdesk` bucket.
+  Search and “Was this helpful?” are rate-limited in the database
+  (`help_centre_allow`, a salted fingerprint, no address stored, no cookie).
+  “Make a help article from this topic” and Claude's draft
+  (`help-centre/draft.ts`) only ever make a DRAFT copy. Publishing to a
+  shop's blog is not built: it needs a shop write permission.
   Instagram and Facebook messages (`lib/helpdesk/social`,
   docs/meta-messages.md) are a channel beside email (`tickets.channel`), on
   the Social tool's `meta` connection with OPTIONAL messaging permissions

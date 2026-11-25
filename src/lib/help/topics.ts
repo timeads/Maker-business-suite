@@ -302,6 +302,8 @@ export const HELP_TOPICS: HelpTopic[] = [
       "Once you have edited a topic it is yours. Later conversations never change it: what they would add shows on the topic as a “Suggested update” to accept, accept and edit, or dismiss.",
       "While answering, press the manual's button in the reply box (beside Macros) to search published topics and articles and put one, or one of its headings, into your reply to edit. The details rail shows up to three published topics that match the conversation.",
       "Every change is kept under History on the topic, with a way back to each version.",
+      "When a conversation a topic drew on came with photos or videos from the customer, they are offered on the topic under “From its conversations”. Keep the ones worth showing, give each a caption, and put them in order. Each conversation also leaves one line under “Cases”: what happened and how it ended.",
+      "Two topics about the same thing? An owner or admin can join one into the other from “Copy or join”. To cover a second product, “Copy for another …” makes a draft with the same words for you to adapt.",
     ],
     notes: [
       "The name of the manual, the labels topics are sorted by and the headings they are written under are yours to set, in the same settings screen.",
@@ -310,6 +312,34 @@ export const HELP_TOPICS: HelpTopic[] = [
       "Each conversation read counts against your plan's AI allowance, up to the monthly limit you set. When either runs out it stops and says so; nothing is lost.",
       "With “Let reply drafts lean on published topics” on, the “AI” button in the reply box is handed the few topics that match. A draft is still only a draft.",
       "Deleting a topic doesn't make its conversations be read again.",
+      "Customers' photos and videos on a topic stay private to your team. If a conversation is deleted for good or a customer is forgotten, their pictures leave the topic too.",
+      "Claude may mark a picture it was shown as useful and suggest a caption. Nothing is kept until you press “Keep on this topic”. Videos are never sent to Claude.",
+    ],
+  },
+  {
+    slug: "helpdesk-help-centre",
+    group: "helpdesk",
+    title: "Publish a help centre your customers can read",
+    summary:
+      "Public pages for the help articles you choose to publish, with search and categories.",
+    intro:
+      "A help centre is a set of pages anyone can read without signing in, at an address of its own on this site. Only help articles an owner or admin publishes appear there. Topics, team articles, drafts and anything a customer sent you never do.",
+    steps: [
+      "An owner or admin opens Settings → Help desk → Help centre, types the categories (one on each line), checks the contact line, and ticks “Help centre on”.",
+      "In the manual's knowledge base, write an article (or open one) and press “Make this a help article”. It becomes a draft: customers can't see it yet.",
+      "Give it a sentence for lists and search results, a category and, if you like, its own address. Add your own pictures and choose the heading each sits under.",
+      "Read it as a customer would, then press “Publish to the help centre”. The link is shown on the article.",
+      "To start from something the team already knows, open a topic and press “Make a help article from this topic”: its words are copied into a new draft for you to rewrite for customers. “Draft a help article with Claude” does the rewriting as a first draft.",
+      "While answering a customer, the manual's button in the reply box offers “Insert link” for a published help article, as well as “Insert text”.",
+    ],
+    notes: [
+      "Once an article is published, only owners and admins can change it, and changes show on the public page straight away.",
+      "Changing an article's address keeps the old one working: it sends people on to the new one.",
+      "A help article made from a topic is a copy. Changing one later doesn't change the other, and customers' photos are never copied across.",
+      "“Was this helpful?” counts a yes or a no from each visitor once a day; the totals show on the article. No names, no comments, no cookies.",
+      "Tick “Ask search engines to leave it out” while you are still writing. People with the link can still read it.",
+      "Switch the help centre off and every page of it says “not found”, whatever is published. The same happens if the help desk leaves your plan.",
+      "Your logo is the picture tagged “logo” in Social → Assets.",
     ],
   },
 
