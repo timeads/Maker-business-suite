@@ -94,7 +94,10 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   never sent automatically; customer text in the prompt is marked as data.
   The inbox is one full-window page (`w/[slug]/helpdesk/page.tsx`) whose
   whole state is in the URL (`view`, `tag`, `q`, `t`); folders are worked out
-  by `inView()` in `lib/helpdesk/views.ts`, so a snooze needs no timer. Notes
+  by `inView()` in `lib/helpdesk/views.ts`, so a snooze needs no timer. The
+  folders and tags are rows in the help desk's menu panel (the nav model
+  builds their addresses); the inbox hands the panel the counts and tags it
+  has already read (`<PanelExtras>`) and never runs a query for them. Notes
   for the team live in `ticket_notes` and are never emailed. A conversation
   joined into another keeps a `merged_into` pointer, and later mail follows
   it. Rules (`auto_tag_rules`) can tag, set priority or hand off; the worker
@@ -115,8 +118,8 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   whole team. A closed or private date refuses online bookings in a trigger,
   so no route can slip past it. Reminder and thank-you timing lives in
   `configs` (bookings / emails) and is read by `claim_booking_emails` in the
-  database; the worker only adds the words. Tools with several views use
-  `<SectionTabs>` under the page header.
+  database; the worker only adds the words. A tool's several places are
+  rows in its menu panel (`lib/nav/model.ts`), not tabs.
   A workshop can instead be sold through the business's own shop
   (`services.shop_product_id`): the date picker on the product page
   (`public/booking-widget.js`, plain JS in a shadow root, reads
@@ -569,16 +572,17 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   that decides, members read their grant through `workspace_plan_grant()`,
   and nothing ever writes `subscriptions` for it.
 - Settings: every tool's settings live in ONE place, workspace Settings
-  (`w/[slug]/(app)/settings/**`), never inside the tool. The list on the left
+  (`w/[slug]/(app)/settings/**`), never inside the tool. Its list of sections
   is one data model, `settingsNav()` in `lib/settings/nav.ts` (groups →
-  sections → a tool's screens, with who sees each and the search words),
-  drawn by one self-contained component (`components/settings/settings-nav`).
+  sections → a tool's screens, with who sees each and the search words);
+  the navigation model turns it into the Settings menu, so Settings is drawn
+  by the same panel as every tool.
   A new settings screen means a page under `settings/<tool>/…`, an entry
   there, and `<SectionHeading back=…>` at its top so there is a way back to
   the tool. The pages import the tool's own forms, actions and gate from the
   tool's folder (those didn't move), and each still checks for itself who may
   open and change it; the list only hides what a person can't use. A tool's
-  tabs carry a gear instead of a "Settings" tab (`<SectionTabs settings>`).
+  menu panel ends in "Settings", which opens that tool's section.
   Tools with nothing to set (Social, Money, Messages, Assistant) have a short
   "where to change things" page. Work stays in the tool: the content plan,
   the link page, Michaels pairing, the bills "to check" list, label batches.
@@ -598,6 +602,25 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   (`font-read`) for anything a customer wrote or will read, Abril Fatface
   (`font-display`) for the wordmark only. Pages start with `<PageHeader>`.
   On phones the rail becomes a bottom tab bar.
+- Navigation: two things sit left of every workspace page, both drawn by
+  `w/[slug]/layout.tsx` from ONE model, `buildNav()` in `lib/nav/model.ts`
+  (pure, tested: tools by plan and role through `entitlements.can`, each
+  tool's menu as groups → rows, which row is lit for an address). The hub
+  rail (`components/shell/hub-rail`) is tools only and never changes between
+  tools: an icon each, named for screen readers and on hover, the current one
+  in ochre. A tool's own places live in the menu panel beside it
+  (`components/shell/menu-panel`): add a place by adding a row to the model,
+  and never add a tab row for a tool's sections (`<SectionTabs>` is only for
+  switching views of one page). The panel sits beside the page from 1024px,
+  can be folded away (the `mbs-panel` cookie, read by the layout so nothing
+  jumps on load), and under that width opens over the page from the menu
+  button `<PageHeader>` carries (`<PanelButton>`; a full-window page puts
+  one in its own header). Counts in the model are only ones the layout
+  already has (`loadAttention`); a page that has worked out more hands them
+  over with `<PanelExtras>`. Messages draws its own conversation list in the
+  panel's place with the panel's classes (`panel: "page"`); Home and the
+  email builder have no panel; Connections shows the Settings menu. A page's
+  title is the name of its place ("Suppliers"), not of its tool.
 - UI copy: warm and plain, written for makers, not developers.
 
 ## Workflow

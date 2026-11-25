@@ -102,6 +102,26 @@ export const HELP_TOPICS: HelpTopic[] = [
     ],
   },
   {
+    slug: "getting-around",
+    group: "start",
+    title: "Find your way around",
+    summary: "Your tools down the side, and each tool's own menu beside them.",
+    intro:
+      "Two things sit to the left of every page: a slim strip with one icon per tool, which never changes, and beside it the menu of the tool you're in.",
+    steps: [
+      "Press an icon on the strip to open a tool. Rest the pointer on an icon to see its name. The tool you're in is marked in ochre, and a small number means something is waiting there.",
+      "The menu beside the strip lists that tool's places: Shipping's To ship, All orders and Scan & pack; Stock's To order, Everything and Suppliers; the help desk's folders and tags. The place you're in is shaded, and a number beside a place is how many things are in it.",
+      "“Settings” at the foot of a tool's menu opens that tool's part of Settings. Each settings page has a “Back to” link at the top that returns you to the tool.",
+      "To give a page more room, press the small button at the top of the menu to fold it away. The same button then appears beside the page's title to bring it back. Your browser remembers which you chose.",
+      "Your workspace's initials at the top of the strip switch between workspaces. Help, and your own initial with “Sign out”, are at the bottom.",
+    ],
+    notes: [
+      "On a narrower window the menu folds away by itself; press the button beside the page's title to open it over the page. Escape, or a press outside it, closes it.",
+      "On a phone your tools are along the bottom, and the same button beside the title opens the tool's menu.",
+      "Home and the email builder have no menu of their own.",
+    ],
+  },
+  {
     slug: "phone",
     group: "start",
     title: "Use the suite on your phone",
@@ -113,7 +133,7 @@ export const HELP_TOPICS: HelpTopic[] = [
       "On an iPhone, open Social → Assets and press “Choose files”, which opens your photo library.",
     ],
     notes: [
-      "The menu sits along the bottom on a phone, with the rest behind “More”.",
+      "Your tools sit along the bottom on a phone, with the rest behind “More”. The button beside a page's title opens the menu of the tool you're in.",
       "The email builder needs a wider screen; use a computer for that.",
     ],
   },
@@ -127,7 +147,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     intro:
       "Each workspace has one support address, shown under Settings → Help desk. Mail sent to it becomes a conversation in your inbox.",
     steps: [
-      "Open Settings → Help desk (the gear at the top of the inbox goes straight there) and copy your support address.",
+      "Open Settings → Help desk (“Settings” at the foot of the help desk's menu goes straight there) and copy your support address.",
       "In your own email (Gmail, Outlook and so on), set your support mailbox to forward to that address.",
       "Send yourself a test. It should appear in the inbox within about a minute.",
     ],
@@ -323,7 +343,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     steps: [
       "On the packing computer, install Zebra Browser Print (free, from zebra.com) and leave it running. In its own settings, make your label printer the default.",
       "In the same browser you use for the suite, open localhost:9101/ssl_support once and accept it. That lets this site talk to Browser Print.",
-      "On that computer, open Settings → Shipping → Printing on this computer (the Settings gear at the end of Shipping's tabs gets you there). Press “Look for a Zebra on this computer”. If Chrome asks whether this site may reach devices or apps on this computer, choose Allow.",
+      "On that computer, open Settings → Shipping → Printing on this computer (“Settings” at the foot of Shipping's menu gets you there). Press “Look for a Zebra on this computer”. If Chrome asks whether this site may reach devices or apps on this computer, choose Allow.",
       "When it finds your printer, the computer is switched to it. Pick yours if there's more than one. Most Zebras are 203 dpi; change that only if yours is a 300 dpi model.",
       "Press “Print test label”. A small label with a barcode should come out.",
       "From then on, “Buy & print label” sends the label straight to the Zebra, and any packing slip button sends the slips there too. With several boxes, the labels come out in box order.",
