@@ -71,7 +71,8 @@ import {
   viewParam,
   type Shelf,
 } from "@/lib/helpdesk/views";
-import { initials, nameOf, splitBody, type Person } from "@/lib/messages/format";
+import type { OutboxRow } from "@/lib/helpdesk/outbox";
+import { handlesFor, initials, nameOf, splitBody, type Person } from "@/lib/messages/format";
 import {
   HELPDESK_FOLDERS_GROUP,
   HELPDESK_TAGS_GROUP,
@@ -104,6 +105,7 @@ import {
   TicketControls,
 } from "./desk-tools";
 import { helpdeskAccess } from "./gate";
+import { DiscardEmpty, OutboxNotices, SendWatch } from "./send-watch";
 
 export const metadata: Metadata = { title: "Help desk" };
 
@@ -584,6 +586,11 @@ export default async function HelpdeskPage({
           )
           .order("created_at")
       : { data: [] };
+  // Email waiting to go on this conversation, or that didn't go. Allowed to fail.
+  const { data: outboxRows } = ticket
+    ? await supabase.rpc("ticket_outbox", { p_ticket_id: ticket.id })
+    : { data: [] };
+  const outbox = (outboxRows ?? []) as OutboxRow[];
   const filesOf = new Map<string, FileRow[]>();
   for (const row of (fileRows ?? []) as FileRow[]) {
     filesOf.set(row.message_id, [...(filesOf.get(row.message_id) ?? []), row]);
@@ -693,7 +700,13 @@ export default async function HelpdeskPage({
     return row ? href({ t: row.number, side: null }) : null;
   };
   const backHref = href({ t: null, side: null });
-  const afterHref = neighbour(1) ?? neighbour(-1) ?? backHref;
+  // After closing: the next one, the list, or stay put (a setting).
+  const afterHref =
+    deskSettings.after_close === "list"
+      ? backHref
+      : deskSettings.after_close === "stay" && ticket
+        ? href({ t: ticket.number })
+        : (neighbour(1) ?? neighbour(-1) ?? backHref);
   const snoozedLabel =
     ticket && isSnoozed(ticket, nowMs) ? when.format(new Date(ticket.snoozed_until!)) : null;
   const choices = snoozeChoices(now, tenant.timezone);
@@ -867,6 +880,7 @@ export default async function HelpdeskPage({
         unread={ticket && ticketUnread ? ticket.id : null}
         latest={entries.at(-1)?.id ?? null}
       />
+      <SendWatch slug={tenant.slug} base={base} />
       {/* The menu panel's counts, folders, views and tags: what the inbox has already read. */}
       <PanelExtras
         tool="helpdesk"
@@ -1242,10 +1256,20 @@ export default async function HelpdeskPage({
                   {folded.tail.map(drawEntry)}
                 </ol>
                 {entries.length === 0 && (
-                  <p className="text-muted-foreground text-sm">
-                    Nothing has been sent on this conversation yet. Write the first email below.
-                  </p>
+                  <div className="text-muted-foreground flex flex-col gap-2 text-sm">
+                    <p>
+                      Nothing has been sent on this conversation yet. Write the first email below.
+                    </p>
+                    {editable && !outbox.some((row) => row.state !== "failed") && (
+                      <DiscardEmpty slug={tenant.slug} ticketId={ticket.id} back={backHref} />
+                    )}
+                  </div>
                 )}
+                <OutboxNotices
+                  slug={tenant.slug}
+                  rows={outbox}
+                  names={Object.fromEntries(people.map((p) => [p.user_id, nameOf(p)]))}
+                />
               </div>
               {editable && (
                 <div className="border-border shrink-0 border-t px-4 py-3 md:px-6">
@@ -1256,6 +1280,15 @@ export default async function HelpdeskPage({
                     customerEmail={contact?.email ?? ""}
                     customerFirstName={firstName}
                     replyAllCc={replyAllCc}
+                    afterClose={deskSettings.after_close}
+                    team={people
+                      .filter((p) => p.user_id !== user.id)
+                      .map((p) => ({
+                        id: p.user_id,
+                        name: nameOf(p),
+                        handle: handlesFor(p)[0] ?? "",
+                      }))
+                      .filter((p) => p.handle)}
                     forwardFiles={forwardFiles}
                     templates={templates}
                     snoozeChoices={choices}

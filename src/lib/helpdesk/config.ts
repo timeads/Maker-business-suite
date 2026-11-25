@@ -13,6 +13,55 @@ export const RULES_KEY = "auto_tag_rules";
 const id = z.string().regex(/^[a-z0-9-]{1,40}$/);
 export const TAG_PATTERN = /^[a-z0-9][a-z0-9 _-]{0,29}$/;
 
+/**
+ * What a saved reply also does when the email it filled is sent: add tags,
+ * decide what happens to the conversation (when the person presses plain
+ * "Send"), and hand it to whoever sends it or to a named teammate.
+ */
+export const templateActionsSchema = z.object({
+  add_tags: z.array(z.string().trim().toLowerCase().regex(TAG_PATTERN)).max(5).optional(),
+  then: z.enum(["open", "pending", "closed"]).optional(),
+  assign_to: z.union([z.literal("sender"), z.string().uuid()]).optional(),
+});
+export type TemplateActions = z.infer<typeof templateActionsSchema>;
+
+/** Several saved replies' extras as one: every tag, the last "then", the last hand-off. */
+export function mergeActions(a: TemplateActions, b: TemplateActions | undefined): TemplateActions {
+  if (!b) return a;
+  const tags = [...new Set([...(a.add_tags ?? []), ...(b.add_tags ?? [])])].slice(0, 10);
+  return {
+    ...(tags.length > 0 ? { add_tags: tags } : {}),
+    ...((b.then ?? a.then) ? { then: b.then ?? a.then } : {}),
+    ...((b.assign_to ?? a.assign_to) ? { assign_to: b.assign_to ?? a.assign_to } : {}),
+  };
+}
+
+/** The extras in a few words each, for the chips under the reply box. */
+export function describeActions(
+  actions: TemplateActions,
+  person: (id: string) => string,
+): { key: "tags" | "then" | "assign"; label: string }[] {
+  const out: { key: "tags" | "then" | "assign"; label: string }[] = [];
+  if (actions.add_tags?.length)
+    out.push({ key: "tags", label: `tag ${actions.add_tags.join(", ")}` });
+  if (actions.then) {
+    out.push({
+      key: "then",
+      label: { open: "keep open", pending: "mark in progress", closed: "close" }[actions.then],
+    });
+  }
+  if (actions.assign_to) {
+    out.push({
+      key: "assign",
+      label:
+        actions.assign_to === "sender"
+          ? "assign to whoever sends"
+          : `assign to ${person(actions.assign_to)}`,
+    });
+  }
+  return out;
+}
+
 export const replyTemplatesSchema = z.object({
   version: z.literal(1),
   templates: z
@@ -21,6 +70,8 @@ export const replyTemplatesSchema = z.object({
         id,
         name: z.string().trim().min(1).max(60),
         body: z.string().trim().min(1).max(4000),
+        /** What sending a reply made with this one also does. */
+        actions: templateActionsSchema.optional(),
       }),
     )
     .max(50),

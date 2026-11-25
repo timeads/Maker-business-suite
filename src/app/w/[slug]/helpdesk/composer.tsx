@@ -24,6 +24,7 @@ import {
   Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { describeActions, mergeActions, type TemplateActions } from "@/lib/helpdesk/config";
 import { draftKey, readDraft, type ComposerMode } from "@/lib/helpdesk/drafts";
 import { fileSize, filesProblem, parseRecipients } from "@/lib/helpdesk/outbound";
 import {
@@ -39,12 +40,17 @@ import {
 import { cn } from "@/lib/utils";
 import { addTicketNote, draftTicketReply, sendMail } from "./actions";
 
-type Template = { id: string; name: string; body: string };
+type Template = { id: string; name: string; body: string; actions?: TemplateActions };
+type Teammate = { id: string; name: string; handle: string };
 type Snooze = { key: string; label: string; until: string };
 
 /** Events other parts of the desk send to the composer. */
 export const INSERT_EVENT = "helpdesk:insert";
 export const FOCUS_EVENT = "helpdesk:focus";
+/** An email was queued with an undo wait: `{ id, seconds, ticketId, number, draft }`. */
+export const QUEUED_EVENT = "helpdesk:queued";
+/** A taken-back email's words are in this browser's drafts again: `{ ticketId }`. */
+export const RESTORE_EVENT = "helpdesk:restore";
 
 // ---- The editor's contents as a small document ------------------------------
 
@@ -163,6 +169,8 @@ export function Composer({
   customerFirstName,
   replyAllCc = [],
   forwardFiles = [],
+  team = [],
+  afterClose = "next",
   templates,
   snoozeChoices,
   canDraft,
@@ -177,6 +185,10 @@ export function Composer({
   replyAllCc?: string[];
   /** The conversation's kept pictures and files, which a forward takes along. */
   forwardFiles?: { id: string; name: string; size: number }[];
+  /** The team, for the @ picker in a note. */
+  team?: Teammate[];
+  /** After "Send & close": the next conversation, the list, or stay here. */
+  afterClose?: "next" | "list" | "stay";
   templates: Template[];
   snoozeChoices: Snooze[];
   canDraft: boolean;
@@ -194,6 +206,8 @@ export function Composer({
   const [editing, setEditing] = useState(false);
   const [files, setFiles] = useState<File[]>([]);
   const [dropped, setDropped] = useState<string[]>([]);
+  const [extras, setExtras] = useState<TemplateActions>({});
+  const [mention, setMention] = useState<{ query: string; at: number } | null>(null);
   const [menu, setMenu] = useState<"macros" | "ai" | "send" | null>(null);
   const [macroSearch, setMacroSearch] = useState("");
   const [hint, setHint] = useState("");
@@ -224,9 +238,10 @@ export function Composer({
     }
   }, [key]);
 
-  // Bring back what was being written on this conversation, in this browser.
+  // Bring back what was being written on this conversation, in this browser:
+  // when it opens, and when an email that was sent is taken back.
   useEffect(() => {
-    const frame = requestAnimationFrame(() => {
+    const bring = (words: string) => {
       let saved = null;
       try {
         saved = readDraft(localStorage.getItem(key));
@@ -238,10 +253,20 @@ export function Composer({
       setModeState(saved.mode);
       if (saved.mode === "forward") setTo(saved.to ?? "");
       if (saved.cc) setCc(saved.cc);
-      setNotice("Your unsent draft is back.");
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [key]);
+      setNotice(words);
+    };
+    const frame = requestAnimationFrame(() => bring("Your unsent draft is back."));
+    const onRestore = (event: Event) => {
+      if ((event as CustomEvent<{ ticketId: string }>).detail?.ticketId === ticketId) {
+        bring("Taken back. Nothing was sent; your words are in the box again.");
+      }
+    };
+    window.addEventListener(RESTORE_EVENT, onRestore);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener(RESTORE_EVENT, onRestore);
+    };
+  }, [key, ticketId]);
 
   const setMode = useCallback(
     (next: ComposerMode, focus = true) => {
@@ -342,6 +367,7 @@ export function Composer({
     if (editor.current) editor.current.innerHTML = "";
     setFiles([]);
     setDropped([]);
+    setExtras({});
     setHint("");
     try {
       localStorage.removeItem(key);
@@ -358,7 +384,8 @@ export function Composer({
     setMode("reply");
   };
 
-  const send = (then: "pending" | "open" | "closed" | "snoozed", until?: string) => {
+  const send = (asked: "pending" | "open" | "closed" | "snoozed", until?: string) => {
+    let then = asked;
     const root = editor.current;
     if (!root || busy) return;
     setMenu(null);
@@ -377,9 +404,12 @@ export function Composer({
       setEditing(true);
       return;
     }
+    // A saved reply's "then" applies when the person presses plain Send.
+    if (then === "pending" && mode !== "forward" && extras.then) then = extras.then;
     const data = new FormData();
     data.set("mode", mode);
     data.set("doc", JSON.stringify(doc));
+    data.set("macro_actions", JSON.stringify(extras));
     data.set("to", to);
     data.set("cc", cc);
     data.set("bcc", bcc);
@@ -397,15 +427,36 @@ export function Composer({
         setProblem(`${result.error} Your draft is saved.`);
         return;
       }
+      if (result.queued) {
+        // It is waiting on the server. The words travel with the notice so
+        // "Undo" can put them back, wherever the person has gone by then.
+        window.dispatchEvent(
+          new CustomEvent(QUEUED_EVENT, {
+            detail: {
+              ...result.queued,
+              ticketId,
+              number: result.number,
+              forward: mode === "forward",
+              draft: JSON.stringify({
+                mode,
+                doc,
+                to: mode === "forward" ? to : undefined,
+                cc: cc || undefined,
+              }),
+            },
+          }),
+        );
+      }
       clear();
       setCc("");
       setBcc("");
       setEditing(false);
       setModeState("reply");
       setTo(customerEmail);
-      if (then === "closed" || then === "snoozed") router.push(afterHref);
+      const leaving = then === "snoozed" || (then === "closed" && afterClose !== "stay");
+      if (leaving) router.push(afterHref);
       else {
-        setNotice(mode === "forward" ? "Forwarded." : "Sent.");
+        setNotice(result.queued ? null : mode === "forward" ? "Forwarded." : "Sent.");
         router.refresh();
       }
     });
@@ -454,6 +505,31 @@ export function Composer({
     });
   };
 
+  // In a note, "@" and a few letters offers the team to pick from.
+  const checkMention = () => {
+    if (state.current.mode !== "note") return setMention(null);
+    const selection = window.getSelection();
+    const node = selection?.anchorNode;
+    if (!selection || !node || node.nodeType !== Node.TEXT_NODE) return setMention(null);
+    const before = (node.textContent ?? "").slice(0, selection.anchorOffset);
+    const found = /(^|\s)@([a-z0-9._-]{0,30})$/i.exec(before);
+    setMention(found ? { query: found[2].toLowerCase(), at: found[2].length + 1 } : null);
+  };
+  const pickMention = (person: Teammate) => {
+    const selection = window.getSelection();
+    const node = selection?.anchorNode;
+    if (!selection || !node || !mention) return;
+    // Replace what was typed after the "@" (and the "@") with the person's handle.
+    const range = document.createRange();
+    range.setStart(node, Math.max(0, selection.anchorOffset - mention.at));
+    range.setEnd(node, selection.anchorOffset);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    document.execCommand("insertText", false, `@${person.handle} `);
+    setMention(null);
+    save();
+  };
+
   const pickFiles = (picked: FileList | null) => {
     const next = [...files, ...Array.from(picked ?? [])];
     const wrong = filesProblem(next.map((file) => ({ name: file.name, size: file.size })));
@@ -474,6 +550,19 @@ export function Composer({
   };
 
   const note = mode === "note";
+  const onSend = describeActions(
+    extras,
+    (id) => team.find((person) => person.id === id)?.name ?? "a teammate",
+  );
+  const mentionable = mention
+    ? team
+        .filter(
+          (person) =>
+            person.handle.startsWith(mention.query) ||
+            person.name.toLowerCase().includes(mention.query),
+        )
+        .slice(0, 6)
+    : [];
   const carried = mode === "forward" ? forwardFiles.filter((f) => !dropped.includes(f.id)) : [];
   const people = {
     to: parseRecipients(to).ok,
@@ -484,7 +573,7 @@ export function Composer({
     `${template.name} ${template.body}`.toLowerCase().includes(macroSearch.trim().toLowerCase()),
   );
   const placeholder = note
-    ? "Only your team sees notes. Type @ and a first name to get someone's attention…"
+    ? "Only your team sees notes. Type @ to mention someone…"
     : mode === "forward"
       ? "Add a message (optional)…"
       : `Reply to ${customerFirstName ?? customerEmail}…`;
@@ -599,7 +688,13 @@ export function Composer({
         data-placeholder={placeholder}
         contentEditable
         suppressContentEditableWarning
-        onInput={save}
+        onInput={() => {
+          save();
+          checkMention();
+        }}
+        onKeyUp={checkMention}
+        onClick={checkMention}
+        onBlur={() => setTimeout(() => setMention(null), 150)}
         onPaste={(event) => {
           // A paste comes in as plain words: nothing from another page's markup gets in.
           event.preventDefault();
@@ -608,6 +703,30 @@ export function Composer({
         className="composer-box font-read max-h-[34vh] min-h-[56px] overflow-y-auto px-3 py-2 text-sm break-words outline-none lg:min-h-[92px]"
       />
 
+      {note && mention && mentionable.length > 0 && (
+        <ul
+          role="listbox"
+          aria-label="Mention a teammate"
+          className="border-border bg-card mx-3 mb-1 w-fit min-w-48 rounded-md border p-1 shadow-lg"
+        >
+          {mentionable.map((person) => (
+            <li key={person.id} role="option" aria-selected={false}>
+              <button
+                type="button"
+                // Keep the caret where it is: the pick replaces what was typed there.
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  pickMention(person);
+                }}
+                className="hover:bg-hover flex w-full items-baseline gap-2 rounded-sm px-2 py-1 text-left text-sm"
+              >
+                <span className="font-semibold">{person.name}</span>
+                <span className="text-muted-foreground text-xs">@{person.handle}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
       {files.length > 0 && (
         <ul className="flex flex-wrap gap-1.5 px-3 pb-1">
           {files.map((file, i) => (
@@ -629,6 +748,36 @@ export function Composer({
             </li>
           ))}
         </ul>
+      )}
+      {!note && onSend.length > 0 && (
+        <p className="flex flex-wrap items-center gap-1.5 px-3 pb-1 text-xs">
+          <span className="text-muted-foreground">On send:</span>
+          {onSend.map((action) => (
+            <span
+              key={action.key}
+              className="border-ochre bg-ochre-soft text-ochre-text flex items-center gap-1 rounded-full border px-2 py-0.5 font-semibold"
+            >
+              <Zap aria-hidden className="size-3" />
+              {action.label}
+              <button
+                type="button"
+                aria-label={`Don't ${action.label}`}
+                onClick={() =>
+                  setExtras((was) => ({
+                    ...was,
+                    ...(action.key === "tags"
+                      ? { add_tags: undefined }
+                      : action.key === "then"
+                        ? { then: undefined }
+                        : { assign_to: undefined }),
+                  }))
+                }
+              >
+                <X aria-hidden className="size-3" />
+              </button>
+            </span>
+          ))}
+        </p>
       )}
       {carried.length > 0 && (
         <ul
@@ -700,11 +849,20 @@ export function Composer({
                           onClick={() => {
                             setMenu(null);
                             setMacroSearch("");
+                            setExtras((was) => mergeActions(was, template.actions));
                             insert(template.body);
                           }}
                           className="hover:bg-hover w-full rounded-sm px-2 py-1.5 text-left"
                         >
-                          <span className="block text-sm font-semibold">{template.name}</span>
+                          <span className="flex items-center gap-1.5 text-sm font-semibold">
+                            {template.name}
+                            {template.actions && Object.keys(template.actions).length > 0 && (
+                              <Zap
+                                aria-label="Also does something when sent"
+                                className="text-ochre-text size-3"
+                              />
+                            )}
+                          </span>
                           <span className="text-muted-foreground font-read line-clamp-1 text-xs">
                             {template.body}
                           </span>

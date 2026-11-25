@@ -129,6 +129,13 @@ describe("archive, spam and the trash", () => {
     expect(event("restored|spam")).toBe("Amy marked this as not spam");
     expect(event("restored|trash")).toBe("Amy restored this from the Trash");
     expect(event("restored|archived")).toBe("Amy took this out of the archive");
+    const log = (kind: string, detail: string, actor: string | null) =>
+      describeEvent({ id: "1", kind, detail, actor_id: actor, created_at: "" }, names);
+    expect(log("tags", "+refund", "u")).toBe("Amy added the tag refund");
+    expect(log("tags", "-refund", "u")).toBe("Amy removed the tag refund");
+    expect(log("tags", "+shipping", null)).toBe("A rule added the tag shipping");
+    expect(log("priority", "urgent", null)).toBe("A rule set priority to urgent");
+    expect(log("priority", "high", "u")).toBe("Amy set priority to high");
   });
 });
 

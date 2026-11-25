@@ -81,7 +81,11 @@ export class ReplyRefused extends Error {
 
 /** What to tell the person who pressed send, in words they can act on. */
 export function replyProblem(err: unknown): string {
-  const code = err instanceof ReplyRefused ? err.code : null;
+  return refusalWords(err instanceof ReplyRefused ? err.code : null);
+}
+
+/** The same words from the mail service's numeric code alone (all that is kept of a refusal). */
+export function refusalWords(code: number | null): string {
   // The sending address or its domain hasn't been confirmed with the mail service.
   if (code === 400 || code === 401) {
     return "Replies can't be sent yet: the support address hasn't been confirmed for sending. Nothing was sent. Whoever set up email for this workspace needs to verify the sending domain.";

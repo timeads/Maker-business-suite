@@ -17,7 +17,9 @@ import {
   parseRules,
   parseTemplates,
   replyTemplatesSchema,
+  templateActionsSchema,
 } from "@/lib/helpdesk/config";
+import { sendPayloadSchema, summaryOf } from "@/lib/helpdesk/outbox";
 import { draftReply } from "@/lib/helpdesk/draft";
 import { readInsights } from "@/lib/helpdesk/insights";
 import {
@@ -323,6 +325,18 @@ export async function saveReplyTemplate(slug: string, _prev: HelpdeskState, form
   return saveHelpdeskConfig(slug, TEMPLATES_KEY, (current) => {
     const existing = parseTemplates(current).templates;
     const name = String(formData.get("name") ?? "").trim();
+    // What sending it also does: tags to add, what happens next, who gets it.
+    const addTags = String(formData.get("add_tags") ?? "")
+      .split(",")
+      .map((tag) => tag.trim().toLowerCase())
+      .filter(Boolean);
+    const then = String(formData.get("then") ?? "");
+    const assign = String(formData.get("assign_to") ?? "");
+    const actions = {
+      ...(addTags.length > 0 ? { add_tags: addTags } : {}),
+      ...(then ? { then } : {}),
+      ...(assign ? { assign_to: assign } : {}),
+    };
     const parsed = replyTemplatesSchema.safeParse({
       version: 1,
       templates: [
@@ -331,12 +345,16 @@ export async function saveReplyTemplate(slug: string, _prev: HelpdeskState, form
           id: `${slugify(name)}-${Date.now().toString(36)}`,
           name,
           body: String(formData.get("body") ?? ""),
+          ...(Object.keys(actions).length > 0 ? { actions } : {}),
         },
       ],
     });
     return parsed.success
       ? { body: parsed.data }
-      : { error: "A saved reply needs a name and some text (up to 4,000 characters)." };
+      : {
+          error:
+            "A saved reply needs a name and some text (up to 4,000 characters). Tags are letters, numbers, spaces or dashes, five at most.",
+        };
   });
 }
 
@@ -513,7 +531,31 @@ export async function mergeTicket(
 // Mail going out: a reply, a reply with copies, a forward, or a new conversation
 // ---------------------------------------------------------------------------
 
-export type SendState = HelpdeskState & { sent?: boolean; number?: number };
+export type SendState = HelpdeskState & {
+  sent?: boolean;
+  number?: number;
+  /** The email is waiting on the server and can still be taken back. */
+  queued?: { id: string; seconds: number };
+};
+
+/** What a saved reply asked to happen as well, checked: tags to add and who gets the conversation. */
+function readSendActions(
+  formData: FormData,
+  me: string,
+): { tags: string[]; assignTo: string | null } {
+  try {
+    const parsed = templateActionsSchema.safeParse(
+      JSON.parse(String(formData.get("macro_actions") ?? "{}")),
+    );
+    if (!parsed.success) return { tags: [], assignTo: null };
+    return {
+      tags: parsed.data.add_tags ?? [],
+      assignTo: parsed.data.assign_to === "sender" ? me : (parsed.data.assign_to ?? null),
+    };
+  } catch {
+    return { tags: [], assignTo: null };
+  }
+}
 
 const THENS = ["pending", "open", "closed", "snoozed", "keep"] as const;
 
@@ -670,6 +712,58 @@ async function deliver(
     }
   }
 
+  const extras = readSendActions(formData, ctx.user.id);
+  const snoozeUntil = then === "snoozed" ? new Date(snooze).toISOString() : null;
+
+  // With an undo wait set, the email isn't sent here at all: it is queued on
+  // the server and the worker sends it when its time comes. Taking it back is
+  // a request to the server too, so nothing depends on this tab staying open.
+  const { data: deskConfig } = await ctx.supabase
+    .from("configs")
+    .select("body")
+    .eq("tenant_id", ctx.tenant.id)
+    .eq("module", HELPDESK_MODULE)
+    .eq("key", DESK_SETTINGS_KEY)
+    .maybeSingle();
+  const undoSeconds = parseDeskSettings(deskConfig?.body).undo_seconds;
+  if (undoSeconds > 0) {
+    const payload = sendPayloadSchema.safeParse({
+      kind,
+      to: to.ok,
+      cc: cc.ok,
+      bcc: bcc.ok,
+      doc,
+      format: isPlain(doc) ? null : doc,
+      appendix,
+      then,
+      snooze_until: snoozeUntil,
+      files,
+      add_tags: extras.tags,
+      assign_to: extras.assignTo,
+    });
+    if (!payload.success) return { error: "That email couldn't be read. Try typing it again." };
+    const { data: queuedId, error: queueError } = await ctx.supabase.rpc("queue_outbound", {
+      p_ticket_id: ticketId,
+      p_payload: payload.data,
+      p_summary: summaryOf(payload.data),
+      p_delay_seconds: undoSeconds,
+    });
+    if (queueError || !queuedId) {
+      return {
+        error: queueError?.message.includes("already waiting")
+          ? "A few emails are already waiting to go on this conversation. Give them a moment."
+          : "We couldn't send that. Nothing was sent; try again in a moment.",
+      };
+    }
+    await ctx.supabase.rpc("mark_ticket_read", { p_ticket_id: ticketId });
+    revalidatePath(`/w/${ctx.tenant.slug}/helpdesk`, "layout");
+    return {
+      sent: true,
+      number: ticket.number as number,
+      queued: { id: String(queuedId), seconds: undoSeconds },
+    };
+  }
+
   try {
     const { data: rows, error } = await getAdminClient().rpc("ticket_reply_context", {
       p_tenant_id: ctx.tenant.id,
@@ -703,9 +797,16 @@ async function deliver(
       p_format: isPlain(doc) ? null : doc,
       p_attachments: files.map((file) => ({ name: file.name.slice(0, 120), size: file.size })),
       p_then: then,
-      p_snooze_until: then === "snoozed" ? new Date(snooze).toISOString() : null,
+      p_snooze_until: snoozeUntil,
     });
     if (recordError) throw new Error(recordError.message);
+    if (extras.tags.length > 0 || extras.assignTo) {
+      await ctx.supabase.rpc("apply_send_actions", {
+        p_ticket_id: ticketId,
+        p_add_tags: extras.tags,
+        p_assign_to: extras.assignTo,
+      });
+    }
     // Keep what was sent, so the conversation shows it. The email has gone
     // either way: trouble here never turns a sent email into a failure.
     if (messageId && files.length > 0) {
@@ -1055,4 +1156,41 @@ export async function emptyTrash(slug: string): Promise<HelpdeskState> {
   if (error) return { error: "The Trash couldn't be emptied. Try again in a moment." };
   done(slug);
   return { message: `${Number(data ?? 0)} deleted for good.` };
+}
+
+// ---------------------------------------------------------------------------
+// Email waiting to go, and empty conversations
+// ---------------------------------------------------------------------------
+
+/** Takes back an email that is still waiting. True when it will never go. */
+export async function undoSend(slug: string, id: string): Promise<boolean> {
+  const ctx = await context(slug);
+  if ("error" in ctx || !/^[0-9a-f-]{36}$/i.test(id)) return false;
+  const { data } = await ctx.supabase.rpc("cancel_outbound", { p_id: id });
+  done(slug);
+  return data === true;
+}
+
+/** Clears the notice about an email that didn't go. */
+export async function dismissSend(slug: string, id: string): Promise<void> {
+  const ctx = await context(slug);
+  if ("error" in ctx || !/^[0-9a-f-]{36}$/i.test(id)) return;
+  await ctx.supabase.rpc("dismiss_outbound", { p_id: id });
+  done(slug);
+}
+
+/** Throws away a conversation that was started and never written. */
+export async function discardEmptyTicket(slug: string, ticketId: string): Promise<HelpdeskState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const { error } = await ctx.supabase.rpc("discard_empty_ticket", { p_ticket_id: ticketId });
+  if (error) {
+    return {
+      error: error.message.includes("empty conversation")
+        ? "Something has been said on this one, so it can't be removed this way. Use Delete under the ⋯ menu."
+        : TRY_AGAIN,
+    };
+  }
+  done(slug);
+  return { message: "Removed." };
 }

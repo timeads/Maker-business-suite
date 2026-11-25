@@ -30,7 +30,13 @@ function useSettingsAction(action: Action, slug: string) {
   return [state, run, saves] as const;
 }
 
-export function AddTemplateForm({ slug }: { slug: string }) {
+export function AddTemplateForm({
+  slug,
+  people = [],
+}: {
+  slug: string;
+  people?: { id: string; name: string }[];
+}) {
   const [state, action, saves] = useSettingsAction(saveReplyTemplate, slug);
   return (
     // Remounting after a save clears the fields.
@@ -62,6 +68,38 @@ export function AddTemplateForm({ slug }: { slug: string }) {
           their latest order).
         </p>
       </div>
+      <fieldset className="border-border grid gap-3 rounded-md border p-3 sm:grid-cols-3">
+        <legend className="px-1 text-sm font-semibold">Also, when it is sent (optional)</legend>
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="template-tags">Add these tags</Label>
+          <Input id="template-tags" name="add_tags" placeholder="refund, answered" />
+        </div>
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="template-then">Then</Label>
+          <Select id="template-then" name="then" defaultValue="">
+            <option value="">Whatever the button says</option>
+            <option value="closed">Close the conversation</option>
+            <option value="pending">Mark it in progress</option>
+            <option value="open">Keep it open</option>
+          </Select>
+        </div>
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="template-assign">Hand it to</Label>
+          <Select id="template-assign" name="assign_to" defaultValue="">
+            <option value="">Nobody in particular</option>
+            <option value="sender">Whoever sends it</option>
+            {people.map((person) => (
+              <option key={person.id} value={person.id}>
+                {person.name}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <p className="text-muted-foreground text-xs sm:col-span-3">
+          Whoever uses the reply sees these under the box and can take any of them off before
+          sending. “Then” applies when they press plain Send.
+        </p>
+      </fieldset>
       <FormMessage>{state.error}</FormMessage>
       <SubmitButton pendingText="Saving…" className="sm:w-fit">
         Save reply
@@ -309,6 +347,58 @@ export function OwnAddressesForm({ slug, addresses }: { slug: string; addresses:
       <SubmitButton variant="outline" size="default" pendingText="Saving…" className="w-fit">
         Save addresses
       </SubmitButton>
+    </form>
+  );
+}
+
+/** How the desk behaves: the wait before an email goes, and what follows closing a conversation. */
+export function DeskBehaviourForm({
+  slug,
+  undoSeconds,
+  afterClose,
+  autoOpen,
+}: {
+  slug: string;
+  undoSeconds: number;
+  afterClose: string;
+  autoOpen: boolean;
+}) {
+  const [state, action] = useSettingsAction(saveDeskSettings, slug);
+  return (
+    <form action={action} className="grid gap-3 sm:grid-cols-2">
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="desk-undo">Time to undo a send</Label>
+        <Select id="desk-undo" name="undo_seconds" defaultValue={String(undoSeconds)}>
+          <option value="0">Off: send at once</option>
+          <option value="5">5 seconds</option>
+          <option value="10">10 seconds</option>
+          <option value="20">20 seconds</option>
+        </Select>
+        <p className="text-muted-foreground text-xs">
+          The email waits this long before it really goes, so “Undo” can take it back. It still goes
+          if you close the page.
+        </p>
+      </div>
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="desk-after">After closing a conversation</Label>
+        <Select id="desk-after" name="after_close" defaultValue={afterClose}>
+          <option value="next">Open the next one</option>
+          <option value="list">Go back to the list</option>
+          <option value="stay">Stay on it</option>
+        </Select>
+      </div>
+      <label className="flex items-center gap-2 text-sm sm:col-span-2">
+        <input type="hidden" name="auto_open_set" value="1" />
+        <input type="checkbox" name="auto_open" value="1" defaultChecked={autoOpen} />
+        On a wide screen, open the first conversation in the list by itself
+      </label>
+      <div className="flex flex-col gap-2 sm:col-span-2">
+        <FormMessage>{state.error}</FormMessage>
+        <FormMessage kind="success">{state.message}</FormMessage>
+        <SubmitButton variant="outline" size="default" pendingText="Saving…" className="w-fit">
+          Save
+        </SubmitButton>
+      </div>
     </form>
   );
 }

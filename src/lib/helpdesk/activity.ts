@@ -44,7 +44,14 @@ export function describeEvent(event: TicketEvent, names: Names): string {
         ? "Snooze ended — customer replied"
         : `${who} brought this back from snooze`;
     case "priority":
+      // With nobody signed in, it was one of the workspace's rules for new email.
+      if (!event.actor_id) return `A rule set priority to ${d}`;
       return d === "normal" ? `${who} cleared the priority` : `${who} set priority to ${d}`;
+    case "tags": {
+      const name = event.detail.slice(1);
+      if (event.detail.startsWith("-")) return `${who} removed the tag ${name}`;
+      return event.actor_id ? `${who} added the tag ${name}` : `A rule added the tag ${name}`;
+    }
     case "folder":
       return d ? `${who} moved this to the ${d} folder` : `${who} moved this back to the inbox`;
     case "subject":
@@ -78,14 +85,14 @@ export const ACTIVITY_GROUPS = [
   { key: "all", label: "Everything" },
   { key: "messages", label: "Messages" },
   { key: "status", label: "Status & assignment" },
-  { key: "tags", label: "Priority & subject" },
+  { key: "tags", label: "Tags, priority & subject" },
 ] as const;
 export type ActivityGroup = (typeof ACTIVITY_GROUPS)[number]["key"];
 export const isActivityGroup = (value: unknown): value is ActivityGroup =>
   ACTIVITY_GROUPS.some((group) => group.key === value);
 
 const groupOf = (kind: string): Exclude<ActivityGroup, "all" | "messages"> =>
-  kind === "priority" || kind === "subject" ? "tags" : "status";
+  kind === "priority" || kind === "subject" || kind === "tags" ? "tags" : "status";
 
 export type ActivityEntry = {
   at: string;

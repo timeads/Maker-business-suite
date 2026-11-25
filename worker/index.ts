@@ -6,6 +6,7 @@
  *  - apply queued Stripe events to the subscriptions table
  *  - file inbound emails into help desk tickets, keeping their pictures and files
  *  - take help desk files out of storage once their conversation is gone
+ *  - send help desk email whose "undo" wait has run out
  *  - confirm booking payments and send booking reminders
  *  - publish scheduled social posts
  *  - ask UPS where incoming stock orders are, a few parcels at a time
@@ -46,7 +47,11 @@ import {
   type IngestResult,
   type PostmarkInbound,
 } from "../src/lib/helpdesk/inbound";
+import { fromBase64 } from "../src/lib/helpdesk/files";
 import { keepMessageFiles, removeQueuedFiles } from "../src/lib/helpdesk/keep-files";
+import { bodyOf, outgoingFrom, refusalCode, sendPayloadSchema } from "../src/lib/helpdesk/outbox";
+import { sendOutbound } from "../src/lib/helpdesk/outbound";
+import { ReplyRefused } from "../src/lib/helpdesk/reply";
 import { postAlert } from "../src/lib/messages/alerts";
 import { runClaimedLook, type ClaimedLook } from "../src/lib/michaels/worker";
 import { moduleOpen } from "../src/lib/module-access";
@@ -325,6 +330,103 @@ async function drainInboundEmails(): Promise<number> {
     if (completeError) console.error(`could not mark ${email.id}: ${completeError.message}`);
   }
   return emails.length;
+}
+
+/**
+ * Sends help desk email that was queued with an "undo" wait and is now due.
+ * Each is claimed once. A refusal from the mail service is written down as
+ * failed (nothing went, and the words are kept for the person to try again).
+ * Anything less clear is left claimed, which the database turns into "we
+ * don't know if it went": it is never sent a second time by itself.
+ */
+async function drainOutbound(): Promise<number> {
+  const domain = inboundDomain();
+  if (!domain || !process.env.POSTMARK_SERVER_TOKEN) return 0;
+  const admin = getAdminClient();
+  const { data, error } = await admin.rpc("claim_outbound", { p_limit: 5 });
+  if (error) throw new Error(`Could not claim email to send: ${error.message}`);
+  const rows = (data ?? []) as {
+    id: string;
+    tenant_id: string;
+    ticket_id: string;
+    author_id: string;
+    payload: unknown;
+  }[];
+  for (const row of rows) {
+    const finish = (args: Record<string, unknown>) =>
+      admin.rpc("finish_outbound", { p_id: row.id, ...args });
+    const parsed = sendPayloadSchema.safeParse(row.payload);
+    if (!parsed.success) {
+      await finish({ p_error: "unreadable" });
+      continue;
+    }
+    const payload = parsed.data;
+    let providerId: string;
+    let slug: string;
+    try {
+      const [{ data: tenants }, { data: context, error: contextError }] = await Promise.all([
+        admin.from("tenants").select("name, slug").eq("id", row.tenant_id),
+        admin.rpc("ticket_reply_context", {
+          p_tenant_id: row.tenant_id,
+          p_ticket_id: row.ticket_id,
+        }),
+      ]);
+      const tenant = (tenants as { name: string; slug: string }[] | null)?.[0];
+      const info = (context as Record<string, string | null>[] | null)?.[0];
+      if (contextError || !tenant || !info?.reply_key) {
+        // Nothing was asked of the mail service, so nothing went.
+        await finish({ p_error: "no_conversation" });
+        continue;
+      }
+      slug = tenant.slug;
+      providerId = await sendOutbound(
+        outgoingFrom(payload, {
+          workspaceName: tenant.name,
+          slug,
+          domain,
+          replyKey: info.reply_key,
+          subject: info.subject ?? "",
+          inReplyTo: info.last_message_id,
+        }),
+      );
+    } catch (err) {
+      if (err instanceof ReplyRefused) {
+        await finish({ p_error: refusalCode(err) });
+        console.error(`help desk email ${row.id} refused (${refusalCode(err)})`);
+      } else {
+        // No clear answer: left claimed, to be marked "unsure". Never resent here.
+        console.error(`help desk email ${row.id}: no clear answer from the mail service`);
+      }
+      continue;
+    }
+    const { data: messageId, error: finishError } = await finish({
+      p_provider_message_id: providerId,
+      p_from_email: `support-${slug}@${domain}`,
+      p_body: bodyOf(payload),
+      p_attachments: payload.files.map((file) => ({
+        name: file.name.slice(0, 120),
+        size: file.size,
+      })),
+    });
+    if (finishError) console.error(`help desk email ${row.id} went but wasn't filed`);
+    if (messageId && payload.files.length > 0) {
+      try {
+        await keepMessageFiles(
+          admin,
+          { tenantId: row.tenant_id, ticketId: row.ticket_id, messageId: String(messageId) },
+          payload.files.map((file) => ({
+            name: file.name,
+            claimed: file.type,
+            bytes: fromBase64(file.base64),
+            contentId: null,
+          })),
+        );
+      } catch (err) {
+        console.error("sent files weren't kept", err instanceof Error ? err.message : err);
+      }
+    }
+  }
+  return rows.length;
 }
 
 /**
@@ -872,6 +974,7 @@ async function main() {
       (await attempt(drainStripeEvents, 0)) +
       (await attempt(drainSyncJobs, 0)) +
       (await attempt(drainInboundEmails, 0)) +
+      (await attempt(drainOutbound, 0)) +
       (await attempt(() => removeQueuedFiles(getAdminClient()), 0)) +
       (await attempt(drainSocialPosts, 0)) +
       (await attempt(drainStockReceipts, 0)) +

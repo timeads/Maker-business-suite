@@ -8,6 +8,7 @@ import {
   HELPDESK_MODULE,
   RULES_KEY,
   TEMPLATES_KEY,
+  describeActions,
   parseRules,
   parseTemplates,
 } from "@/lib/helpdesk/config";
@@ -21,6 +22,7 @@ import {
   AddTemplateForm,
   AddViewForm,
   DeleteButton,
+  DeskBehaviourForm,
   FolderForm,
   OwnAddressesForm,
 } from "./forms";
@@ -63,6 +65,7 @@ export default async function HelpdeskSettingsPage({
   const views = parseSavedViews(stored.get(SAVED_VIEWS_KEY)).views;
   const desk = parseDeskSettings(stored.get(DESK_SETTINGS_KEY));
   const domain = inboundDomain();
+  const personName = (id: string) => people.find((p) => p.id === id)?.name ?? "someone who left";
 
   return (
     <>
@@ -108,6 +111,32 @@ export default async function HelpdeskSettingsPage({
         </CardContent>
       </Card>
 
+      <Card id="behaviour" className="scroll-mt-6">
+        <CardHeader>
+          <CardTitle>How the desk behaves</CardTitle>
+          <CardDescription>
+            A moment to take a sent email back, and where you land after closing a conversation.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {canEdit ? (
+            <DeskBehaviourForm
+              slug={tenant.slug}
+              undoSeconds={desk.undo_seconds}
+              afterClose={desk.after_close}
+              autoOpen={desk.auto_open}
+            />
+          ) : (
+            <p className="text-muted-foreground text-sm">
+              {desk.undo_seconds > 0
+                ? `Sent email waits ${desk.undo_seconds} seconds before it goes.`
+                : "Email goes as soon as it is sent."}{" "}
+              Only owners and admins can change this.
+            </p>
+          )}
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader>
           <CardTitle>Saved replies</CardTitle>
@@ -128,6 +157,15 @@ export default async function HelpdeskSettingsPage({
                     <p className="text-muted-foreground line-clamp-2 text-sm whitespace-pre-wrap">
                       {template.body}
                     </p>
+                    {template.actions &&
+                      describeActions(template.actions, personName).length > 0 && (
+                        <p className="text-ochre-text mt-0.5 text-xs font-semibold">
+                          When sent:{" "}
+                          {describeActions(template.actions, personName)
+                            .map((action) => action.label)
+                            .join(" · ")}
+                        </p>
+                      )}
                   </div>
                   {canEdit && (
                     <DeleteButton
@@ -141,7 +179,7 @@ export default async function HelpdeskSettingsPage({
               ))}
             </ul>
           )}
-          {canEdit && <AddTemplateForm slug={tenant.slug} />}
+          {canEdit && <AddTemplateForm slug={tenant.slug} people={people} />}
         </CardContent>
       </Card>
 
