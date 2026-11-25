@@ -14,7 +14,6 @@ import {
 import { createClient } from "@/lib/supabase/server";
 import { cn } from "@/lib/utils";
 import { bookingsAccess } from "../gate";
-import { BookingsTabs } from "../tabs";
 
 export const metadata: Metadata = { title: "Bookings calendar" };
 
@@ -101,7 +100,7 @@ export default async function BookingsCalendarPage({
 
   return (
     <>
-      <PageHeader title="Bookings" description="Everything on your calendar, month by month.">
+      <PageHeader title="Calendar" description="Everything on your calendar, month by month.">
         <Button asChild variant="outline" size="sm" aria-label="Earlier month">
           <Link href={`${base}/calendar?month=${grid.previous}`}>
             <ChevronLeft />
@@ -114,7 +113,6 @@ export default async function BookingsCalendarPage({
           </Link>
         </Button>
       </PageHeader>
-      <BookingsTabs slug={tenant.slug} />
 
       {/* Phones get the month as a list of its busy days. */}
       <div className="flex flex-col gap-4 md:hidden">

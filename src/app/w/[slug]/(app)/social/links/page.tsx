@@ -8,7 +8,6 @@ import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
 import { LinkPageForm } from "../forms";
 import { socialAccess } from "../gate";
-import { SocialTabs } from "../tabs";
 
 export const metadata: Metadata = { title: "Link page" };
 
@@ -34,14 +33,13 @@ export default async function SocialLinksPage({ params }: { params: Promise<{ sl
   return (
     <>
       <PageHeader
-        title="Social"
+        title="Link page"
         description="One page with all your links, for the single link a profile lets you have."
       >
         <Badge tone={page.published ? "good" : "closed"}>
           {page.published ? "Live" : "Not published"}
         </Badge>
       </PageHeader>
-      <SocialTabs slug={tenant.slug} />
       <Card>
         <CardHeader>
           <CardTitle>Your link page</CardTitle>

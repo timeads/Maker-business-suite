@@ -6,7 +6,7 @@ import { canManage } from "@/lib/tenants";
 import { loadMichaels } from "../../../stock/michaels/data";
 import { MichaelsSettingsForm } from "../../../stock/michaels/forms";
 import { michaelsAccess } from "../../../stock/michaels/gate";
-import { WatchingBanner } from "../../../stock/michaels/tabs";
+import { WatchingBanner } from "../../../stock/michaels/watching";
 
 export const metadata: Metadata = { title: "Michaels settings" };
 

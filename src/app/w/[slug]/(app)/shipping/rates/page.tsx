@@ -3,7 +3,6 @@ import { PageHeader } from "@/components/ui/page-header";
 import { createClient } from "@/lib/supabase/server";
 import { loadBoxes, loadLabelConnections, loadShippingSetup } from "../data";
 import { shippingAccess } from "../gate";
-import { ShippingTabs } from "../tabs";
 import { RateCalculator } from "./rate-calculator";
 
 export const metadata: Metadata = { title: "Rate calculator" };
@@ -26,10 +25,9 @@ export default async function RateCalculatorPage({
   return (
     <>
       <PageHeader
-        title="Shipping"
-        description="Orders waiting to ship, labels from every carrier, packing slips and the packing station."
+        title="Rate calculator"
+        description="What a parcel would cost with each of your accounts. Nothing is bought here."
       />
-      <ShippingTabs slug={tenant.slug} />
       <RateCalculator
         slug={tenant.slug}
         homeZip={setup.settings.ship_from.postal_code.slice(0, 5)}

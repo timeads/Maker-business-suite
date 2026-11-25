@@ -1,6 +1,9 @@
+import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
 import { BillingBanner } from "@/components/shell/billing-banner";
-import { Sidebar } from "@/components/shell/sidebar";
+import { HubRail } from "@/components/shell/hub-rail";
+import { MenuPanel } from "@/components/shell/menu-panel";
+import { NavProvider } from "@/components/shell/nav-context";
 import { isPlatformAdmin } from "@/lib/admin/platform";
 import { loadAttention } from "@/lib/attention";
 import { requireUser } from "@/lib/auth";
@@ -12,7 +15,9 @@ import {
   parseAppearance,
 } from "@/lib/brand/appearance";
 import { BRAND_MODULE, KIT_KEY, parseBrandKit } from "@/lib/brand/kit";
+import { googleMailConfigured } from "@/lib/connections/providers/google-mail";
 import { getEntitlements } from "@/lib/entitlements";
+import { PANEL_COOKIE, buildNav } from "@/lib/nav/model";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext, listMyTenants } from "@/lib/tenants";
 
@@ -29,10 +34,11 @@ export default async function WorkspaceLayout({
   // Not a member looks exactly like "doesn't exist".
   if (!ctx) notFound();
   const supabase = await createClient();
-  const [tenants, platformAdmin, entitlements, { data: brandRows }] = await Promise.all([
+  const [tenants, platformAdmin, entitlements, jar, { data: brandRows }] = await Promise.all([
     listMyTenants(),
     isPlatformAdmin(),
     getEntitlements(ctx.tenant.id),
+    cookies(),
     supabase
       .from("configs")
       .select("key, body")
@@ -46,6 +52,27 @@ export default async function WorkspaceLayout({
     (key) => entitlements.can(`module.${key}`),
     daysFromNow(0),
   ).catch(() => ({}));
+  // Stock's menu has a Michaels row only once a seller account is connected.
+  // One small read, as the member, and only where the plan has Stock.
+  const { data: michaels } = entitlements.can("module.stock")
+    ? await supabase
+        .from("connections")
+        .select("status")
+        .eq("tenant_id", ctx.tenant.id)
+        .eq("provider", "michaels")
+        .maybeSingle()
+    : { data: null };
+  // The rail and every tool's menu, decided in one place for this person.
+  const tools = buildNav(
+    {
+      can: (feature) => entitlements.can(feature),
+      manager: canManage(ctx.role),
+      canWrite: entitlements.canWrite,
+      gmailOrders: googleMailConfigured(),
+      michaels: michaels?.status === "active" || michaels?.status === "needs_reconnect",
+    },
+    attention,
+  );
   const setting = (key: string) => (brandRows ?? []).find((row) => row.key === key)?.body;
   const look = parseAppearance(setting(APPEARANCE_KEY));
   const kit = look.brand_colors ? parseBrandKit(setting(KIT_KEY)) : null;
@@ -60,23 +87,28 @@ export default async function WorkspaceLayout({
       data-theme={look.mode}
       style={brandVars as React.CSSProperties}
     >
-      <Sidebar
-        tenant={ctx.tenant}
-        tenants={tenants}
-        userEmail={user.email}
-        entitlements={entitlements}
-        attention={attention}
-        platformAdmin={platformAdmin}
-      />
-      <div className="flex min-w-0 flex-1 flex-col">
-        <BillingBanner
-          entitlements={entitlements}
-          billingHref={`/w/${ctx.tenant.slug}/settings/billing`}
-          timeZone={ctx.tenant.timezone}
-          canManage={canManage(ctx.role)}
+      <NavProvider
+        slug={ctx.tenant.slug}
+        tools={tools}
+        startCollapsed={jar.get(PANEL_COOKIE)?.value === "closed"}
+      >
+        <HubRail
+          tenant={ctx.tenant}
+          tenants={tenants}
+          userEmail={user.email}
+          platformAdmin={platformAdmin}
         />
-        {children}
-      </div>
+        <MenuPanel />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <BillingBanner
+            entitlements={entitlements}
+            billingHref={`/w/${ctx.tenant.slug}/settings/billing`}
+            timeZone={ctx.tenant.timezone}
+            canManage={canManage(ctx.role)}
+          />
+          {children}
+        </div>
+      </NavProvider>
     </div>
   );
 }

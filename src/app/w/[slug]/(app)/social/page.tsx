@@ -9,7 +9,6 @@ import { createClient } from "@/lib/supabase/server";
 import { cn } from "@/lib/utils";
 import { socialAccess } from "./gate";
 import { STATUS_LABELS, socialChannels } from "./shared";
-import { SocialTabs } from "./tabs";
 
 export const metadata: Metadata = { title: "Social" };
 
@@ -153,7 +152,7 @@ export default async function SocialPage({
   return (
     <>
       <PageHeader
-        title="Social"
+        title="Calendar"
         description="What's going out, what's pencilled in, and what's waiting on you."
       >
         {entitlements.canWrite && (
@@ -162,7 +161,6 @@ export default async function SocialPage({
           </Button>
         )}
       </PageHeader>
-      <SocialTabs slug={tenant.slug} />
 
       <FormMessage kind="success">{SAVED[query.saved ?? ""]}</FormMessage>
 

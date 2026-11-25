@@ -8,7 +8,6 @@ import { createClient } from "@/lib/supabase/server";
 import { DraftMonthForm, PlanForm } from "../forms";
 import { socialAccess } from "../gate";
 import { composerChoices } from "../shared";
-import { SocialTabs } from "../tabs";
 
 export const metadata: Metadata = { title: "Content plan" };
 
@@ -44,10 +43,9 @@ export default async function SocialPlanPage({ params }: { params: Promise<{ slu
   return (
     <>
       <PageHeader
-        title="Social"
+        title="Plan"
         description="What you post about and when, so there's always something lined up."
       />
-      <SocialTabs slug={tenant.slug} />
 
       {plan.slots.length > 0 && (
         <div className="grid gap-6 lg:grid-cols-2">

@@ -17,7 +17,6 @@ import { createClient } from "@/lib/supabase/server";
 import { cn } from "@/lib/utils";
 import { ORDER_FIELDS, type ShippingOrder } from "../data";
 import { shippingAccess } from "../gate";
-import { ShippingTabs } from "../tabs";
 
 export const metadata: Metadata = { title: "All orders" };
 
@@ -116,10 +115,9 @@ export default async function AllOrdersPage({
   return (
     <>
       <PageHeader
-        title="Shipping"
+        title="All orders"
         description="Every order with something to send, newest first, whether it has gone or not."
       />
-      <ShippingTabs slug={tenant.slug} />
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <nav aria-label="Filter orders" className="flex flex-1 flex-wrap gap-1">

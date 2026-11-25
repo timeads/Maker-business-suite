@@ -8,7 +8,6 @@ import { parseBatchOrders } from "@/lib/shipping/batches";
 import { shownBoxes } from "@/lib/shipping/labels";
 import { createClient } from "@/lib/supabase/server";
 import { shippingAccess } from "../gate";
-import { ShippingTabs } from "../tabs";
 import { BatchReprint, type BatchLabel } from "./reprint";
 
 export const metadata: Metadata = { title: "Label batches" };
@@ -93,10 +92,9 @@ export default async function LabelBatchesPage({ params }: { params: Promise<{ s
   return (
     <>
       <PageHeader
-        title="Shipping"
+        title="Label batches"
         description="Every time labels were bought for several orders at once: what was bought, what was left out, and the labels to print again."
       />
-      <ShippingTabs slug={tenant.slug} />
       {batches.length === 0 ? (
         <p className="bg-card border-border text-muted-foreground rounded-lg border px-4 py-8 text-center text-sm">
           No runs yet. On To ship, tick two or more orders and press Buy labels: each run is kept

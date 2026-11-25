@@ -22,7 +22,6 @@ import { cn } from "@/lib/utils";
 import { loadOrderList } from "../data";
 import { NewOrderForm } from "../forms";
 import { stockAccess } from "../gate";
-import { StockTabs } from "../tabs";
 
 export const metadata: Metadata = { title: "Stock orders" };
 
@@ -132,8 +131,7 @@ export default async function StockOrdersPage({
 
   return (
     <>
-      <PageHeader title="Stock" description="What you've ordered, and what has arrived." />
-      <StockTabs slug={tenant.slug} tenantId={tenant.id} manager={canManage(role)} />
+      <PageHeader title="Orders" description="What you've ordered, and what has arrived." />
       {flags.gone && <FormMessage kind="success">That draft is deleted.</FormMessage>}
       {drafted.length > 0 && (
         <FormMessage kind="success">

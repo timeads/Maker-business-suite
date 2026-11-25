@@ -339,6 +339,17 @@ textarea {
     7px 7px;
 }
 
+/* A tool's menu opening over the page on a phone or a narrow window. */
+@keyframes menu-sheet-in {
+  from {
+    transform: translateX(-16px);
+    opacity: 0;
+  }
+}
+.menu-sheet[open] {
+  animation: menu-sheet-in 180ms var(--tuft-ease);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

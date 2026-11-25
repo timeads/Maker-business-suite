@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getAiUsage } from "@/lib/ai/usage";
 import { findConfig } from "@/lib/assistant/registry";
+import { PageHeader } from "@/components/ui/page-header";
 import { requireUser } from "@/lib/auth";
 import { getEntitlements } from "@/lib/entitlements";
 import { createClient } from "@/lib/supabase/server";
@@ -66,12 +67,10 @@ export default async function AssistantPage({ params }: { params: Promise<{ slug
 
   return (
     <>
-      <header className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Assistant</h1>
-        <p className="text-muted-foreground text-sm">
-          Ask about your business, or ask for a change to how things are set up.
-        </p>
-      </header>
+      <PageHeader
+        title="Assistant"
+        description="Ask about your business, or ask for a change to how things are set up."
+      />
 
       <Card>
         <CardContent className="pt-6">

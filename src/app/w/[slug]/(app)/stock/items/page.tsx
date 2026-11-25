@@ -20,7 +20,6 @@ import { overstockUnits } from "@/lib/stock/plan";
 import { canManage } from "@/lib/tenants";
 import { loadOrderTracking, loadStock } from "../data";
 import { stockAccess } from "../gate";
-import { StockTabs } from "../tabs";
 import { ItemsGrid } from "./grid";
 
 export const metadata: Metadata = { title: "Everything in stock" };
@@ -96,10 +95,9 @@ export default async function StockItemsPage({
   return (
     <>
       <PageHeader
-        title="Stock"
+        title="Everything"
         description="Every item your shop keeps a count of, soonest to reorder first. Tick the ones you want and draft an order for them."
       />
-      <StockTabs slug={tenant.slug} tenantId={tenant.id} manager={canManage(role)} />
 
       <ItemsGrid
         slug={tenant.slug}

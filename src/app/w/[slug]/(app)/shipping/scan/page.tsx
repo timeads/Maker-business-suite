@@ -26,7 +26,6 @@ import {
 } from "../data";
 import { shippingAccess } from "../gate";
 import { plannedBoxes } from "../slips-data";
-import { ShippingTabs } from "../tabs";
 import { PackStation, type PackOrder } from "./pack-station";
 
 export const metadata: Metadata = { title: "Scan & pack" };
@@ -233,10 +232,9 @@ export default async function ScanPage({
   return (
     <>
       <PageHeader
-        title="Shipping"
-        description="Orders waiting to ship, labels from every carrier, packing slips and the packing station."
+        title="Scan & pack"
+        description="Scan a packing slip, tick off each item as it goes in the box, and print the label."
       />
-      <ShippingTabs slug={tenant.slug} />
       {justSent && !order && (
         <p role="status" className="bg-mint-soft text-mint-ink rounded-md px-4 py-2.5 text-sm">
           Parcel {justSent} recorded. Scan the next slip when you&apos;re ready.{" "}

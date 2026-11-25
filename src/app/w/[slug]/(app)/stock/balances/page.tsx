@@ -17,7 +17,6 @@ import { supplierCard, termsHeading } from "@/lib/stock/balance/words";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
 import { stockAccess } from "../gate";
-import { StockTabs } from "../tabs";
 import { loadBalances } from "./data";
 import { BalanceFilterBar } from "./filters";
 import { loadMailFacts } from "./mail-data";
@@ -57,10 +56,9 @@ export default async function SupplierBalancesPage({
   const header = (
     <>
       <PageHeader
-        title="Stock"
+        title="Balances"
         description="Supplier balances: what you owe each supplier, and when each bill is due."
       />
-      <StockTabs slug={tenant.slug} tenantId={tenant.id} manager={canManage(role)} />
     </>
   );
   if (!canManage(role)) {

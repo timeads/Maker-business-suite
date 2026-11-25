@@ -11,7 +11,6 @@ import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
 import { ServiceForm } from "./forms";
 import { bookingsAccess } from "./gate";
-import { BookingsTabs } from "./tabs";
 
 export const metadata: Metadata = { title: "Bookings" };
 
@@ -130,12 +129,14 @@ export default async function BookingsPage({ params }: { params: Promise<{ slug:
 
   return (
     <>
-      <PageHeader title="Bookings" description="Your workshops and appointments, and who's coming.">
+      <PageHeader
+        title="Coming up"
+        description="Your workshops and appointments, and who's coming."
+      >
         <Button asChild variant="outline" size="sm">
           <a href={bookingUrl}>See your booking page</a>
         </Button>
       </PageHeader>
-      <BookingsTabs slug={tenant.slug} />
 
       <dl className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         {stats.map((stat) => (

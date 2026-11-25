@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { BarChart3, ChevronLeft, Settings } from "lucide-react";
+import { ChevronLeft, X } from "lucide-react";
+import { PanelButton } from "@/components/shell/menu-panel";
+import { PanelExtras } from "@/components/shell/nav-context";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,6 +27,7 @@ import {
   type ViewKey,
 } from "@/lib/helpdesk/views";
 import { initials, nameOf, splitBody, type Person } from "@/lib/messages/format";
+import { HELPDESK_TAGS_GROUP, helpdeskTagItems } from "@/lib/nav/model";
 import { createClient } from "@/lib/supabase/server";
 import { cn } from "@/lib/utils";
 import { setTicketStatus } from "./actions";
@@ -325,20 +328,22 @@ export default async function HelpdeskPage({
           ticket && "max-md:hidden",
         )}
       >
-        <header className="flex items-center justify-between gap-2 px-4 pt-4 pb-2">
-          <h1 className="text-xl leading-tight font-bold tracking-[-0.015em]">Help desk</h1>
-          <div className="flex gap-1">
-            <Button asChild variant="ghost" size="sm" aria-label="How we're doing">
-              <Link href={`${base}/reports`}>
-                <BarChart3 />
-              </Link>
-            </Button>
-            <Button asChild variant="ghost" size="sm" aria-label="Help desk settings">
-              <Link href={`/w/${tenant.slug}/settings/helpdesk`}>
-                <Settings />
-              </Link>
-            </Button>
-          </div>
+        {/* The folders and tags live in the help desk's menu panel; the inbox tells it what it counted. */}
+        <PanelExtras
+          tool="helpdesk"
+          counts={Object.fromEntries(
+            VIEWS.filter((v) => counts[v.key] !== null).map((v) => [
+              `helpdesk.${v.key}`,
+              counts[v.key] ?? 0,
+            ]),
+          )}
+          items={{ [HELPDESK_TAGS_GROUP]: helpdeskTagItems(allTags) }}
+        />
+        <header className="flex items-center gap-2.5 px-4 pt-4 pb-2">
+          <PanelButton />
+          <h1 className="min-w-0 truncate text-xl leading-tight font-bold tracking-[-0.015em]">
+            {q ? "Search results" : (VIEWS.find((v) => v.key === view)?.label ?? "Help desk")}
+          </h1>
         </header>
         <form className="px-4 pb-2" role="search" action={base}>
           {view !== "open" && <input type="hidden" name="view" value={view} />}
@@ -350,43 +355,17 @@ export default async function HelpdeskPage({
             aria-label="Search conversations"
           />
         </form>
-        <nav aria-label="Folders" className="flex gap-1 overflow-x-auto px-4 pb-2">
-          {VIEWS.map((v) => (
+        {tag && (
+          <p className="flex px-4 pb-2">
             <Link
-              key={v.key}
-              href={href({ view: v.key, t: null, q: null })}
-              aria-current={v.key === view && !q ? "page" : undefined}
-              className={cn(
-                "rounded-full px-2.5 py-1 text-xs whitespace-nowrap transition-colors duration-150",
-                v.key === view && !q
-                  ? "bg-teal font-semibold text-white"
-                  : "text-text-2 hover:bg-hover",
-              )}
+              href={href({ tag: null, t: null })}
+              className="border-ochre bg-ochre-soft text-ochre-text flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold"
             >
-              {v.label}
-              {counts[v.key] !== null && counts[v.key]! > 0 && (
-                <span className="ml-1 tabular-nums opacity-80">{counts[v.key]}</span>
-              )}
+              Tagged {tag}
+              <X aria-hidden className="size-3" />
+              <span className="sr-only">: show every tag</span>
             </Link>
-          ))}
-        </nav>
-        {allTags.length > 0 && (
-          <div className="flex gap-1 overflow-x-auto px-4 pb-2">
-            {allTags.map((name) => (
-              <Link
-                key={name}
-                href={href({ tag: tag === name ? null : name, t: null })}
-                className={cn(
-                  "rounded-full border px-2 py-0.5 text-[11px] whitespace-nowrap",
-                  tag === name
-                    ? "border-ochre bg-ochre-soft text-ochre-text font-semibold"
-                    : "border-border text-muted-foreground hover:bg-hover",
-                )}
-              >
-                {name}
-              </Link>
-            ))}
-          </div>
+          </p>
         )}
         <ul className="border-border bg-card min-h-0 flex-1 overflow-y-auto border-t">
           {list.length === 0 && (

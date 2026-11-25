@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 import { loadListings, loadMichaels, type ListingView } from "../data";
 import { PairForm, UnpairButton } from "../forms";
 import { michaelsAccess } from "../gate";
-import { MichaelsTabs, WatchingBanner } from "../tabs";
+import { WatchingBanner } from "../watching";
 
 export const metadata: Metadata = { title: "Michaels listings" };
 
@@ -113,11 +113,10 @@ export default async function MichaelsListingsPage({
   return (
     <>
       <PageHeader
-        title="Michaels Marketplace"
+        title="Michaels listings"
         description="Each thing you sell on Michaels, and the item in your shop it is."
         back={{ href: `/w/${tenant.slug}/stock`, label: "Stock" }}
       />
-      <MichaelsTabs slug={tenant.slug} />
       <WatchingBanner />
 
       {rows.length === 0 ? (

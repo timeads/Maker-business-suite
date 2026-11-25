@@ -8,7 +8,6 @@ import { createClient } from "@/lib/supabase/server";
 import { ProjectForm } from "../forms";
 import { socialAccess } from "../gate";
 import { composerChoices } from "../shared";
-import { SocialTabs } from "../tabs";
 
 export const metadata: Metadata = { title: "Projects" };
 
@@ -63,10 +62,9 @@ export default async function SocialProjectsPage({
   return (
     <>
       <PageHeader
-        title="Social"
+        title="Projects"
         description="A project gathers the photos and posts of one piece of work: a rug, a workshop, a series."
       />
-      <SocialTabs slug={tenant.slug} />
 
       {projects.length > 0 && (
         <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

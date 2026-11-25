@@ -10,7 +10,6 @@ import { cn } from "@/lib/utils";
 import { PhotoForm } from "../forms";
 import { socialAccess } from "../gate";
 import { loadDesignKit } from "../shared";
-import { SocialTabs } from "../tabs";
 import {
   AssetGrid,
   EditDesign,
@@ -150,10 +149,9 @@ export default async function SocialAssetsPage({
   return (
     <>
       <PageHeader
-        title="Social"
+        title="Assets"
         description="Your photos and videos in one place, ready to drop into a post."
       />
-      <SocialTabs slug={tenant.slug} />
 
       {folder ? (
         <div className="flex flex-col gap-2">

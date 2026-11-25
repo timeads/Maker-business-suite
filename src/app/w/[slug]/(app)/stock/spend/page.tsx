@@ -10,7 +10,6 @@ import { cn } from "@/lib/utils";
 import { loadSpendLines, stockToday } from "../data";
 import { stockAccess } from "../gate";
 import { SpendItemsTable } from "./items-table";
-import { StockTabs } from "../tabs";
 
 export const metadata: Metadata = { title: "Stock spend" };
 
@@ -40,10 +39,9 @@ export default async function StockSpendPage({
   const header = (
     <>
       <PageHeader
-        title="Stock"
+        title="Spend"
         description="What you've spent with suppliers: the items on orders you've sent, without shipping or tax."
       />
-      <StockTabs slug={tenant.slug} tenantId={tenant.id} manager={canManage(role)} />
     </>
   );
   if (!canManage(role)) {

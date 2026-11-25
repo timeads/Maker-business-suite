@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { PanelButton } from "@/components/shell/menu-panel";
 
 /** The top of every workspace page: where you are, one line on what it's for, and what you can do. */
 export function PageHeader({
@@ -21,15 +22,19 @@ export function PageHeader({
         </Link>
       )}
       <div className="flex flex-wrap items-end justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <h1 className="text-2xl leading-tight font-bold tracking-[-0.015em] text-balance">
-            {title}
-          </h1>
-          {description && (
-            <p className="text-muted-foreground font-read mt-1 text-sm lg:truncate">
-              {description}
-            </p>
-          )}
+        <div className="flex min-w-0 flex-1 items-start gap-3">
+          {/* The tool's menu, where the panel isn't beside the page. */}
+          <PanelButton className="-mt-0.5" />
+          <div className="min-w-0 flex-1">
+            <h1 className="text-2xl leading-tight font-bold tracking-[-0.015em] text-balance">
+              {title}
+            </h1>
+            {description && (
+              <p className="text-muted-foreground font-read mt-1 text-sm lg:truncate">
+                {description}
+              </p>
+            )}
+          </div>
         </div>
         {children && <div className="flex flex-wrap items-center gap-2">{children}</div>}
       </div>
