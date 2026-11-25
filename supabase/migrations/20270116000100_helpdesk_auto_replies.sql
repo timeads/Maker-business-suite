@@ -134,14 +134,19 @@ begin
   if not found then
     return jsonb_build_object('result', 'unknown');
   end if;
+  -- One at a time per person, so two messages on two conversations can't both
+  -- pass the quiet period. The person first, then the conversation: the same
+  -- order filing a message takes them in, so the two never wait on each other.
+  perform 1 from public.contacts c
+  where c.id = (select t.contact_id from public.tickets t
+                where t.id = v_message.ticket_id and t.tenant_id = p_tenant_id)
+  for update;
   select * into v_ticket from public.tickets t
   where t.id = v_message.ticket_id and t.tenant_id = p_tenant_id
   for update;
   if not found then
     return jsonb_build_object('result', 'unknown');
   end if;
-  -- One at a time per person, so two messages on two conversations can't both pass the quiet period.
-  perform 1 from public.contacts c where c.id = v_ticket.contact_id for update;
 
   if exists (select 1 from private.auto_replies a where a.inbound_message_id = p_message_id) then
     return jsonb_build_object('result', 'duplicate');
