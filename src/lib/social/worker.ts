@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { canPost } from "../connections/meta-access";
 import type { StoredToken } from "../connections/tokens";
 import { ReconnectRequiredError } from "../connections/types";
 import { withTenant } from "../supabase/admin";
@@ -27,6 +28,10 @@ export type SocialWorkerDeps = {
 export const publicAssetUrl = (storagePath: string) =>
   `${(process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").replace(/\/+$/, "")}/storage/v1/object/public/social/${storagePath}`;
 
+/** The connection's granted permissions, or null when they aren't on record. */
+const grantedScopes = (raw: unknown): string[] | null =>
+  Array.isArray(raw) ? raw.map(String) : null;
+
 const failAll = (post: DuePost, error: string): PublishOutcome => ({
   retry: false,
   results: Object.fromEntries(
@@ -49,11 +54,11 @@ async function send(post: DuePost, deps: SocialWorkerDeps): Promise<PublishOutco
   }
   // Posts saved before several photos were possible only have the one.
   const assetIds = post.asset_ids?.length ? post.asset_ids : post.asset_id ? [post.asset_id] : [];
-  const { instagramId, storagePaths, videoPath } = await withTenant(
+  const { instagramId, storagePaths, videoPath, scopes } = await withTenant(
     post.tenant_id,
     async (scope) => {
       const [{ data: connection }, { data: assets }] = await Promise.all([
-        scope.select("connections", "metadata").eq("provider", "meta").maybeSingle(),
+        scope.select("connections", "metadata, scopes").eq("provider", "meta").maybeSingle(),
         assetIds.length
           ? scope.select("social_assets", "id, storage_path, mime_type").in("id", assetIds)
           : Promise.resolve({ data: [] }),
@@ -74,10 +79,22 @@ async function send(post: DuePost, deps: SocialWorkerDeps): Promise<PublishOutco
           ? []
           : assetIds.flatMap((id) => (paths.has(id) ? [paths.get(id)!] : [])),
         videoPath: video?.storage_path ?? null,
+        scopes: grantedScopes((connection as { scopes?: unknown } | null)?.scopes),
       };
     },
     deps.admin,
   );
+  // A connection made for the help desk alone has no permission to publish.
+  const waiting = post.channels.filter((c) => !("id" in (post.results[c] ?? {})));
+  if (
+    scopes !== null &&
+    waiting.some((c) => (c === "facebook" || c === "instagram") && !canPost(c, scopes))
+  ) {
+    return failAll(
+      post,
+      "Facebook wasn't given permission to post. Open Social and press “Allow posting on Facebook”",
+    );
+  }
   return deps.publish({
     caption: post.caption,
     captions: post.captions ?? {},

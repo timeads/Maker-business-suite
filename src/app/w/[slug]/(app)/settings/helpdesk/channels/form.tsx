@@ -8,21 +8,35 @@ import type { HelpdeskState } from "@/app/w/[slug]/helpdesk/actions";
 import { saveChannelSwitches } from "@/app/w/[slug]/helpdesk/social-actions";
 
 /**
- * Sends the person to Facebook to allow messages as well as posting. The
- * same connection as Social's, asked again with the wider permissions; when
- * they come back they land here.
+ * Sends the person to Facebook to allow one more use of the connection
+ * (messages, comments, posting). Only that use's permissions are asked for,
+ * on top of what the connection already has; when they come back they land
+ * on the screen that sent them.
  */
-export function AllowMessagesForm({ slug, label }: { slug: string; label: string }) {
+export function AllowMetaAccess({
+  slug,
+  label,
+  access,
+  returnTo,
+  variant = "default",
+}: {
+  slug: string;
+  label: string;
+  /** A comma list of uses: "messages", "posting", "facebook_comments", "instagram_comments". */
+  access: string;
+  returnTo: "helpdesk_channels" | "social";
+  variant?: "default" | "outline";
+}) {
   const [state, action] = useActionState<ConnectionState, FormData>(
     startConnection.bind(null, slug, "meta"),
     {},
   );
   return (
     <form action={action} className="flex flex-col gap-2">
-      <input type="hidden" name="access" value="messages" />
-      <input type="hidden" name="return_to" value="helpdesk_channels" />
+      <input type="hidden" name="access" value={access} />
+      <input type="hidden" name="return_to" value={returnTo} />
       <FormMessage>{state.error}</FormMessage>
-      <SubmitButton pendingText="Opening Facebook…" className="w-fit">
+      <SubmitButton variant={variant} pendingText="Opening Facebook…" className="w-fit">
         {label}
       </SubmitButton>
     </form>

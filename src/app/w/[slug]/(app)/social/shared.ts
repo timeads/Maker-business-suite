@@ -1,4 +1,5 @@
 import { localDay } from "@/lib/bookings/slots";
+import { canPost } from "@/lib/connections/meta-access";
 import { BRAND_MODULE, KIT_KEY, parseBrandKit, toDesignKit } from "@/lib/brand/kit";
 import type { BrandKit } from "@/lib/design/brands";
 import { matchPhotos } from "@/lib/social/photo-match";
@@ -8,20 +9,31 @@ import type { createClient } from "@/lib/supabase/server";
 
 type Supabase = Awaited<ReturnType<typeof createClient>>;
 
-/** What the composer needs to know about the workspace's Facebook connection. */
+/**
+ * What the composer needs to know about the workspace's Facebook connection.
+ * A place can be posted to only when the connection was granted its posting
+ * permission: a workspace that connected for the help desk alone can draft,
+ * and is offered "Allow posting" rather than sent to connect again.
+ */
 export async function socialChannels(supabase: Supabase, tenantId: string) {
+  // Named columns only: members can't read the whole row.
   const { data } = await supabase
     .from("connections")
-    .select("status, display_name, metadata")
+    .select("status, display_name, metadata, scopes")
     .eq("tenant_id", tenantId)
     .eq("provider", "meta")
     .maybeSingle();
   const active = data?.status === "active";
+  const scopes = Array.isArray(data?.scopes) ? (data.scopes as string[]) : [];
   const metadata = (data?.metadata ?? {}) as { instagram_username?: string | null };
+  const facebook = active && canPost("facebook", scopes);
   return {
-    facebook: active ? String(data?.display_name ?? "your Page").split(" · ")[0] : null,
-    instagram: active ? (metadata.instagram_username ?? null) : null,
+    facebook: facebook ? String(data?.display_name ?? "your Page").split(" · ")[0] : null,
+    instagram:
+      active && canPost("instagram", scopes) ? (metadata.instagram_username ?? null) : null,
     needsReconnect: data?.status === "needs_reconnect",
+    /** Connected and live, but without permission to post (connected for the help desk only). */
+    needsPosting: active && !facebook,
   };
 }
 

@@ -1,6 +1,6 @@
-import { MESSAGING_SCOPES } from "../../helpdesk/social/channels";
-import { subscribePage, unsubscribePage } from "../../helpdesk/social/graph";
+import { subscribePage, subscribedFieldsFor, unsubscribePage } from "../../helpdesk/social/graph";
 import { ProviderHttpError, requestJson, requiredEnv } from "../http";
+import { featuresOf, requestedFeatures, scopesFor } from "../meta-access";
 import {
   ConnectError,
   ReconnectRequiredError,
@@ -9,26 +9,24 @@ import {
   type ProviderAdapter,
 } from "../types";
 
-const SCOPES = [
-  "pages_show_list",
-  "pages_read_engagement",
-  "pages_manage_posts",
-  "instagram_basic",
-  "instagram_content_publish",
-];
-
 /**
- * The optional extra: reading and answering the Page's and the Instagram
- * account's messages in the help desk. Asked for only when a manager switches
- * "Messages in the help desk" on (Settings → Help desk → Channels); a
- * workspace that only posts is never asked. What Facebook really granted is
- * recorded in the connection's `scopes`, and everything about messages checks
- * it.
+ * One connection, several uses, each asked for only where a workspace
+ * switches it on: posting (Social), messages and comments (the help desk).
+ * `lib/connections/meta-access.ts` holds the permissions behind each. A
+ * login asks for what the screen that started it wants plus what the
+ * connection already had, and never for anything else: Facebook refuses the
+ * whole login when asked for a permission the Meta app doesn't carry. What
+ * Facebook really granted is recorded in the connection's `scopes`, and
+ * every feature checks those.
  */
 export const META_WITH_MESSAGES = "messages";
-const wantsMessages = (input: Record<string, string>) => input.access === META_WITH_MESSAGES;
-const hasMessaging = (scopes: readonly string[]) =>
-  scopes.includes("pages_messaging") || scopes.includes("instagram_manage_messages");
+export const META_WITH_POSTING = "posting";
+
+/** Where a login may land afterwards, by the name the starting screen gives. */
+const RETURN_PATHS: Record<string, string> = {
+  helpdesk_channels: "settings/helpdesk/channels",
+  social: "social",
+};
 
 export const metaApiVersion = () => process.env.META_API_VERSION || "v23.0";
 export const graphUrl = (path: string) => `https://graph.facebook.com/${metaApiVersion()}${path}`;
@@ -87,15 +85,17 @@ export function createMetaAdapter(fetchImpl: Fetch = fetch): ProviderAdapter {
     key: "meta",
     name: "Facebook & Instagram",
     blurb: "Schedule posts to your Facebook Page and Instagram",
-    // Neither is drawn on the Connections page: the help desk's Channels screen sets them.
+    // Neither is drawn on the Connections page: the screen that starts the connection sets them.
     connectFields: [
       { name: "access", label: "", placeholder: "", hidden: true },
       { name: "return_to", label: "", placeholder: "", hidden: true },
     ],
-    reconnectInput: (scopes): Record<string, string> =>
-      hasMessaging(scopes) ? { access: META_WITH_MESSAGES } : {},
-    returnPath: (input) =>
-      input.return_to === "helpdesk_channels" ? "settings/helpdesk/channels" : null,
+    // Renewing a connection asks again for what it was granted, and for nothing it wasn't.
+    reconnectInput: (scopes): Record<string, string> => {
+      const kept = featuresOf(scopes);
+      return kept.length > 0 ? { kept: kept.join(",") } : {};
+    },
+    returnPath: (input) => RETURN_PATHS[input.return_to ?? ""] ?? null,
     pollEveryHours: 24,
     configured: () => Boolean(process.env.META_APP_ID && process.env.META_APP_SECRET),
 
@@ -105,10 +105,7 @@ export function createMetaAdapter(fetchImpl: Fetch = fetch): ProviderAdapter {
       url.searchParams.set("redirect_uri", redirectUri);
       url.searchParams.set("state", state);
       url.searchParams.set("response_type", "code");
-      url.searchParams.set(
-        "scope",
-        (wantsMessages(input) ? [...SCOPES, ...MESSAGING_SCOPES] : SCOPES).join(","),
-      );
+      url.searchParams.set("scope", scopesFor(requestedFeatures(input)).join(","));
       return url.toString();
     },
 
@@ -140,21 +137,19 @@ export function createMetaAdapter(fetchImpl: Fetch = fetch): ProviderAdapter {
       if (!page) {
         throw new ConnectError("No Facebook Page was shared. Pick a Page when Facebook asks.");
       }
-      // With messages asked for, people can still untick a permission on
-      // Facebook's screen: record what was really granted, not what we asked.
-      let scopes: string[] = SCOPES;
-      if (wantsMessages(input)) {
-        const granted = await get<{ data?: { permission?: string; status?: string }[] }>(
-          "/me/permissions",
-          long.access_token,
-        );
-        const given = new Set(
-          (granted.data ?? [])
-            .filter((row) => row.status === "granted" && typeof row.permission === "string")
-            .map((row) => row.permission as string),
-        );
-        scopes = [...SCOPES, ...MESSAGING_SCOPES].filter((scope) => given.has(scope));
-      }
+      // People can untick a permission on Facebook's screen, and an app may
+      // not carry every one: record what was really granted, not what we asked.
+      const asked = scopesFor(requestedFeatures(input));
+      const granted = await get<{ data?: { permission?: string; status?: string }[] }>(
+        "/me/permissions",
+        long.access_token,
+      );
+      const given = new Set(
+        (granted.data ?? [])
+          .filter((row) => row.status === "granted" && typeof row.permission === "string")
+          .map((row) => row.permission as string),
+      );
+      const scopes = asked.filter((scope) => given.has(scope));
       return {
         externalAccountId: page.id,
         displayName: describePage(page),
@@ -169,12 +164,17 @@ export function createMetaAdapter(fetchImpl: Fetch = fetch): ProviderAdapter {
       return token;
     },
 
-    // With the messaging permissions granted, ask Meta to send this Page's
-    // (and its Instagram account's) messages to our webhook.
+    // With the help desk's permissions granted, ask Meta to send this Page's
+    // (and its Instagram account's) messages and comments to our webhook.
+    // Which of them are filed is the workspace's own switches.
     async afterConnect(account) {
-      if (!hasMessaging(account.scopes) || !account.scopes.includes("pages_manage_metadata"))
-        return;
-      await subscribePage(account.externalAccountId, account.token.access_token, fetchImpl);
+      const features = featuresOf(account.scopes);
+      const fields = subscribedFieldsFor({
+        messages: features.includes("messages"),
+        comments: features.includes("facebook_comments") || features.includes("instagram_comments"),
+      });
+      if (fields.length === 0 || !account.scopes.includes("pages_manage_metadata")) return;
+      await subscribePage(account.externalAccountId, account.token.access_token, fetchImpl, fields);
     },
 
     async disconnect(token, externalAccountId) {

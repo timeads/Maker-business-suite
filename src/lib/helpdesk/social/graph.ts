@@ -186,18 +186,30 @@ export async function readProfile(
   }
 }
 
-/** What we ask a Page to send us. Instagram's messages ride on the Page's `messages` field. */
+/** What we ask a Page to send us for messages. Instagram's messages ride on the Page's `messages` field. */
 export const SUBSCRIBED_FIELDS = ["messages", "message_echoes", "message_reactions"] as const;
+/**
+ * And for comments: the Page's `feed`. Instagram's comments are a field of
+ * the app's own Instagram webhook; they start arriving for an account once
+ * its Page has the app installed with any field, so `feed` does for both.
+ */
+export const COMMENT_FIELDS = ["feed"] as const;
 
-/** Asks Meta to send this Page's (and its Instagram account's) messages to our webhook. */
+/** The fields a Page should be subscribed with, for what is granted and switched on. */
+export function subscribedFieldsFor(want: { messages: boolean; comments: boolean }): string[] {
+  return [...(want.messages ? SUBSCRIBED_FIELDS : []), ...(want.comments ? COMMENT_FIELDS : [])];
+}
+
+/** Asks Meta to send this Page's (and its Instagram account's) activity to our webhook. */
 export async function subscribePage(
   pageId: string,
   token: string,
   fetchImpl: typeof fetch = fetch,
+  fields: readonly string[] = SUBSCRIBED_FIELDS,
 ): Promise<void> {
   await call(fetchImpl, token, `/${encodeURIComponent(pageId)}/subscribed_apps`, {
     method: "POST",
-    query: { subscribed_fields: SUBSCRIBED_FIELDS.join(",") },
+    query: { subscribed_fields: fields.join(",") },
   });
 }
 

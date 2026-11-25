@@ -6,7 +6,9 @@ import { FormMessage } from "@/components/ui/form-message";
 import { PageHeader } from "@/components/ui/page-header";
 import { formatDay, formatTime, localDay, zonedTimeToUtc } from "@/lib/bookings/slots";
 import { createClient } from "@/lib/supabase/server";
+import { canManage } from "@/lib/tenants";
 import { cn } from "@/lib/utils";
+import { AllowMetaAccess } from "../settings/helpdesk/channels/form";
 import { socialAccess } from "./gate";
 import { STATUS_LABELS, socialChannels } from "./shared";
 
@@ -56,7 +58,7 @@ export default async function SocialPage({
   const query = await searchParams;
   const access = await socialAccess(slug, `/w/${slug}/social`);
   if (!access.ok) return access.upsell;
-  const { tenant, entitlements } = access;
+  const { tenant, role, entitlements } = access;
   const base = `/w/${tenant.slug}/social`;
 
   const today = localDay(new Date(), tenant.timezone);
@@ -164,7 +166,33 @@ export default async function SocialPage({
 
       <FormMessage kind="success">{SAVED[query.saved ?? ""]}</FormMessage>
 
-      {channels.facebook === null && (
+      {channels.facebook === null && channels.needsPosting && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Reconnect to allow posting</CardTitle>
+            <CardDescription>
+              Facebook &amp; Instagram is connected for the help desk, but it wasn&apos;t given
+              permission to publish posts. You can write drafts now; to schedule and publish them,
+              Facebook needs to ask you for that permission.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {canManage(role) ? (
+              <AllowMetaAccess
+                slug={tenant.slug}
+                access="posting"
+                returnTo="social"
+                label="Allow posting on Facebook"
+              />
+            ) : (
+              <p className="text-muted-foreground text-sm">
+                An owner or admin can allow it from here.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+      {channels.facebook === null && !channels.needsPosting && (
         <Card>
           <CardHeader>
             <CardTitle>

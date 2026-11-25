@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { FEATURE_SCOPES } from "../../connections/meta-access";
 
 /**
  * Where a conversation comes from. Email is the help desk's first channel;
@@ -27,18 +28,11 @@ export const channelOfObject = (object: unknown): SocialChannel | null =>
   object === "instagram" ? "instagram" : object === "page" ? "facebook" : null;
 
 /**
- * The permissions messages need on top of what posting asks for. They are
- * requested only when a manager switches messages on; what Meta really
- * granted is recorded on the connection and checked before anything is read
- * or sent. (`business_management` is listed by Meta as a dependency of the
- * messaging permissions.)
+ * The permissions messages need. They are requested only when a manager
+ * switches messages on; what Meta really granted is recorded on the
+ * connection and checked before anything is read or sent.
  */
-export const MESSAGING_SCOPES = [
-  "pages_messaging",
-  "pages_manage_metadata",
-  "instagram_manage_messages",
-  "business_management",
-] as const;
+export const MESSAGING_SCOPES = FEATURE_SCOPES.messages;
 
 /** Whether the connection's granted permissions cover a channel. */
 export function scopesAllow(channel: SocialChannel, scopes: readonly string[] | null): boolean {

@@ -17,7 +17,7 @@ import {
 import { connectionFacts } from "@/lib/helpdesk/social/server";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
-import { AllowMessagesForm, ChannelSwitches } from "./form";
+import { AllowMetaAccess, ChannelSwitches } from "./form";
 
 export const metadata: Metadata = { title: "Help desk channels" };
 
@@ -180,8 +180,10 @@ export default async function ChannelsPage({
                       ? "Your Page is connected for posting. To bring messages in, Facebook needs to ask you for a little more: permission to read and send messages for the Page and its Instagram account."
                       : "Connect your Facebook Page (and the Instagram professional account linked to it), allowing messages when Facebook asks."}
                   </p>
-                  <AllowMessagesForm
+                  <AllowMetaAccess
                     slug={tenant.slug}
+                    access="messages"
+                    returnTo="helpdesk_channels"
                     label={live ? "Allow messages on Facebook" : "Connect Facebook & Instagram"}
                   />
                   <p className="text-muted-foreground text-xs">

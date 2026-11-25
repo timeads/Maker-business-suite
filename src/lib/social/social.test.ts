@@ -57,6 +57,19 @@ describe("Meta adapter", () => {
       ["fb_exchange_token", 200, { access_token: "long-user-token" }],
       ["/oauth/access_token", 200, { access_token: "short-user-token" }],
       ["/me/accounts", 200, pages],
+      [
+        "/me/permissions",
+        200,
+        {
+          data: [
+            { permission: "pages_show_list", status: "granted" },
+            { permission: "pages_read_engagement", status: "granted" },
+            { permission: "pages_manage_posts", status: "granted" },
+            { permission: "instagram_basic", status: "granted" },
+            { permission: "instagram_content_publish", status: "declined" },
+          ],
+        },
+      ],
     ]);
     const account = await createMetaAdapter(impl).completeConnect({
       params: new URLSearchParams({ code: "abc" }),
@@ -68,6 +81,13 @@ describe("Meta adapter", () => {
     expect(account.token.access_token).toBe("page-token-2");
     expect(account.metadata).toMatchObject({ instagram_id: "ig9", other_pages: 1 });
     expect(calls[2].auth).toBe("Bearer long-user-token");
+    // What Facebook granted is what is recorded: here Instagram posting was unticked.
+    expect(account.scopes).toEqual([
+      "pages_show_list",
+      "pages_read_engagement",
+      "pages_manage_posts",
+      "instagram_basic",
+    ]);
   });
 
   it("explains itself when no Page was shared or the person backed out", async () => {
