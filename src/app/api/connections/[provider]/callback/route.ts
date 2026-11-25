@@ -25,8 +25,13 @@ export async function GET(request: NextRequest, ctx: { params: Promise<{ provide
   cookieStore.delete({ name: OAUTH_COOKIE, path: OAUTH_COOKIE_PATH });
 
   const params = request.nextUrl.searchParams;
+  // Some connections are started from another screen and go back to it.
+  const returnPath =
+    saved && isProviderKey(provider) && saved.provider === provider
+      ? (getAdapter(provider).returnPath?.(saved.input) ?? "connections")
+      : "connections";
   const back = (slug: string | null, query: Record<string, string>) => {
-    const url = new URL(slug ? `${site}/w/${slug}/connections` : `${site}/app`);
+    const url = new URL(slug ? `${site}/w/${slug}/${returnPath}` : `${site}/app`);
     for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value);
     return NextResponse.redirect(url);
   };

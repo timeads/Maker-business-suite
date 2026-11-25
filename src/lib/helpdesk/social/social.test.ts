@@ -570,7 +570,10 @@ describe("files come from Meta's hosts only", () => {
 
   const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4]);
   const answer = (bytes: Uint8Array, headers: Record<string, string> = {}) =>
-    new Response(Buffer.from(bytes), { status: 200, headers: { "content-type": "image/jpeg", ...headers } });
+    new Response(Buffer.from(bytes), {
+      status: 200,
+      headers: { "content-type": "image/jpeg", ...headers },
+    });
 
   it("downloads from a Meta host without cookies or a referrer", async () => {
     const seen: [string, RequestInit][] = [];

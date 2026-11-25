@@ -294,6 +294,8 @@ export interface ProviderAdapter {
     secret?: boolean;
     /** A short list to pick from instead of a box to type in; the first is the usual choice. */
     options?: { value: string; label: string }[];
+    /** Never drawn on the Connections page: set by the screen that starts the connection. */
+    hidden?: boolean;
   }[];
   /** True when this environment has the provider's app credentials. */
   configured(): boolean;
@@ -319,6 +321,17 @@ export interface ProviderAdapter {
     metadata: Record<string, unknown>,
     today: string,
   ): { tone: "good" | "waiting" | "bad"; text: string } | null;
+  /**
+   * What a reconnect should ask for again without being told: a connection
+   * that was granted something optional keeps it when it is renewed from the
+   * Connections page. Worked out from the scopes on record.
+   */
+  reconnectInput?(scopes: string[]): Record<string, string>;
+  /**
+   * Where in the workspace to land after connecting, when it isn't the
+   * Connections page (a path under `/w/<slug>/`, from a fixed list of ours).
+   */
+  returnPath?(input: Record<string, string>): string | null;
   /** Where to send the person to approve the connection. */
   beginConnect(start: ConnectStart): string;
   /** Exchanges the callback for tokens and identifies the account. */

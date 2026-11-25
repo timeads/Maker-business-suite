@@ -53,6 +53,12 @@ import { keepMessageFiles, removeQueuedFiles } from "../src/lib/helpdesk/keep-fi
 import { bodyOf, outgoingFrom, refusalCode, sendPayloadSchema } from "../src/lib/helpdesk/outbox";
 import { sendOutbound } from "../src/lib/helpdesk/outbound";
 import { ReplyRefused } from "../src/lib/helpdesk/reply";
+import {
+  drainMetaEvents,
+  isSocialPayload,
+  runMetaDeletions,
+  sendQueuedSocial,
+} from "../src/lib/helpdesk/social/worker";
 import { postAlert } from "../src/lib/messages/alerts";
 import { runClaimedLook, type ClaimedLook } from "../src/lib/michaels/worker";
 import { moduleOpen } from "../src/lib/module-access";
@@ -335,6 +341,23 @@ async function drainInboundEmails(): Promise<number> {
   return emails.length;
 }
 
+function metaTokenDeps(): TokenDeps {
+  return {
+    store: vaultTokenStore(getAdminClient()),
+    adapter: getAdapter,
+    now: Date.now,
+    wait: sleep,
+    onNeedsReconnect: notifyNeedsReconnect,
+  };
+}
+
+/** Files what Meta delivered: Instagram and Facebook messages for the help desk. */
+async function drainMetaMessages(): Promise<number> {
+  if (!process.env.META_APP_SECRET) return 0;
+  const admin = getAdminClient();
+  return (await drainMetaEvents(admin, metaTokenDeps())) + (await runMetaDeletions(admin));
+}
+
 /**
  * Sends help desk email that was queued with an "undo" wait and is now due.
  * Each is claimed once. A refusal from the mail service is written down as
@@ -344,7 +367,9 @@ async function drainInboundEmails(): Promise<number> {
  */
 async function drainOutbound(): Promise<number> {
   const domain = inboundDomain();
-  if (!domain || !process.env.POSTMARK_SERVER_TOKEN) return 0;
+  // Email needs the mail service; Instagram and Facebook replies need the Meta app.
+  const canMail = Boolean(domain && process.env.POSTMARK_SERVER_TOKEN);
+  if (!canMail && !process.env.META_APP_SECRET) return 0;
   const admin = getAdminClient();
   const { data, error } = await admin.rpc("claim_outbound", { p_limit: 5 });
   if (error) throw new Error(`Could not claim email to send: ${error.message}`);
@@ -356,8 +381,18 @@ async function drainOutbound(): Promise<number> {
     payload: unknown;
   }[];
   for (const row of rows) {
+    // An Instagram or Facebook reply has a deliverer of its own; the queue is the same.
+    if (isSocialPayload(row.payload)) {
+      await sendQueuedSocial(admin, row, metaTokenDeps());
+      continue;
+    }
     const finish = (args: Record<string, unknown>) =>
       admin.rpc("finish_outbound", { p_id: row.id, ...args });
+    if (!canMail || !domain) {
+      // Nothing was asked of the mail service, so nothing went.
+      await finish({ p_error: "not_configured" });
+      continue;
+    }
     const parsed = sendPayloadSchema.safeParse(row.payload);
     if (!parsed.success) {
       await finish({ p_error: "unreadable" });
@@ -1003,6 +1038,7 @@ async function main() {
       (await attempt(drainStripeEvents, 0)) +
       (await attempt(drainSyncJobs, 0)) +
       (await attempt(drainInboundEmails, 0)) +
+      (await attempt(drainMetaMessages, 0)) +
       (await attempt(drainOutbound, 0)) +
       (await attempt(() => removeQueuedFiles(getAdminClient()), 0)) +
       (await attempt(drainSocialPosts, 0)) +

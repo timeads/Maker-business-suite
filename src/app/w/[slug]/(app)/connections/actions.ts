@@ -95,6 +95,21 @@ export async function startConnection(
 
   if (ctx.adapter.connectWithKey) return connectWithKey(slug, ctx, input);
 
+  // Renewing a connection keeps what it was already granted (the help desk's
+  // messages on a Facebook Page, say), read from the scopes on record.
+  if (ctx.adapter.reconnectInput) {
+    const { data: existing } = await (
+      await createClient()
+    )
+      .from("connections")
+      .select("scopes")
+      .eq("tenant_id", ctx.tenant.id)
+      .eq("provider", ctx.provider)
+      .maybeSingle();
+    const kept = ctx.adapter.reconnectInput((existing?.scopes as string[] | null) ?? []);
+    for (const [name, value] of Object.entries(kept)) if (!input[name]) input[name] = value;
+  }
+
   const state = randomBytes(24).toString("base64url");
   const site = await getSiteUrl();
   let url: string;

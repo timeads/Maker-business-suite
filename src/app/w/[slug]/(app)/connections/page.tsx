@@ -224,7 +224,7 @@ export default async function ConnectionsPage({
                         slug={tenant.slug}
                         provider={key}
                         providerName={adapter.name}
-                        fields={adapter.connectFields}
+                        fields={adapter.connectFields.filter((field) => !field.hidden)}
                         label={live ? `Reconnect ${adapter.name}` : `Connect ${adapter.name}`}
                         withKey={withKey}
                       />
