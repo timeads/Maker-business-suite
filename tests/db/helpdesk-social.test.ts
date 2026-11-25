@@ -667,6 +667,7 @@ describe("workspaces stay apart", () => {
       `select public.set_social_reaction('${tenantA}', 'r', 'm', 'x', now())`,
       `select * from public.social_reply_context('${tenantA}', gen_random_uuid())`,
       "select public.finish_social_outbound(gen_random_uuid())",
+      `select public.note_thread_control('${tenantA}', 'instagram', 'p', 'other')`,
       "select public.request_meta_deletion('abcdefghijklmnop', 'x')",
       "select public.run_meta_deletions(1)",
       "select public.meta_deletion_status('abcdefghijklmnop')",
@@ -678,6 +679,89 @@ describe("workspaces stay apart", () => {
         sql,
       ).rejects.toThrow(/permission denied/);
     }
+  });
+});
+
+describe("who is answering a conversation at Meta", () => {
+  type Row = {
+    thread_control: string | null;
+    thread_control_app: string | null;
+    thread_control_at: string | null;
+  };
+  const read = async (who: User, person: string) =>
+    (
+      await q<Row>(
+        who,
+        `select thread_control, thread_control_app, thread_control_at::text
+         from public.contacts where channel = 'instagram' and external_id = $1`,
+        [person],
+      )
+    )[0];
+  const note = async (
+    tenant: string,
+    person: string,
+    state: string,
+    app: string | null,
+    at: string,
+    channel = "instagram",
+  ) =>
+    (
+      await service<{ r: boolean }>(
+        "select public.note_thread_control($1, $2, $3, $4, $5, $6::timestamptz) as r",
+        [tenant, channel, person, state, app, at],
+      )
+    )[0].r;
+
+  it("is written on the person, with the other tool's app id only when another has it", async () => {
+    await message(tenantA, "instagram", "person-control", "Hello");
+    expect((await read(amy, "person-control")).thread_control).toBeNull();
+
+    expect(
+      await note(tenantA, "person-control", "other", "263902037430900", "2026-11-25T10:00:00Z"),
+    ).toBe(true);
+    expect(await read(amy, "person-control")).toMatchObject({
+      thread_control: "other",
+      thread_control_app: "263902037430900",
+    });
+    // Ours: no other tool is named any more, whatever was handed in.
+    expect(await note(tenantA, "person-control", "ours", "123", "2026-11-25T11:00:00Z")).toBe(true);
+    expect(await read(amy, "person-control")).toMatchObject({
+      thread_control: "ours",
+      thread_control_app: null,
+    });
+    // Anything that isn't an app id is left out rather than kept.
+    expect(
+      await note(tenantA, "person-control", "other", "not an id", "2026-11-25T12:00:00Z"),
+    ).toBe(true);
+    expect(await read(amy, "person-control")).toMatchObject({
+      thread_control: "other",
+      thread_control_app: null,
+    });
+  });
+
+  it("never goes backwards in time, and never into the future", async () => {
+    // Meta delivers out of order: an older note doesn't overwrite a newer one.
+    expect(await note(tenantA, "person-control", "ours", null, "2026-11-25T09:00:00Z")).toBe(false);
+    expect((await read(amy, "person-control")).thread_control).toBe("other");
+    const { rows } = await db.query<{ late: boolean }>(
+      "select bool_or(thread_control_at > now()) as late from public.contacts",
+    );
+    expect(rows[0].late).not.toBe(true);
+  });
+
+  it("only touches someone already known in that workspace and channel", async () => {
+    const at = "2026-11-25T13:00:00Z";
+    expect(await note(tenantA, "nobody-we-know", "other", null, at)).toBe(false);
+    expect(await note(tenantA, "person-control", "other", null, at, "facebook")).toBe(false);
+    expect(await note(tenantA, "person-control", "sideways", null, at)).toBe(false);
+    expect(await note(tenantA, "person-control", "other", null, at, "email")).toBe(false);
+    // The same person id in another workspace is another person.
+    await connect(tenantB, PAGE_B, MESSAGING, "ig-b-4004", bob);
+    await switchOn(bob, tenantB, { facebook: true, instagram: true });
+    await message(tenantB, "instagram", "person-control", "Hello B");
+    expect(await note(tenantB, "person-control", "ours", null, "2026-11-25T14:00:00Z")).toBe(true);
+    expect((await read(bob, "person-control")).thread_control).toBe("ours");
+    expect((await read(amy, "person-control")).thread_control).toBe("other");
   });
 });
 
