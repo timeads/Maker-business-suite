@@ -10,8 +10,8 @@ export function MichaelsTabs({ slug }: { slug: string }) {
         { href: `${base}/listings`, name: "Listings" },
         { href: `${base}/would-send`, name: "Would send" },
         { href: `${base}/orders`, name: "Orders" },
-        { href: `${base}/settings`, name: "Settings" },
       ]}
+      settings={{ href: `/w/${slug}/settings/stock/michaels` }}
     />
   );
 }

@@ -10,7 +10,7 @@ import { canManage } from "@/lib/tenants";
 import { cn } from "@/lib/utils";
 import { loadIncoming, loadStock } from "../data";
 import { stockAccess } from "../gate";
-import { Importer } from "../settings/import/importer";
+import { Importer } from "../../settings/stock/import/importer";
 import { StockTabs } from "../tabs";
 import { closureWords } from "./closure-words";
 import { AddSupplier, SuppliersTable, type SupplierLine } from "./table";
@@ -140,7 +140,7 @@ export default async function SuppliersPage({
             Columns: {guide.columns.map((column) => column.name).join(", ")}. {guide.matchedBy}{" "}
             You&apos;ll see what the file would change before anything is saved.{" "}
             <Link
-              href={`${base}/settings/import`}
+              href={`/w/${tenant.slug}/settings/stock/import`}
               className="text-ochre-text underline-offset-2 hover:underline"
             >
               What each column means, and the other files you can bring in

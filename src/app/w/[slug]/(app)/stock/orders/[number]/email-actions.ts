@@ -226,5 +226,6 @@ export async function saveOrderEmailTemplate(
   });
   if (error) return { error: OOPS };
   revalidatePath(`/w/${slug}/stock`, "layout");
+  revalidatePath(`/w/${slug}/settings`, "layout");
   return { message: "Saved." };
 }

@@ -317,6 +317,7 @@ async function saveHelpdeskConfig(
   });
   if (error) return { error: "We couldn't save that. Try again in a moment." };
   revalidatePath(`/w/${slug}/helpdesk`, "layout");
+  revalidatePath(`/w/${slug}/settings`, "layout");
   return { message: "Saved." };
 }
 

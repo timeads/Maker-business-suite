@@ -64,7 +64,7 @@ export default async function MichaelsOrdersPage({
             <CardDescription>
               {settings.jobs.orders
                 ? "Orders from the last 30 days that still need shipping, and the last week's finished ones, appear here after a look."
-                : "Reading orders is switched off in Settings."}
+                : "Reading orders is switched off under Settings → Stock → Michaels."}
             </CardDescription>
           </CardHeader>
         </Card>

@@ -55,7 +55,7 @@ In the Cloud project that already holds the Gmail OAuth client:
 
 1. APIs & Services → OAuth consent screen (Google Auth Platform) → **Data access** → Add or remove scopes → add `https://www.googleapis.com/auth/gmail.readonly`. Google lists it under **Restricted scopes**.
 2. Nothing changes on the OAuth client or the redirect URI. No new environment variable.
-3. Connect Gmail again in the workspace, choosing reading (Stock → Balances → Bills by email has a button for it).
+3. Connect Gmail again in the workspace, choosing reading (Settings → Stock → Balances & bills by email has a button for it).
 
 ### Who can use it
 

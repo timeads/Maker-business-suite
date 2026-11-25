@@ -13,6 +13,7 @@ export function SocialTabs({ slug }: { slug: string }) {
         { href: `${base}/plan`, name: "Plan" },
         { href: `${base}/links`, name: "Link page" },
       ]}
+      settings={{ href: `/w/${slug}/settings/social` }}
     />
   );
 }

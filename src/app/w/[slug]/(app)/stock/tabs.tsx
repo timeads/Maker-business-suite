@@ -45,8 +45,8 @@ export async function StockTabs({
             ]
           : []),
         ...(michaels ? [{ href: `${base}/michaels`, name: "Michaels" }] : []),
-        { href: `${base}/settings`, name: "Settings" },
       ]}
+      settings={{ href: `/w/${slug}/settings/stock` }}
     />
   );
 }

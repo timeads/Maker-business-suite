@@ -22,7 +22,7 @@ const UUID = /^[0-9a-f-]{36}$/i;
 
 /** Rules and packing memory are settings: owners and admins only. */
 async function managers(slug: string) {
-  const user = await requireUser(`/w/${slug}/shipping/settings`);
+  const user = await requireUser(`/w/${slug}/settings/shipping/rules`);
   const ctx = await getTenantContext(slug, user.id);
   if (!ctx) return { error: NO_ACCESS } as const;
   const entitlements = await getEntitlements(ctx.tenant.id);
@@ -32,7 +32,11 @@ async function managers(slug: string) {
   return { tenant: ctx.tenant, supabase: await createClient() } as const;
 }
 
-const done = (slug: string) => revalidatePath(`/w/${slug}/shipping`, "layout");
+const done = (slug: string) => {
+  revalidatePath(`/w/${slug}/shipping`, "layout");
+  // This tool's settings screens live under workspace Settings.
+  revalidatePath(`/w/${slug}/settings`, "layout");
+};
 
 /**
  * Saves the whole list of shipping rules, in order. It is a setting like any

@@ -45,7 +45,11 @@ async function context(slug: string, managersOnly: boolean) {
 type Ctx = Exclude<Awaited<ReturnType<typeof context>>, { error: string }>;
 
 const text = (formData: FormData, name: string) => String(formData.get(name) ?? "").trim();
-const done = (slug: string) => revalidatePath(`/w/${slug}/bookings`, "layout");
+const done = (slug: string) => {
+  revalidatePath(`/w/${slug}/bookings`, "layout");
+  // This tool's settings screens live under workspace Settings.
+  revalidatePath(`/w/${slug}/settings`, "layout");
+};
 
 /** What the emails need to know about one booking, read as the signed-in member. */
 async function detailsFor(ctx: Ctx, bookingId: string): Promise<BookingDetails | null> {

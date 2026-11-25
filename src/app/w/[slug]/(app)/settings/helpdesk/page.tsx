@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { Badge } from "@/components/ui/badge";
-import { PageHeader } from "@/components/ui/page-header";
+import { SectionHeading } from "@/components/settings/section-heading";
 import { nameOf, type Person } from "@/lib/messages/format";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { inboundDomain, supportAddress } from "@/lib/helpdesk/addresses";
@@ -31,7 +31,7 @@ export default async function HelpdeskSettingsPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  const access = await helpdeskAccess(slug, `/w/${slug}/helpdesk/settings`);
+  const access = await helpdeskAccess(slug, `/w/${slug}/settings/helpdesk`);
   if (!access.ok) return access.upsell;
   const { tenant, role, entitlements } = access;
   const canEdit = canManage(role) && entitlements.canWrite;
@@ -53,9 +53,9 @@ export default async function HelpdeskSettingsPage({
 
   return (
     <>
-      <PageHeader
+      <SectionHeading
         back={{ href: `/w/${tenant.slug}/helpdesk`, label: "Help desk" }}
-        title="Help desk settings"
+        title="Help desk"
         description="Your address, the replies you reuse, and what happens to new email on its own."
       />
 

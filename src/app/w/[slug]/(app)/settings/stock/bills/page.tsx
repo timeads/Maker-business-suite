@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { PageHeader } from "@/components/ui/page-header";
+import { SectionHeading } from "@/components/settings/section-heading";
 import { GMAIL_WITH_READING } from "@/lib/connections/providers/google-mail";
 import {
   MAX_FILE_BYTES,
@@ -12,31 +12,31 @@ import {
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
 import { startConnection } from "../../../connections/actions";
-import { stockAccess } from "../../gate";
-import { clearBillsConfirmation } from "../mail-actions";
-import { loadMailFacts, lookFacts } from "../mail-data";
-import { BillsAddressBox, SourcesEditor } from "../mail-forms";
+import { clearBillsConfirmation } from "../../../stock/balances/mail-actions";
+import { loadMailFacts, lookFacts } from "../../../stock/balances/mail-data";
+import { BillsAddressBox, SourcesEditor } from "../../../stock/balances/mail-forms";
+import { ManagersOnly, moment } from "../../../stock/balances/parts";
+import { stockAccess } from "../../../stock/gate";
 import { ConnectReadingForm } from "./connect-form";
-import { ManagersOnly, moment } from "../parts";
 
 export const metadata: Metadata = { title: "Bills by email" };
 
 /**
- * Setting up balances that fill themselves in: the workspace's own bills
+ * Settings → Stock → Balances & bills by email. Setting up balances that fill themselves in: the workspace's own bills
  * address to forward to (the usual way), who to recognise, and, as an extra
  * for those who want it, reading Gmail directly. Owners and admins only.
  */
 export default async function BillsByEmailPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  const access = await stockAccess(slug, `/w/${slug}/stock/balances/email`);
+  const access = await stockAccess(slug, `/w/${slug}/settings/stock/bills`);
   if (!access.ok) return access.upsell;
   const { tenant, role, entitlements } = access;
   const base = `/w/${tenant.slug}/stock/balances`;
-  const back = { href: base, label: "Supplier balances" };
+  const back = { href: base, label: "Balances" };
   if (!canManage(role)) {
     return (
       <>
-        <PageHeader back={back} title="Bills by email" />
+        <SectionHeading back={back} title="Balances & bills by email" />
         <ManagersOnly />
       </>
     );
@@ -62,9 +62,9 @@ export default async function BillsByEmailPage({ params }: { params: Promise<{ s
 
   return (
     <>
-      <PageHeader
+      <SectionHeading
         back={back}
-        title="Bills by email"
+        title="Balances & bills by email"
         description="Have your suppliers' invoices, statements and payment notices file themselves on their accounts."
       />
 

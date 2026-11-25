@@ -27,6 +27,7 @@ for (const path of [
   "/onboarding",
   "/w/some-workspace",
   "/w/some-workspace/settings/team",
+  "/w/some-workspace/settings/shipping/printing",
   "/w/some-workspace/bookings",
   "/w/some-workspace/social/new",
   "/w/some-workspace/assistant",

@@ -548,7 +548,7 @@ export function notPlannedReason(row: StockRow): NotPlannedReason | null {
 export const NOT_PLANNED_LABELS: Record<NotPlannedReason, string> = {
   hidden: "Hidden by you",
   paused: "You said don't reorder",
-  rule: "Matches a rule in Settings",
+  rule: "Matches a rule under Settings → Stock",
   tag: "Tagged don't-reorder in your shop",
   untracked: "Your shop doesn't count it",
   archived: "Archived in your shop",

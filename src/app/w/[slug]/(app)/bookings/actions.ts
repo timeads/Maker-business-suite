@@ -248,6 +248,7 @@ export async function saveBookingForm(
   });
   if (error) return { error: OOPS };
   revalidatePath(`/w/${slug}/bookings`, "layout");
+  revalidatePath(`/w/${slug}/settings`, "layout");
   return { message: "Saved." };
 }
 

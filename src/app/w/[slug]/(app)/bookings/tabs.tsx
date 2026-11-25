@@ -9,8 +9,8 @@ export function BookingsTabs({ slug }: { slug: string }) {
         { href: base, name: "Coming up", exact: true },
         { href: `${base}/calendar`, name: "Calendar" },
         { href: `${base}/customers`, name: "Customers" },
-        { href: `${base}/settings`, name: "Settings" },
       ]}
+      settings={{ href: `/w/${slug}/settings/bookings` }}
     />
   );
 }

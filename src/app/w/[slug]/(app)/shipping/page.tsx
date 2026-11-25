@@ -255,7 +255,7 @@ export default async function ShippingPage({
         title="Shipping"
         description="Orders waiting to ship, labels from every carrier, packing slips and the packing station."
       >
-        <PrintingChip href={`${base}/settings`} />
+        <PrintingChip href={`/w/${tenant.slug}/settings/shipping/printing#printing`} />
         {counts.ready > 0 && (
           <Button asChild variant="outline" size="sm">
             <Link href={`${base}/slips`}>

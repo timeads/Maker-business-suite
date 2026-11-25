@@ -1,20 +1,20 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { PageHeader } from "@/components/ui/page-header";
+import { SectionHeading } from "@/components/settings/section-heading";
 import { isImportKind } from "@/lib/stock/import/files";
 import { IMPORT_GUIDE, IMPORT_ORDER } from "@/lib/stock/import/guide";
 import { countLines } from "@/lib/stock/import/words";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
-import { stockAccess } from "../../gate";
+import { stockAccess } from "../../../stock/gate";
 import { Importer } from "./importer";
 
 export const metadata: Metadata = { title: "Bring stock records in" };
 
 export default async function StockImportPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  const access = await stockAccess(slug, `/w/${slug}/stock/settings/import`);
+  const access = await stockAccess(slug, `/w/${slug}/settings/stock/import`);
   if (!access.ok) return access.upsell;
   const { tenant, role, entitlements } = access;
   // Like suppliers and orders themselves, this is for the people who run the business.
@@ -35,8 +35,8 @@ export default async function StockImportPage({ params }: { params: Promise<{ sl
 
   return (
     <>
-      <PageHeader
-        back={{ href: `/w/${tenant.slug}/stock/settings`, label: "Stock settings" }}
+      <SectionHeading
+        back={{ href: `/w/${tenant.slug}/stock`, label: "Stock" }}
         title="Bring your records across"
         description="Suppliers, planning figures, orders and history, from spreadsheets saved as CSV."
       />

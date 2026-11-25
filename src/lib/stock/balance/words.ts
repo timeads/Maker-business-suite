@@ -162,12 +162,12 @@ export function lastArrival(
  */
 export function arrivalWords(supplier: string, facts: ArrivalFacts): string[] {
   const out = [
-    `Invoices, payments, statements and credits for ${supplier} are typed in here, or brought in from a spreadsheet under Stock → Settings.`,
+    `Invoices, payments, statements and credits for ${supplier} are typed in here, or brought in from a spreadsheet under Settings → Stock.`,
   ];
   out.push(
     facts.booksOn
       ? `Payments made out to ${supplier} in your books are read at each sync and filed here, marked “your books”. Nothing is ever changed in your books.`
-      : "Payments aren't read from your books. You can switch that on under Stock → Settings if your books are connected.",
+      : "Payments aren't read from your books. You can switch that on under Settings → Stock if your books are connected.",
   );
   const mail = facts.mail;
   if (mail && (mail.forwarding || mail.reading)) {

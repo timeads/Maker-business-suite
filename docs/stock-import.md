@@ -1,6 +1,6 @@
 # Bringing stock records in from spreadsheets
 
-Stock → Settings → **Bring your records across** takes CSV files and turns them into suppliers, planning figures, purchase orders, supplier accounts and history. It is for owners and admins.
+Settings → Stock → **Bring your records across** takes CSV files and turns them into suppliers, planning figures, purchase orders, supplier accounts and history. It is for owners and admins.
 
 This page says exactly what each file needs, and how to get each one out of TuftStock. Nothing has to be added to TuftStock: every file is one query against its database.
 
@@ -123,7 +123,7 @@ where v."discontinuedAt" is null
 order by v.title, v."optionLabel";
 ```
 
-TuftStock also switches reordering off by tag or collection (`dontReorderAuto`). That is left out on purpose: here the same job is done by the words under Stock → Settings → "Never plan for".
+TuftStock also switches reordering off by tag or collection (`dontReorderAuto`). That is left out on purpose: here the same job is done by the words under Settings → Stock → "Never plan for".
 
 ## 3. Purchase orders
 

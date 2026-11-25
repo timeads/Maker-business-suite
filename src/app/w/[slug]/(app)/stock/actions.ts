@@ -66,7 +66,11 @@ const whole = (formData: FormData, name: string) => {
   const value = text(formData, name);
   return value === "" ? null : Number.parseInt(value, 10);
 };
-const done = (slug: string) => revalidatePath(`/w/${slug}/stock`, "layout");
+const done = (slug: string) => {
+  revalidatePath(`/w/${slug}/stock`, "layout");
+  // This tool's settings screens live under workspace Settings.
+  revalidatePath(`/w/${slug}/settings`, "layout");
+};
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 /**
@@ -147,7 +151,7 @@ export async function saveSupplier(
   if (contact.length > 120) return { error: "That contact name is too long." };
   const emails = parseEmailList(text(formData, "emails"));
   if ("error" in emails) return { error: emails.error };
-  // Empty, or a typed 0, follows the workspace's usual figure (Stock → Settings).
+  // Empty, or a typed 0, follows the workspace's usual figure (Settings → Stock).
   const typedLead = text(formData, "lead");
   const lead = parseWhole(typedLead, { min: 0, max: 365, empty: null });
   if ("error" in lead) {
@@ -288,7 +292,7 @@ export async function saveSupplierField(
   let failed: { code?: string } | null = null;
 
   if (field === "lead") {
-    // Empty follows the workspace's usual figure (Stock → Settings).
+    // Empty follows the workspace's usual figure (Settings → Stock).
     const parsed = parseWhole(value, { min: 0, max: 365, empty: null });
     if ("error" in parsed) {
       return { error: "A whole number of days, up to 365. Leave it empty to use your usual." };
@@ -660,7 +664,7 @@ export async function bulkItems(
     return {
       message:
         n === 0
-          ? "Nothing changed: those are left out by your shop or by a rule in Settings, not by you."
+          ? "Nothing changed: those are left out by your shop or by a rule under Settings → Stock, not by you."
           : `${plural(n, "item")} ${n === 1 ? "is" : "are"} back in planning.`,
     };
   }

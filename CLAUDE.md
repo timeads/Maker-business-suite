@@ -252,7 +252,7 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   (`row.buildAhead`, sized to last until the first order after they reopen
   could arrive) and `closureOrders()` turns those into the "Order before …"
   cards. Only the dates are stored.
-  Spreadsheet imports (Stock → Settings → "Bring your records across",
+  Spreadsheet imports (Settings → Stock → "Bring your records across",
   manager-only; docs/stock-import.md): the file is read in the browser, sent
   as text and never kept. `lib/stock/import` (pure, tested) reads it and
   reports unusable rows by line; the six `import_*` functions do the writing.
@@ -295,8 +295,9 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   and hand them to `import_book_payments`, which files a payment on the
   supplier of the same name, once (`external_key`), never one already typed
   in, and never one a manager took off (`supplier_ledger_skips`).
-  Bills by email (docs/bills-by-email.md; `lib/stock/mail`, pages under
-  `stock/balances/email` and `balances/mail-*`): invoices, statements and
+  Bills by email (docs/bills-by-email.md; `lib/stock/mail`; set up under
+  Settings → Stock → Balances & bills by email, `settings/stock/bills`; the
+  working lists are `stock/balances/mail-*`): invoices, statements and
   payment notices are read into the ledger by ONE general reader. Never add
   a parser or a code path for one supplier: who to recognise is a config
   (`stock` / `email_sources`: senders, subject words, a bank's words per
@@ -374,7 +375,8 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   policy as tight as it is. `?raw=1` is the file. Nothing talks to
   Browser Print except on a person's press (Chrome asks before a page may
   reach apps on the computer): a new computer is switched over by "Look for a
-  Zebra on this computer" in Shipping → Settings (`#printing`), and print
+  Zebra on this computer" in Settings → Shipping → Printing on this computer
+  (`settings/shipping/printing#printing`), and print
   buttons on a browser-printing computer carry a hint that leads there. On a
   Zebra computer every slip button (`SlipsButton`, `SlipsPagePrint` in
   `print-ui.tsx`) sends straight to the printer; which slips a press means is
@@ -528,7 +530,8 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   How a workspace looks is a second config (`brand` / `appearance`): light,
   dark or the device's choice, set as `data-theme` on the workspace wrapper
   (`.tuft-scope` in `globals.css`), and optionally the kit's colours on the
-  menu and the filled button (`brandThemeVars`, which keeps them readable).
+  menu and the filled button (`brandThemeVars`, which keeps them readable);
+  it is set under Settings → Look.
   Pages outside a workspace are always light.
 - Emails: a marketing email is a document (`emails.doc`, the model in
   `lib/design`, ported from the Content Hub with its tests) edited in the
@@ -565,6 +568,24 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   runs: `resolveEntitlements(subscription, grant)` is still the one place
   that decides, members read their grant through `workspace_plan_grant()`,
   and nothing ever writes `subscriptions` for it.
+- Settings: every tool's settings live in ONE place, workspace Settings
+  (`w/[slug]/(app)/settings/**`), never inside the tool. The list on the left
+  is one data model, `settingsNav()` in `lib/settings/nav.ts` (groups →
+  sections → a tool's screens, with who sees each and the search words),
+  drawn by one self-contained component (`components/settings/settings-nav`).
+  A new settings screen means a page under `settings/<tool>/…`, an entry
+  there, and `<SectionHeading back=…>` at its top so there is a way back to
+  the tool. The pages import the tool's own forms, actions and gate from the
+  tool's folder (those didn't move), and each still checks for itself who may
+  open and change it; the list only hides what a person can't use. A tool's
+  tabs carry a gear instead of a "Settings" tab (`<SectionTabs settings>`).
+  Tools with nothing to set (Social, Money, Messages, Assistant) have a short
+  "where to change things" page. Work stays in the tool: the content plan,
+  the link page, Michaels pairing, the bills "to check" list, label batches.
+  Old addresses (`shipping/settings`, `stock/settings`, …) are sent on for
+  good by the proxy from the list in `lib/settings/redirects.ts`; Shipping's
+  old anchors are read in the browser (`ShippingAnchorForward`). Tool actions
+  revalidate `/w/<slug>/settings` as well as their own tool.
 - Schema changes are new files in `supabase/migrations`; never edit an
   applied migration.
 - Look: the "Tuft Life" house style (see the tuft-ui repo's DESIGN.md). Teal

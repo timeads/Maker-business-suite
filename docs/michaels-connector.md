@@ -10,7 +10,7 @@ The connector is a port of the one that runs for real inside TuftStock (the owne
 2. **Match listings.** Each look reads the seller's whole catalog and matches every sellable Michaels SKU to a stock item, in this order: a pairing typed in by hand; the same SKU exactly; the same SKU with capitals and outer spaces ignored; the same barcode. A rule only counts with exactly one hit; two or more is "more than one match" and is left for a person. The same seller SKU on two Michaels listings matches the first and reports the second.
 3. **Watch stock and prices.** For every matched listing the look works out the stock it would send (the shop's count, less the units held back, never below zero) and the price (the shop's, to the cent; a missing or zero price is never sent), compares them with what Michaels shows now, and writes down the differences.
 4. **Orders, read only.** The look reads recent orders (30 days of ones still to ship, 7 days of finished ones) and keeps each order's number, status, dates, totals and lines. The Orders tab shows what bringing each into the shop would make, all or nothing: one unknown SKU and the order "couldn't be brought in yet".
-5. **Pages** under Stock → Michaels (the tab appears once Michaels is connected): Overview, Listings, Would send, Orders, Settings. The whole team can look; pairing, settings and "Look now" are for owners and admins.
+5. **Pages** under Stock → Michaels (the tab appears once Michaels is connected): Overview, Listings, Would send, Orders. Its settings are under workspace Settings → Stock → Michaels (the gear at the end of the Michaels tabs). The whole team can look; pairing, settings and "Look now" are for owners and admins.
 
 ### The safety stop
 
@@ -62,7 +62,7 @@ One look per workspace about once an hour while switched on, plus "Look now" (at
 1. Sign in to the **Michaels Developer Account Center** (from the Michaels seller site: michaels.com/developer-api) and make an **API key**. For this stage give it **Read Only** on Listing, Inventory, Price and Order. Make a new key for the suite rather than sharing TuftStock's: keys are easy to make, and a separate one can be thrown away without touching TuftStock. Production keys need a request and Michaels' approval; sandbox keys don't.
 2. Note **the day the key was made**.
 3. In the suite: **Connections → Michaels Marketplace**. Paste the key, type the day, choose "The real marketplace" (or the sandbox), and press Connect. The key is never shown again.
-4. **Stock → Michaels → Settings**: tick "Look at Michaels", leave units held back at 1 (or set your own), and save.
+4. **Settings → Stock → Michaels**: tick "Look at Michaels", leave units held back at 1 (or set your own), and save.
 5. Wait a few minutes, or press **Look now** on the Overview.
 6. **Listings → Needs a look**: pair anything unmatched by typing its SKU in your shop.
 

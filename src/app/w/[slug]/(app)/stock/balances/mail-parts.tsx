@@ -55,14 +55,12 @@ export function MailNotices({
   notices,
   names,
   slug,
-  base,
   timezone,
   canEdit,
 }: {
   notices: MailNotice[];
   names: Map<string, string>;
   slug: string;
-  base: string;
   timezone: string;
   canEdit: boolean;
 }) {
@@ -86,7 +84,7 @@ export function MailNotices({
                     : "It hasn't read your mail yet. "}
                 New invoices, statements and payment notices won&apos;t reach these balances until
                 it runs again.{" "}
-                <Link href={`${base}/email`} className="font-semibold underline">
+                <Link href={`/w/${slug}/settings/stock/bills`} className="font-semibold underline">
                   Check the setup
                 </Link>
                 , or forward bills to your bills address instead.
@@ -105,7 +103,7 @@ export function MailNotices({
                   : `no payment has been written down in ${n.days} days`}
                 . If you&apos;ve paid since, the notice may not have reached us: add the payment by
                 hand, or check the bank&apos;s sender under{" "}
-                <Link href={`${base}/email`} className="font-semibold underline">
+                <Link href={`/w/${slug}/settings/stock/bills`} className="font-semibold underline">
                   Bills by email
                 </Link>
                 .
@@ -256,7 +254,10 @@ export function MailPanel({
     return (
       <p className="text-muted-foreground text-xs print:hidden">
         Tired of typing bills in?{" "}
-        <Link href={`${base}/email`} className="text-ochre-text font-semibold hover:underline">
+        <Link
+          href={`/w/${slug}/settings/stock/bills`}
+          className="text-ochre-text font-semibold hover:underline"
+        >
           Set up Bills by email
         </Link>{" "}
         and invoices, statements and payment notices file themselves.
@@ -270,7 +271,6 @@ export function MailPanel({
         notices={notices}
         names={names}
         slug={slug}
-        base={base}
         timezone={timezone}
         canEdit={canEdit}
       />
@@ -285,7 +285,7 @@ export function MailPanel({
                 {[read, forwarded].filter(Boolean).join(" · ") || "Nothing has come in yet"}
                 {" · "}
                 <Link
-                  href={`${base}/email`}
+                  href={`/w/${slug}/settings/stock/bills`}
                   className="text-ochre-text font-semibold hover:underline"
                 >
                   Settings
@@ -298,7 +298,7 @@ export function MailPanel({
           {facts.bills?.confirm && (
             <p className="text-ochre-text text-sm">
               Gmail wants to confirm your bills address.{" "}
-              <Link href={`${base}/email`} className="font-semibold underline">
+              <Link href={`/w/${slug}/settings/stock/bills`} className="font-semibold underline">
                 See the code
               </Link>
             </p>
