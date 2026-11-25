@@ -27,6 +27,11 @@ export const KEPT_TYPES = [
   "application/pdf",
   "video/mp4",
   "video/quicktime",
+  "audio/mp4",
+  "audio/mpeg",
+  "audio/aac",
+  "audio/ogg",
+  "audio/wav",
   "text/plain",
   "text/csv",
 ] as const;
@@ -44,11 +49,18 @@ const INLINE_TYPES = new Set<string>([
   "application/pdf",
   "video/mp4",
   "video/quicktime",
+  "audio/mp4",
+  "audio/mpeg",
+  "audio/aac",
+  "audio/ogg",
+  "audio/wav",
 ]);
 /** Pictures every browser can draw (HEIC is a download unless the browser manages it). */
 export const isPicture = (type: string) =>
   type === "image/jpeg" || type === "image/png" || type === "image/gif" || type === "image/webp";
 export const isVideo = (type: string) => type === "video/mp4" || type === "video/quicktime";
+/** A voice message or other sound, played with the browser's own player. */
+export const isAudio = (type: string) => type.startsWith("audio/") && INLINE_TYPES.has(type);
 
 const ascii = (bytes: Uint8Array, from: number, to: number) =>
   String.fromCharCode(...bytes.subarray(from, Math.min(to, bytes.length)));
@@ -111,8 +123,20 @@ export function sniffType(
     const brand = ascii(bytes, 8, 12);
     if (HEIC_BRANDS.has(brand)) return "image/heic";
     if (brand === "qt  ") return "video/quicktime";
+    if (brand === "M4A " || brand === "M4B ") return "audio/mp4";
     if (MP4_BRANDS.has(brand)) return "video/mp4";
     return null;
+  }
+  // Sound, as a voice message arrives: each has a signature of its own.
+  if (ascii(bytes, 0, 4) === "OggS") return "audio/ogg";
+  if (ascii(bytes, 0, 4) === "RIFF" && ascii(bytes, 8, 12) === "WAVE") return "audio/wav";
+  if (ascii(bytes, 0, 3) === "ID3") return "audio/mpeg";
+  if (bytes.length >= 2 && bytes[0] === 0xff) {
+    // An MPEG audio frame starts with eleven set bits; the next few say MP3 or AAC (ADTS).
+    if (bytes[1] === 0xfb || bytes[1] === 0xf3 || bytes[1] === 0xf2 || bytes[1] === 0xfa) {
+      return "audio/mpeg";
+    }
+    if (bytes[1] === 0xf1 || bytes[1] === 0xf9) return "audio/aac";
   }
   const type = (declared.type ?? "").split(";")[0].trim().toLowerCase();
   const name = (declared.name ?? "").toLowerCase();
@@ -164,6 +188,8 @@ export type IncomingFile = {
   contentId: string | null;
   /** The size the sender stated, for a file whose content never arrived. */
   statedSize?: number;
+  /** We tried to fetch it and couldn't: listed, never kept. */
+  failed?: boolean;
 };
 
 export type NotKeptReason = "type" | "too_big" | "message_cap" | "daily_cap" | "failed";
@@ -193,6 +219,7 @@ export function planFiles(files: IncomingFile[], usedToday: number): FilePlan[] 
       reason,
     });
     if (size > MAX_FILE_BYTES) return skip("too_big");
+    if (file.failed) return skip("failed");
     const type = sniffType(file.bytes, { type: file.claimed, name: file.name });
     if (!type) return skip("type");
     if (message + size > MAX_MESSAGE_BYTES) return skip("message_cap");
