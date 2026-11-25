@@ -813,13 +813,16 @@ export function Composer({
                 type="button"
                 onClick={() => setMenu(menu === "manual" ? null : "manual")}
                 aria-expanded={menu === "manual"}
+                title={manualName === "Manual" ? undefined : manualName}
                 className={quiet}
               >
                 <BookOpen aria-hidden />
-                {manualName}
+                Manual
               </button>
               {menu === "manual" && (
-                <div className={cn(pop, "left-0 w-[min(24rem,88vw)]")}>
+                <div
+                  className={cn(pop, "-left-[4.5rem] w-[min(24rem,calc(100vw-2.5rem))] sm:left-0")}
+                >
                   <ManualPicker
                     slug={slug}
                     name={manualName}

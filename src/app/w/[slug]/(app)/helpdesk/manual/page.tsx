@@ -164,7 +164,7 @@ export default async function ManualPage({
 
       {manager && (
         <Card>
-          <CardContent className="flex flex-wrap items-start justify-between gap-4">
+          <CardContent className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
               {!hasSources(config.sources) ? (
                 <>

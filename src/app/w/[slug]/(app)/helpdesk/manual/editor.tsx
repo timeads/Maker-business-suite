@@ -105,7 +105,7 @@ function BodyEditor({
           event.preventDefault();
           document.execCommand("insertText", false, event.clipboardData.getData("text/plain"));
         }}
-        className="rich font-read min-h-[280px] px-3 py-3 text-[15px] leading-relaxed break-words outline-none [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:mb-2 [&_ul]:list-disc [&_ul]:pl-5"
+        className="rich font-read min-h-[280px] px-3 py-3 text-[15px] leading-relaxed break-words outline-none [&_ol]:mb-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:mb-2 [&_ul]:mb-3 [&_ul]:list-disc [&_ul]:pl-5"
       />
       {headings.length > 0 && (
         <div className="border-border flex flex-wrap items-center gap-1.5 border-t px-2 py-2">

@@ -139,37 +139,40 @@ export default async function TopicPage({
         title={topic.title}
         description={topic.summary || undefined}
         back={{ href: base, label: config.name }}
-      >
-        {canWrite && (
-          <Button asChild variant="outline">
-            <Link href={`${here}?edit=1`}>Edit</Link>
-          </Button>
-        )}
-        {manager && canWrite && (
-          <form
-            action={publishTopic.bind(null, tenant.slug, topic.id, topic.status !== "published")}
-          >
-            <Button type="submit" variant={topic.status === "published" ? "outline" : "default"}>
-              {topic.status === "published" ? "Unpublish" : "Publish"}
-            </Button>
-          </form>
-        )}
-      </PageHeader>
+      />
 
-      <div className="flex flex-wrap items-center gap-1.5 text-sm">
-        <Badge tone={topic.status === "published" ? "good" : "waiting"}>
-          {topic.status === "published" ? "Published" : "Draft"}
-        </Badge>
-        {topic.facets.map((f) => (
-          <Badge key={`${f.facet}:${f.value}`} tone="open">
-            {facetLabel(f.facet) ? `${facetLabel(f.facet)}: ` : ""}
-            {f.value}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-sm">
+          <Badge tone={topic.status === "published" ? "good" : "waiting"}>
+            {topic.status === "published" ? "Published" : "Draft"}
           </Badge>
-        ))}
-        <span className="text-muted-foreground">
-          {topic.personEdited ? "Edited by the team" : "Written by Claude"} · updated{" "}
-          {manualDay(topic.updatedAt, tenant.timezone)}
-        </span>
+          {topic.facets.map((f) => (
+            <Badge key={`${f.facet}:${f.value}`} tone="open">
+              {facetLabel(f.facet) ? `${facetLabel(f.facet)}: ` : ""}
+              {f.value}
+            </Badge>
+          ))}
+          <span className="text-muted-foreground">
+            {topic.personEdited ? "Edited by the team" : "Written by Claude"} · updated{" "}
+            {manualDay(topic.updatedAt, tenant.timezone)}
+          </span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {canWrite && (
+            <Button asChild variant="outline">
+              <Link href={`${here}?edit=1`}>Edit</Link>
+            </Button>
+          )}
+          {manager && canWrite && (
+            <form
+              action={publishTopic.bind(null, tenant.slug, topic.id, topic.status !== "published")}
+            >
+              <Button type="submit" variant={topic.status === "published" ? "outline" : "default"}>
+                {topic.status === "published" ? "Unpublish" : "Publish"}
+              </Button>
+            </form>
+          )}
+        </div>
       </div>
 
       {topic.status === "draft" && (

@@ -1,6 +1,6 @@
 # Help desk: the owner's help desk app vs. the suite, side by side
 
-Written 25 Nov 2026 before the rebuild, and brought up to date after it and again after the second pass. The old app was only read. Nothing here was checked against real mail or a real shop: see section 5.
+Written 25 Nov 2026 before the rebuild, and brought up to date after it, after the second pass and after the manual was built. The old app was only read. Nothing here was checked against real mail or a real shop: see section 5.
 
 **How to read the file references**
 
@@ -19,6 +19,7 @@ The old app has **126** help desk capabilities a person answering customers woul
 - **Before the rebuild** (counted 25 Nov 2026): **18 matched**, **27 partly**, **81 missing**.
 - **After the rebuild**: **76 matched**, **15 partly**, **35 missing**.
 - **After the second pass** (files, Archive / Spam / Trash, bulk actions, undo send and the smaller items): **92 matched**, **11 partly**, **23 missing**.
+- **After the manual** (topics written from conversations, the knowledge base, the picker in the reply box): **94 matched**, **13 partly**, **19 missing**.
 
 | Area                           | Capabilities | Matched | Partly | Missing |
 | ------------------------------ | -----------: | ------: | -----: | ------: |
@@ -31,8 +32,8 @@ The old app has **126** help desk capabilities a person answering customers woul
 | Numbers                        |            2 |       0 |      1 |       1 |
 | Settings & automation          |            7 |       2 |      1 |       4 |
 | Channels                       |            3 |       0 |      1 |       2 |
-| Repair manual & knowledge base |            4 |       0 |      0 |       4 |
-| **Total**                      |      **126** |  **92** | **11** |  **23** |
+| Repair manual & knowledge base |            4 |       2 |      2 |       0 |
+| **Total**                      |      **126** |  **94** | **13** |  **19** |
 
 ---
 
@@ -207,12 +208,14 @@ The old app has **126** help desk capabilities a person answering customers woul
 
 ### Repair manual & knowledge base
 
-| Capability                                                                                 | Old app                                                            | New suite    | What's different or missing    | Size |
-| ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------ | ------------ | ------------------------------ | ---- |
-| Repair topics written by AI from finished repair conversations, with the customer's photos | `public/js/manual.js`, `src/lib/manual.ts`, `src/routes/manual.ts` | **Missing.** | Not built. See the plan below. | L    |
-| Topics can be edited, published and searched; “New topic”                                  | `manual.js:60-324`                                                 | **Missing.** | Not built.                     | L    |
-| Knowledge base: articles, pulled-in pages, links, merge suggestions                        | `public/js/kb.js`, `src/lib/kb*.ts`, `src/routes/kb.ts`            | **Missing.** | Not built.                     | L    |
-| Published topics and articles guide AI drafts                                              | `src/lib/ai.ts`, `src/lib/site-knowledge.ts`                       | **Missing.** | Not built.                     | M    |
+| Capability                                                                                 | Old app                                                            | New suite                                                                     | What's different or missing                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Size |
+| ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------ | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
+| Repair topics written by AI from finished repair conversations, with the customer's photos | `public/js/manual.js`, `src/lib/manual.ts`, `src/routes/manual.ts` | **Partly.** `lib/manual/run.ts`, `reader.ts`, `plan.ts`, `mig/20270109000100` | Claude reads closed, answered conversations from the folders, saved views or tags the workspace chose, with up to three of the customer's photos, and writes draft topics. Different on purpose: which conversations count is a setting, not a word list; points are added by code under their headings instead of the model rewriting the page; a topic a person edited only ever gets a suggested update. Missing: the customer's photos and videos shown on the topic with captions, and the one-line “what happened” for each conversation (only the links are kept). No separate “dig into the archive” run: an update reads ten at a time from the newest four hundred closed conversations. | M    |
+| Topics can be edited, published and searched; “New topic”                                  | `manual.js:60-324`                                                 | **Matched.** `desk/../(app)/helpdesk/manual/**`                               | Also here: a history of every change with a way back, and filters by label. Not here: joining two topics into one, and “Copy for another machine” (section 3).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | –    |
+| Knowledge base: articles, pulled-in pages, links, merge suggestions                        | `public/js/kb.js`, `src/lib/kb*.ts`, `src/routes/kb.ts`            | **Partly.** `manual/kb/**`, `manual_articles`                                 | Articles written by hand for the team, with tags, search and a “fine to paste to a customer” mark. Missing: everything that reaches the shop (publishing articles to the shop's blog, pulling its pages in), pictures in articles, link checking, near-duplicate merging, AI suggestions for articles and article versions. See section 4.                                                                                                                                                                                                                                                                                                                                                         | L    |
+| Published topics and articles guide AI drafts                                              | `src/lib/ai.ts`, `src/lib/site-knowledge.ts`                       | **Matched.** `lib/manual/match.ts`, `lib/draft.ts`                            | The three published topics or articles closest to the conversation (by words, no model call) go to the draft as marked reference; a workspace or a single topic can switch it off. The old app hands over its forty newest topics whatever the conversation is about.                                                                                                                                                                                                                                                                                                                                                                                                                              | –    |
+
+Only here: the “Manual” picker in the reply box (search, then put a whole topic or one heading into the reply), and up to three matching topics in the details rail.
 
 ### Only in the suite (not counted)
 
@@ -224,32 +227,45 @@ The old app has **126** help desk capabilities a person answering customers woul
 
 ## 3. Left out on purpose, and what each would need
 
-| Left out                                        | Why                                                      | What it needs                                                                    |
-| ----------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| Live chat view and chat replies                 | The suite has no website chat.                           | A chat widget, a public endpoint and a channel on tickets: a feature of its own. |
-| Instagram & Facebook view                       | The Social tool only posts.                              | Meta's messaging permissions (a new app review) and a webhook.                   |
-| Discount codes                                  | The shop connection can't write discounts.               | A new shop permission (`write_discounts`) and the owner's go-ahead.              |
-| HTML email as sent                              | A rule here: customer email is shown as plain text only. | A decision to change the rule, then a locked frame.                              |
-| Customer tags, note and phone from the shop     | The sync stores a customer's name and email only.        | Three columns and the sync asking for them (no new permission).                  |
-| Tracking for parcels not sent through the suite | The sync doesn't store the shop's fulfilments.           | Reading fulfilments in the order sync.                                           |
-| Suggested replies                               | The old app writes them unasked for every new ticket.    | A decision to let AI run without a press, or a “suggest three” button.           |
+| Left out                                        | Why                                                      | What it needs                                                                           |
+| ----------------------------------------------- | -------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Live chat view and chat replies                 | The suite has no website chat.                           | A chat widget, a public endpoint and a channel on tickets: a feature of its own.        |
+| Instagram & Facebook view                       | The Social tool only posts.                              | Meta's messaging permissions (a new app review) and a webhook.                          |
+| Discount codes                                  | The shop connection can't write discounts.               | A new shop permission (`write_discounts`) and the owner's go-ahead.                     |
+| HTML email as sent                              | A rule here: customer email is shown as plain text only. | A decision to change the rule, then a locked frame.                                     |
+| Customer tags, note and phone from the shop     | The sync stores a customer's name and email only.        | Three columns and the sync asking for them (no new permission).                         |
+| Tracking for parcels not sent through the suite | The sync doesn't store the shop's fulfilments.           | Reading fulfilments in the order sync.                                                  |
+| Suggested replies                               | The old app writes them unasked for every new ticket.    | A decision to let AI run without a press, or a “suggest three” button.                  |
+| Joining two topics; “Copy for another machine”  | Kept the first build of the manual small.                | Two manager-only functions and a second prompt; the copy needs the shop's product text. |
+| A help centre customers can read                | The old app publishes articles to the shop's blog.       | See section 4: a write permission on the shop, or public pages of our own.              |
 
 ---
 
-## 4. Repair manual and knowledge base: how the old one works, and a plan
+## 4. Repair manual and knowledge base: how the old one works, and what was built
 
-**How it works in the old app.** `src/lib/manual.ts` reads a finished repair conversation (the customer's messages, the team's replies, the photos and videos sent) and asks the AI whether it holds a repair. If it does, the AI either adds a case to an existing topic or writes a new one: a title, the machine, the symptoms, the steps that fixed it, written as simple Markdown (`public/js/manual.js` renders it with its own small, escaping renderer). Each topic keeps a running record of its cases with links back to the tickets and the customer's media. A person can edit a topic, write one from scratch (“New topic”), search by topic, machine or symptom, and publish it. Published topics are handed to the AI when it drafts replies (`src/lib/ai.ts`). A full scan reads past repair tickets in batches; “Add to repair manual” on a ticket reads just that one. The knowledge base beside it (`public/js/kb.js`, `src/lib/kb.ts`, `kb-pull.ts`, `kb-links.ts`, `kb-merge.ts`) holds articles: written by hand, pulled in from the shop's own help pages, cross-linked, with merge suggestions for near-duplicates, and also fed to drafts.
+**How it works in the old app.**
 
-**A plan for the suite (not built).**
+- _A topic_ is a title, one product (“machine”), a summary and a Markdown body that the AI writes under fixed headings (Symptoms, Likely causes, How to fix it, Parts & tools, Notes), plus draft/published, “use in AI drafts” and “edited by a person”. Each topic keeps its _cases_ (the ticket, one line on what happened, the outcome) and the photos and videos picked from those tickets, with captions. Symptoms are not a field: they are a heading in the body. The list is grouped by machine.
+- _Which conversations_: closed, with a reply from the team, not read before, and either classified as a repair, tagged “Repairs”, or containing one of two dozen repair words written into the code (`REPAIR_WORDS`). The AI then decides whether each one really is a repair.
+- _What is sent_: every message of up to four conversations at a time (the customer's name and address on each line), attachment names, up to three photos a conversation (eight a batch, 3.5 MB each), and the titles and summaries of up to 300 existing topics with their ids. A second call per touched topic rewrites the whole topic from the old text and the new cases.
+- _New or existing_: the first call answers with an existing topic's id or a new topic's title; the second call rewrites it.
+- _A person's edits_: saved in place and marked `edited_at`. The only protection afterwards is a sentence in the prompt asking the AI to keep their wording. There is no history for topics.
+- _While answering_: the forty most recently updated published topics are added to every AI draft. There is no picker and nothing is shown beside a ticket.
+- _Knowledge base_: customer-facing articles in HTML, published to the shop's blog (so the old app does have a public help centre, on the shop's own site), pulled back in from it, with pictures, link checks, near-duplicate merging, versions, and AI suggestions from conversations that a person accepts or dismisses.
+- _Schedule and cost_: none for the manual. An admin presses “Read N new” or “Dig into archive” and the browser asks for batch after batch; “Add to repair manual” reads one ticket. Tokens are counted per feature; there is no cap.
+- _Search_: in the browser, over title, machine and summary.
 
-1. Tables `manual_topics` (title, machine, symptoms, body as Markdown, published, tenant_id, RLS) and `manual_cases` (topic, ticket, what was learned); cross-tenant tests. Writes through manager-only functions; the whole team reads.
-2. A pure reader in `lib/helpdesk/manual/`: structured output, no tools, the conversation marked as material, the answer only ever data (the bills-by-email reader is the pattern). Counted against the AI allowance.
-3. “Add to repair manual” on a ticket (a person's press), then an optional worker pass over closed tickets tagged by a rule. Nothing is published without a person.
-4. A place in the menu (“Repair manual”) with search, a topic page, an editor and “New topic”; Markdown rendered as React nodes, never as HTML.
-5. Published topics added to the draft prompt as data, capped.
-6. The knowledge base as a second kind of entry in the same tables; pulling pages from a website needs a decision first (the suite fetches nothing a person types today).
+**What the suite has** (`src/lib/helpdesk/manual/`, pages under `(app)/helpdesk/manual/`, `supabase/migrations/20270109000100_helpdesk_manual.sql`).
 
-Customer photos are now kept with their conversation (`message_attachments`), so a topic can point at them.
+- General, not about repairs: the name (“Manual” until a workspace names it), the first tab's name, a sentence on what belongs in it, the labels topics are sorted by and the headings they are written under are one setting (`helpdesk` / `manual`). So are the sources: folders, saved views or tags. No word list.
+- A topic's body is the suite's small document; a bold one-line paragraph is a heading. Labels are free values under the workspace's facets.
+- The worker reads one conversation per call: its words with quoted text left out and scrubbed (email addresses, phone-like numbers, order and tracking numbers, street addresses, the customer's name), attachment names, up to three of the customer's kept photos (JPEG, PNG, GIF or WebP under 3.5 MB, never a video; a workspace can switch photos off), and a shortlist of at most eight existing topics found by word matching, each under a reference of ours (T1…). The model never sees an id. Structured output, no tools.
+- The answer is data: tidied, scrubbed again and planned in code. A new topic is a draft. Points are added under their headings and nothing written is changed. A topic a person has edited is never changed: the points wait as a suggested update. The database function that files a reading holds the same rule.
+- Every change leaves a revision with who or what made it; any version can be brought back.
+- By itself only where switched on (daily or weekly); otherwise on a manager's “Update now” (once per ten minutes, six a day) or “Add this conversation” (thirty a day). Ten conversations a run, a monthly cap the workspace sets (100 unless changed, 1000 at most), and the plan's AI allowance: it stops at zero and says so.
+- While answering: the picker in the reply box, matching topics in the rail, and matching topics and articles handed to the AI draft.
+
+**Not built: a help centre customers can read.** The old app has one, on the shop's blog. The suite's articles are for the team; “fine to paste to a customer” is only a mark. To build it: either a new shop permission to write blog articles (and the same once-only queue as the other writes to a shop, a manager's press each time, and pictures kept in our own storage), or public pages of our own like the booking and link pages (a service-role reader that names the workspace, only articles marked shareable and published, no customer data anywhere near them, and a decision about search engines). Pulling pages in from a website stays out until the rule “nothing a person types is fetched” is changed on purpose.
 
 ---
 
@@ -263,3 +279,7 @@ Customer photos are now kept with their conversation (`message_attachments`), so
 - Storage itself is not in the test database: the bucket's row and its policy are tested, uploading and downloading are not.
 - Undo send needs the worker running; the wait, taking back, a refusal and a send that never finished are tested in the database, not against the mail service.
 - The owner's “only the signature showed” email wasn't available. The cause found in the code (the mail service's own guess at “just the reply” was preferred over the whole text) is fixed and tested with made-up emails.
+- The manual's reader was never run against the API: the prompt, the tidying, the scrubbing, the planning and the worker's path are tested with a made-up reader, including a conversation that tries to give orders. How good the topics are, how well Claude files a conversation under an existing topic, and what a real update costs in tokens are not known.
+- Photos are read from storage and sent as pictures in tests with made-up bytes only; storage isn't in the test database.
+- Scrubbing was tested with invented names, numbers and addresses. Order-number and address shapes it hasn't seen (and names other than the ticket's own customer) can get through, which is why new topics are drafts for a person to read.
+- No real conversations were used: which folder, view or tag holds the owner's repair conversations in the suite is for the owner to choose.

@@ -157,7 +157,34 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   for the team live in `ticket_notes` and are never emailed. A conversation
   joined into another keeps a `merged_into` pointer, and later mail follows
   it. Rules (`auto_tag_rules`) can tag, set priority or hand off; the worker
-  applies the last two through `apply_ticket_rules` after filing. What the
+  applies the last two through `apply_ticket_rules` after filing.
+  The manual (`lib/helpdesk/manual`, pages under `(app)/helpdesk/manual`,
+  set up under Settings → Help desk → Manual): topics written up from
+  finished conversations, and hand-written articles. NOTHING in it is about
+  one trade: its name, the labels topics are sorted by, the headings they
+  are written under and which folders, saved views or tags feed it are a
+  config (`helpdesk` / `manual`); never add a word list or a code path for
+  one business. A topic's body is the small document of `rich.ts`; an
+  all-bold one-line paragraph is a heading (`sections.ts`). The worker
+  claims a run (`claim_manual_runs`: by itself only where `auto` is on, or a
+  manager's `request_manual_run`), and for each closed, answered source
+  conversation not yet in `manual_reads` asks Claude with structured output
+  and no tools (`reader.ts`): the words scrubbed (`scrub.ts`), up to three
+  of the customer's kept photos, never a video, and a shortlist of existing
+  topics under references of ours (`T1`…), so the model never sees or names
+  an id. Its answer is only data for `tidyReading` (scrubbed again) and
+  `planReading`, which decides in code: a new draft, points added under
+  their headings (`mergeAdditions` never changes what is written), or, for
+  a topic a person has edited (`person_edited_at`), a row in
+  `manual_suggestions` for a person to accept or dismiss.
+  `apply_manual_reading` is the ONLY writer of a reading and re-checks that
+  rule under the row's lock. Nothing is published by itself; every change
+  leaves a `manual_topic_revisions` row. Runs stop at the plan's AI
+  allowance and the workspace's `monthly_cap`. Published topics are offered
+  in the reply box's picker (`findInManual`), beside a conversation and to
+  the "AI" draft as marked reference (`match.ts`: word matching, no model
+  call on a page load). Keep `tests/db/helpdesk-manual.test.ts` and
+  `manual/run.test.ts` passing. What the
   old help desk does that this one doesn't is in
   `docs/helpdesk-side-by-side.md`.
 - Bookings: seats are never stored as a count. `hold_booking`,

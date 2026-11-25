@@ -262,6 +262,31 @@ export const HELP_TOPICS: HelpTopic[] = [
       "With an undo time set, the email is sent a few seconds after you press Send, so a problem shows as a red notice at the foot of the conversation instead. “Put the words back in the box” lets you try again.",
     ],
   },
+  {
+    slug: "helpdesk-manual",
+    group: "helpdesk",
+    title: "Keep a manual of what the team has learned",
+    summary: "Topics written up from finished conversations, and articles you write yourselves.",
+    intro:
+      "The manual is in the help desk's menu. It holds topics (one thing the team has learned to answer, under a few headings) and a knowledge base of articles. It is for the team: nothing in it reaches a customer unless someone puts it in a reply.",
+    steps: [
+      "Write a topic by hand with “New topic”: a title, a sentence for the list, the labels it is sorted by, and the writing itself. A line that is all bold is a heading; the buttons under the box add your usual ones.",
+      "To have Claude draft topics, an owner or admin opens Settings → Help desk → Manual and chooses which conversations it learns from: a folder, a saved view or a tag. Only closed conversations the team answered are read.",
+      "Press “Update now” on the manual's page, or switch on “Bring it up to date by itself” for a daily or weekly look. On one conversation, “Add this conversation” in the details rail reads just that one.",
+      "New topics arrive as drafts. Read one, edit it if you like, and an owner or admin publishes it.",
+      "Once you have edited a topic it is yours. Later conversations never change it: what they would add shows on the topic as a “Suggested update” to accept, accept and edit, or dismiss.",
+      "While answering, press the manual's button in the reply box (beside Macros) to search published topics and articles and put one, or one of its headings, into your reply to edit. The details rail shows up to three published topics that match the conversation.",
+      "Every change is kept under History on the topic, with a way back to each version.",
+    ],
+    notes: [
+      "The name of the manual, the labels topics are sorted by and the headings they are written under are yours to set, in the same settings screen.",
+      "Customers' names, email addresses, phone numbers, street addresses and order numbers are taken out before a conversation is read and again before anything is saved. Do still read a draft before publishing it.",
+      "Claude is shown the conversation's words and up to three of the customer's photos (you can switch photos off). Videos and other files are only named.",
+      "Each conversation read counts against your plan's AI allowance, up to the monthly limit you set. When either runs out it stops and says so; nothing is lost.",
+      "With “Let reply drafts lean on published topics” on, the “AI” button in the reply box is handed the few topics that match. A draft is still only a draft.",
+      "Deleting a topic doesn't make its conversations be read again.",
+    ],
+  },
 
   // --------------------------------------------------------------- shipping
   {

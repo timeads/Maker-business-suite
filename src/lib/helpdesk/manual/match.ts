@@ -1,8 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { splitQuote } from "../thread";
+import type { RichDoc } from "../rich";
 import {
   DRAFT_TOPICS,
   DRAFT_TOPIC_CHARS,
+  articleEntry,
+  loadArticles,
   loadManualConfig,
   loadTopics,
   topicEntry,
@@ -63,8 +66,8 @@ export async function loadRailTopics(
 }
 
 /**
- * For the "AI" reply draft: the few matching published topics as reference,
- * when the workspace allows it. Their text only, cut to length.
+ * For the "AI" reply draft: the few published topics and articles that match,
+ * as reference, when the workspace allows it. Their text only, cut to length.
  */
 export async function loadDraftTopics(
   supabase: SupabaseClient,
@@ -75,10 +78,29 @@ export async function loadDraftTopics(
   try {
     const config = await loadManualConfig(supabase, tenantId);
     if (!config.use_in_drafts) return [];
-    const topics = (await loadTopics(supabase, tenantId)).filter((topic) => topic.useInDrafts);
-    return pickTopics(topics, conversationWords(subject, messages), DRAFT_TOPICS).map((topic) => ({
-      title: topic.title,
-      text: docText(topic.body).slice(0, DRAFT_TOPIC_CHARS),
+    const [topics, articles] = await Promise.all([
+      loadTopics(supabase, tenantId),
+      loadArticles(supabase, tenantId),
+    ]);
+    const bodies = new Map<string, RichDoc>();
+    const entries = [
+      ...topics
+        .filter((topic) => topic.status === "published" && topic.useInDrafts)
+        .map((topic) => {
+          bodies.set(topic.id, topic.body);
+          return topicEntry(topic);
+        }),
+      ...articles.map((article) => {
+        bodies.set(article.id, article.body);
+        return articleEntry(article);
+      }),
+    ];
+    return closestEntries(entries, conversationWords(subject, messages), {
+      limit: DRAFT_TOPICS,
+      minShared: 2,
+    }).map((match) => ({
+      title: match.entry.title,
+      text: docText(bodies.get(match.entry.id) ?? []).slice(0, DRAFT_TOPIC_CHARS),
     }));
   } catch {
     return [];
