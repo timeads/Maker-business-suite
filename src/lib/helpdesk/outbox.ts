@@ -3,6 +3,7 @@ import { TAG_PATTERN } from "./config";
 import { outgoingText, type Outgoing } from "./outbound";
 import { ReplyRefused, refusalWords } from "./reply";
 import { richDocSchema } from "./rich";
+import { refusalWords as metaRefusalWords } from "./social/graph";
 
 /**
  * Email waiting to go. "Undo send" is a short wait on the server: the email
@@ -98,7 +99,8 @@ export type OutboxRow = {
 /** What to tell the team about an email that is waiting, or didn't go as planned. */
 export function outboxWords(row: Pick<OutboxRow, "state" | "error" | "summary">): string {
   const to = (row.summary?.to ?? []).join(", ") || "the customer";
-  const an = row.summary?.kind === "forward" ? "A forward" : "An email";
+  const social = row.summary?.kind === "social";
+  const an = row.summary?.kind === "forward" ? "A forward" : social ? "A message" : "An email";
   if (row.state === "waiting") return `${an} to ${to} is about to go.`;
   if (row.state === "sending") return `${an} to ${to} is going out now.`;
   if (row.state === "unsure") {
@@ -108,6 +110,12 @@ export function outboxWords(row: Pick<OutboxRow, "state" | "error" | "summary">)
   }
   if (row.error === "author_left") {
     return `${an} to ${to} wasn't sent: the person who wrote it has left the workspace.`;
+  }
+  // An Instagram or Facebook reply: Meta's own reason, in plain words.
+  if (social) {
+    return /:partial:/.test(row.error ?? "")
+      ? `About your message to ${to}: ${metaRefusalWords(row.error)}`
+      : `${an} to ${to} wasn't sent. ${metaRefusalWords(row.error)}`;
   }
   const code = /^postmark:\d+:(\d+)$/.exec(row.error ?? "")?.[1];
   return `${an} to ${to} wasn't sent. ${refusalWords(code ? Number(code) : null)}`;

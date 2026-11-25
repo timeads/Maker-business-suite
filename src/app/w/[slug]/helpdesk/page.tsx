@@ -7,6 +7,7 @@ import {
   ExternalLink,
   Folder,
   Mail,
+  MessageCircle,
   MessageSquare,
   Package,
   Paperclip,
@@ -56,6 +57,18 @@ import { parseRichDoc, type RichDoc } from "@/lib/helpdesk/rich";
 import { loadRailTopics } from "@/lib/helpdesk/manual/match";
 import { SAVED_VIEWS_KEY, matchesConditions, parseSavedViews } from "@/lib/helpdesk/saved-views";
 import { DESK_SETTINGS_KEY, parseDeskSettings } from "@/lib/helpdesk/settings";
+import {
+  CHANNELS_KEY,
+  CHANNEL_LABELS,
+  TEXT_LIMITS,
+  channelState,
+  isSocialChannel,
+  parseChannelSettings,
+  personLabel,
+  profileUrl,
+} from "@/lib/helpdesk/social/channels";
+import { connectionFacts } from "@/lib/helpdesk/social/server";
+import { lastInboundAt, replyWindow, windowWords } from "@/lib/helpdesk/social/window";
 import { TAG_GROUPS_KEY, parseTagGroups } from "@/lib/helpdesk/tag-groups";
 import { foldThread, placeInline, splitQuote } from "@/lib/helpdesk/thread";
 import {
@@ -111,10 +124,17 @@ import {
 } from "./desk-tools";
 import { helpdeskAccess } from "./gate";
 import { DiscardEmpty, OutboxNotices, SendWatch } from "./send-watch";
+import { ForgetPerson, KnownEmail } from "./social-tools";
 
 export const metadata: Metadata = { title: "Help desk" };
 
-type Contact = { email: string; name: string | null };
+type Contact = {
+  id: string;
+  email: string | null;
+  name: string | null;
+  handle: string | null;
+  known_email: string | null;
+};
 type FileRow = {
   id: string;
   message_id: string;
@@ -136,6 +156,8 @@ type Row = {
   merged_into: string | null;
   folder_id: string | null;
   shelf: Shelf | null;
+  /** "email", "instagram" or "facebook". */
+  channel: string;
   last_message_at: string;
   created_at: string;
   contact_id: string;
@@ -153,9 +175,15 @@ type Message = {
   id: string;
   direction: string;
   kind: string | null;
-  from_email: string;
+  from_email: string | null;
   from_name: string | null;
   body: string;
+  /** Our own few words for a message that isn't only text ("Sent a photo"). */
+  summary: string | null;
+  /** When Meta says it was sent (messages on Instagram and Facebook). */
+  sent_at: string | null;
+  /** The customer took it back. */
+  removed_at: string | null;
   created_at: string;
   author_id: string | null;
   to_emails: string[] | null;
@@ -172,7 +200,7 @@ const tagsOf = (row: Row) =>
     .filter((name): name is string => Boolean(name));
 
 const FIELDS =
-  "id, number, subject, status, priority, assignee_id, snoozed_until, merged_into, folder_id, shelf, last_message_at, created_at, contact_id, contacts(email, name), ticket_tags(tags(name))";
+  "id, number, subject, status, priority, assignee_id, snoozed_until, merged_into, folder_id, shelf, channel, last_message_at, created_at, contact_id, contacts(id, email, name, handle, known_email), ticket_tags(tags(name))";
 const UUID = /^[0-9a-f-]{36}$/;
 const heading = "text-[13px] font-bold tracking-[-0.005em]";
 const card = "border-border border-b px-4 py-4";
@@ -257,6 +285,9 @@ export default async function HelpdeskPage({
       : undefined;
   const priority = (["low", "normal", "high", "urgent"] as const).find((p) => p === query.priority);
   const unreadOnly = query.unread === "1";
+  const channelFilter = (["email", "social", "instagram", "facebook"] as const).find(
+    (c) => c === query.channel,
+  );
   // "Show more": each step reads further back, up to a thousand conversations.
   const pages = /^[2-5]$/.test(query.n ?? "") ? Number(query.n) : 1;
   const side = query.side === "activity" || query.side === "details" ? query.side : null;
@@ -283,6 +314,7 @@ export default async function HelpdeskPage({
     { data: shelved },
     { count: spamCount },
     cookieJar,
+    { data: metaRow },
   ] = await Promise.all([
     supabase
       .from("tickets")
@@ -317,7 +349,7 @@ export default async function HelpdeskPage({
       .select("key, body")
       .eq("tenant_id", tenant.id)
       .eq("module", HELPDESK_MODULE)
-      .in("key", [SAVED_VIEWS_KEY, DESK_SETTINGS_KEY, TAG_GROUPS_KEY]),
+      .in("key", [SAVED_VIEWS_KEY, DESK_SETTINGS_KEY, TAG_GROUPS_KEY, CHANNELS_KEY]),
     // This person's own read marks, newest first.
     supabase
       .from("ticket_reads")
@@ -350,6 +382,14 @@ export default async function HelpdeskPage({
       .eq("tenant_id", tenant.id)
       .eq("shelf", "spam"),
     cookies(),
+    // The Facebook & Instagram connection, by the columns members may read.
+    // Allowed to fail: without it, messages simply read as not connected.
+    supabase
+      .from("connections")
+      .select("status, scopes, display_name, metadata")
+      .eq("tenant_id", tenant.id)
+      .eq("provider", "meta")
+      .maybeSingle(),
   ]);
   const people = (team ?? []) as Person[];
   const person = (id: string | null) => people.find((p) => p.user_id === id);
@@ -359,6 +399,9 @@ export default async function HelpdeskPage({
   const savedViews = parseSavedViews(configOf(SAVED_VIEWS_KEY)).views;
   const deskSettings = parseDeskSettings(configOf(DESK_SETTINGS_KEY));
   const tagGroups = parseTagGroups(configOf(TAG_GROUPS_KEY)).groups;
+  const channelSettings = parseChannelSettings(configOf(CHANNELS_KEY));
+  const metaConnection = metaRow ? connectionFacts(metaRow as Record<string, unknown>) : null;
+  const socialOn = channelSettings.instagram || channelSettings.facebook;
   const savedView = choice.kind === "saved" ? savedViews.find((v) => v.id === choice.id) : null;
   const folder = choice.kind === "folder" ? folders.find((f) => f.id === choice.id) : null;
   const readAt = new Map((readRows ?? []).map((r) => [r.ticket_id as string, r.read_at as string]));
@@ -376,8 +419,11 @@ export default async function HelpdeskPage({
   const facts = (row: Row) => ({ ...row, mentioned: mentioned.has(row.id) });
   const customerOf = (row: Row) => {
     const contact = one(row.contacts);
-    return `${contact?.name ?? ""} ${contact?.email ?? ""}`;
+    return `${contact?.name ?? ""} ${contact?.email ?? ""} ${contact?.handle ? `@${contact.handle}` : ""}`;
   };
+  /** Who a conversation is with, as the list and its header name them. */
+  const whoOf = (row: Row) =>
+    personLabel(isSocialChannel(row.channel) ? row.channel : "email", one(row.contacts));
 
   const inChoice = (row: Row): boolean => {
     if (choice.kind === "folder") return inFolder(row, choice.id);
@@ -427,7 +473,11 @@ export default async function HelpdeskPage({
   });
   const wantUnread = unreadOnly || Boolean(savedView?.conditions.unread);
   const filtered = listRows.filter((row) =>
-    passesFilters(row, { tag, assignee, priority, unread: wantUnread }, user.id),
+    passesFilters(
+      row,
+      { tag, assignee, priority, unread: wantUnread, channel: channelFilter },
+      user.id,
+    ),
   );
   const mixed =
     Boolean(q) ||
@@ -482,6 +532,7 @@ export default async function HelpdeskPage({
     assignee: assignee ?? "",
     priority: priority ?? "",
     unread: unreadOnly ? "1" : "",
+    channel: channelFilter ?? "",
     n: pages > 1 ? String(pages) : "",
   };
   const href = (changes: Record<string, string | number | null>) => {
@@ -540,7 +591,7 @@ export default async function HelpdeskPage({
         supabase
           .from("messages")
           .select(
-            "id, direction, kind, from_email, from_name, body, created_at, author_id, to_emails, cc_emails, format, attachments",
+            "id, direction, kind, from_email, from_name, body, summary, sent_at, removed_at, created_at, author_id, to_emails, cc_emails, format, attachments",
           )
           .eq("tenant_id", tenant.id)
           .eq("ticket_id", ticket.id)
@@ -578,10 +629,14 @@ export default async function HelpdeskPage({
           ? supabase.from("tickets").select("number").eq("id", ticket.merged_into).maybeSingle()
           : Promise.resolve({ data: null }),
         // The shop's side of the story. Trouble reading it never costs the conversation.
-        contact
-          ? loadCustomerSide(supabase, tenant.id, contact.email).catch(
-              (): CustomerSide | null => null,
-            )
+        // Someone who messaged is matched to the shop only by an email the
+        // team wrote down for them. Never by a name.
+        (contact?.email ?? contact?.known_email)
+          ? loadCustomerSide(
+              supabase,
+              tenant.id,
+              (contact?.email ?? contact?.known_email) as string,
+            ).catch((): CustomerSide | null => null)
           : Promise.resolve(null),
       ])
     : [null, null, null, null, null, null, null];
@@ -629,8 +684,9 @@ export default async function HelpdeskPage({
     .reverse()
     .slice(0, 20)
     .map((row) => ({ id: row.id, name: row.name, size: Number(row.bytes) }));
+  const lastMail = thread.filter((m) => m.direction === "inbound" && m.from_email).at(-1);
   const replyAllCc = replyAllCopies(
-    thread.filter((m) => m.direction === "inbound").at(-1) ?? null,
+    lastMail ? { ...lastMail, from_email: lastMail.from_email as string } : null,
     {
       domain,
       addresses: [
@@ -665,7 +721,7 @@ export default async function HelpdeskPage({
     body: fillTemplate(template.body, {
       first_name: firstName ?? "there",
       name: contact?.name ?? "",
-      email: contact?.email ?? "",
+      email: contact?.email ?? contact?.known_email ?? "",
       workspace: tenant.name,
       my_name: nameOf(person(user.id)).split(/\s+/)[0],
       ...(latestOrder
@@ -694,8 +750,15 @@ export default async function HelpdeskPage({
     | { kind: "message"; at: string; id: string; m: Message }
     | { kind: "note"; at: string; id: string; who: string; body: string }
     | { kind: "event"; at: string; id: string; text: string };
+  const channel = ticket && isSocialChannel(ticket.channel) ? ticket.channel : null;
+  const customerLabel = personLabel(channel ?? "email", contact);
   const entries: Entry[] = [
-    ...thread.map((m): Entry => ({ kind: "message", at: m.created_at, id: m.id, m })),
+    ...thread.map((m): Entry =>
+      m.kind === "reaction"
+        ? // A reaction is a small line in the conversation, not a message to answer.
+          { kind: "event", at: m.created_at, id: m.id, text: `${customerLabel} reacted ${m.body}` }
+        : { kind: "message", at: m.created_at, id: m.id, m },
+    ),
     ...(notes?.data ?? []).map((n): Entry => ({
       kind: "note",
       at: n.created_at as string,
@@ -734,11 +797,41 @@ export default async function HelpdeskPage({
     domain && process.env.POSTMARK_SERVER_TOKEN && process.env.SUPABASE_SECRET_KEY,
   );
   const canDraft = Boolean(process.env.ANTHROPIC_API_KEY && process.env.SUPABASE_SECRET_KEY);
+  // An Instagram or Facebook conversation: Meta's limits and its 24-hour
+  // reply window, worked out here from the customer's last message.
+  const windowTime = new Intl.DateTimeFormat("en-US", {
+    weekday: "short",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: tenant.timezone,
+  });
+  const socialState = channel ? channelState(channel, channelSettings, metaConnection) : null;
+  const socialWindow = channel
+    ? replyWindow(lastInboundAt(thread), nowMs, { humanAgent: channelSettings.human_agent })
+    : null;
+  const socialReply =
+    channel && socialState && socialWindow
+      ? {
+          channel,
+          name: CHANNEL_LABELS[channel],
+          to: customerLabel,
+          max: TEXT_LIMITS[channel].max,
+          unit: TEXT_LIMITS[channel].unit,
+          open: socialWindow.open,
+          words: windowWords(channel, socialWindow, (at) => windowTime.format(new Date(at))),
+          blocked: !(process.env.META_APP_SECRET && process.env.SUPABASE_SECRET_KEY)
+            ? `${CHANNEL_LABELS[channel]} messages aren't switched on for this environment yet. Notes still work.`
+            : socialState.state === "on"
+              ? null
+              : `${socialState.why ?? `${CHANNEL_LABELS[channel]} messages are switched off.`} See Settings → Help desk → Channels. Notes still work.`,
+        }
+      : null;
   const editable = Boolean(ticket && canWrite && !ticket.merged_into);
   const ticketUnread =
     ticket &&
     isUnread(
-      thread.filter((m) => m.direction === "inbound").at(-1)?.created_at ?? null,
+      thread.filter((m) => m.direction === "inbound" && m.kind !== "reaction").at(-1)?.created_at ??
+        null,
       readAt.get(ticket.id) ?? null,
       ticket.status,
     );
@@ -798,11 +891,20 @@ export default async function HelpdeskPage({
       ? m.author_id
         ? nameOf(person(m.author_id))
         : tenant.name
-      : (m.from_name ?? m.from_email);
+      : channel
+        ? customerLabel
+        : (m.from_name ?? m.from_email ?? "Unknown sender");
+    // A reply sent from the Instagram or Facebook app itself, not from here.
+    const fromApp = ours && !m.author_id && channel ? m.from_name : null;
+    const KIND_WORDS: Record<string, string> = {
+      story_reply: "replied to your story",
+      story_mention: "mentioned you in their story",
+      share: "shared a post",
+    };
     const doc = ours ? parseRichDoc(m.format) : null;
     const text = ours ? { own: m.body, quoted: null } : splitQuote(m.body);
     const to =
-      (m.to_emails ?? []).length > 0 ? (m.to_emails ?? []) : contact ? [contact.email] : [];
+      (m.to_emails ?? []).length > 0 ? (m.to_emails ?? []) : contact?.email ? [contact.email] : [];
     const files = filesOf.get(m.id) ?? [];
     const body = ours
       ? { pieces: [{ kind: "text" as const, text: text.own }], placed: new Set<string>() }
@@ -826,9 +928,13 @@ export default async function HelpdeskPage({
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm leading-tight font-bold">{who}</p>
             <p className="text-muted-foreground truncate text-xs">
-              {ours
-                ? `${m.kind === "forward" ? "forwarded to" : "to"} ${to.join(", ")}${(m.cc_emails ?? []).length > 0 ? ` · cc ${(m.cc_emails ?? []).join(", ")}` : ""}`
-                : `${m.from_email}${copied.length > 0 ? ` · also to ${copied.join(", ")}` : ""}`}
+              {channel
+                ? ours
+                  ? `${CHANNEL_LABELS[channel]} message to ${customerLabel}${fromApp ? ` · sent from the ${fromApp}` : ""}`
+                  : `${CHANNEL_LABELS[channel]} message${KIND_WORDS[m.kind ?? ""] ? ` · ${KIND_WORDS[m.kind ?? ""]}` : ""}`
+                : ours
+                  ? `${m.kind === "forward" ? "forwarded to" : "to"} ${to.join(", ")}${(m.cc_emails ?? []).length > 0 ? ` · cc ${(m.cc_emails ?? []).join(", ")}` : ""}`
+                  : `${m.from_email ?? ""}${copied.length > 0 ? ` · also to ${copied.join(", ")}` : ""}`}
             </p>
           </div>
           <time className="text-muted-foreground shrink-0 text-xs" dateTime={m.created_at}>
@@ -854,8 +960,19 @@ export default async function HelpdeskPage({
             ),
           )
         )}
-        {!doc && body.pieces.length === 0 && files.length > 0 && (
-          <p className="text-muted-foreground text-xs">No words, just what&apos;s attached.</p>
+        {m.removed_at ? (
+          <p className="text-muted-foreground text-sm italic">
+            This message was removed by the person who sent it.
+          </p>
+        ) : !doc && body.pieces.length === 0 && m.summary ? (
+          // Our own words for a message that isn't text; never the customer's.
+          <p className="text-muted-foreground text-sm">{m.summary}</p>
+        ) : (
+          !doc &&
+          body.pieces.length === 0 &&
+          files.length > 0 && (
+            <p className="text-muted-foreground text-xs">No words, just what&apos;s attached.</p>
+          )
         )}
         {text.quoted && (
           <details className="mt-2">
@@ -950,6 +1067,7 @@ export default async function HelpdeskPage({
               canWrite={canWrite}
               canSaveView={canWrite && canManage(role)}
               canSend={canSend}
+              channels={socialOn}
               manageHref={`/w/${tenant.slug}/settings/helpdesk#folders`}
               extra={
                 canManage(role) && canWrite ? (
@@ -1016,8 +1134,10 @@ export default async function HelpdeskPage({
                   )
                 ) : q ? (
                   `Nothing matches “${q}” in names, emails, subjects, what was said or ticket numbers.`
-                ) : tag || assignee || priority || unreadOnly ? (
+                ) : tag || assignee || priority || unreadOnly || channelFilter ? (
                   "No conversations match these filters."
+                ) : choice.kind === "built" && choice.key === "social" ? (
+                  "No Instagram or Facebook messages are waiting."
                 ) : choice.kind === "built" &&
                   ["open", "mine", "unassigned"].includes(choice.key) ? (
                   "Inbox zero. Nothing needs a reply."
@@ -1043,7 +1163,7 @@ export default async function HelpdeskPage({
                   {canWrite && (
                     <BulkBox
                       id={row.id}
-                      label={`#${row.number} from ${who?.name ?? who?.email ?? "an unknown sender"}`}
+                      label={`#${row.number} from ${who ? whoOf(row) : "an unknown sender"}`}
                     />
                   )}
                   <Link
@@ -1068,7 +1188,7 @@ export default async function HelpdeskPage({
                           row.unread ? "font-bold" : "font-semibold",
                         )}
                       >
-                        {who?.name ?? who?.email ?? "Unknown sender"}
+                        {whoOf(row)}
                       </span>
                       <time
                         dateTime={row.last_message_at}
@@ -1092,6 +1212,19 @@ export default async function HelpdeskPage({
                       </span>
                     )}
                     <span className="flex flex-wrap items-center gap-1 pt-1">
+                      {isSocialChannel(row.channel) && (
+                        <span
+                          className={cn(
+                            "flex items-center gap-1 rounded-sm border px-1.5 py-0.5 text-[11px] font-semibold",
+                            row.channel === "instagram"
+                              ? "border-ochre bg-ochre-soft text-ochre-text"
+                              : "border-border bg-teal-soft text-teal-soft-ink",
+                          )}
+                        >
+                          <MessageCircle aria-hidden className="size-3" />
+                          {CHANNEL_LABELS[row.channel]}
+                        </span>
+                      )}
                       {rowFolder && choice.kind !== "folder" && (
                         <span className="border-border text-text-2 flex items-center gap-1 rounded-sm border px-1.5 py-0.5 text-[11px] font-semibold">
                           <Folder aria-hidden className="size-3" />
@@ -1227,8 +1360,8 @@ export default async function HelpdeskPage({
                       canEdit={editable}
                     />
                     <p className="text-muted-foreground truncate text-[13px]">
-                      #{ticket.number} ·{" "}
-                      <span className="font-read">{contact?.name ?? contact?.email}</span> ·{" "}
+                      #{ticket.number} · <span className="font-read">{customerLabel}</span> ·{" "}
+                      {channel && <>{CHANNEL_LABELS[channel]} · </>}
                       <span title={when.format(new Date(ticket.created_at))}>
                         {openedAgo(ticket.created_at, nowMs)}
                       </span>
@@ -1321,7 +1454,8 @@ export default async function HelpdeskPage({
                 {entries.length === 0 && (
                   <div className="text-muted-foreground flex flex-col gap-2 text-sm">
                     <p>
-                      Nothing has been sent on this conversation yet. Write the first email below.
+                      Nothing has been sent on this conversation yet.
+                      {channel ? "" : " Write the first email below."}
                     </p>
                     {editable && !outbox.some((row) => row.state !== "failed") && (
                       <DiscardEmpty slug={tenant.slug} ticketId={ticket.id} back={backHref} />
@@ -1357,8 +1491,9 @@ export default async function HelpdeskPage({
                     manualName={railManual.name}
                     snoozeChoices={choices}
                     canDraft={canDraft}
-                    canSend={canSend}
+                    canSend={channel ? true : canSend}
                     afterHref={afterHref}
+                    social={socialReply}
                   />
                 </div>
               )}
@@ -1379,7 +1514,9 @@ export default async function HelpdeskPage({
         <dd className="flex min-w-0 justify-end text-right text-sm">{value}</dd>
       </div>
     );
-    const customerName = contact?.name ?? contact?.email ?? "Customer";
+    const customerName = channel
+      ? (contact?.name ?? customerLabel)
+      : (contact?.name ?? contact?.email ?? "Customer");
     return (
       <>
         <div className="border-border flex shrink-0 items-center gap-4 border-b px-4">
@@ -1420,6 +1557,7 @@ export default async function HelpdeskPage({
       {
         createdAt: ticket.created_at,
         messages: thread,
+        channelName: channel ? CHANNEL_LABELS[channel] : null,
         notes: (notes?.data ?? []) as { author_id: string | null; created_at: string }[],
         events: eventRows,
       },
@@ -1672,10 +1810,28 @@ export default async function HelpdeskPage({
               <p className="font-read truncate text-[15px] leading-tight font-bold">
                 {customerName}
               </p>
-              {contact && (
+              {contact?.email && (
                 <p className="text-muted-foreground flex items-center gap-1.5 text-xs">
                   <span className="font-read truncate">{contact.email}</span>
                   <CopyButton text={contact.email} label="Copy email" />
+                </p>
+              )}
+              {channel && (
+                <p className="text-muted-foreground flex flex-wrap items-center gap-x-1.5 text-xs">
+                  <span>{CHANNEL_LABELS[channel]}</span>
+                  {contact?.handle && <span className="font-read">· @{contact.handle}</span>}
+                  {profileUrl(channel, contact?.handle) && (
+                    // A plain link to their public profile. Nothing of it is loaded here.
+                    <a
+                      href={profileUrl(channel, contact?.handle)!}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-ochre-text flex items-center gap-0.5 font-semibold hover:underline"
+                    >
+                      profile
+                      <ExternalLink aria-hidden className="size-3" />
+                    </a>
+                  )}
                 </p>
               )}
               {customer?.phone && (
@@ -1707,6 +1863,16 @@ export default async function HelpdeskPage({
               ))}
             </dl>
           )}
+          {channel && contact && (
+            <KnownEmail
+              key={contact.known_email ?? ""}
+              slug={tenant.slug}
+              contactId={contact.id}
+              email={contact.known_email}
+              canEdit={canWrite}
+              name={CHANNEL_LABELS[channel]}
+            />
+          )}
           {customer && !customer.known && (
             <p className="bg-sunken mt-3 rounded-md px-3 py-2 text-xs">
               {customer.shopName
@@ -1714,15 +1880,18 @@ export default async function HelpdeskPage({
                 : "Connect your shop to see this customer's orders here."}
             </p>
           )}
-          {!customer && (
+          {!customer && (contact?.email ?? contact?.known_email) && (
             <p className="bg-sunken mt-3 rounded-md px-3 py-2 text-xs">
               Their orders couldn&apos;t be read just now.
             </p>
           )}
-          {canWrite && contact && (
+          {canWrite && (contact?.email ?? contact?.known_email) && (
             <div className="mt-3">
-              <NewEmailTo email={contact.email} />
+              <NewEmailTo email={(contact?.email ?? contact?.known_email) as string} />
             </div>
+          )}
+          {channel && contact && canWrite && canManage(role) && (
+            <ForgetPerson slug={tenant.slug} contactId={contact.id} back={backHref} />
           )}
         </section>
 

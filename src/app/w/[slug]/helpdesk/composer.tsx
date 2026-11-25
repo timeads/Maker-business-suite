@@ -31,7 +31,25 @@ import { fileSize, filesProblem, parseRecipients } from "@/lib/helpdesk/outbound
 import { isSafeLink, richToHtml, richToText, textToRich, type RichDoc } from "@/lib/helpdesk/rich";
 import { readEditor } from "@/lib/helpdesk/rich-dom";
 import { cn } from "@/lib/utils";
+import { socialFilesProblem, textSize } from "@/lib/helpdesk/social/channels";
 import { addTicketNote, draftTicketReply, sendMail } from "./actions";
+import { sendSocialMessage } from "./social-actions";
+
+/** What the reply box needs to know about an Instagram or Facebook conversation. */
+export type SocialReply = {
+  channel: "instagram" | "facebook";
+  name: string;
+  /** Who it goes to, as the conversation names them ("@handle"). */
+  to: string;
+  /** How much one message holds, and what that is counted in. */
+  max: number;
+  unit: "bytes" | "characters";
+  /** Meta's reply window, worked out on the server from the customer's last message. */
+  open: boolean;
+  words: string;
+  /** Why nothing can be sent at all (not connected, switched off), or null. */
+  blocked: string | null;
+};
 import { ManualPicker } from "./manual-picker";
 
 type Template = { id: string; name: string; body: string; actions?: TemplateActions };
@@ -100,7 +118,10 @@ export function Composer({
   canDraft,
   canSend,
   afterHref,
+  social = null,
 }: {
+  /** Set for a conversation on Instagram or Facebook: plain words, Meta's limits. */
+  social?: SocialReply | null;
   slug: string;
   ticketId: string;
   customerEmail: string;
@@ -139,7 +160,15 @@ export function Composer({
   const [hint, setHint] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [size, setSize] = useState(0);
   const [busy, start] = useTransition();
+  // The channel by its name, so these don't change every time the page is read again.
+  const socialChannel = social?.channel ?? null;
+  const measure = useCallback(() => {
+    if (socialChannel && editor.current) {
+      setSize(textSize(socialChannel, richToText(readEditor(editor.current)).trim()));
+    }
+  }, [socialChannel]);
   const key = draftKey(ticketId);
   const state = useRef({ mode, to, cc });
   useEffect(() => {
@@ -176,8 +205,11 @@ export function Composer({
       }
       if (!saved || !editor.current) return;
       fillEditor(editor.current, saved.doc);
-      setModeState(saved.mode);
-      if (saved.mode === "forward") setTo(saved.to ?? "");
+      // A message has no "reply all" or forward, whatever an old draft says.
+      const savedMode = socialChannel && saved.mode !== "note" ? "reply" : saved.mode;
+      setModeState(savedMode);
+      measure();
+      if (savedMode === "forward") setTo(saved.to ?? "");
       if (saved.cc) setCc(saved.cc);
       setNotice(words);
     };
@@ -192,10 +224,11 @@ export function Composer({
       cancelAnimationFrame(frame);
       window.removeEventListener(RESTORE_EVENT, onRestore);
     };
-  }, [key, ticketId]);
+  }, [key, ticketId, socialChannel, measure]);
 
   const setMode = useCallback(
-    (next: ComposerMode, focus = true) => {
+    (asked: ComposerMode, focus = true) => {
+      const next = socialChannel && asked !== "note" ? "reply" : asked;
       setModeState(next);
       setProblem(null);
       setNotice(null);
@@ -217,7 +250,7 @@ export function Composer({
       save();
       if (focus) requestAnimationFrame(() => editor.current?.focus());
     },
-    [customerEmail, replyAllCc, save],
+    [customerEmail, replyAllCc, save, socialChannel],
   );
 
   // A saved reply, an order's summary or anything else dropped in goes under what is already there.
@@ -235,8 +268,9 @@ export function Composer({
       selection?.addRange(range);
       root.scrollTop = root.scrollHeight;
       save();
+      measure();
     },
-    [save],
+    [save, measure],
   );
 
   // The little menus close on Escape and on a press anywhere else.
@@ -291,6 +325,7 @@ export function Composer({
 
   const clear = () => {
     if (editor.current) editor.current.innerHTML = "";
+    setSize(0);
     setFiles([]);
     setDropped([]);
     setExtras({});
@@ -317,13 +352,26 @@ export function Composer({
     setMenu(null);
     setNotice(null);
     const doc = readEditor(root);
-    if (mode !== "forward" && !richToText(doc)) {
+    if (mode !== "forward" && !richToText(doc) && !(social && files.length > 0)) {
       setProblem("Write a reply first.");
       root.focus();
       return;
     }
+    if (social) {
+      if (social.blocked || !social.open) {
+        setProblem(social.blocked ?? social.words);
+        return;
+      }
+      const used = textSize(social.channel, richToText(doc).trim());
+      if (used > social.max) {
+        setProblem(
+          `That is ${used.toLocaleString("en-US")} ${social.unit}; one ${social.name} message holds ${social.max.toLocaleString("en-US")}. Send it as two.`,
+        );
+        return;
+      }
+    }
     const people = parseRecipients(to);
-    if (people.ok.length === 0 || people.bad.length > 0) {
+    if (!social && (people.ok.length === 0 || people.bad.length > 0)) {
       setProblem(
         people.bad[0] ? `“${people.bad[0]}” isn't an email address.` : "Add who to send it to.",
       );
@@ -348,7 +396,9 @@ export function Composer({
     }
     setProblem(null);
     start(async () => {
-      const result = await sendMail(slug, ticketId, data);
+      const result = social
+        ? await sendSocialMessage(slug, ticketId, data)
+        : await sendMail(slug, ticketId, data);
       if (result.error) {
         setProblem(`${result.error} Your draft is saved.`);
         return;
@@ -382,7 +432,9 @@ export function Composer({
       const leaving = then === "snoozed" || (then === "closed" && afterClose !== "stay");
       if (leaving) router.push(afterHref);
       else {
-        setNotice(result.queued ? null : mode === "forward" ? "Forwarded." : "Sent.");
+        setNotice(
+          result.queued ? null : (result.message ?? (mode === "forward" ? "Forwarded." : "Sent.")),
+        );
         router.refresh();
       }
     });
@@ -424,6 +476,7 @@ export function Composer({
       }
       if (editor.current) fillEditor(editor.current, textToRich(result.draft));
       save();
+      measure();
       setNotice(
         "Claude's draft is in the box. Read it and change what you like; nothing is sent until you press send.",
       );
@@ -458,7 +511,11 @@ export function Composer({
 
   const pickFiles = (picked: FileList | null) => {
     const next = [...files, ...Array.from(picked ?? [])];
-    const wrong = filesProblem(next.map((file) => ({ name: file.name, size: file.size })));
+    const wrong = social
+      ? socialFilesProblem(
+          next.map((file) => ({ name: file.name, size: file.size, type: file.type })),
+        )
+      : filesProblem(next.map((file) => ({ name: file.name, size: file.size })));
     if (wrong) setProblem(wrong);
     else {
       setProblem(null);
@@ -502,7 +559,12 @@ export function Composer({
     ? "Only your team sees notes. Type @ to mention someone…"
     : mode === "forward"
       ? "Add a message (optional)…"
-      : `Reply to ${customerFirstName ?? customerEmail}…`;
+      : social
+        ? `Reply to ${social.to} on ${social.name}…`
+        : `Reply to ${customerFirstName ?? customerEmail}…`;
+  // A message has no copies, no forward and no formatting: two tabs, plain words.
+  const tabs = social ? TABS.filter((tab) => tab.key === "reply" || tab.key === "note") : TABS;
+  const cantSend = !canSend || Boolean(social && (social.blocked || !social.open));
 
   return (
     <div
@@ -515,7 +577,7 @@ export function Composer({
     >
       <div className="flex flex-wrap items-center gap-x-1 gap-y-1 px-2 pt-2">
         <div role="tablist" aria-label="What to write" className="flex flex-wrap gap-0.5">
-          {TABS.map((tab) => (
+          {tabs.map((tab) => (
             <button
               key={tab.key}
               type="button"
@@ -543,6 +605,8 @@ export function Composer({
         <p className="text-muted-foreground ml-auto min-w-0 truncate px-1 text-xs">
           {note ? (
             "Only your team sees notes"
+          ) : social ? (
+            `${social.name} message to ${social.to}`
           ) : (
             <>
               {people.to.length > 0
@@ -565,7 +629,7 @@ export function Composer({
         </p>
       </div>
 
-      {editing && !note && (
+      {editing && !note && !social && (
         <div className="grid grid-cols-[2.5rem_1fr] items-center gap-x-2 gap-y-1 px-3 pt-2 text-xs">
           {(
             [
@@ -593,7 +657,12 @@ export function Composer({
         </div>
       )}
 
-      <div role="toolbar" aria-label="Formatting" className="flex items-center gap-0.5 px-2 pt-1.5">
+      <div
+        role="toolbar"
+        aria-label="Formatting"
+        hidden={Boolean(social)}
+        className={cn("items-center gap-0.5 px-2 pt-1.5", social ? "hidden" : "flex")}
+      >
         {FORMATS.map((entry, i) =>
           entry === null ? (
             <span key={i} aria-hidden className="bg-border mx-1 h-4 w-px" />
@@ -626,6 +695,7 @@ export function Composer({
         onInput={() => {
           save();
           checkMention();
+          measure();
         }}
         onKeyUp={checkMention}
         onClick={checkMention}
@@ -739,6 +809,25 @@ export function Composer({
           ))}
         </ul>
       )}
+      {social && !note && (
+        <p
+          className={cn(
+            "flex flex-wrap items-center gap-x-2 gap-y-1 px-3 pb-1 text-xs",
+            social.blocked || !social.open ? "text-foreground" : "text-muted-foreground",
+          )}
+        >
+          <span className="min-w-0 flex-1 basis-64">{social.blocked ?? social.words}</span>
+          {(social.blocked || !social.open) && (
+            <button
+              type="button"
+              onClick={() => setMode("note")}
+              className="text-ochre-text font-semibold hover:underline"
+            >
+              Write an internal note instead
+            </button>
+          )}
+        </p>
+      )}
       {(problem || notice) && (
         <p
           role={problem ? "alert" : "status"}
@@ -836,12 +925,13 @@ export function Composer({
             </div>
             <button type="button" onClick={() => fileInput.current?.click()} className={quiet}>
               <Paperclip aria-hidden />
-              Attach
+              {social ? "Picture" : "Attach"}
             </button>
             <input
               ref={fileInput}
               type="file"
               multiple
+              accept={social ? "image/jpeg,image/png" : undefined}
               hidden
               onChange={(event) => pickFiles(event.target.files)}
             />
@@ -893,6 +983,18 @@ export function Composer({
           </>
         )}
         <span className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
+          {social && !note && (
+            <span
+              aria-live="polite"
+              title={`One ${social.name} message holds ${social.max.toLocaleString("en-US")} ${social.unit}`}
+              className={cn(
+                "px-1 text-xs tabular-nums",
+                size > social.max ? "text-brick font-semibold" : "text-muted-foreground",
+              )}
+            >
+              {size.toLocaleString("en-US")} / {social.max.toLocaleString("en-US")}
+            </span>
+          )}
           <button
             type="button"
             onClick={discard}
@@ -913,7 +1015,7 @@ export function Composer({
                   type="button"
                   variant="outline"
                   onClick={() => send("pending")}
-                  disabled={busy || !canSend}
+                  disabled={busy || cantSend}
                   title={
                     mode === "forward" ? "Forward" : "Send and mark in progress (Ctrl/⌘ + Enter)"
                   }
@@ -925,7 +1027,7 @@ export function Composer({
                   type="button"
                   variant="outline"
                   onClick={() => setMenu(menu === "send" ? null : "send")}
-                  disabled={busy || !canSend}
+                  disabled={busy || cantSend}
                   aria-label="More ways to send"
                   aria-expanded={menu === "send"}
                   className="-ml-px rounded-l-none px-2"
@@ -964,7 +1066,7 @@ export function Composer({
               <Button
                 type="button"
                 onClick={() => send("closed")}
-                disabled={busy || !canSend}
+                disabled={busy || cantSend}
                 title="Send, close and go to the next one (Ctrl/⌘ + Shift + Enter)"
               >
                 <Send aria-hidden />
@@ -974,7 +1076,7 @@ export function Composer({
           )}
         </span>
       </div>
-      {!canSend && !note && (
+      {!canSend && !note && !social && (
         <p className="text-muted-foreground border-border border-t px-3 py-2 text-xs">
           Sending email isn&apos;t switched on for this environment yet. Notes still work.
         </p>

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Download, FileText, Film, Paperclip, X } from "lucide-react";
 import { fileSize } from "@/lib/helpdesk/outbound";
-import { isPicture, isVideo, notKeptWords } from "@/lib/helpdesk/files";
+import { isAudio, isPicture, isVideo, notKeptWords } from "@/lib/helpdesk/files";
 import { cn } from "@/lib/utils";
 
 export type ShownFile = {
@@ -155,6 +155,19 @@ function FileChip({ file, onOpen }: { file: ShownFile; onOpen: () => void }) {
         <span className="truncate">
           A file we didn&apos;t keep: <span className="font-read font-semibold">{file.name}</span>,{" "}
           {file.type}, {fileSize(file.size)} ({notKeptWords(file.reason)})
+        </span>
+      </span>
+    );
+  }
+  if (isAudio(file.type)) {
+    // A voice message: the browser's own player, pointed at our own route.
+    return (
+      <span className="flex max-w-full flex-col gap-1">
+        <audio controls preload="none" src={fileHref(file.id)} className="h-9 max-w-full">
+          <a href={fileHref(file.id, true)}>Download {file.name}</a>
+        </audio>
+        <span className="text-muted-foreground text-[11px]">
+          <span className="font-read">{file.name}</span> · {fileSize(file.size)}
         </span>
       </span>
     );
