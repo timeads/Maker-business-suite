@@ -92,16 +92,39 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   email is shown as plain text only. Reply templates and auto-tag rules are
   `configs` (module `helpdesk`). Claude drafts go into the reply box and are
   never sent automatically; customer text in the prompt is marked as data.
-  The inbox is one full-window page (`w/[slug]/helpdesk/page.tsx`) whose
-  whole state is in the URL (`view`, `tag`, `q`, `t`); folders are worked out
-  by `inView()` in `lib/helpdesk/views.ts`, so a snooze needs no timer. The
-  folders and tags are rows in the help desk's menu panel (the nav model
-  builds their addresses); the inbox hands the panel the counts and tags it
-  has already read (`<PanelExtras>`) and never runs a query for them. Notes
+  The inbox is one full-window page (`w/[slug]/helpdesk/page.tsx`) of three
+  panes, each scrolling on its own: the list, the conversation with its
+  composer, and a details rail (Details / Activity). Its whole state is in the
+  URL (`view`, `tag`, `q`, `t`, the filters `assignee` / `priority` / `unread`
+  / `sort`, and `side` for the rail); only "rail folded" is a cookie. `view`
+  is a built-in view, a folder (`f:<id>`) or a saved view (`v:<id>`):
+  `parseView()` and `inView()` in `lib/helpdesk/views.ts`, so a snooze needs
+  no timer. Folders are `ticket_folders` (managers make them, anyone files
+  with `file_ticket`); a filed conversation leaves the inbox views. Saved
+  views are a config (`helpdesk` / `saved_views`, `lib/helpdesk/saved-views.ts`).
+  The menu panel's folders, views, tags and counts are what the inbox has
+  already read (`<PanelExtras>`); it never runs a query for them. Unread is
+  each person's own (`ticket_reads`), worked out on read with the list's other
+  facts (`ticket_list_facts`, never stored). `ticket_events` is the activity
+  log, written only by a trigger on `tickets` (and a forward); it never holds
+  a subject's words. Mail goes out through one path (`sendMail` → `deliver`
+  → `record_outbound`): reply, copies, forward, files (sent, not kept), and
+  what happens next (in progress, open, snoozed, closed). Formatting is a
+  small document (`lib/helpdesk/rich.ts`): the editor hands it over, the
+  server checks it and writes the HTML and plain-text parts itself, and the
+  thread draws it as React nodes; no HTML from a browser or a customer is
+  ever sent or rendered. Unsent drafts live in the browser only. The customer
+  and orders in the rail come from what the shop sync stored, read as the
+  member (`helpdesk/data.ts`, `lib/helpdesk/customer.ts`): no call to the
+  shop, and Shipping's and Stock's parts are allowed to fail. "Summarize"
+  (`lib/helpdesk/insights.ts`) is a person's press, kept on the ticket, never
+  sent. Notes
   for the team live in `ticket_notes` and are never emailed. A conversation
   joined into another keeps a `merged_into` pointer, and later mail follows
   it. Rules (`auto_tag_rules`) can tag, set priority or hand off; the worker
-  applies the last two through `apply_ticket_rules` after filing.
+  applies the last two through `apply_ticket_rules` after filing. What the
+  old help desk does that this one doesn't is in
+  `docs/helpdesk-side-by-side.md`.
 - Bookings: seats are never stored as a count. `hold_booking`,
   `confirm_booking` and friends work them out from `bookings` under a row
   lock on the session. A paid booking is never dropped: paid late into a full

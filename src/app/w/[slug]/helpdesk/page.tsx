@@ -285,10 +285,12 @@ export default async function HelpdeskPage({
       .eq("module", HELPDESK_MODULE)
       .eq("key", SAVED_VIEWS_KEY)
       .maybeSingle(),
+    // This person's own read marks, newest first.
     supabase
       .from("ticket_reads")
       .select("ticket_id, read_at")
       .eq("tenant_id", tenant.id)
+      .order("read_at", { ascending: false })
       .limit(5000),
     supabase
       .from("ticket_notes")

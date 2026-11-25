@@ -1,6 +1,6 @@
 # Help desk: the owner's help desk app vs. the suite, side by side
 
-Written 25 Nov 2026, before the rebuild, and kept up to date as gaps close. The old app was only read.
+Written 25 Nov 2026 before the rebuild, and brought up to date the same day after it. The old app was only read. Nothing here was checked against real mail or a real shop: see section 5.
 
 **How to read the file references**
 
@@ -17,21 +17,21 @@ Written 25 Nov 2026, before the rebuild, and kept up to date as gaps close. The 
 The old app has **126** help desk capabilities a person answering customers would notice.
 
 - **Before the rebuild** (counted 25 Nov 2026): **18 matched**, **27 partly**, **81 missing**.
-- After the rebuild: filled in as the pieces land.
+- **After the rebuild**: **76 matched**, **15 partly**, **35 missing**.
 
 | Area                           | Capabilities | Matched | Partly | Missing |
 | ------------------------------ | -----------: | ------: | -----: | ------: |
-| Menu, folders & views          |           20 |       7 |      2 |      11 |
-| List column                    |           22 |       4 |      4 |      14 |
-| Ticket header & actions        |           11 |       1 |      7 |       3 |
-| Conversation                   |           10 |       1 |      1 |       8 |
-| Composer                       |           21 |       2 |      3 |      16 |
-| Details rail                   |           26 |       1 |      8 |      17 |
+| Menu, folders & views          |           20 |      12 |      2 |       6 |
+| List column                    |           22 |      17 |      2 |       3 |
+| Ticket header & actions        |           11 |       6 |      3 |       2 |
+| Conversation                   |           10 |       6 |      0 |       4 |
+| Composer                       |           21 |      13 |      3 |       5 |
+| Details rail                   |           26 |      20 |      3 |       3 |
 | Numbers                        |            2 |       0 |      1 |       1 |
 | Settings & automation          |            7 |       2 |      0 |       5 |
 | Channels                       |            3 |       0 |      1 |       2 |
 | Repair manual & knowledge base |            4 |       0 |      0 |       4 |
-| **Total**                      |      **126** |  **18** | **27** |  **81** |
+| **Total**                      |      **126** |  **76** | **15** |  **35** |
 
 ---
 
@@ -39,82 +39,82 @@ The old app has **126** help desk capabilities a person answering customers woul
 
 ### Menu, folders & views
 
-| Capability                                                                   | Old app                                       | New suite    | What's different or missing                                                                           | Size |
-| ---------------------------------------------------------------------------- | --------------------------------------------- | ------------ | ----------------------------------------------------------------------------------------------------- | ---- |
-| Dashboard at the top of the menu                                             | `public/js/app.js:108-113`                    | **Partly.**  | The numbers page exists (`desk/reports`) but sits under “More” at the foot of the menu.               | –    |
-| Your tickets, with a count                                                   | `app.js:14`, `src/routes/tickets.ts:183`      | **Matched.** | `lib/views.ts` (“Assigned to me”).                                                                    | –    |
-| Unassigned, with a count                                                     | `app.js:15`                                   | **Matched.** | `lib/views.ts` (“Nobody has it”).                                                                     | –    |
-| Open, with a count                                                           | `app.js:16`                                   | **Matched.** | `lib/views.ts` (“Needs a reply”).                                                                     | –    |
-| In progress (we answered, waiting on the customer)                           | `app.js:17`                                   | **Matched.** | `lib/views.ts` (“Waiting on customer”; the suite's `pending`).                                        | –    |
-| Live chats view                                                              | `app.js:18`, `src/lib/chat.ts`                | **Missing.** | The suite has no website chat.                                                                        | L    |
-| Instagram & Facebook view                                                    | `app.js:19`, `src/lib/meta.ts`                | **Missing.** | The suite's help desk has no Instagram or Facebook messages.                                          | L    |
-| Snoozed                                                                      | `app.js:20`                                   | **Matched.** | `lib/views.ts`; a snooze needs no timer.                                                              | –    |
-| Mentions (notes that @name you)                                              | `app.js:21`, `tickets.ts:60-66`               | **Missing.** | Notes store who was mentioned, but no view lists them.                                                | –    |
-| Closed                                                                       | `app.js:22`                                   | **Matched.** | `lib/views.ts`.                                                                                       | –    |
-| More: All tickets                                                            | `app.js:25`                                   | **Matched.** | “Everything”.                                                                                         | –    |
-| More: Archived                                                               | `app.js:26`                                   | **Missing.** | The suite has three states (open, in progress, closed) plus snooze.                                   | S    |
-| More: Spam                                                                   | `app.js:27`                                   | **Missing.** | No spam state; nothing is filtered.                                                                   | S    |
-| More: Trash (delete and restore)                                             | `app.js:28`                                   | **Missing.** | Nothing can be deleted by hand.                                                                       | S    |
-| Folders people make (“Repairs”), with “+” in the menu and a count            | `app.js:122-134`, `src/lib/folders.ts`        | **Missing.** | No folders.                                                                                           | –    |
-| A filed ticket leaves the inbox views but stays in All, Closed and searches  | `tickets.ts:43,116-119`                       | **Missing.** | No folders.                                                                                           | –    |
-| A folder lights up when a customer writes back into it                       | `tickets.ts:198-201`                          | **Missing.** | No folders.                                                                                           | S    |
-| Saved views (name + filters) with live counts                                | `tickets.ts:67-72,167-175`, `inbox.js:91-109` | **Missing.** | No saved views.                                                                                       | –    |
-| Views grouped under their own headings in the menu                           | `app.js:135-137,220`                          | **Missing.** | All saved views sit under one “Views” heading.                                                        | S    |
-| Store links in the same menu: Shipping (with count), Repair manual, Settings | `app.js:139-142`                              | **Partly.**  | Shipping is its own tool on the rail; Settings is at the foot of the menu; there is no repair manual. | –    |
+| Capability                                                                   | Old app                                       | New suite    | What's different or missing                                                                                          | Size |
+| ---------------------------------------------------------------------------- | --------------------------------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------- | ---- |
+| Dashboard at the top of the menu                                             | `public/js/app.js:108-113`                    | **Matched.** | “How we're doing” is the first row. `lib/nav/model.ts`                                                               | –    |
+| Your tickets, with a count                                                   | `app.js:14`, `src/routes/tickets.ts:183`      | **Matched.** | Renamed “Your tickets”. `lib/views.ts`                                                                               | –    |
+| Unassigned, with a count                                                     | `app.js:15`                                   | **Matched.** | Renamed “Unassigned”.                                                                                                | –    |
+| Open, with a count                                                           | `app.js:16`                                   | **Matched.** | Renamed “Open”.                                                                                                      | –    |
+| In progress (we answered, waiting on the customer)                           | `app.js:17`                                   | **Matched.** | Renamed “In progress”.                                                                                               | –    |
+| Live chats view                                                              | `app.js:18`, `src/lib/chat.ts`                | **Missing.** | The suite has no website chat.                                                                                       | L    |
+| Instagram & Facebook view                                                    | `app.js:19`, `src/lib/meta.ts`                | **Missing.** | The suite's help desk has no Instagram or Facebook messages.                                                         | L    |
+| Snoozed                                                                      | `app.js:20`                                   | **Matched.** | `lib/views.ts`; a snooze needs no timer.                                                                             | –    |
+| Mentions (notes that @name you)                                              | `app.js:21`, `tickets.ts:60-66`               | **Matched.** | `lib/views.ts` (`mentions`), read from `ticket_notes.mentions` by the inbox.                                         | –    |
+| Closed                                                                       | `app.js:22`                                   | **Matched.** | `lib/views.ts`.                                                                                                      | –    |
+| More: All tickets                                                            | `app.js:25`                                   | **Matched.** | “All tickets”, under More.                                                                                           | –    |
+| More: Archived                                                               | `app.js:26`                                   | **Missing.** | The suite has three states (open, in progress, closed) plus snooze.                                                  | S    |
+| More: Spam                                                                   | `app.js:27`                                   | **Missing.** | No spam state; nothing is filtered.                                                                                  | S    |
+| More: Trash (delete and restore)                                             | `app.js:28`                                   | **Missing.** | Nothing can be deleted by hand.                                                                                      | S    |
+| Folders people make (“Repairs”), with “+” in the menu and a count            | `app.js:122-134`, `src/lib/folders.ts`        | **Matched.** | `ticket_folders` (managers make them, anyone files). `mig/20270105000100`, `desk/desk-tools.tsx`, `lib/nav/model.ts` | –    |
+| A filed ticket leaves the inbox views but stays in All, Closed and searches  | `tickets.ts:43,116-119`                       | **Matched.** | `inView()` in `lib/views.ts`.                                                                                        | –    |
+| A folder lights up when a customer writes back into it                       | `tickets.ts:198-201`                          | **Partly.**  | The folder's count is shown; unread ones carry the dot in the list, but the menu row has no separate unread mark.    | S    |
+| Saved views (name + filters) with live counts                                | `tickets.ts:67-72,167-175`, `inbox.js:91-109` | **Matched.** | A config (`helpdesk` / `saved_views`), `lib/saved-views.ts`; counted by the inbox from what it has read.             | –    |
+| Views grouped under their own headings in the menu                           | `app.js:135-137,220`                          | **Missing.** | All saved views sit under one “Views” heading.                                                                       | S    |
+| Store links in the same menu: Shipping (with count), Repair manual, Settings | `app.js:139-142`                              | **Partly.**  | Shipping is its own tool on the rail; Settings is at the foot of the menu; there is no repair manual.                | –    |
 
 ### List column
 
-| Capability                                                             | Old app                                      | New suite    | What's different or missing                        | Size |
-| ---------------------------------------------------------------------- | -------------------------------------------- | ------------ | -------------------------------------------------- | ---- |
-| Heading is the folder you are in, with how many are listed (“50+”)     | `inbox.js:53,249`                            | **Partly.**  | Heading only.                                      | –    |
-| Search names, emails, subjects and #numbers                            | `inbox.js:47,209-213`                        | **Matched.** | `desk/page.tsx` (`q`).                             | –    |
-| Search the text of every message                                       | `inbox.js:214-220`, `tickets.ts` (`deep`)    | **Missing.** | Search never reads message text.                   | –    |
-| Filter by tag, assignee, priority, unread only; sort five ways         | `inbox.js:62-89`                             | **Missing.** | Only a tag filter (from the menu).                 | –    |
-| “Save as view” from the filters                                        | `inbox.js:91-109`                            | **Missing.** | Not there.                                         | –    |
-| New email: start a conversation with a customer                        | `composer.js:552-615`                        | **Missing.** | A conversation only starts when a customer writes. | –    |
-| Refresh / check for new mail now                                       | `inbox.js:48,221-227`                        | **Missing.** | No button.                                         | –    |
-| Export the view as a spreadsheet                                       | `inbox.js:112`, `tickets.ts` (`export.csv`)  | **Missing.** | No export.                                         | S    |
-| Keyboard shortcuts sheet (?)                                           | `inbox.js:382-391`                           | **Partly.**  | A one-line hint under the list.                    | –    |
-| Row: who wrote, and how long ago                                       | `inbox.js:269-271`                           | **Matched.** | Name and a clock time or date.                     | –    |
-| Row: unread dot, per person; mark read / unread                        | `inbox.js:262,309-316`, `tickets.ts:280,354` | **Missing.** | No read state.                                     | –    |
-| Row: channel icon and chip (chat, Instagram, Facebook)                 | `inbox.js:272-273`                           | **Missing.** | Email is the only channel.                         | L    |
-| Row: subject                                                           | `inbox.js:272`                               | **Matched.** | `desk/page.tsx`.                                   | –    |
-| Row: two-line preview of the last message                              | `inbox.js:274`                               | **Missing.** | No preview.                                        | –    |
-| Row: assignee's initials and first name, or “Unassigned”               | `inbox.js:279-281`                           | **Partly.**  | Initials only.                                     | –    |
-| Row: number of messages                                                | `inbox.js:283`                               | **Missing.** | Not shown.                                         | –    |
-| Row: priority, status in mixed views, snoozed-until, tags, folder chip | `inbox.js:272-283`                           | **Partly.**  | Priority, snoozed and tags.                        | –    |
-| Tick several rows and act on them together                             | `inbox.js:117-204`                           | **Missing.** | One conversation at a time.                        | M    |
-| The list re-reads itself every 30 seconds                              | `inbox.js:361`                               | **Missing.** | Only on a page load.                               | –    |
-| “Show more” for long lists                                             | `inbox.js:57,228`                            | **Missing.** | The first 200.                                     | S    |
-| Opens the first conversation by itself on a wide screen                | `inbox.js:371-373`                           | **Missing.** | You pick one.                                      | S    |
-| Friendly empty states (“Inbox zero”)                                   | `inbox.js:250-258`                           | **Matched.** | `desk/page.tsx`.                                   | –    |
+| Capability                                                             | Old app                                      | New suite    | What's different or missing                                                                 | Size |
+| ---------------------------------------------------------------------- | -------------------------------------------- | ------------ | ------------------------------------------------------------------------------------------- | ---- |
+| Heading is the folder you are in, with how many are listed (“50+”)     | `inbox.js:53,249`                            | **Matched.** | `desk/page.tsx`                                                                             | –    |
+| Search names, emails, subjects and #numbers                            | `inbox.js:47,209-213`                        | **Matched.** | `desk/page.tsx` (`q`).                                                                      | –    |
+| Search the text of every message                                       | `inbox.js:214-220`, `tickets.ts` (`deep`)    | **Matched.** | `search_ticket_messages()` runs as the member. `mig/20270105000100`                         | –    |
+| Filter by tag, assignee, priority, unread only; sort five ways         | `inbox.js:62-89`                             | **Matched.** | `desk/desk-tools.tsx`, `lib/list.ts`; all in the address.                                   | –    |
+| “Save as view” from the filters                                        | `inbox.js:91-109`                            | **Matched.** | `desk/desk-tools.tsx` → `saveView` (owners and admins: views are a config).                 | –    |
+| New email: start a conversation with a customer                        | `composer.js:552-615`                        | **Matched.** | `start_ticket()` + `desk/desk-tools.tsx`.                                                   | –    |
+| Refresh / check for new mail now                                       | `inbox.js:48,221-227`                        | **Matched.** | Refresh re-reads; mail arrives by webhook, so there is nothing to poll at the mail service. | –    |
+| Export the view as a spreadsheet                                       | `inbox.js:112`, `tickets.ts` (`export.csv`)  | **Missing.** | No export.                                                                                  | S    |
+| Keyboard shortcuts sheet (?)                                           | `inbox.js:382-391`                           | **Matched.** | `desk/desk-tools.tsx`.                                                                      | –    |
+| Row: who wrote, and how long ago                                       | `inbox.js:269-271`                           | **Matched.** | Name and “8h”, “1d”. `lib/list.ts` (`timeAgo`)                                              | –    |
+| Row: unread dot, per person; mark read / unread                        | `inbox.js:262,309-316`, `tickets.ts:280,354` | **Matched.** | `ticket_reads` (each person's own). `mig/20270105000100`                                    | –    |
+| Row: channel icon and chip (chat, Instagram, Facebook)                 | `inbox.js:272-273`                           | **Partly.**  | Email rows look as they do in the old app (no chip); there are no other channels to mark.   | L    |
+| Row: subject                                                           | `inbox.js:272`                               | **Matched.** | `desk/page.tsx`.                                                                            | –    |
+| Row: two-line preview of the last message                              | `inbox.js:274`                               | **Matched.** | `ticket_list_facts()` (worked out on read, never stored).                                   | –    |
+| Row: assignee's initials and first name, or “Unassigned”               | `inbox.js:279-281`                           | **Matched.** | `desk/page.tsx`                                                                             | –    |
+| Row: number of messages                                                | `inbox.js:283`                               | **Matched.** | `ticket_list_facts()`.                                                                      | –    |
+| Row: priority, status in mixed views, snoozed-until, tags, folder chip | `inbox.js:272-283`                           | **Matched.** | All five. `desk/page.tsx`                                                                   | –    |
+| Tick several rows and act on them together                             | `inbox.js:117-204`                           | **Missing.** | One conversation at a time.                                                                 | M    |
+| The list re-reads itself every 30 seconds                              | `inbox.js:361`                               | **Matched.** | `desk/desk-tools.tsx` (`Freshen`)                                                           | –    |
+| “Show more” for long lists                                             | `inbox.js:57,228`                            | **Partly.**  | The first 200, with “50+” style counts; no paging.                                          | S    |
+| Opens the first conversation by itself on a wide screen                | `inbox.js:371-373`                           | **Missing.** | You pick one.                                                                               | S    |
+| Friendly empty states (“Inbox zero”)                                   | `inbox.js:250-258`                           | **Matched.** | `desk/page.tsx`.                                                                            | –    |
 
 ### Ticket header & actions
 
-| Capability                                                                                    | Old app                 | New suite    | What's different or missing                                                                 | Size |
-| --------------------------------------------------------------------------------------------- | ----------------------- | ------------ | ------------------------------------------------------------------------------------------- | ---- |
-| Title is the subject; click to rename                                                         | `ticket.js:76-103`      | **Partly.**  | Shown, not editable.                                                                        | –    |
-| “#12 · customer · opened 16h ago”                                                             | `ticket.js:146-149`     | **Partly.**  | Number, name and email.                                                                     | –    |
-| Status control: Open, In progress, Snooze…, Closed                                            | `common.js:50-56`       | **Partly.**  | A badge, plus separate Close and Snooze menus.                                              | –    |
-| Close / Reopen button                                                                         | `ticket.js:80-87`       | **Matched.** | `desk/page.tsx`.                                                                            | –    |
-| ⋯ menu: in progress, snooze, merge, folder, assign, assign to me, priority, tags, mark unread | `ticket.js:119-137`     | **Partly.**  | Three small menus and a join form; no “assign to me”, folder or unread.                     | –    |
-| ⋯ menu: Archive, Mark as spam, Delete                                                         | `ticket.js:123,135-136` | **Missing.** | Those states don't exist in the suite.                                                      | S    |
-| ⋯ menu: Add to repair manual                                                                  | `ticket.js:132,433-443` | **Missing.** | No repair manual (see below).                                                               | L    |
-| Snooze presets and a date and time of your own                                                | `common.js:22-48`       | **Partly.**  | Five presets.                                                                               | –    |
-| Merge with suggestions from the same customer, several at once                                | `ticket.js:447-481`     | **Partly.**  | Joined one at a time, by number; the customer's other conversations are listed in the rail. | S    |
-| After closing: next ticket, back to the list, or stay (a setting)                             | `ticket.js:39-41`       | **Missing.** | Stays on the closed conversation.                                                           | S    |
-| Keyboard: j k / c r n f e s a t p m v                                                         | `inbox.js:333-359`      | **Partly.**  | j k r n e u.                                                                                | S    |
+| Capability                                                                                    | Old app                 | New suite    | What's different or missing                                                                          | Size |
+| --------------------------------------------------------------------------------------------- | ----------------------- | ------------ | ---------------------------------------------------------------------------------------------------- | ---- |
+| Title is the subject; click to rename                                                         | `ticket.js:76-103`      | **Matched.** | `set_ticket_subject()`, `desk/desk-tools.tsx`                                                        | –    |
+| “#12 · customer · opened 16h ago”                                                             | `ticket.js:146-149`     | **Matched.** | `desk/desk-tools.tsx`                                                                                | –    |
+| Status control: Open, In progress, Snooze…, Closed                                            | `common.js:50-56`       | **Matched.** | `desk/desk-tools.tsx` (`StatusMenu`)                                                                 | –    |
+| Close / Reopen button                                                                         | `ticket.js:80-87`       | **Matched.** | `desk/page.tsx`.                                                                                     | –    |
+| ⋯ menu: in progress, snooze, merge, folder, assign, assign to me, priority, tags, mark unread | `ticket.js:119-137`     | **Matched.** | `desk/desk-tools.tsx` (`MoreMenu`)                                                                   | –    |
+| ⋯ menu: Archive, Mark as spam, Delete                                                         | `ticket.js:123,135-136` | **Missing.** | Those states don't exist in the suite.                                                               | S    |
+| ⋯ menu: Add to repair manual                                                                  | `ticket.js:132,433-443` | **Missing.** | No repair manual (see below).                                                                        | L    |
+| Snooze presets and a date and time of your own                                                | `common.js:22-48`       | **Matched.** | Presets plus a date-time box.                                                                        | –    |
+| Merge with suggestions from the same customer, several at once                                | `ticket.js:447-481`     | **Partly.**  | The merge box offers the customer's other open conversations or takes a number; still one at a time. | S    |
+| After closing: next ticket, back to the list, or stay (a setting)                             | `ticket.js:39-41`       | **Partly.**  | Always moves to the next one in the list; not a setting.                                             | S    |
+| Keyboard: j k / c r n f e s a t p m v                                                         | `inbox.js:333-359`      | **Partly.**  | j k / c r n f e s m u ?; a t p v open the rail's pickers. No x (ticking rows) or Alt shortcuts.      | S    |
 
 ### Conversation
 
 | Capability                                                                                                               | Old app                            | New suite    | What's different or missing                                    | Size |
 | ------------------------------------------------------------------------------------------------------------------------ | ---------------------------------- | ------------ | -------------------------------------------------------------- | ---- |
-| Messages as cards: customer on the left, the team on a tinted ground on the right, with initials, name, address and time | `ticket.js:369-427`                | **Partly.**  | Bubbles with a name and time.                                  | –    |
-| “to customer@…” on what the team sent                                                                                    | `ticket.js:369-427`                | **Missing.** | Not shown.                                                     | –    |
-| Internal notes in the thread, with @names picked out                                                                     | `ticket.js:274-276,294-299`        | **Matched.** | `desk/page.tsx`.                                               | –    |
-| What happened, in the thread (“took this ticket”, “marked closed”)                                                       | `ticket.js:250,278`                | **Missing.** | Nothing is written down.                                       | –    |
-| Earlier messages folded away, the last two left open                                                                     | `ticket.js:281-291`                | **Missing.** | Everything is open.                                            | –    |
-| The quoted earlier email folded under “…”                                                                                | `ticket.js:359-366`                | **Missing.** | Shown in full.                                                 | –    |
+| Messages as cards: customer on the left, the team on a tinted ground on the right, with initials, name, address and time | `ticket.js:369-427`                | **Matched.** | `desk/page.tsx`                                                | –    |
+| “to customer@…” on what the team sent                                                                                    | `ticket.js:369-427`                | **Matched.** | `messages.to_emails`, `desk/page.tsx`                          | –    |
+| Internal notes in the thread, with @names picked out                                                                     | `ticket.js:274-276,294-299`        | **Matched.** | `desk/page.tsx`                                                | –    |
+| What happened, in the thread (“took this ticket”, “marked closed”)                                                       | `ticket.js:250,278`                | **Matched.** | `ticket_events` (written only by a trigger), `lib/activity.ts` | –    |
+| Earlier messages folded away, the last two left open                                                                     | `ticket.js:281-291`                | **Matched.** | `lib/thread.ts` (`foldThread`)                                 | –    |
+| The quoted earlier email folded under “…”                                                                                | `ticket.js:359-366`                | **Matched.** | `lib/thread.ts` (`quoteStart`, ported with its tests)          | –    |
 | Designed (HTML) email shown as sent, in a locked frame                                                                   | `ticket.js:369-400`                | **Missing.** | By rule the suite shows customer email as plain text only.     | –    |
 | Pictures in the email and attachment chips with their size                                                               | `ticket.js:400-427`                | **Missing.** | The suite keeps the words of an incoming email, not its files. | M    |
 | Several email threads in one ticket, with subject dividers                                                               | `ticket.js:259-271`                | **Missing.** | One subject per conversation.                                  | S    |
@@ -122,60 +122,60 @@ The old app has **126** help desk capabilities a person answering customers woul
 
 ### Composer
 
-| Capability                                                          | Old app                                     | New suite    | What's different or missing                                                        | Size |
-| ------------------------------------------------------------------- | ------------------------------------------- | ------------ | ---------------------------------------------------------------------------------- | ---- |
-| Reply                                                               | `composer.js:231-470`                       | **Matched.** | `desk/reply-form.tsx`.                                                             | –    |
-| Reply all (copies in everyone on the customer's last email)         | `composer.js:242-247`                       | **Missing.** | Not there.                                                                         | S    |
-| Forward to someone else                                             | `composer.js:253,281`                       | **Missing.** | Not there.                                                                         | –    |
-| Internal note, with an @name picker                                 | `composer.js:299-345`                       | **Partly.**  | A note tab; @first-name works when typed, with no picker.                          | S    |
-| Edit To, Cc and Bcc                                                 | `composer.js:249-266`                       | **Missing.** | Always to the customer.                                                            | –    |
-| Formatting bar: bold, italic, underline, strike, lists, link, clear | `composer.js:96-116`                        | **Missing.** | Plain text only.                                                                   | –    |
-| Pasted text keeps simple formatting                                 | `composer.js:37-56,98-103`                  | **Missing.** | Plain text.                                                                        | S    |
-| Attach files to a reply                                             | `composer.js:77-91,268-273`                 | **Missing.** | Not there.                                                                         | –    |
-| Macros: search, pick, placeholders filled                           | `composer.js:120-170`, `src/lib/macros.ts`  | **Partly.**  | A pick list of saved replies with placeholders filled.                             | –    |
-| A macro can also act on send (set status, add tags)                 | `composer.js:172-181,275-277`               | **Missing.** | A saved reply is words only.                                                       | M    |
-| Discount code made in the shop and dropped into the reply           | `composer.js:183-204`                       | **Missing.** | Needs permission to write discounts in the shop, which the suite doesn't ask for.  | M    |
-| AI draft, with a line saying what to say                            | `composer.js:347-379`                       | **Partly.**  | A draft with no steer.                                                             | –    |
-| Two or three suggested replies to pick from                         | `composer.js:478-548`, `src/lib/suggest.ts` | **Missing.** | One draft at a time.                                                               | S    |
-| Send (marks in progress)                                            | `composer.js:382`                           | **Matched.** | `desk/reply-form.tsx`.                                                             | –    |
-| Send & close                                                        | `composer.js:381`                           | **Missing.** | Send, then close by hand.                                                          | –    |
-| Send ▾: keep open, snooze…, close                                   | `composer.js:384-389`                       | **Missing.** | Not there.                                                                         | –    |
-| A few seconds to undo a send                                        | `composer.js:207-228`                       | **Missing.** | Sent at once.                                                                      | S    |
-| Discard draft                                                       | `composer.js:392-394`                       | **Missing.** | Not there.                                                                         | –    |
-| Unsent drafts kept per ticket in the browser                        | `composer.js:232-234,275`                   | **Missing.** | Lost on leaving.                                                                   | –    |
-| ⌘↵ sends, ⌘⇧↵ sends and closes                                      | `composer.js:456-470`                       | **Missing.** | Not there.                                                                         | –    |
-| Mail goes out from the business's own Gmail address                 | `src/lib/gmail.ts`                          | **Missing.** | The suite sends from the workspace's support address through its own mail service. | L    |
+| Capability                                                          | Old app                                     | New suite    | What's different or missing                                                                                                      | Size |
+| ------------------------------------------------------------------- | ------------------------------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------- | ---- |
+| Reply                                                               | `composer.js:231-470`                       | **Matched.** | `desk/composer.tsx`                                                                                                              | –    |
+| Reply all (copies in everyone on the customer's last email)         | `composer.js:242-247`                       | **Partly.**  | The tab is there and Cc can be typed, but the suite doesn't keep who else an incoming email was sent to, so nobody is filled in. | S    |
+| Forward to someone else                                             | `composer.js:253,281`                       | **Matched.** | `record_outbound(kind 'forward')`, quoted conversation added by `lib/outbound.ts`                                                | –    |
+| Internal note, with an @name picker                                 | `composer.js:299-345`                       | **Partly.**  | A note tab; @first-name works when typed, with no picker.                                                                        | S    |
+| Edit To, Cc and Bcc                                                 | `composer.js:249-266`                       | **Matched.** | `desk/composer.tsx`, `lib/outbound.ts` (`parseRecipients`)                                                                       | –    |
+| Formatting bar: bold, italic, underline, strike, lists, link, clear | `composer.js:96-116`                        | **Matched.** | `lib/rich.ts`: the editor hands over a small document; the server writes the HTML and the plain-text part itself.                | –    |
+| Pasted text keeps simple formatting                                 | `composer.js:37-56,98-103`                  | **Partly.**  | A paste comes in as plain text.                                                                                                  | S    |
+| Attach files to a reply                                             | `composer.js:77-91,268-273`                 | **Matched.** | Sent with the email (up to 4 MB together); only names and sizes are kept. `lib/outbound.ts`                                      | –    |
+| Macros: search, pick, placeholders filled                           | `composer.js:120-170`, `src/lib/macros.ts`  | **Matched.** | With a search box. `desk/composer.tsx`                                                                                           | –    |
+| A macro can also act on send (set status, add tags)                 | `composer.js:172-181,275-277`               | **Missing.** | A saved reply is words only.                                                                                                     | M    |
+| Discount code made in the shop and dropped into the reply           | `composer.js:183-204`                       | **Missing.** | Needs permission to write discounts in the shop, which the suite doesn't ask for.                                                | M    |
+| AI draft, with a line saying what to say                            | `composer.js:347-379`                       | **Matched.** | A hint box; the hint is marked as the team's own words. Never sent by itself.                                                    | –    |
+| Two or three suggested replies to pick from                         | `composer.js:478-548`, `src/lib/suggest.ts` | **Missing.** | One draft at a time.                                                                                                             | S    |
+| Send (marks in progress)                                            | `composer.js:382`                           | **Matched.** | `desk/composer.tsx`                                                                                                              | –    |
+| Send & close                                                        | `composer.js:381`                           | **Matched.** | The one filled button.                                                                                                           | –    |
+| Send ▾: keep open, snooze…, close                                   | `composer.js:384-389`                       | **Matched.** | `record_outbound(p_then)`.                                                                                                       | –    |
+| A few seconds to undo a send                                        | `composer.js:207-228`                       | **Missing.** | Sent at once.                                                                                                                    | S    |
+| Discard draft                                                       | `composer.js:392-394`                       | **Matched.** | Not there.                                                                                                                       | –    |
+| Unsent drafts kept per ticket in the browser                        | `composer.js:232-234,275`                   | **Matched.** | `lib/drafts.ts`, in the browser only.                                                                                            | –    |
+| ⌘↵ sends, ⌘⇧↵ sends and closes                                      | `composer.js:456-470`                       | **Matched.** | Not there.                                                                                                                       | –    |
+| Mail goes out from the business's own Gmail address                 | `src/lib/gmail.ts`                          | **Missing.** | The suite sends from the workspace's support address through its own mail service.                                               | L    |
 
 ### Details rail
 
-| Capability                                                      | Old app                                          | New suite    | What's different or missing           | Size |
-| --------------------------------------------------------------- | ------------------------------------------------ | ------------ | ------------------------------------- | ---- |
-| Details / Activity tabs; rail folds away                        | `ticket.js:166-230`                              | **Missing.** | One customer panel.                   | –    |
-| Assignee, changed in place                                      | `ticket.js:174-175`                              | **Partly.**  | A menu in the header.                 | –    |
-| Priority, changed in place                                      | `ticket.js:176-178`                              | **Partly.**  | A menu in the header.                 | –    |
-| Folder, changed in place                                        | `ticket.js:185-190`                              | **Missing.** | No folders.                           | –    |
-| Status, “Back on”, Created, Last message                        | `ticket.js:191-194`                              | **Partly.**  | Status badge in the header only.      | –    |
-| Tags as chips: remove one, find or make one                     | `ticket.js:179-180,196-198`, `common.js:113-150` | **Partly.**  | A comma-separated box.                | –    |
-| Tags in groups                                                  | `common.js:136-141`                              | **Missing.** | One flat list.                        | S    |
-| AI insights: a short summary, the mood, the kind of request     | `ticket.js:200-219`, `src/lib/ai.ts`             | **Missing.** | Not there.                            | –    |
-| Customer: “View on Shopify”                                     | `ticket.js:519`                                  | **Missing.** | No link.                              | –    |
-| Customer: initials, name, email with copy                       | `ticket.js:520-527`                              | **Partly.**  | Name and email.                       | –    |
-| Customer: phone                                                 | `ticket.js:527`                                  | **Missing.** | Not shown.                            | S    |
-| Tiles: orders, lifetime, last order                             | `ticket.js:528-531`                              | **Missing.** | Not there.                            | –    |
-| The shop's tags on the customer                                 | `ticket.js:532`                                  | **Missing.** | The sync doesn't store customer tags. | S    |
-| The shop's note on the customer                                 | `ticket.js:533`                                  | **Missing.** | The sync doesn't store it.            | S    |
-| “New email” to this customer                                    | `ticket.js:538-539`                              | **Missing.** | Not there.                            | –    |
-| Orders, with how many                                           | `ticket.js:541-543`                              | **Matched.** | The last five.                        | –    |
-| Order card: name, date, total, Paid / Fulfilled / Cancelled     | `ticket.js:563-570`                              | **Partly.**  | Statuses as words in a line.          | –    |
-| Items with the option's photo and quantity                      | `ticket.js:572-575`                              | **Partly.**  | Titles and quantities.                | –    |
-| Tracking: status and a link to the carrier                      | `ticket.js:576-580`                              | **Missing.** | Not shown.                            | S    |
-| Ship to, with the delivery method and address                   | `ticket.js:581-583`                              | **Missing.** | Not shown.                            | –    |
-| The order's note                                                | `ticket.js:584`                                  | **Missing.** | Not shown.                            | –    |
-| “Add to reply”: the order as plain text                         | `ticket.js:494-499,586`                          | **Missing.** | Not there.                            | –    |
-| “Ship” / “Label”: open the order in Shipping                    | `ticket.js:587`                                  | **Missing.** | Not there.                            | –    |
-| Open the order in the shop                                      | `ticket.js:588`                                  | **Missing.** | Not there.                            | –    |
-| Earlier conversations, with a nudge to merge open ones          | `ticket.js:545-550`                              | **Partly.**  | A list.                               | –    |
-| Activity: everything that happened, newest first, with a filter | `ticket.js:332-346`                              | **Missing.** | Nothing is logged.                    | S    |
+| Capability                                                      | Old app                                          | New suite    | What's different or missing                                                                                                                                                 | Size |
+| --------------------------------------------------------------- | ------------------------------------------------ | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
+| Details / Activity tabs; rail folds away                        | `ticket.js:166-230`                              | **Matched.** | `desk/page.tsx`; the tab is in the address (`side`).                                                                                                                        | –    |
+| Assignee, changed in place                                      | `ticket.js:174-175`                              | **Matched.** | `desk/desk-tools.tsx`                                                                                                                                                       | –    |
+| Priority, changed in place                                      | `ticket.js:176-178`                              | **Matched.** | `desk/desk-tools.tsx` (“Normal” is the suite's “None”).                                                                                                                     | –    |
+| Folder, changed in place                                        | `ticket.js:185-190`                              | **Matched.** | `file_ticket()`.                                                                                                                                                            | –    |
+| Status, “Back on”, Created, Last message                        | `ticket.js:191-194`                              | **Matched.** | `desk/page.tsx`                                                                                                                                                             | –    |
+| Tags as chips: remove one, find or make one                     | `ticket.js:179-180,196-198`, `common.js:113-150` | **Matched.** | `desk/desk-tools.tsx` (`TagEditor`)                                                                                                                                         | –    |
+| Tags in groups                                                  | `common.js:136-141`                              | **Missing.** | One flat list.                                                                                                                                                              | S    |
+| AI insights: a short summary, the mood, the kind of request     | `ticket.js:200-219`, `src/lib/ai.ts`             | **Matched.** | `lib/insights.ts`, kept on the ticket by `set_ticket_insights()`; counted against the AI allowance.                                                                         | –    |
+| Customer: “View on Shopify”                                     | `ticket.js:519`                                  | **Matched.** | A plain link built from the connected shop's name. `lib/customer.ts` (`shopLinks`)                                                                                          | –    |
+| Customer: initials, name, email with copy                       | `ticket.js:520-527`                              | **Matched.** | `desk/page.tsx`                                                                                                                                                             | –    |
+| Customer: phone                                                 | `ticket.js:527`                                  | **Partly.**  | The phone on their latest order's ship-to; the shop's own customer record isn't synced.                                                                                     | S    |
+| Tiles: orders, lifetime, last order                             | `ticket.js:528-531`                              | **Matched.** | Worked out on read. `lib/customer.ts` (`customerTiles`)                                                                                                                     | –    |
+| The shop's tags on the customer                                 | `ticket.js:532`                                  | **Missing.** | The sync doesn't store customer tags.                                                                                                                                       | S    |
+| The shop's note on the customer                                 | `ticket.js:533`                                  | **Missing.** | The sync doesn't store it.                                                                                                                                                  | S    |
+| “New email” to this customer                                    | `ticket.js:538-539`                              | **Matched.** | `desk/desk-tools.tsx`                                                                                                                                                       | –    |
+| Orders, with how many                                           | `ticket.js:541-543`                              | **Matched.** | The last eight, with the full count.                                                                                                                                        | –    |
+| Order card: name, date, total, Paid / Fulfilled / Cancelled     | `ticket.js:563-570`                              | **Matched.** | Badges with words. `desk/page.tsx`                                                                                                                                          | –    |
+| Items with the option's photo and quantity                      | `ticket.js:572-575`                              | **Matched.** | Photos from Stock's synced items (`variant_image_url`), only from the shop platform's image servers.                                                                        | –    |
+| Tracking: status and a link to the carrier                      | `ticket.js:576-580`                              | **Partly.**  | Parcels recorded in the suite's Shipping, as “Sent” with the carrier, number and link. Whether it was delivered isn't known, and parcels fulfilled elsewhere aren't synced. | S    |
+| Ship to, with the delivery method and address                   | `ticket.js:581-583`                              | **Matched.** | From `shipping_orders`, read as the member.                                                                                                                                 | –    |
+| The order's note                                                | `ticket.js:584`                                  | **Matched.** | `shipping_orders.note`.                                                                                                                                                     | –    |
+| “Add to reply”: the order as plain text                         | `ticket.js:494-499,586`                          | **Matched.** | `lib/customer.ts` (`orderSummaryText`)                                                                                                                                      | –    |
+| “Ship” / “Label”: open the order in Shipping                    | `ticket.js:587`                                  | **Matched.** | Shown when the order is still to ship and the workspace has Shipping.                                                                                                       | –    |
+| Open the order in the shop                                      | `ticket.js:588`                                  | **Matched.** | `shopLinks`.                                                                                                                                                                | –    |
+| Earlier conversations, with a nudge to merge open ones          | `ticket.js:545-550`                              | **Matched.** | `desk/page.tsx`                                                                                                                                                             | –    |
+| Activity: everything that happened, newest first, with a filter | `ticket.js:332-346`                              | **Partly.**  | Messages, notes, status, assignment, priority, folder, snooze, rename, merges and forwards. Tag changes and rule runs aren't logged.                                        | S    |
 
 ### Numbers
 
@@ -251,3 +251,12 @@ The old app has **126** help desk capabilities a person answering customers woul
 6. The knowledge base as a second kind of entry in the same tables; pulling pages from a website needs a decision first (the suite fetches nothing a person types today).
 
 Customer photos can't be shown until incoming attachments are kept (see section 3).
+
+---
+
+## 5. Not checked against the real thing
+
+- No real email was sent or received: sending goes through the same mail service as before, with Cc, Bcc, an HTML part and attachments added to the request, and that request is covered by tests, not by a delivery.
+- No real shop was read: the customer and orders in the rail were looked at with made-up rows shaped like what the sync stores.
+- Claude's summary and the draft hint were not run against the API here; the prompts and the tidying are tested.
+- The new migration (`mig/20270105000100_helpdesk_desk.sql`) runs in the test database only; it has not been applied anywhere else.
