@@ -386,7 +386,7 @@ export function refusalWords(stored: string | null): string {
     return `${start}This person can't receive messages from you right now. They may have blocked or muted the conversation.`;
   }
   if (code === 200 && subcode === 2534041) {
-    return `${start}Instagram isn't letting connected tools read messages. In the Instagram app: Settings → Messages and story replies → Message controls → Connected tools → Allow access to messages.`;
+    return `${start}Instagram isn't letting connected tools read messages. In the Instagram app: Settings → Messages and story replies → Message requests → Allow access to messages.`;
   }
   if (/private repl|already (been )?replied/i.test(reason)) {
     return `${start}That comment has already had its one private message, which is all Meta allows.`;

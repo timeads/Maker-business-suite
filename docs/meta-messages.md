@@ -97,7 +97,7 @@ All of this is in the Meta app the suite already uses for Social
    the state of App Review.
 6. **On Instagram itself**, each business must allow connected tools to read
    messages: Instagram app → Settings → Messages and story replies → Message
-   controls → Connected tools → Allow access to messages. Without it Instagram
+   requests → Allow access to messages. Without it Instagram
    sends nothing.
 
 ### What works before App Review, and what review needs

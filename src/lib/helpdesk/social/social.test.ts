@@ -896,7 +896,9 @@ describe("sending through Meta", () => {
     expect(refusalWords("meta:100:2018008:partial:Failed to fetch the file from the url.")).toMatch(
       /^Your words were sent, but the pictures weren't\. .*Meta said: “Failed to fetch the file from the url\.”$/,
     );
-    expect(refusalWords("meta:200:2534041:none:disabled")).toContain("Connected tools");
+    expect(refusalWords("meta:200:2534041:none:disabled")).toContain(
+      "Message requests → Allow access to messages",
+    );
     expect(refusalWords("window_closed")).toContain("24 hours");
     expect(refusalWords(null)).toContain("Meta didn't take it");
   });

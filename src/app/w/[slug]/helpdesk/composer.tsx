@@ -12,6 +12,8 @@ import {
   Link2,
   List,
   ListOrdered,
+  Globe,
+  Lock,
   Paperclip,
   Reply,
   ReplyAll,
@@ -49,7 +51,20 @@ export type SocialReply = {
   words: string;
   /** Why nothing can be sent at all (not connected, switched off), or null. */
   blocked: string | null;
+  /**
+   * Set on a conversation about a comment on a post: the two ways to answer.
+   * A public reply sits under the comment for everyone to read; a private
+   * message is allowed once per comment (Meta's rule).
+   */
+  comment?: {
+    /** Meta's id for the comment being answered: the customer's latest that still stands. */
+    commentId: string;
+    public: { ok: boolean; why: string | null; max: number };
+    private: { ok: boolean; words: string };
+  } | null;
 };
+/** How an answer to a comment goes out. */
+type Via = "public" | "private";
 import { ManualPicker } from "./manual-picker";
 
 type Template = { id: string; name: string; body: string; actions?: TemplateActions };
@@ -164,11 +179,31 @@ export function Composer({
   const [busy, start] = useTransition();
   // The channel by its name, so these don't change every time the page is read again.
   const socialChannel = social?.channel ?? null;
+  // An answer to a comment starts as a public reply where that is possible.
+  const comment = social?.comment ?? null;
+  const [asked, setVia] = useState<Via>("public");
+  const via: Via | null = comment
+    ? asked === "private"
+      ? comment.private.ok
+        ? "private"
+        : "public"
+      : comment.public.ok || !comment.private.ok
+        ? "public"
+        : "private"
+    : null;
+  // A public reply is counted in characters; a message in what that channel counts in.
+  const limit = social
+    ? via === "public" && comment
+      ? { max: comment.public.max, unit: "characters" as const }
+      : { max: social.max, unit: social.unit }
+    : null;
+  const countsChars = via === "public";
   const measure = useCallback(() => {
     if (socialChannel && editor.current) {
-      setSize(textSize(socialChannel, richToText(readEditor(editor.current)).trim()));
+      const words = richToText(readEditor(editor.current)).trim();
+      setSize(countsChars ? [...words].length : textSize(socialChannel, words));
     }
-  }, [socialChannel]);
+  }, [socialChannel, countsChars]);
   const key = draftKey(ticketId);
   const state = useRef({ mode, to, cc });
   useEffect(() => {
@@ -357,15 +392,20 @@ export function Composer({
       root.focus();
       return;
     }
-    if (social) {
+    if (social && limit) {
       if (social.blocked || !social.open) {
         setProblem(social.blocked ?? social.words);
         return;
       }
-      const used = textSize(social.channel, richToText(doc).trim());
-      if (used > social.max) {
+      if (comment && via && !comment[via].ok) {
+        setProblem(via === "public" ? comment.public.why : comment.private.words);
+        return;
+      }
+      const words = richToText(doc).trim();
+      const used = countsChars ? [...words].length : textSize(social.channel, words);
+      if (used > limit.max) {
         setProblem(
-          `That is ${used.toLocaleString("en-US")} ${social.unit}; one ${social.name} message holds ${social.max.toLocaleString("en-US")}. Send it as two.`,
+          `That is ${used.toLocaleString("en-US")} ${limit.unit}; one ${social.name} ${via === "public" ? "reply" : "message"} holds ${limit.max.toLocaleString("en-US")}. Send it as two.`,
         );
         return;
       }
@@ -389,7 +429,13 @@ export function Composer({
     data.set("bcc", bcc);
     data.set("then", mode === "forward" && then === "pending" ? "keep" : then);
     if (until) data.set("snooze_until", until);
-    for (const file of files) data.append("files", file);
+    if (comment && via) {
+      // An answer to a comment is words only, and says which way it goes.
+      data.set("via", via);
+      data.set("comment_id", comment.commentId);
+    } else {
+      for (const file of files) data.append("files", file);
+    }
     if (mode === "forward") {
       for (const file of forwardFiles)
         if (!dropped.includes(file.id)) data.append("carry", file.id);
@@ -560,11 +606,21 @@ export function Composer({
     : mode === "forward"
       ? "Add a message (optional)…"
       : social
-        ? `Reply to ${social.to} on ${social.name}…`
+        ? via === "public"
+          ? `Reply under ${social.to}'s comment. Everyone can read this…`
+          : via === "private"
+            ? `A private message to ${social.to} about their comment…`
+            : `Reply to ${social.to} on ${social.name}…`
         : `Reply to ${customerFirstName ?? customerEmail}…`;
   // A message has no copies, no forward and no formatting: two tabs, plain words.
   const tabs = social ? TABS.filter((tab) => tab.key === "reply" || tab.key === "note") : TABS;
-  const cantSend = !canSend || Boolean(social && (social.blocked || !social.open));
+  const cantSend =
+    !canSend ||
+    Boolean(social && (social.blocked || !social.open)) ||
+    Boolean(comment && via && !comment[via].ok);
+  // On a comment the button says which way the words go: nobody posts in public by accident.
+  const sendWord =
+    via === "public" ? "Reply publicly" : via === "private" ? "Send privately" : "Send";
 
   return (
     <div
@@ -606,7 +662,13 @@ export function Composer({
           {note ? (
             "Only your team sees notes"
           ) : social ? (
-            `${social.name} message to ${social.to}`
+            via === "public" ? (
+              `Public reply on ${social.name} to ${social.to}`
+            ) : via === "private" ? (
+              `Private ${social.name} message to ${social.to}`
+            ) : (
+              `${social.name} message to ${social.to}`
+            )
           ) : (
             <>
               {people.to.length > 0
@@ -809,7 +871,80 @@ export function Composer({
           ))}
         </ul>
       )}
-      {social && !note && (
+      {social && comment && via && !note && !social.blocked && (
+        <fieldset className="px-3 pt-2 pb-1">
+          <legend className="sr-only">How to answer this comment</legend>
+          <div className="grid gap-1.5 2xl:grid-cols-2">
+            {(
+              [
+                {
+                  key: "public" as const,
+                  icon: Globe,
+                  label: "Reply publicly",
+                  ok: comment.public.ok,
+                  words:
+                    comment.public.why ??
+                    `Under their comment on ${social.name}. Everyone who can see the post can read it.`,
+                },
+                {
+                  key: "private" as const,
+                  icon: Lock,
+                  label: "Message privately",
+                  ok: comment.private.ok,
+                  words: comment.private.words,
+                },
+              ] as const
+            ).map((option) => (
+              <label
+                key={option.key}
+                className={cn(
+                  "flex items-start gap-2 rounded-md border px-2.5 py-2 text-xs",
+                  via === option.key ? "border-ochre bg-ochre-soft" : "border-border",
+                  option.ok ? "cursor-pointer" : "opacity-70",
+                )}
+              >
+                <input
+                  type="radio"
+                  name="via"
+                  value={option.key}
+                  checked={via === option.key}
+                  disabled={!option.ok}
+                  onChange={() => {
+                    setVia(option.key);
+                    // The two ways count differently: say how full it is the new way.
+                    if (editor.current) {
+                      const words = richToText(readEditor(editor.current)).trim();
+                      setSize(
+                        option.key === "public"
+                          ? [...words].length
+                          : textSize(social.channel, words),
+                      );
+                    }
+                  }}
+                  className="mt-0.5"
+                />
+                <span className="min-w-0">
+                  <span className="flex items-center gap-1 text-[13px] font-bold">
+                    <option.icon aria-hidden className="size-3.5" />
+                    {option.label}
+                  </span>
+                  <span className="text-muted-foreground block">{option.words}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+          {via === "public" && comment.public.ok && (
+            <p
+              role="note"
+              className="bg-brick-soft mt-1.5 flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold"
+            >
+              <Globe aria-hidden className="size-3.5 shrink-0" />
+              This reply is public. Don&apos;t put an order number, address or email in it.
+            </p>
+          )}
+        </fieldset>
+      )}
+      {social && !note && (!comment || social.blocked) && (
         <p
           className={cn(
             "flex flex-wrap items-center gap-x-2 gap-y-1 px-3 pb-1 text-xs",
@@ -923,10 +1058,12 @@ export function Composer({
                 </div>
               )}
             </div>
-            <button type="button" onClick={() => fileInput.current?.click()} className={quiet}>
-              <Paperclip aria-hidden />
-              {social ? "Picture" : "Attach"}
-            </button>
+            {!comment && (
+              <button type="button" onClick={() => fileInput.current?.click()} className={quiet}>
+                <Paperclip aria-hidden />
+                {social ? "Picture" : "Attach"}
+              </button>
+            )}
             <input
               ref={fileInput}
               type="file"
@@ -983,16 +1120,16 @@ export function Composer({
           </>
         )}
         <span className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
-          {social && !note && (
+          {social && limit && !note && (
             <span
               aria-live="polite"
-              title={`One ${social.name} message holds ${social.max.toLocaleString("en-US")} ${social.unit}`}
+              title={`One ${social.name} ${via === "public" ? "reply" : "message"} holds ${limit.max.toLocaleString("en-US")} ${limit.unit}`}
               className={cn(
                 "px-1 text-xs tabular-nums",
-                size > social.max ? "text-brick font-semibold" : "text-muted-foreground",
+                size > limit.max ? "text-brick font-semibold" : "text-muted-foreground",
               )}
             >
-              {size.toLocaleString("en-US")} / {social.max.toLocaleString("en-US")}
+              {size.toLocaleString("en-US")} / {limit.max.toLocaleString("en-US")}
             </span>
           )}
           <button
@@ -1021,7 +1158,7 @@ export function Composer({
                   }
                   className="rounded-r-none"
                 >
-                  {busy ? "Sending…" : mode === "forward" ? "Forward" : "Send"}
+                  {busy ? "Sending…" : mode === "forward" ? "Forward" : sendWord}
                 </Button>
                 <Button
                   type="button"
@@ -1038,17 +1175,25 @@ export function Composer({
                   <ul className={cn(pop, "right-0 w-60 text-sm")}>
                     {[
                       {
-                        label: "Send and mark in progress",
+                        label: `${sendWord} and mark in progress`,
                         then: "pending" as const,
                         until: undefined,
                       },
-                      { label: "Send and keep open", then: "open" as const, until: undefined },
+                      {
+                        label: `${sendWord} and keep open`,
+                        then: "open" as const,
+                        until: undefined,
+                      },
                       ...snoozeChoices.map((choice) => ({
-                        label: `Send and snooze: ${choice.label.toLowerCase()}`,
+                        label: `${sendWord} and snooze: ${choice.label.toLowerCase()}`,
                         then: "snoozed" as const,
                         until: choice.until,
                       })),
-                      { label: "Send and close", then: "closed" as const, until: undefined },
+                      {
+                        label: `${sendWord} and close`,
+                        then: "closed" as const,
+                        until: undefined,
+                      },
                     ].map((option) => (
                       <li key={option.label}>
                         <button
@@ -1069,8 +1214,8 @@ export function Composer({
                 disabled={busy || cantSend}
                 title="Send, close and go to the next one (Ctrl/⌘ + Shift + Enter)"
               >
-                <Send aria-hidden />
-                Send &amp; close
+                {via === "public" ? <Globe aria-hidden /> : <Send aria-hidden />}
+                {sendWord} &amp; close
               </Button>
             </>
           )}

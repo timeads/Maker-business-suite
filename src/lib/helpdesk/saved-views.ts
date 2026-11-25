@@ -24,6 +24,12 @@ export function channelMatches(channel: string | null | undefined, want: string)
   return want === "social" ? is === "instagram" || is === "facebook" : is === want;
 }
 
+export const KINDS = ["message", "comment"] as const;
+export const KIND_CHOICES: Record<(typeof KINDS)[number], string> = {
+  message: "Messages and email",
+  comment: "Comments on posts",
+};
+
 export const viewConditionsSchema = z.object({
   /** active: open or in progress, not snoozed, not filed. any: everything not joined away. */
   status: z.enum(["active", "open", "pending", "snoozed", "closed", "any"]).default("active"),
@@ -35,6 +41,8 @@ export const viewConditionsSchema = z.object({
   folder: z.union([z.literal("none"), z.string().uuid()]).optional(),
   priority: z.array(z.enum(PRIORITIES)).max(4).optional(),
   channel: z.enum(CHANNELS).optional(),
+  /** Only messages, or only comments on posts (Instagram and Facebook bring both). */
+  kind: z.enum(KINDS).optional(),
   /** Words in the subject or the customer's name or address, any letter case. */
   text: z.string().trim().min(2).max(80).optional(),
   unread: z.boolean().optional(),
@@ -122,6 +130,9 @@ export function matchesConditions(
   }
   if (conditions.priority?.length && !conditions.priority.includes(ticket.priority)) return false;
   if (conditions.channel && !channelMatches(ticket.channel, conditions.channel)) return false;
+  if (conditions.kind && (conditions.kind === "comment") !== (ticket.kind === "comment")) {
+    return false;
+  }
   if (conditions.text) {
     const hay = `${ticket.subject} ${ticket.customer}`.toLowerCase();
     if (!hay.includes(conditions.text.toLowerCase())) return false;
@@ -162,6 +173,9 @@ export function describeConditions(
   }
   if (conditions.priority?.length) parts.push(`${conditions.priority.join(" or ")} priority`);
   if (conditions.channel) parts.push(`from ${CHANNEL_CHOICES[conditions.channel]}`);
+  if (conditions.kind) {
+    parts.push(conditions.kind === "comment" ? "comments on posts" : "not comments");
+  }
   if (conditions.text) parts.push(`mentions “${conditions.text}”`);
   if (conditions.unread) parts.push("unread");
   return parts.join(" · ");

@@ -279,7 +279,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     ],
     notes: [
       "Instagram and Facebook only let a business reply within 24 hours of the customer's last message. The reply box tells you until when, and after that it won't send. You can still leave an internal note, and you can reply again as soon as they write back.",
-      "If nothing arrives from Instagram, open the Instagram app: Settings → Messages and story replies → Message controls → Connected tools → Allow access to messages.",
+      "If nothing arrives from Instagram, open the Instagram app: Settings → Messages and story replies → Message requests → Allow access to messages.",
       "Photos, videos and voice messages people send are kept with the conversation. A shared post or a story reply is noted in words; the post itself isn't copied.",
       "If someone unsends a message, it is removed here too.",
       "Replies you send from the Instagram or Facebook app show up in the conversation as well.",

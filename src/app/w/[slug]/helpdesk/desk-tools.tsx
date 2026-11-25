@@ -416,11 +416,14 @@ export function ListTools({
   manageHref,
   extra,
   channels = false,
+  comments = false,
 }: {
   /** One more button for the row (the export, for owners and admins). */
   extra?: React.ReactNode;
   /** Instagram or Facebook messages are on, so the list can be narrowed by channel. */
   channels?: boolean;
+  /** Comments on posts are on, so the list can be narrowed to messages or comments. */
+  comments?: boolean;
   slug: string;
   base: string;
   /** The address's own words, so a filter changes only itself. */
@@ -434,7 +437,9 @@ export function ListTools({
   manageHref: string;
 }) {
   const router = useRouter();
-  const filters = ["tag", "assignee", "priority", "unread", "channel"].filter((key) => params[key]);
+  const filters = ["tag", "assignee", "priority", "unread", "channel", "kind"].filter(
+    (key) => params[key],
+  );
   const [open, setOpen] = useState(filters.length > 0 || Boolean(params.sort));
   const [spinning, startRefresh] = useTransition();
   const [saving, setSaving] = useState(false);
@@ -542,6 +547,11 @@ export function ListTools({
               { value: "instagram", label: "Instagram" },
               { value: "facebook", label: "Facebook" },
             ])}
+          {(comments || params.kind) &&
+            select("kind", "Messages and comments", [
+              { value: "message", label: "Messages only" },
+              { value: "comment", label: "Comments only" },
+            ])}
           <span className="col-span-2 flex flex-wrap items-center gap-2 text-xs">
             <label className="flex items-center gap-1.5">
               <input
@@ -556,7 +566,14 @@ export function ListTools({
                 <button
                   type="button"
                   onClick={() =>
-                    go({ tag: null, assignee: null, priority: null, unread: null, channel: null })
+                    go({
+                      tag: null,
+                      assignee: null,
+                      priority: null,
+                      unread: null,
+                      channel: null,
+                      kind: null,
+                    })
                   }
                   className="text-ochre-text ml-auto font-semibold hover:underline"
                 >
@@ -580,6 +597,7 @@ export function ListTools({
               <input type="hidden" name="assignee" value={params.assignee ?? ""} />
               <input type="hidden" name="priority" value={params.priority ?? ""} />
               <input type="hidden" name="channel" value={params.channel ?? ""} />
+              <input type="hidden" name="kind" value={params.kind ?? ""} />
               {params.unread === "1" && <input type="hidden" name="unread" value="1" />}
               <Label htmlFor="view-name" className="sr-only">
                 Name the view

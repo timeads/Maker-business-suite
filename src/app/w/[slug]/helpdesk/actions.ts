@@ -1091,6 +1091,7 @@ export async function saveView(slug: string, _prev: HelpdeskState, formData: For
             folder: text("folder"),
             priority: priority.length > 0 ? priority : undefined,
             channel: text("channel"),
+            kind: text("kind"),
             text: text("text"),
             unread: formData.get("unread") ? true : undefined,
           },

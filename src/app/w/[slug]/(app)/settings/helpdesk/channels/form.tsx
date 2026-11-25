@@ -2,6 +2,7 @@
 
 import { useActionState } from "react";
 import { FormMessage } from "@/components/ui/form-message";
+import type { CommentFilter } from "@/lib/helpdesk/social/channels";
 import { SubmitButton } from "@/components/ui/submit-button";
 import { startConnection, type ConnectionState } from "@/app/w/[slug]/(app)/connections/actions";
 import type { HelpdeskState } from "@/app/w/[slug]/helpdesk/actions";
@@ -120,6 +121,134 @@ export function ChannelSwitches({
           </span>
         </label>
       </details>
+      <FormMessage>{state.error}</FormMessage>
+      <FormMessage kind="success">{state.message}</FormMessage>
+      <SubmitButton variant="outline" size="default" pendingText="Saving…" className="w-fit">
+        Save
+      </SubmitButton>
+    </form>
+  );
+}
+
+const FILTERS: { value: CommentFilter; label: string; help: string }[] = [
+  {
+    value: "skip_noise",
+    label: "Comments worth answering",
+    help: "Leaves out comments that are only emoji, a tagged friend or a one-word cheer (“🔥”, “love it”). The usual choice.",
+  },
+  {
+    value: "matching",
+    label: "Only questions and your own words",
+    help: "Only a comment with a question mark, or with one of the words you list below.",
+  },
+  {
+    value: "all",
+    label: "Every comment",
+    help: "Everything anyone writes under a post. Busy accounts will find this a lot.",
+  },
+];
+
+/** Which comments come into the help desk, and which of them start a conversation. */
+export function CommentSwitches({
+  slug,
+  instagram,
+  facebook,
+  canInstagram,
+  canFacebook,
+  filter,
+  words,
+}: {
+  slug: string;
+  instagram: boolean;
+  facebook: boolean;
+  /** Facebook granted what comments on each platform need. */
+  canInstagram: boolean;
+  canFacebook: boolean;
+  filter: CommentFilter;
+  words: string[];
+}) {
+  const [state, action] = useActionState<HelpdeskState, FormData>(
+    saveChannelSwitches.bind(null, slug),
+    {},
+  );
+  return (
+    <form action={action} className="flex flex-col gap-4">
+      <div className="flex flex-col gap-3">
+        <label className="flex items-start gap-2 text-sm">
+          <input type="hidden" name="instagram_comments_set" value="1" />
+          <input
+            type="checkbox"
+            name="instagram_comments"
+            value="1"
+            defaultChecked={instagram && canInstagram}
+            disabled={!canInstagram}
+            className="mt-0.5"
+          />
+          <span>
+            <span className="font-semibold">Instagram comments</span>
+            <span className="text-muted-foreground block text-xs">
+              {canInstagram
+                ? "Comments on your Instagram posts and reels."
+                : "Facebook hasn't been asked for permission to read Instagram comments yet. Use the button above."}
+            </span>
+          </span>
+        </label>
+        <label className="flex items-start gap-2 text-sm">
+          <input type="hidden" name="facebook_comments_set" value="1" />
+          <input
+            type="checkbox"
+            name="facebook_comments"
+            value="1"
+            defaultChecked={facebook && canFacebook}
+            disabled={!canFacebook}
+            className="mt-0.5"
+          />
+          <span>
+            <span className="font-semibold">Facebook comments</span>
+            <span className="text-muted-foreground block text-xs">
+              {canFacebook
+                ? "Comments on your Facebook Page's posts."
+                : "Facebook hasn't been asked for permission to read your Page's comments yet. Use the button above."}
+            </span>
+          </span>
+        </label>
+      </div>
+      <fieldset className="flex flex-col gap-2">
+        <legend className="mb-1 text-sm font-semibold">Which comments start a conversation</legend>
+        {FILTERS.map((option) => (
+          <label key={option.value} className="flex items-start gap-2 text-sm">
+            <input
+              type="radio"
+              name="comment_filter"
+              value={option.value}
+              defaultChecked={filter === option.value}
+              className="mt-0.5"
+            />
+            <span>
+              {option.label}
+              <span className="text-muted-foreground block text-xs">{option.help}</span>
+            </span>
+          </label>
+        ))}
+      </fieldset>
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="comment-words" className="text-sm font-semibold">
+          Your own words
+        </label>
+        <input type="hidden" name="comment_words_set" value="1" />
+        <textarea
+          id="comment-words"
+          name="comment_words"
+          rows={3}
+          defaultValue={words.join("\n")}
+          placeholder={"order\nrefund\nclass"}
+          className="border-input bg-card focus-visible:border-ochre focus-visible:ring-ochre/25 max-w-sm rounded-sm border px-2.5 py-1.5 text-sm outline-none focus-visible:ring-2"
+        />
+        <p className="text-muted-foreground text-xs">
+          One to a line, up to 30. A comment with any of these in it always starts a conversation,
+          whatever is chosen above.
+        </p>
+      </div>
       <FormMessage>{state.error}</FormMessage>
       <FormMessage kind="success">{state.message}</FormMessage>
       <SubmitButton variant="outline" size="default" pendingText="Saving…" className="w-fit">

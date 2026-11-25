@@ -260,4 +260,40 @@ describe("Instagram and Facebook conversations", () => {
     );
     expect(passesFilters(row, { channel: "email" }, ME)).toBe(true);
   });
+
+  it("tells comments on posts from messages, in a saved view and in the filter row", () => {
+    const facts = {
+      ...base,
+      priority: "normal" as const,
+      tags: [],
+      subject: "",
+      customer: "",
+      unread: false,
+    };
+    const comment = { ...facts, channel: "instagram", kind: "comment" };
+    const message = { ...facts, channel: "instagram", kind: "message" };
+    const only = (kind: "message" | "comment") => ({ status: "active", kind }) as const;
+    expect(matchesConditions(comment, only("comment"), ME, NOW)).toBe(true);
+    expect(matchesConditions(message, only("comment"), ME, NOW)).toBe(false);
+    expect(matchesConditions(message, only("message"), ME, NOW)).toBe(true);
+    expect(matchesConditions(comment, only("message"), ME, NOW)).toBe(false);
+    // An email, and a conversation from before comments existed, is not a comment.
+    expect(matchesConditions(facts, only("message"), ME, NOW)).toBe(true);
+    expect(matchesConditions(facts, only("comment"), ME, NOW)).toBe(false);
+    // Both kinds are in the "Instagram & Facebook" view.
+    expect(inView(comment, "social", ME, NOW)).toBe(true);
+    expect(inView(message, "social", ME, NOW)).toBe(true);
+    expect(
+      describeConditions(
+        { status: "active", channel: "social", kind: "comment" },
+        { person: () => "", folder: () => "" },
+      ),
+    ).toBe("open or in progress · from Instagram & Facebook · comments on posts");
+
+    const row = { ...facts, last_message_at: "", created_at: "", last_inbound_at: null };
+    expect(passesFilters({ ...row, kind: "comment" }, { kind: "comment" }, ME)).toBe(true);
+    expect(passesFilters({ ...row, kind: "comment" }, { kind: "message" }, ME)).toBe(false);
+    expect(passesFilters(row, { kind: "message" }, ME)).toBe(true);
+    expect(passesFilters(row, { kind: "comment" }, ME)).toBe(false);
+  });
 });

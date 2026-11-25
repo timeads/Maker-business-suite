@@ -87,7 +87,11 @@ export default async function WorkspaceLayout({
       gmailOrders: googleMailConfigured(),
       michaels: michaels?.status === "active" || michaels?.status === "needs_reconnect",
       manualName: parseManual(manual?.body).name,
-      socialInbox: channels.instagram || channels.facebook,
+      socialInbox:
+        channels.instagram ||
+        channels.facebook ||
+        channels.instagram_comments ||
+        channels.facebook_comments,
     },
     attention,
   );

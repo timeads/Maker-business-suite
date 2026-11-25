@@ -52,6 +52,8 @@ export type ListRow = {
   tags: string[];
   unread: boolean;
   channel?: string | null;
+  /** "message", or "comment" for a conversation about a comment on a post. */
+  kind?: string | null;
 };
 
 export type ListFilters = {
@@ -62,7 +64,13 @@ export type ListFilters = {
   unread?: boolean;
   /** "email", "instagram", "facebook", or "social" for the last two together. */
   channel?: string;
+  /** "message" or "comment": Instagram and Facebook bring both. */
+  kind?: string;
 };
+
+/** Whether a conversation is the kind asked for ("comment", or "message" for everything else). */
+export const kindMatches = (kind: string | null | undefined, want: string): boolean =>
+  want === "comment" ? kind === "comment" : kind !== "comment";
 
 /** The filter row above the list: every filter that is set must hold. */
 export function passesFilters(row: ListRow, filters: ListFilters, me: string): boolean {
@@ -82,6 +90,7 @@ export function passesFilters(row: ListRow, filters: ListFilters, me: string): b
         : is === filters.channel;
     if (!hit) return false;
   }
+  if (filters.kind && !kindMatches(row.kind, filters.kind)) return false;
   return true;
 }
 

@@ -61,12 +61,22 @@ import {
   CHANNELS_KEY,
   CHANNEL_LABELS,
   TEXT_LIMITS,
+  COMMENT_LIMITS,
   channelState,
+  commentAbilities,
+  commentState,
   isSocialChannel,
   parseChannelSettings,
   personLabel,
   profileUrl,
 } from "@/lib/helpdesk/social/channels";
+import {
+  conversationWords,
+  latestComment,
+  postLink,
+  privateReplyState,
+  privateReplyWords,
+} from "@/lib/helpdesk/social/comments";
 import { connectionFacts } from "@/lib/helpdesk/social/server";
 import { lastInboundAt, replyWindow, windowWords } from "@/lib/helpdesk/social/window";
 import { TAG_GROUPS_KEY, parseTagGroups } from "@/lib/helpdesk/tag-groups";
@@ -124,7 +134,7 @@ import {
 } from "./desk-tools";
 import { helpdeskAccess } from "./gate";
 import { DiscardEmpty, OutboxNotices, SendWatch } from "./send-watch";
-import { ForgetPerson, KnownEmail } from "./social-tools";
+import { CommentTools, ForgetPerson, KnownEmail } from "./social-tools";
 
 export const metadata: Metadata = { title: "Help desk" };
 
@@ -158,6 +168,9 @@ type Row = {
   shelf: Shelf | null;
   /** "email", "instagram" or "facebook". */
   channel: string;
+  /** "message", or "comment" for a conversation about a comment on a post. */
+  kind: string;
+  comment_post_id: string | null;
   last_message_at: string;
   created_at: string;
   contact_id: string;
@@ -184,6 +197,14 @@ type Message = {
   sent_at: string | null;
   /** The customer took it back. */
   removed_at: string | null;
+  /** A comment: changed by its author, hidden on the platform, and whether it has had its private message. */
+  edited_at: string | null;
+  hidden: boolean | null;
+  private_reply: string | null;
+  /** The comment it was written under, when it is a reply. */
+  parent_external_id: string | null;
+  /** Meta's id for it (a comment's id is what a reply is written under). */
+  provider_message_id: string | null;
   created_at: string;
   author_id: string | null;
   to_emails: string[] | null;
@@ -200,7 +221,7 @@ const tagsOf = (row: Row) =>
     .filter((name): name is string => Boolean(name));
 
 const FIELDS =
-  "id, number, subject, status, priority, assignee_id, snoozed_until, merged_into, folder_id, shelf, channel, last_message_at, created_at, contact_id, contacts(id, email, name, handle, known_email), ticket_tags(tags(name))";
+  "id, number, subject, status, priority, assignee_id, snoozed_until, merged_into, folder_id, shelf, channel, kind, comment_post_id, last_message_at, created_at, contact_id, contacts(id, email, name, handle, known_email), ticket_tags(tags(name))";
 const UUID = /^[0-9a-f-]{36}$/;
 const heading = "text-[13px] font-bold tracking-[-0.005em]";
 const card = "border-border border-b px-4 py-4";
@@ -288,6 +309,7 @@ export default async function HelpdeskPage({
   const channelFilter = (["email", "social", "instagram", "facebook"] as const).find(
     (c) => c === query.channel,
   );
+  const kindFilter = (["message", "comment"] as const).find((k) => k === query.kind);
   // "Show more": each step reads further back, up to a thousand conversations.
   const pages = /^[2-5]$/.test(query.n ?? "") ? Number(query.n) : 1;
   const side = query.side === "activity" || query.side === "details" ? query.side : null;
@@ -401,7 +423,8 @@ export default async function HelpdeskPage({
   const tagGroups = parseTagGroups(configOf(TAG_GROUPS_KEY)).groups;
   const channelSettings = parseChannelSettings(configOf(CHANNELS_KEY));
   const metaConnection = metaRow ? connectionFacts(metaRow as Record<string, unknown>) : null;
-  const socialOn = channelSettings.instagram || channelSettings.facebook;
+  const commentsOn = channelSettings.instagram_comments || channelSettings.facebook_comments;
+  const socialOn = channelSettings.instagram || channelSettings.facebook || commentsOn;
   const savedView = choice.kind === "saved" ? savedViews.find((v) => v.id === choice.id) : null;
   const folder = choice.kind === "folder" ? folders.find((f) => f.id === choice.id) : null;
   const readAt = new Map((readRows ?? []).map((r) => [r.ticket_id as string, r.read_at as string]));
@@ -475,7 +498,7 @@ export default async function HelpdeskPage({
   const filtered = listRows.filter((row) =>
     passesFilters(
       row,
-      { tag, assignee, priority, unread: wantUnread, channel: channelFilter },
+      { tag, assignee, priority, unread: wantUnread, channel: channelFilter, kind: kindFilter },
       user.id,
     ),
   );
@@ -533,6 +556,7 @@ export default async function HelpdeskPage({
     priority: priority ?? "",
     unread: unreadOnly ? "1" : "",
     channel: channelFilter ?? "",
+    kind: kindFilter ?? "",
     n: pages > 1 ? String(pages) : "",
   };
   const href = (changes: Record<string, string | number | null>) => {
@@ -591,7 +615,7 @@ export default async function HelpdeskPage({
         supabase
           .from("messages")
           .select(
-            "id, direction, kind, from_email, from_name, body, summary, sent_at, removed_at, created_at, author_id, to_emails, cc_emails, format, attachments",
+            "id, direction, kind, from_email, from_name, body, summary, sent_at, removed_at, edited_at, hidden, private_reply, parent_external_id, provider_message_id, created_at, author_id, to_emails, cc_emails, format, attachments",
           )
           .eq("tenant_id", tenant.id)
           .eq("ticket_id", ticket.id)
@@ -611,7 +635,7 @@ export default async function HelpdeskPage({
           .limit(300),
         supabase
           .from("tickets")
-          .select("id, number, subject, status, last_message_at")
+          .select("id, number, subject, status, kind, last_message_at")
           .eq("tenant_id", tenant.id)
           .eq("contact_id", ticket.contact_id)
           .neq("id", ticket.id)
@@ -642,6 +666,17 @@ export default async function HelpdeskPage({
     : [null, null, null, null, null, null, null];
 
   const thread = (messages?.data ?? []) as unknown as Message[];
+  // The post a comment is on: its address and the start of its caption. Read on
+  // its own and allowed to fail; the conversation is readable without it.
+  const { data: postRow } =
+    ticket?.kind === "comment" && ticket.comment_post_id
+      ? await supabase
+          .from("comment_posts")
+          .select("permalink, excerpt, checked_at")
+          .eq("tenant_id", tenant.id)
+          .eq("id", ticket.comment_post_id)
+          .maybeSingle()
+      : { data: null };
   // Topics from the manual that fit this conversation, found by its words.
   // Read on its own and allowed to fail.
   const railManual = ticket
@@ -805,12 +840,73 @@ export default async function HelpdeskPage({
     minute: "2-digit",
     timeZone: tenant.timezone,
   });
-  const socialState = channel ? channelState(channel, channelSettings, metaConnection) : null;
+  const isComment = Boolean(channel && ticket?.kind === "comment");
+  const socialState = channel
+    ? isComment
+      ? commentState(channel, channelSettings, metaConnection)
+      : channelState(channel, channelSettings, metaConnection)
+    : null;
   const socialWindow = channel
     ? replyWindow(lastInboundAt(thread), nowMs, { humanAgent: channelSettings.human_agent })
     : null;
+  // A comment is answered under the customer's latest comment that still
+  // stands: in public, or with the one private message Meta allows about it.
+  const answering = isComment ? latestComment(thread) : null;
+  const canComment = channel ? commentAbilities(channel, metaConnection?.scopes ?? null) : null;
+  const privately =
+    channel && isComment
+      ? privateReplyState(
+          answering
+            ? {
+                at: answering.sent_at ?? answering.created_at,
+                privateReply: answering.private_reply,
+              }
+            : null,
+          nowMs,
+          Boolean(canComment?.privately),
+        )
+      : null;
+  const postUrl = channel && postRow ? postLink(channel, postRow.permalink) : null;
+  const commentReply =
+    channel && isComment && socialState && privately && canComment
+      ? {
+          channel,
+          name: CHANNEL_LABELS[channel],
+          to: customerLabel,
+          max: TEXT_LIMITS[channel].max,
+          unit: TEXT_LIMITS[channel].unit,
+          open: Boolean(answering),
+          words: "There is no comment left here to answer: it was removed. Notes still work.",
+          blocked: !(process.env.META_APP_SECRET && process.env.SUPABASE_SECRET_KEY)
+            ? `${CHANNEL_LABELS[channel]} comments aren't switched on for this environment yet. Notes still work.`
+            : socialState.state === "on"
+              ? null
+              : `${socialState.why ?? `${CHANNEL_LABELS[channel]} comments are switched off.`} See Settings → Help desk → Channels. Notes still work.`,
+          comment: answering?.provider_message_id
+            ? {
+                commentId: answering.provider_message_id,
+                public: {
+                  ok: canComment.reply && !(channel === "instagram" && answering.hidden),
+                  why: !canComment.reply
+                    ? "Facebook didn't give permission to reply to comments. An owner or admin can allow it in Settings → Help desk → Channels."
+                    : channel === "instagram" && answering.hidden
+                      ? "Instagram doesn't allow a public reply to a hidden comment. Show it again first."
+                      : null,
+                  max: COMMENT_LIMITS[channel].max,
+                },
+                private: {
+                  ok: privately.state === "available",
+                  words: privateReplyWords(channel, privately.state, privately.until, (at) =>
+                    windowTime.format(new Date(at)),
+                  ),
+                },
+              }
+            : null,
+        }
+      : null;
   const socialReply =
-    channel && socialState && socialWindow
+    commentReply ??
+    (channel && socialState && socialWindow
       ? {
           channel,
           name: CHANNEL_LABELS[channel],
@@ -825,7 +921,7 @@ export default async function HelpdeskPage({
               ? null
               : `${socialState.why ?? `${CHANNEL_LABELS[channel]} messages are switched off.`} See Settings → Help desk → Channels. Notes still work.`,
         }
-      : null;
+      : null);
   const editable = Boolean(ticket && canWrite && !ticket.merged_into);
   const ticketUnread =
     ticket &&
@@ -901,6 +997,7 @@ export default async function HelpdeskPage({
       story_mention: "mentioned you in their story",
       share: "shared a post",
     };
+    const isReply = m.kind === "comment" && !ours && Boolean(m.parent_external_id);
     const doc = ours ? parseRichDoc(m.format) : null;
     const text = ours ? { own: m.body, quoted: null } : splitQuote(m.body);
     const to =
@@ -928,13 +1025,19 @@ export default async function HelpdeskPage({
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm leading-tight font-bold">{who}</p>
             <p className="text-muted-foreground truncate text-xs">
-              {channel
+              {channel && m.kind === "comment"
                 ? ours
-                  ? `${CHANNEL_LABELS[channel]} message to ${customerLabel}${fromApp ? ` · sent from the ${fromApp}` : ""}`
-                  : `${CHANNEL_LABELS[channel]} message${KIND_WORDS[m.kind ?? ""] ? ` · ${KIND_WORDS[m.kind ?? ""]}` : ""}`
-                : ours
-                  ? `${m.kind === "forward" ? "forwarded to" : "to"} ${to.join(", ")}${(m.cc_emails ?? []).length > 0 ? ` · cc ${(m.cc_emails ?? []).join(", ")}` : ""}`
-                  : `${m.from_email ?? ""}${copied.length > 0 ? ` · also to ${copied.join(", ")}` : ""}`}
+                  ? `Public reply on ${CHANNEL_LABELS[channel]} · everyone can see this${fromApp ? ` · sent from the ${fromApp}` : ""}`
+                  : `${CHANNEL_LABELS[channel]} comment${isReply ? " · a reply under an earlier comment" : ""}`
+                : channel && m.kind === "private_reply"
+                  ? `Private ${CHANNEL_LABELS[channel]} message to ${customerLabel} about their comment`
+                  : channel
+                    ? ours
+                      ? `${CHANNEL_LABELS[channel]} message to ${customerLabel}${fromApp ? ` · sent from the ${fromApp}` : ""}`
+                      : `${CHANNEL_LABELS[channel]} message${KIND_WORDS[m.kind ?? ""] ? ` · ${KIND_WORDS[m.kind ?? ""]}` : ""}`
+                    : ours
+                      ? `${m.kind === "forward" ? "forwarded to" : "to"} ${to.join(", ")}${(m.cc_emails ?? []).length > 0 ? ` · cc ${(m.cc_emails ?? []).join(", ")}` : ""}`
+                      : `${m.from_email ?? ""}${copied.length > 0 ? ` · also to ${copied.join(", ")}` : ""}`}
             </p>
           </div>
           <time className="text-muted-foreground shrink-0 text-xs" dateTime={m.created_at}>
@@ -960,7 +1063,25 @@ export default async function HelpdeskPage({
             ),
           )
         )}
-        {m.removed_at ? (
+        {m.kind === "comment" && !m.removed_at && (m.edited_at || m.hidden || m.private_reply) && (
+          <p className="mt-1.5 flex flex-wrap gap-1.5">
+            {m.edited_at && <Badge>Edited</Badge>}
+            {m.private_reply === "sent" && <Badge tone="good">Private message sent</Badge>}
+            {m.private_reply === "claimed" && (
+              <Badge tone="waiting">Private message on its way</Badge>
+            )}
+            {m.hidden && (
+              <Badge tone="waiting">
+                Hidden on {channel ? CHANNEL_LABELS[channel] : "the post"}
+              </Badge>
+            )}
+          </p>
+        )}
+        {m.removed_at && m.kind === "comment" ? (
+          <p className="text-muted-foreground text-sm italic">
+            This comment was removed from the post. Its words are gone here too.
+          </p>
+        ) : m.removed_at ? (
           <p className="text-muted-foreground text-sm italic">
             This message was removed by the person who sent it.
           </p>
@@ -985,6 +1106,17 @@ export default async function HelpdeskPage({
           </details>
         )}
         <MessageFiles files={files.filter((file) => !body.placed.has(file.id)).map(shown)} />
+        {channel && m.kind === "comment" && !m.removed_at && canWrite && canComment?.moderate && (
+          <CommentTools
+            slug={tenant.slug}
+            messageId={m.id}
+            name={CHANNEL_LABELS[channel]}
+            hidden={Boolean(m.hidden)}
+            // Hiding is for a customer's comment; the team's own reply can only be deleted.
+            canHide={!ours}
+            canDelete={canManage(role)}
+          />
+        )}
         {/* Mail sent before files were kept: only their names were written down. */}
         {files.length === 0 && (m.attachments ?? []).length > 0 && (
           <ul className="mt-3 flex flex-wrap gap-1.5">
@@ -1068,6 +1200,7 @@ export default async function HelpdeskPage({
               canSaveView={canWrite && canManage(role)}
               canSend={canSend}
               channels={socialOn}
+              comments={commentsOn}
               manageHref={`/w/${tenant.slug}/settings/helpdesk#folders`}
               extra={
                 canManage(role) && canWrite ? (
@@ -1134,7 +1267,7 @@ export default async function HelpdeskPage({
                   )
                 ) : q ? (
                   `Nothing matches “${q}” in names, emails, subjects, what was said or ticket numbers.`
-                ) : tag || assignee || priority || unreadOnly || channelFilter ? (
+                ) : tag || assignee || priority || unreadOnly || channelFilter || kindFilter ? (
                   "No conversations match these filters."
                 ) : choice.kind === "built" && choice.key === "social" ? (
                   "No Instagram or Facebook messages are waiting."
@@ -1222,7 +1355,7 @@ export default async function HelpdeskPage({
                           )}
                         >
                           <MessageCircle aria-hidden className="size-3" />
-                          {CHANNEL_LABELS[row.channel]}
+                          {conversationWords(row.channel, row.kind)}
                         </span>
                       )}
                       {rowFolder && choice.kind !== "folder" && (
@@ -1385,7 +1518,13 @@ export default async function HelpdeskPage({
                         after={afterHref}
                         back={backHref}
                         others={(earlier?.data ?? [])
-                          .filter((other) => other.status !== "closed")
+                          // Only ones it could be joined with: comments and messages stay apart.
+                          .filter(
+                            (other) =>
+                              other.status !== "closed" &&
+                              ticket.kind !== "comment" &&
+                              other.kind !== "comment",
+                          )
                           .map((other) => ({
                             number: other.number as number,
                             subject: other.subject as string,
@@ -1818,7 +1957,7 @@ export default async function HelpdeskPage({
               )}
               {channel && (
                 <p className="text-muted-foreground flex flex-wrap items-center gap-x-1.5 text-xs">
-                  <span>{CHANNEL_LABELS[channel]}</span>
+                  <span>{conversationWords(channel, ticket.kind)}</span>
                   {contact?.handle && <span className="font-read">· @{contact.handle}</span>}
                   {profileUrl(channel, contact?.handle) && (
                     // A plain link to their public profile. Nothing of it is loaded here.
@@ -1894,6 +2033,38 @@ export default async function HelpdeskPage({
             <ForgetPerson slug={tenant.slug} contactId={contact.id} back={backHref} />
           )}
         </section>
+
+        {channel && isComment && (
+          <section className={card}>
+            <h3 className={cn(heading, "mb-2")}>The post</h3>
+            {/* A few of the post's own words as plain text, and a plain link. Nothing of it is loaded here. */}
+            {postRow?.excerpt ? (
+              <p className="font-read text-sm break-words">{postRow.excerpt}</p>
+            ) : (
+              <p className="text-muted-foreground text-sm">
+                {postRow?.checked_at
+                  ? "This post has no caption, or it couldn't be read."
+                  : "The post's caption hasn't been read yet."}
+              </p>
+            )}
+            {postUrl && (
+              <a
+                href={postUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-ochre-text mt-2 flex w-fit items-center gap-1 text-sm font-semibold hover:underline"
+              >
+                Open the post on {CHANNEL_LABELS[channel]}
+                <ExternalLink aria-hidden className="size-3" />
+              </a>
+            )}
+            <p className="text-muted-foreground mt-2 text-xs">
+              {(earlier?.data ?? []).some((other) => other.kind !== "comment")
+                ? `${customerLabel} has also messaged you: see “Earlier conversations” below.`
+                : `If ${customerLabel} answers a private message, it arrives as its own ${CHANNEL_LABELS[channel]} message conversation and is listed below.`}
+            </p>
+          </section>
+        )}
 
         {customer && customer.tiles.orders > 0 && (
           <section className={card}>
@@ -2072,11 +2243,15 @@ export default async function HelpdeskPage({
         {(earlier?.data ?? []).length > 0 && (
           <section className={card}>
             <h3 className={cn(heading, "mb-2")}>Earlier conversations</h3>
-            {editable && (earlier?.data ?? []).some((other) => other.status !== "closed") && (
-              <p className="bg-teal-soft text-teal-soft-ink mb-2 rounded-md px-3 py-2 text-xs">
-                This customer has another open conversation. “Merge…” under the ⋯ menu joins them.
-              </p>
-            )}
+            {editable &&
+              ticket.kind !== "comment" &&
+              (earlier?.data ?? []).some(
+                (other) => other.status !== "closed" && other.kind !== "comment",
+              ) && (
+                <p className="bg-teal-soft text-teal-soft-ink mb-2 rounded-md px-3 py-2 text-xs">
+                  This customer has another open conversation. “Merge…” under the ⋯ menu joins them.
+                </p>
+              )}
             <ul className="flex flex-col gap-1.5 text-sm">
               {(earlier?.data ?? []).map((other) => (
                 <li key={other.id}>

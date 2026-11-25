@@ -68,6 +68,8 @@ export type TicketFacts = {
   shelf?: Shelf | null;
   /** Where it came from: "email", "instagram" or "facebook". */
   channel?: string | null;
+  /** "message", or "comment" for a conversation about a comment on a post. */
+  kind?: string | null;
 };
 
 export const isSnoozed = (ticket: Pick<TicketFacts, "snoozed_until">, now: number) =>

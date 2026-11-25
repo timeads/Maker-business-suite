@@ -3,7 +3,92 @@
 import { useActionState, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { HelpdeskState } from "./actions";
-import { forgetSocialPerson, setKnownEmail } from "./social-actions";
+import { forgetSocialPerson, hideComment, removeComment, setKnownEmail } from "./social-actions";
+
+/**
+ * What can be done to a comment on the platform itself: hide it from everyone
+ * else (and show it again), or delete it for good. Deleting is for owners and
+ * admins and asks first: there is no undoing it.
+ */
+export function CommentTools({
+  slug,
+  messageId,
+  name,
+  hidden,
+  canHide,
+  canDelete,
+}: {
+  slug: string;
+  messageId: string;
+  /** "Instagram" or "Facebook". */
+  name: string;
+  hidden: boolean;
+  canHide: boolean;
+  canDelete: boolean;
+}) {
+  const router = useRouter();
+  const [asking, setAsking] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const [busy, start] = useTransition();
+  const run = (action: () => Promise<HelpdeskState>) =>
+    start(async () => {
+      const result = await action();
+      setProblem(result.error ?? null);
+      setAsking(false);
+      if (!result.error) router.refresh();
+    });
+  if (!canHide && !canDelete) return null;
+  const link = "text-ochre-text font-semibold hover:underline disabled:opacity-60";
+  return (
+    <div className="border-border mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t pt-2 text-xs">
+      {canHide && (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => run(() => hideComment(slug, messageId, !hidden))}
+          title={
+            hidden
+              ? `Show this comment to everyone on ${name} again`
+              : `Hide this comment from everyone on ${name} except the person who wrote it`
+          }
+          className={link}
+        >
+          {hidden ? `Show on ${name} again` : `Hide on ${name}`}
+        </button>
+      )}
+      {canDelete &&
+        (asking ? (
+          <span
+            role="alertdialog"
+            aria-label="Delete this comment?"
+            className="flex flex-wrap items-center gap-2"
+          >
+            <span>Delete this comment from {name} for good? It can&apos;t be brought back.</span>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => run(() => removeComment(slug, messageId))}
+              className="text-brick font-semibold hover:underline disabled:opacity-60"
+            >
+              {busy ? "Deleting…" : "Yes, delete it"}
+            </button>
+            <button type="button" disabled={busy} onClick={() => setAsking(false)} className={link}>
+              Keep it
+            </button>
+          </span>
+        ) : (
+          <button type="button" disabled={busy} onClick={() => setAsking(true)} className={link}>
+            Delete…
+          </button>
+        ))}
+      {problem && (
+        <span role="alert" className="text-brick basis-full">
+          {problem}
+        </span>
+      )}
+    </div>
+  );
+}
 
 /**
  * An email for someone who messaged on Instagram or Facebook. Meta doesn't
