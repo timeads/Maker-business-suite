@@ -138,6 +138,25 @@ const REQUIRED: Record<ImportKind, string[]> = {
   deliveries: ["reference", "item", "received_at", "quantity"],
 };
 
+/**
+ * Which kind of file these headings belong to, for the kinds whose needed
+ * columns are all there. The kind that needs the most wins, so a ledger
+ * (which names a supplier on every row) is never taken for a list of
+ * suppliers. Null when nothing fits.
+ */
+export function guessImportKind(headers: string[]): ImportKind | null {
+  const present = new Set(headers);
+  const fits = (kind: ImportKind) => {
+    const has = (column: string) =>
+      [column, ...(ALIASES[kind][column] ?? [])].some((name) => present.has(name));
+    return REQUIRED[kind].every((column) =>
+      column === "item" ? has("sku") || has("product") : has(column),
+    );
+  };
+  const order: ImportKind[] = ["orders", "deliveries", "ledger", "counts", "items", "suppliers"];
+  return order.find(fits) ?? null;
+}
+
 const FILE_WORDS: Record<ImportKind, string> = {
   suppliers: "suppliers",
   items: "item planning",

@@ -623,3 +623,23 @@ describe("the guide on the import page", () => {
     }
   });
 });
+
+describe("guessImportKind", () => {
+  it("tells each kind of file from its headings", async () => {
+    const { guessImportKind } = await import("./files");
+    expect(guessImportKind(["name", "contact_name", "contact_email", "moq"])).toBe("suppliers");
+    expect(guessImportKind(["sku", "supplier", "moq", "case_pack"])).toBe("items");
+    expect(guessImportKind(["supplier", "type", "entry_date", "amount", "reference"])).toBe(
+      "ledger",
+    );
+    expect(guessImportKind(["reference", "supplier", "sku", "qty_ordered"])).toBe("orders");
+    expect(guessImportKind(["reference", "sku", "received_at", "quantity"])).toBe("deliveries");
+    expect(guessImportKind(["sku", "date", "on_hand"])).toBe("counts");
+    expect(guessImportKind(["colour", "size"])).toBeNull();
+  });
+
+  it("never takes a ledger for a list of suppliers", async () => {
+    const { guessImportKind } = await import("./files");
+    expect(guessImportKind(["supplier", "type", "date", "amount"])).toBe("ledger");
+  });
+});

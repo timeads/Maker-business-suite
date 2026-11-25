@@ -4,7 +4,8 @@ import { useRef, useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { FormMessage } from "@/components/ui/form-message";
 import { Label, Select } from "@/components/ui/input";
-import { MAX_IMPORT_BYTES, type ImportKind } from "@/lib/stock/import/files";
+import { parseCsv } from "@/lib/stock/import/csv";
+import { MAX_IMPORT_BYTES, guessImportKind, type ImportKind } from "@/lib/stock/import/files";
 import { IMPORT_GUIDE, IMPORT_ORDER } from "@/lib/stock/import/guide";
 import { countLines, plural } from "@/lib/stock/import/words";
 import { lookAtImport, runImport, type ImportState } from "./actions";
@@ -20,6 +21,8 @@ export function Importer({ slug, only }: { slug: string; only?: ImportKind }) {
   const [file, setFile] = useState<{ name: string; text: string } | null>(null);
   const [state, setState] = useState<ImportState>({});
   const [key, setKey] = useState("");
+  /** Set when the file was plainly another kind than the one chosen, and we read it as that. */
+  const [switched, setSwitched] = useState<ImportKind | null>(null);
   const [busy, start] = useTransition();
   const input = useRef<HTMLInputElement>(null);
   const guide = IMPORT_GUIDE[kind];
@@ -27,6 +30,7 @@ export function Importer({ slug, only }: { slug: string; only?: ImportKind }) {
   const reset = () => {
     setFile(null);
     setState({});
+    setSwitched(null);
     if (input.current) input.current.value = "";
   };
 
@@ -41,10 +45,27 @@ export function Importer({ slug, only }: { slug: string; only?: ImportKind }) {
       return;
     }
     const text = await picked.text();
+    // The headings say what the file is. If they plainly say another kind than the
+    // one chosen, read it as what it is and say so, rather than as the wrong thing.
+    const parsed = parseCsv(text);
+    const guess = parsed.ok ? guessImportKind(parsed.headers) : null;
+    let as = kind;
+    setSwitched(null);
+    if (guess && guess !== kind) {
+      if (only) {
+        setState({
+          error: `That looks like a ${IMPORT_GUIDE[guess].title.toLowerCase()} file, and this box takes ${IMPORT_GUIDE[only].title.toLowerCase()}. Bring it in under Settings → Stock → Bring your records across.`,
+        });
+        return;
+      }
+      as = guess;
+      setKind(guess);
+      setSwitched(guess);
+    }
     setFile({ name: picked.name, text });
     // A fresh key for this look: pressing "Bring these in" twice sends the same one.
     setKey(crypto.randomUUID());
-    start(async () => setState(await lookAtImport(slug, kind, picked.name, text)));
+    start(async () => setState(await lookAtImport(slug, as, picked.name, text)));
   };
 
   const look = state.look;
@@ -91,6 +112,13 @@ export function Importer({ slug, only }: { slug: string; only?: ImportKind }) {
         <p className="text-muted-foreground font-read text-sm">
           {guide.about} {guide.matchedBy}
         </p>
+      )}
+
+      {switched && !done && (
+        <FormMessage kind="success">
+          That&apos;s a {IMPORT_GUIDE[switched].title.toLowerCase()} file, so we&apos;ve read it as
+          one.
+        </FormMessage>
       )}
 
       {busy && !done && (
