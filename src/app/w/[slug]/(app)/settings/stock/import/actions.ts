@@ -61,7 +61,7 @@ const FUNCTIONS: Record<ImportKind, string> = {
 const NEEDS_ITEMS: ImportKind[] = ["items", "orders", "counts", "deliveries"];
 
 async function context(slug: string) {
-  const user = await requireUser(`/w/${slug}/stock/settings/import`);
+  const user = await requireUser(`/w/${slug}/settings/stock/import`);
   const ctx = await getTenantContext(slug, user.id);
   if (!ctx) return { error: NO_ACCESS } as const;
   const entitlements = await getEntitlements(ctx.tenant.id);
@@ -239,5 +239,6 @@ export async function runImport(
   }
   const { repeated, ...counts } = tidyCounts(data);
   revalidatePath(`/w/${slug}/stock`, "layout");
+  revalidatePath(`/w/${slug}/settings`, "layout");
   return { done: { kind, fileName: name, counts, repeated } };
 }

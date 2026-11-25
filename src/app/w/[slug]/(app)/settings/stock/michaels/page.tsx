@@ -1,12 +1,12 @@
 import type { Metadata } from "next";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { PageHeader } from "@/components/ui/page-header";
+import { SectionHeading } from "@/components/settings/section-heading";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
-import { loadMichaels } from "../data";
-import { MichaelsSettingsForm } from "../forms";
-import { michaelsAccess } from "../gate";
-import { MichaelsTabs, WatchingBanner } from "../tabs";
+import { loadMichaels } from "../../../stock/michaels/data";
+import { MichaelsSettingsForm } from "../../../stock/michaels/forms";
+import { michaelsAccess } from "../../../stock/michaels/gate";
+import { WatchingBanner } from "../../../stock/michaels/tabs";
 
 export const metadata: Metadata = { title: "Michaels settings" };
 
@@ -16,7 +16,7 @@ export default async function MichaelsSettingsPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  const access = await michaelsAccess(slug, `/w/${slug}/stock/michaels/settings`);
+  const access = await michaelsAccess(slug, `/w/${slug}/settings/stock/michaels`);
   if (!access.ok) return access.upsell;
   const { tenant, role, entitlements } = access;
   const michaels = await loadMichaels(await createClient(), tenant);
@@ -24,12 +24,11 @@ export default async function MichaelsSettingsPage({
 
   return (
     <>
-      <PageHeader
+      <SectionHeading
+        back={{ href: `/w/${tenant.slug}/stock/michaels`, label: "Michaels" }}
         title="Michaels Marketplace"
         description="Whether we look at Michaels, and what each look works out."
-        back={{ href: `/w/${tenant.slug}/stock`, label: "Stock" }}
       />
-      <MichaelsTabs slug={tenant.slug} />
       <WatchingBanner />
       <Card>
         <CardHeader>

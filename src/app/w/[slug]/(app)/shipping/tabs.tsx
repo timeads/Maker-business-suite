@@ -12,8 +12,8 @@ export function ShippingTabs({ slug }: { slug: string }) {
         { href: `${base}/batches`, name: "Label batches" },
         { href: `${base}/rates`, name: "Rate calculator" },
         { href: `${base}/sent`, name: "Sent" },
-        { href: `${base}/settings`, name: "Settings" },
       ]}
+      settings={{ href: `/w/${slug}/settings/shipping` }}
     />
   );
 }

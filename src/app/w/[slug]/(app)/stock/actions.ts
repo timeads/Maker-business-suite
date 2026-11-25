@@ -64,7 +64,11 @@ const whole = (formData: FormData, name: string) => {
   const value = text(formData, name);
   return value === "" ? null : Number.parseInt(value, 10);
 };
-const done = (slug: string) => revalidatePath(`/w/${slug}/stock`, "layout");
+const done = (slug: string) => {
+  revalidatePath(`/w/${slug}/stock`, "layout");
+  // This tool's settings screens live under workspace Settings.
+  revalidatePath(`/w/${slug}/settings`, "layout");
+};
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 /**
@@ -138,7 +142,7 @@ export async function saveSupplier(
   ) {
     return { error: "Check the other emails: up to five, with commas between them." };
   }
-  // Empty follows the workspace's usual figure (Stock → Settings).
+  // Empty follows the workspace's usual figure (Settings → Stock).
   if (lead !== null && !(lead >= 0 && lead <= 365)) {
     return { error: "How many days from ordering to arriving? (0 to 365, or leave it empty)" };
   }
@@ -477,7 +481,7 @@ export async function bulkItems(
     return {
       message:
         n === 0
-          ? "Nothing changed: those are left out by your shop or by a rule in Settings, not by you."
+          ? "Nothing changed: those are left out by your shop or by a rule under Settings → Stock, not by you."
           : `${plural(n, "item")} ${n === 1 ? "is" : "are"} back in planning.`,
     };
   }

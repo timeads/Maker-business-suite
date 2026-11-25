@@ -35,8 +35,9 @@ type Note = { kind: "error" | "success"; text: string } | null;
 const said = (err: unknown, fallback: string) =>
   err instanceof ZebraError || err instanceof PdfLabelError ? err.message : fallback;
 
-/** Where this computer's printing is set, as a link straight to that part of Shipping settings. */
-export const printingSettingsHref = (slug: string) => `/w/${slug}/shipping/settings#printing`;
+/** Where this computer's printing is set: Settings → Shipping → Printing on this computer. */
+export const printingSettingsHref = (slug: string) =>
+  `/w/${slug}/settings/shipping/printing#printing`;
 
 const never = () => () => undefined;
 /** False on the server and while the page wakes up, so nothing about this computer is guessed. */

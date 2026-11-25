@@ -985,7 +985,7 @@ export default async function ShippingOrderPage({
               fromGaps.length > 0
                 ? {
                     missing: `your ship-from address needs ${fromGaps.join(", ")}.`,
-                    href: manager ? `${base}/settings` : null,
+                    href: manager ? `/w/${tenant.slug}/settings/shipping` : null,
                   }
                 : null
             }

@@ -4,7 +4,7 @@ import { useActionState } from "react";
 import { FormMessage } from "@/components/ui/form-message";
 import { Input, Label } from "@/components/ui/input";
 import { SubmitButton } from "@/components/ui/submit-button";
-import { saveOrderEmailTemplate } from "../orders/[number]/email-actions";
+import { saveOrderEmailTemplate } from "../../../stock/orders/[number]/email-actions";
 
 /** The words every order email starts from. Each one can still be changed before it is sent. */
 export function OrderEmailTemplateForm({

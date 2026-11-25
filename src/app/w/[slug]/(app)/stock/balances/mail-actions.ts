@@ -63,7 +63,11 @@ async function context(slug: string) {
 }
 type Ctx = Extract<Awaited<ReturnType<typeof context>>, { tenant: unknown }>;
 
-const done = (slug: string) => revalidatePath(`/w/${slug}/stock`, "layout");
+const done = (slug: string) => {
+  revalidatePath(`/w/${slug}/stock`, "layout");
+  // This tool's settings screens live under workspace Settings.
+  revalidatePath(`/w/${slug}/settings`, "layout");
+};
 
 /** Is there Claude allowance left this month? The same sum the drafting tools do. */
 async function claudeLeft(ctx: Ctx): Promise<boolean> {

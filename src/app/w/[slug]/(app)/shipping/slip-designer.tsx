@@ -105,7 +105,7 @@ function Segments<T extends string>({
 }
 
 /**
- * Settings → Packing slip: what is on the slip and in what order, with the
+ * Settings → Shipping → Packing slip: what is on the slip and in what order, with the
  * slip itself beside it, redrawn as each thing changes. The preview is the
  * same sheet that prints, on paper and on a Zebra.
  */
@@ -180,7 +180,7 @@ export function SlipDesigner({
   );
 
   return (
-    <div className="grid gap-8 xl:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">
+    <div className="grid gap-8 @4xl:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">
       <div className="flex min-w-0 flex-col gap-5">
         <fieldset className="flex flex-col gap-3">
           <legend className="mb-2 text-sm font-semibold">At the top</legend>

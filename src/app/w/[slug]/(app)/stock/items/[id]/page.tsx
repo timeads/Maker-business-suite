@@ -159,7 +159,7 @@ export default async function StockItemPage({
             <CardTitle>Reordering</CardTitle>
             <CardDescription>
               This one is left out because its product is tagged “{row.skippedByTag}” in your shop,
-              and that tag is under Stock → Settings (&quot;Never reorder anything with these
+              and that tag is under Settings → Stock (&quot;Never reorder anything with these
               tags&quot;). Take the tag off there, or off the product, to bring it back.
             </CardDescription>
           </CardHeader>
@@ -170,7 +170,7 @@ export default async function StockItemPage({
           <CardHeader className="pb-5">
             <CardTitle>Reordering</CardTitle>
             <CardDescription>
-              This one is left out because its name matches a word under Stock → Settings
+              This one is left out because its name matches a word under Settings → Stock
               (&quot;Never reorder anything with these words&quot;). Take the word off there to
               bring it back.
             </CardDescription>

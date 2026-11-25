@@ -47,7 +47,7 @@ export const VIEW_NOTES: Partial<Record<ViewKey, string>> = {
     "Your best sellers (the top fifth by what they bring in) that need ordering within a week.",
   nosales: "Nothing sold in 90 days, and there's still some on the shelf.",
   hidden:
-    "Out of sight and out of planning: hidden by you, by a rule in Settings, or by your shop. Press “Unhide” on any you hid yourself.",
+    "Out of sight and out of planning: hidden by you, by a rule under Settings → Stock, or by your shop. Press “Unhide” on any you hid yourself.",
 };
 
 /**

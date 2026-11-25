@@ -19,7 +19,7 @@ export function PrintingChip({ href }: { href: string }) {
   return (
     <Link
       href={href}
-      title="How labels and slips print on this computer. Change it in Shipping settings."
+      title="How labels and slips print on this computer. Change it under Settings, Shipping."
       // Left out on a phone, where the header has no room and nobody prints.
       className="bg-sunken text-text-2 hover:bg-hover hidden h-[30px] items-center gap-1.5 rounded-full px-3 text-xs font-semibold whitespace-nowrap transition-colors duration-150 sm:inline-flex"
     >

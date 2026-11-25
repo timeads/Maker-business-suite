@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { PageHeader } from "@/components/ui/page-header";
+import { SectionHeading } from "@/components/settings/section-heading";
 import {
   BOOKINGS_MODULE,
   EMAILS_KEY,
@@ -11,9 +11,8 @@ import {
 } from "@/lib/bookings/config";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
-import { BookingEmailsForm, BookingQuestionsForm } from "../forms";
-import { bookingsAccess } from "../gate";
-import { BookingsTabs } from "../tabs";
+import { BookingEmailsForm, BookingQuestionsForm } from "../../bookings/forms";
+import { bookingsAccess } from "../../bookings/gate";
 
 export const metadata: Metadata = { title: "Booking page settings" };
 
@@ -23,7 +22,7 @@ export default async function BookingSettingsPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  const access = await bookingsAccess(slug, `/w/${slug}/bookings/settings`);
+  const access = await bookingsAccess(slug, `/w/${slug}/settings/bookings`);
   if (!access.ok) return access.upsell;
   const { tenant, role, entitlements } = access;
 
@@ -41,11 +40,11 @@ export default async function BookingSettingsPage({
 
   return (
     <>
-      <PageHeader
+      <SectionHeading
+        back={{ href: `/w/${tenant.slug}/bookings`, label: "Bookings" }}
         title="Bookings"
         description="What you ask people when they book, and the emails they get from you."
       />
-      <BookingsTabs slug={tenant.slug} />
       <Card>
         <CardHeader>
           <CardTitle>Emails to your customers</CardTitle>

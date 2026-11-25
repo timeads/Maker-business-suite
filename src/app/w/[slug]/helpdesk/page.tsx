@@ -334,7 +334,7 @@ export default async function HelpdeskPage({
               </Link>
             </Button>
             <Button asChild variant="ghost" size="sm" aria-label="Help desk settings">
-              <Link href={`${base}/settings`}>
+              <Link href={`/w/${tenant.slug}/settings/helpdesk`}>
                 <Settings />
               </Link>
             </Button>

@@ -188,7 +188,7 @@ export default async function MichaelsPage({ params }: { params: Promise<{ slug:
           <CardContent>
             {manager ? (
               <Button asChild>
-                <Link href={`${base}/settings`}>Open settings</Link>
+                <Link href={`/w/${tenant.slug}/settings/stock/michaels`}>Open settings</Link>
               </Button>
             ) : (
               <p className="text-muted-foreground text-sm">An owner or admin can switch it on.</p>

@@ -355,7 +355,6 @@ export default async function SupplierBalancePage({
         notices={quietNotices}
         names={new Map([[account.supplierId, name]])}
         slug={tenant.slug}
-        base={base}
         timezone={tenant.timezone}
         canEdit={canEdit}
       />
@@ -417,7 +416,10 @@ export default async function SupplierBalancePage({
             </p>
           ))}
           <p className="text-xs">
-            <Link href={`${base}/email`} className="text-ochre-text font-semibold hover:underline">
+            <Link
+              href={`/w/${tenant.slug}/settings/stock/bills`}
+              className="text-ochre-text font-semibold hover:underline"
+            >
               {mailOn
                 ? "Bills by email settings"
                 : "Have bills file themselves: set up Bills by email"}

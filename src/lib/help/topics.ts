@@ -74,7 +74,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     title: "Light, dark and your own colours",
     summary: "Choose how the suite looks for everyone in your workspace.",
     steps: [
-      "Open Settings → Brand kit and find Appearance at the top.",
+      "Open Settings → Look.",
       "Pick Light (a dark menu beside a light page), Dark, or Match my device.",
       "Tick “Use my brand colours” to put your kit's colours on the menu and main buttons.",
       "Press “Save appearance”.",
@@ -125,9 +125,9 @@ export const HELP_TOPICS: HelpTopic[] = [
     title: "Get customer email into the help desk",
     summary: "Your workspace has its own support address; forward your mail to it.",
     intro:
-      "Each workspace has one support address, shown at the top of Help desk settings. Mail sent to it becomes a conversation in your inbox.",
+      "Each workspace has one support address, shown under Settings → Help desk. Mail sent to it becomes a conversation in your inbox.",
     steps: [
-      "Open Help desk → Settings and copy your support address.",
+      "Open Settings → Help desk (the gear at the top of the inbox goes straight there) and copy your support address.",
       "In your own email (Gmail, Outlook and so on), set your support mailbox to forward to that address.",
       "Send yourself a test. It should appear in the inbox within about a minute.",
     ],
@@ -150,7 +150,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     notes: [
       "A draft from Claude only fills the reply box. It is never sent unless you press Send.",
       "Notes are for your team only and are never emailed.",
-      "Tags, priorities and who it's handed to can be set by hand, or by rules in Settings.",
+      "Tags, priorities and who it's handed to can be set by hand, or by rules under Settings → Help desk.",
     ],
   },
   {
@@ -183,12 +183,12 @@ export const HELP_TOPICS: HelpTopic[] = [
     ],
     notes: [
       "Put an order on hold with the “Hold” button under its summary: add a note and, if you like, the day it should come back. It returns marked “Back from hold”.",
-      "If Shipping settings say so, recording a parcel also marks the order as sent in your shop, and your shop emails the customer their tracking.",
+      "If your settings say so (Settings → Shipping), recording a parcel also marks the order as sent in your shop, and your shop emails the customer their tracking.",
       "The number beside Shipping in the menu is how many orders are ready to go.",
       "“Best quote · margin” is worked out a few orders at a time after the list opens and kept for 12 hours or until the order changes. It is for the box under “Box”: what you set up on the order (“your choice”), a rule's box (“by rule”), the way you packed those items last time (“remembered”), or else your usual box. “By rule” beside a price means it is the service a rule asks for rather than simply the cheapest.",
       "Tick two or more orders to buy all their labels in one go (see “Buy labels for several orders at once”).",
       "“Address found” or “Address not found” under the town is what the carriers' address book said. Each address is asked about once.",
-      "“Needs signature” lists orders your rules, or the signature amount in Shipping → Settings, ask a signature for.",
+      "“Needs signature” lists orders your rules, or the signature amount under Settings → Shipping, ask a signature for.",
       "An order a rule holds shows under “On hold” with the rule's note. Release it and no rule will hold it again.",
       "“Refresh” reads the list again. The chip at the top right shows how this computer prints and opens the setting.",
     ],
@@ -199,7 +199,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     title: "Packing slips and Scan & pack",
     summary: "Print slips your way, then scan items as you pack.",
     steps: [
-      "In Shipping → Settings, design the slip: your logo and address at the top, what prints and in what order, what each item shows, and a thank-you message. The preview beside it is the slip itself, redrawn as you change things; what you see is what prints, on paper and on a Zebra.",
+      "Under Settings → Shipping → Packing slip, design the slip: your logo and address at the top, what prints and in what order, what each item shows, and a thank-you message. The preview beside it is the slip itself, redrawn as you change things; what you see is what prints, on paper and on a Zebra.",
       "Your logo is the picture tagged “logo” in Assets. A plain dark logo on white prints best, because thermal printers have no grey. Without one, your name prints instead.",
       "Tick orders in “To ship” and press “Packing slips” to print them.",
       "Open Scan & pack and scan a slip's barcode, or type the order number.",
@@ -236,7 +236,7 @@ export const HELP_TOPICS: HelpTopic[] = [
       "Labels are bought through your own postage accounts: EasyPost, your own UPS account, Redo, or any mix of them. You pay each one directly, and their prices are shown together in one list.",
     steps: [
       "Open Connections and connect at least one postage account. For EasyPost, paste in your API key; a test key buys pretend labels, which is a good way to try it. To add UPS or Redo, see “Use your own UPS account or Redo for postage”.",
-      "In Shipping → Settings, fill in where you ship from (street, city, state, postcode and phone) and add the boxes you pack in.",
+      "Under Settings → Shipping → Ship-from & boxes, fill in where you ship from (street, city, state, postcode and phone) and add the boxes you pack in.",
       "Open an order. The address is checked for you, and the order starts in the box your rules or your past packing say (else your usual box). If the weight is known, the rates are already waiting.",
       "Fix the address if it needs it (the change is for this label only), pick the box, check its weight (one box, in pounds: 12.6 is twelve pounds and about ten ounces), and choose whether a signature is needed. Then press “Get rates” if they aren't showing.",
       "Choose a service. The list is cheapest first, and a small tag on each price says where the label would be bought: “via EasyPost”, “your UPS account” or “via Redo”.",
@@ -247,7 +247,7 @@ export const HELP_TOPICS: HelpTopic[] = [
       "Each rate shows its margin: the shipping your customer paid, less the label. It turns red when a label costs more than they were charged. “Customer's choice” marks the service that matches what they picked at checkout, when that's clear.",
       "When the same service is on offer from more than one account, you see it once, at the cheapest, with what the others would charge underneath.",
       "If one account can't be reached, its prices are left out and a line under the list says so. The rest still work.",
-      "In Shipping → Settings you can ask for a signature on every order over an amount, and write rules that pick the box, the signature, the service or a hold for you (see “Shipping rules”). “Rules applied” above the address lists the ones that matched; “By rule” marks the service a rule chose. Whatever you change on the order yourself wins.",
+      "Under Settings → Shipping you can ask for a signature on every order over an amount (Ship-from & boxes), and write rules that pick the box, the signature, the service or a hold for you (see “Shipping rules”). “Rules applied” above the address lists the ones that matched; “By rule” marks the service a rule chose. Whatever you change on the order yourself wins.",
       "What you set up on an order (boxes, weights, which items go where, the signature, the service) is saved as you go, so you can set it up at a desk and buy it at the packing computer. “Your saved choices · Reset” in the Items & boxes header goes back to the plan. A change to the address is for the label on screen only and isn't saved.",
       "After you buy a label for a whole order, its boxes, split and weights are remembered for those items. The next order with the same things opens packed the same way and says so, with “Use the usual box” beside it. Switch this off, or forget one packing, under Shipping → Settings → Remember how I pack.",
       "Use the arrows at the top (or J and K) to go to the next order without going back to the list.",
@@ -270,7 +270,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     intro:
       "A rule says “when an order looks like this, do that”. Rules are worked out for every waiting order, so the To ship list and each order's page already show the right box, signature and service. Owners and admins set them up under Shipping → Settings → Rules.",
     steps: [
-      "Open Shipping → Settings and find Rules. Press “Add a rule” and give it a name you'll recognise, like “Machines need a signature”.",
+      "Open Settings → Shipping → Rules. Press “Add a rule” and give it a name you'll recognise, like “Machines need a signature”.",
       "Say when it applies. Add one or more conditions: how many items are in the order, the order total, product names, item codes (SKUs), the state or country it's going to, or the shipping your customer chose. Every condition has to be true.",
       "Say what it does. Tick any of: pack it in a box from your list, ask for a signature (or an adult's), send it by the cheapest service, the fastest, or one you name (like “UPS Ground”), or put it on hold with a note.",
       "Press “Save rule”. It applies to waiting orders straight away.",
@@ -307,7 +307,7 @@ export const HELP_TOPICS: HelpTopic[] = [
       "Every price is asked for again as the label is bought. If it has gone up by much since the list worked it out, that order is skipped so you can look at it.",
       "Left out of a run: orders on hold, pickups, international orders, unpaid orders, orders that are partly sent, orders with a label already under way, orders that could ship together with another (use “Ship together” for those, or say “Not now”), orders with no weight or box, and orders whose address the carriers don't know.",
       "“Needs a look” means we couldn't tell whether a label was bought, or it was bought but not recorded. Open the order: it is under “Labels to finish”, exactly as when buying one label. Don't buy it again until then.",
-      "Marking orders fulfilled in your shop, and emailing customers their tracking, follow your Shipping settings.",
+      "Marking orders fulfilled in your shop, and emailing customers their tracking, follow your settings under Settings → Shipping.",
       "One run buys up to 25 labels. Keep the page open until it finishes; if you leave, the orders not yet reached are simply not bought.",
       "Every run is kept under Shipping → Label batches: who ran it, what was bought and what it cost, what was skipped, and a button to print all its labels again.",
     ],
@@ -323,7 +323,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     steps: [
       "On the packing computer, install Zebra Browser Print (free, from zebra.com) and leave it running. In its own settings, make your label printer the default.",
       "In the same browser you use for the suite, open localhost:9101/ssl_support once and accept it. That lets this site talk to Browser Print.",
-      "Open Shipping → Settings on that computer. Under “Printing on this computer”, press “Look for a Zebra on this computer”. If Chrome asks whether this site may reach devices or apps on this computer, choose Allow.",
+      "On that computer, open Settings → Shipping → Printing on this computer (the Settings gear at the end of Shipping's tabs gets you there). Press “Look for a Zebra on this computer”. If Chrome asks whether this site may reach devices or apps on this computer, choose Allow.",
       "When it finds your printer, the computer is switched to it. Pick yours if there's more than one. Most Zebras are 203 dpi; change that only if yours is a 300 dpi model.",
       "Press “Print test label”. A small label with a barcode should come out.",
       "From then on, “Buy & print label” sends the label straight to the Zebra, and any packing slip button sends the slips there too. With several boxes, the labels come out in box order.",
@@ -405,7 +405,7 @@ export const HELP_TOPICS: HelpTopic[] = [
       "When the customer has it, open the order and press “Mark picked up”. It leaves the queue, and your shop shows the order as fulfilled.",
     ],
     notes: [
-      "Telling your shop is the “Tell my shop about pickups” setting in Shipping → Settings. It's on unless you switch it off. Switched off, the steps are kept in the suite only.",
+      "Telling your shop is the “Tell my shop about pickups” setting under Settings → Shipping → Ship-from & boxes. It's on unless you switch it off. Switched off, the steps are kept in the suite only.",
       "The order says how it went: “Telling your shop…”, then that your shop was told, or that it couldn't be and what to do there instead.",
       "If your shop is connected watch-only (or hasn't given permission to change orders), the buttons still keep the suite's own record and the page says plainly that your shop wasn't told. Do the step in your shop too.",
       "Owners and admins can step a pickup back. A “ready” email your shop has already sent can't be taken back, and the customer isn't emailed a second time if you mark it ready again.",
@@ -422,12 +422,12 @@ export const HELP_TOPICS: HelpTopic[] = [
       "Stock looks at what each item has sold, how many you have, and how long your supplier takes, and works out when to order and how many.",
     steps: [
       "“Runs out” is when you'd sell your last one at the current pace, counting anything already on order.",
-      "“Order by” is that date, less the supplier's lead time and a small buffer you set in Settings.",
+      "“Order by” is that date, less the supplier's lead time and a small buffer you set under Settings → Stock.",
       "The suggested quantity covers the lead time plus the days of cover you want, plus any safety stock, less what you have and what's coming.",
       "Suggestions round up to whole cases, and respect the smallest order you or your supplier set.",
     ],
     notes: [
-      "Lead time and days of cover come from the supplier unless an item has its own. A supplier whose “days to arrive” is left empty uses your usual figure from Stock → Settings.",
+      "Lead time and days of cover come from the supplier unless an item has its own. A supplier whose “days to arrive” is left empty uses your usual figure from Settings → Stock.",
       "Once a supplier's orders have arrived, Stock → Suppliers shows how long they really take, with a button to use that figure.",
       "Days an item was sold out don't count against it: a day with none on the shelf isn't a day nobody wanted it. We note each item's count once a day from the day Stock is switched on, so this gets better with time.",
       "Every figure is worked out fresh each time you look; nothing is stored, so it's never stale.",
@@ -485,7 +485,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     ],
     notes: [
       "The PDF is for owners and admins, like placing the order itself.",
-      "Your address is the one parcels are sent from, in Shipping → Settings.",
+      "Your address is the one parcels are sent from, under Settings → Shipping → Ship-from & boxes.",
       "For your logo, upload it under Social → Assets and tag it “logo”. It needs to be a PNG or a JPEG.",
       "Add the contact name and any extra email addresses on the supplier, under Stock → Suppliers.",
       "Dates are shown on your own calendar, whatever timezone the supplier is in.",
@@ -514,7 +514,7 @@ export const HELP_TOPICS: HelpTopic[] = [
       "If you change an order after emailing it, the order says “Changed since you emailed it” and lists what changed. Sending again replies in the same conversation with the new PDF and says what's different.",
       "Pressing send twice sends once. If Gmail says no, nothing went and you can try again. If we never hear back from Gmail we say so and don't send again by ourselves: check your Sent folder first.",
       "If the supplier has no email saved, whoever you send to is saved as their contact for next time.",
-      "Set the words every order email starts from under Stock → Settings → “Emailing orders”. You can use {{po_reference}}, {{supplier_name}}, {{contact_name}}, {{month}} and {{sender_name}}.",
+      "Set the words every order email starts from under Settings → Stock → Order emails. You can use {{po_reference}}, {{supplier_name}}, {{contact_name}}, {{month}} and {{sender_name}}.",
       "To stop, press Disconnect on Gmail under Connections, or remove the app in your Google account's security settings. Either one ends it.",
       "Don't see Gmail under Connections? It hasn't been switched on for your suite yet. You can still download the PDF and send it yourself.",
     ],
@@ -549,7 +549,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     summary:
       "Suppliers, planning figures, past and open orders, supplier accounts and history, as CSV files.",
     intro:
-      "Coming from another stock tool, or from spreadsheets? Owners and admins can bring records in under Stock → Settings → “Bring your records across”.",
+      "Coming from another stock tool, or from spreadsheets? Owners and admins can bring records in under Settings → Stock → Bring your records across.",
     steps: [
       "Connect your shop first and let it sync: rows are matched to the items your shop has, by SKU, or by product and option where there is no SKU.",
       "Pick what's in the file, then the file. Bring them in this order: suppliers, item planning, purchase orders, past deliveries, supplier ledger, past daily counts.",
@@ -602,7 +602,7 @@ export const HELP_TOPICS: HelpTopic[] = [
       "Both switches are also on each item's own page.",
     ],
     notes: [
-      "In Stock → Settings you can list words that hide matching items automatically. It starts with “gift card”.",
+      "Under Settings → Stock you can list words that hide matching items automatically. It starts with “gift card”.",
       "You can also list tags there. Any product carrying one of those tags in your shop is left out after the next sync, and comes back when the tag is taken off.",
     ],
   },
@@ -634,7 +634,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     steps: [
       "Open the order under Stock → Orders.",
       "Enter how many of each item arrived and press to check them in. Anyone on the team can do this.",
-      "If you've switched it on in Settings, the arrived quantity is added to the count in your shop.",
+      "If you've switched it on under Settings → Stock, the arrived quantity is added to the count in your shop.",
       "When everything has arrived, the order closes by itself.",
     ],
     notes: [
@@ -680,12 +680,12 @@ export const HELP_TOPICS: HelpTopic[] = [
     summary:
       "Forward a supplier's invoices and statements to your bills address and they're filed on their account.",
     intro:
-      "Stock → Balances → Bills by email gives your workspace a private address. Forward a supplier's email to it and Claude reads it (and any PDF or picture attached) and files what it finds: an invoice, a statement's balance, a payment. Owners and admins set it up.",
+      "Settings → Stock → Balances & bills by email gives your workspace a private address. Forward a supplier's email to it and Claude reads it (and any PDF or picture attached) and files what it finds: an invoice, a statement's balance, a payment. Owners and admins set it up.",
     steps: [
-      "Open Stock → Balances, then “Bills by email” (or “Set up Bills by email”). Press “Switch on and get my address” and copy the address.",
+      "Open Settings → Stock → Balances & bills by email (Stock → Balances has a link to it). Press “Switch on and get my address” and copy the address.",
       "Under “Who to recognise”, add each supplier's sender: pick the supplier and type the address (or just the domain) their bills come from. Save.",
       "Forward a bill to your address to try it. A minute or two later it's on that supplier's account, marked “From email”.",
-      "To forward automatically from Gmail: add your bills address under Settings → Forwarding and POP/IMAP. Gmail sends a confirmation code to the address; it appears on the Bills by email page, and you type it into Gmail yourself. Then make a filter per supplier (From: their address → “Forward it to” your bills address).",
+      "To forward automatically from Gmail: add your bills address under Settings → Forwarding and POP/IMAP. Gmail sends a confirmation code to the address; it appears on that same settings page, and you type it into Gmail yourself. Then make a filter per supplier (From: their address → “Forward it to” your bills address).",
       "Look at the Balances page now and then: “to check” lists anything that was unclear, “Whose is this?” lists forwarded mail from a sender you haven't listed, and “Left out” says what wasn't filed and why.",
     ],
     notes: [
@@ -711,7 +711,7 @@ export const HELP_TOPICS: HelpTopic[] = [
       "If QuickBooks is connected, Stock can read what you've paid your suppliers and add it to their accounts under Balances.",
     steps: [
       "Connect QuickBooks under Connections, if you haven't.",
-      "In Stock → Settings, tick “Read payments to my suppliers from QuickBooks” and save.",
+      "Under Settings → Stock, tick “Read payments to my suppliers from QuickBooks” and save.",
       "From the next sync (a few times a day), bill payments, cheques and card charges made out to a supplier appear on that supplier's account, marked “from your books”.",
     ],
     notes: [
@@ -728,7 +728,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     title: "Plan ahead for a busy season",
     summary: "Say when you want stock on the shelf, and get an order-by date for each supplier.",
     steps: [
-      "In Stock → Settings, under “Seasons to plan ahead for”, add the season: a name, the day you want the stock in by, and a note if you like.",
+      "Under Settings → Stock → Seasons, add the season: a name, the day you want the stock in by, and a note if you like.",
       "On Stock → To order the season gets a card with the last day to order from each supplier. Items that take different times to arrive get their own line.",
       "Press “Draft an order” on a line to start that order, at today's suggested amounts.",
       "Expecting more than usual, for a sale or a fair your past sales don't know about? Give the season an extra lift in percent. Suggestions for that month go up by that much, and rows being bought into the busy month show a mark like “↑1.25×”.",
@@ -736,7 +736,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     notes: [
       "“Order by” is the in-stock day, less the days that supplier takes, less the days between your order reviews.",
       "Fold a card to one line, or put it away, with the buttons on it. That's kept for the whole workspace, on every device.",
-      "The lift only counts while “plan for busy seasons” is on in Settings. A season whose day has passed no longer changes anything.",
+      "The lift only counts while “plan for busy seasons” is on under Settings → Stock. A season whose day has passed no longer changes anything.",
       "This is separate from a supplier being shut: see “Plan around the days a supplier is shut”.",
     ],
   },
@@ -770,7 +770,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     steps: [
       "In the Michaels Developer Account Center, make an API key. Read Only access to Listing, Inventory, Price and Order is enough for now. Note the day you made it.",
       "Open Connections and find Michaels Marketplace. Paste the key, type the day it was made, choose the real marketplace (or the sandbox, if you're testing) and connect. We check the key with one small read.",
-      "Open Stock → Michaels → Settings, tick “Look at Michaels” and save. The first look happens within a few minutes, then about once an hour.",
+      "Open Settings → Stock → Michaels, tick “Look at Michaels” and save. The first look happens within a few minutes, then about once an hour.",
       "Open Listings. Each thing you sell on Michaels is matched to your shop by its seller SKU. “Needs a look” lists the ones that didn't match or are out of step.",
       "For a listing that didn't match, type the SKU it has in your shop and press “Pair”. A pairing you make by hand wins over the automatic matching, and “Take pairing off” undoes it.",
       "Open Would send to see every listing whose stock or price on Michaels differs from what your shop says it should be.",
@@ -778,7 +778,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     ],
     notes: [
       "Nothing is sent. Not stock, not prices, not orders, not tracking. Sending comes later, with its own switch and a cut-over time you choose.",
-      "Stock would be your shop's count less the units held back (1 unless you change it in Settings), never below zero. Prices would be exactly your shop's prices.",
+      "Stock would be your shop's count less the units held back (1 unless you change it under Settings → Stock → Michaels), never below zero. Prices would be exactly your shop's prices.",
       "Safety stop: if more than one listing in ten has no item in your shop, nothing could ever be sent until they're sorted out. You'll get a heads-up in Messages.",
       "Michaels ends every API key 90 days after it was made, and keys tend to misbehave in their last month. We count from the day you gave and remind you in Messages 14, 7, 3 and 1 days before the 60-day mark.",
       "To put in a new key: make it in the Developer Account Center, then under Connections disconnect Michaels Marketplace and connect again with the new key. Your pairings are kept.",
@@ -800,7 +800,7 @@ export const HELP_TOPICS: HelpTopic[] = [
       "Open a date to see its list: add someone by hand, move or cancel a booking, and tick people in on the day.",
     ],
     notes: [
-      "Confirmation, reminder and thank-you emails are sent for you. Set their timing and wording in Bookings → Settings.",
+      "Confirmation, reminder and thank-you emails are sent for you. Set their timing and wording under Settings → Bookings.",
       "A date can be closed to new bookings, or made private so only you can add people.",
       "A paid booking is never dropped. If a date was full when the payment landed, the person is booked and the date is flagged for you.",
     ],
@@ -919,7 +919,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     title: "Invite your team",
     summary: "Add people and choose what they can change.",
     steps: [
-      "Open Settings → Team and invite someone by email.",
+      "Open Settings → People and invite someone by email.",
       "Choose their role. Members do the daily work; admins can also change settings; owners can manage billing.",
       "They get a link to join. Until they accept, the invite shows as waiting.",
     ],
@@ -966,7 +966,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     summary: "Start free, choose a plan, change or cancel any time.",
     steps: [
       "Every workspace starts with a free trial.",
-      "Open Settings → Billing to choose a plan or change it. Payment is handled by Stripe.",
+      "Open Settings → Plan & billing to choose a plan or change it. Payment is handled by Stripe.",
       "Tools that aren't on your plan show a lock in the menu.",
     ],
     notes: [

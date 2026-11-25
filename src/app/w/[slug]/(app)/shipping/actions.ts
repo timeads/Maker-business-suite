@@ -52,7 +52,11 @@ async function context(slug: string, managersOnly = false) {
 }
 
 const text = (formData: FormData, name: string) => String(formData.get(name) ?? "").trim();
-const done = (slug: string) => revalidatePath(`/w/${slug}/shipping`, "layout");
+const done = (slug: string) => {
+  revalidatePath(`/w/${slug}/shipping`, "layout");
+  // This tool's settings screens live under workspace Settings.
+  revalidatePath(`/w/${slug}/settings`, "layout");
+};
 
 /** Records a parcel: for an order (all of it, or the amounts typed), or on its own. */
 export async function recordParcel(

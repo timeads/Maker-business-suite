@@ -31,7 +31,11 @@ async function context(slug: string) {
   return { tenant: ctx.tenant, supabase: await createClient() } as const;
 }
 
-const done = (slug: string) => revalidatePath(`/w/${slug}/stock/michaels`, "layout");
+const done = (slug: string) => {
+  revalidatePath(`/w/${slug}/stock/michaels`, "layout");
+  // This tool's settings screens live under workspace Settings.
+  revalidatePath(`/w/${slug}/settings`, "layout");
+};
 
 /**
  * Saves the connector's switches. The mode is not read from the form: this
@@ -138,7 +142,7 @@ export async function lookNow(slug: string, _prev: MichaelsState): Promise<Micha
       error: said.includes("too_soon")
         ? "We looked a few minutes ago. Try again in ten minutes."
         : said.includes("not_on")
-          ? "Connect Michaels and switch it on in Settings first."
+          ? "Connect Michaels and switch it on under Settings → Stock → Michaels first."
           : "We couldn't start a look. Try again in a moment.",
     };
   }
