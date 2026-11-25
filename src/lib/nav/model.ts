@@ -36,7 +36,18 @@ export type NavMatch = {
   unless?: string[];
 };
 
-export type ItemIcon = "chart" | "tag";
+export type ItemIcon =
+  | "chart"
+  | "tag"
+  | "user"
+  | "help"
+  | "inbox"
+  | "clock"
+  | "moon"
+  | "at"
+  | "check"
+  | "layers"
+  | "folder";
 
 export type NavItem = {
   id: string;
@@ -58,7 +69,13 @@ export type NavItem = {
   children?: NavItem[];
 };
 
-export type NavGroup = { id: string; name?: string; items: NavItem[] };
+export type NavGroup = {
+  id: string;
+  name?: string;
+  items: NavItem[];
+  /** A "+" beside the group's name: where a new one of these is made. Keeps an empty group on show. */
+  add?: { label: string; to: string };
+};
 
 export type NavTool = {
   key: ToolKey;
@@ -144,35 +161,83 @@ function stockMenu(viewer: NavViewer): NavGroup[] {
   return [{ id: "stock.main", items }];
 }
 
-/** The group the inbox fills with the workspace's tags once it has read them. */
+/** The groups the inbox fills once it has read them: folders, saved views and tags. */
+export const HELPDESK_FOLDERS_GROUP = "helpdesk.folders";
+export const HELPDESK_VIEWS_GROUP = "helpdesk.views";
 export const HELPDESK_TAGS_GROUP = "helpdesk.tags";
 
-function helpdeskMenu(attention: Attention): NavGroup[] {
+const VIEW_ICONS: Record<(typeof VIEWS)[number]["key"], ItemIcon> = {
+  mine: "user",
+  unassigned: "help",
+  open: "inbox",
+  pending: "clock",
+  snoozed: "moon",
+  mentions: "at",
+  closed: "check",
+  all: "layers",
+};
+
+/** A row for one way of looking at the inbox: `view` is the word in the address. */
+function helpdeskView(id: string, label: string, view: string, icon: ItemIcon): NavItem {
+  return {
+    id,
+    label,
+    to: view === "open" ? "helpdesk" : `helpdesk?view=${view}`,
+    match: {
+      path: "helpdesk",
+      exact: true,
+      query: [{ key: "view", value: view, fallback: view === "open" }],
+      unless: ["q"],
+    },
+    keep: ["tag"],
+    icon,
+  };
+}
+
+function helpdeskMenu(viewer: NavViewer, attention: Attention): NavGroup[] {
+  const built = VIEWS.map((view) => ({
+    ...helpdeskView(`helpdesk.${view.key}`, view.label, view.key, VIEW_ICONS[view.key]),
+    ...(view.key === "open" ? count(attention.helpdesk) : {}),
+  }));
   return [
+    {
+      id: "helpdesk.top",
+      items: [place("helpdesk.reports", "How we're doing", "helpdesk/reports", { icon: "chart" })],
+    },
     {
       id: "helpdesk.tickets",
       name: "Tickets",
-      items: VIEWS.map((view) => ({
-        id: `helpdesk.${view.key}`,
-        label: view.label,
-        to: view.key === "open" ? "helpdesk" : `helpdesk?view=${view.key}`,
-        match: {
-          path: "helpdesk",
-          exact: true,
-          query: [{ key: "view", value: view.key, fallback: view.key === "open" }],
-          unless: ["q"],
-        },
-        keep: ["tag"],
-        ...(view.key === "open" ? count(attention.helpdesk) : {}),
-      })),
+      items: built.filter((item) => item.id !== "helpdesk.all"),
     },
-    { id: HELPDESK_TAGS_GROUP, name: "Tags", items: [] },
     {
       id: "helpdesk.more",
       name: "More",
-      items: [place("helpdesk.reports", "How we're doing", "helpdesk/reports", { icon: "chart" })],
+      items: built.filter((item) => item.id === "helpdesk.all"),
     },
+    {
+      id: HELPDESK_FOLDERS_GROUP,
+      name: "Folders",
+      items: [],
+      // Folders are made by owners and admins; anyone files into them.
+      ...(viewer.manager ? { add: { label: "New folder", to: "settings/helpdesk#folders" } } : {}),
+    },
+    { id: HELPDESK_VIEWS_GROUP, name: "Views", items: [] },
+    { id: HELPDESK_TAGS_GROUP, name: "Tags", items: [] },
   ];
+}
+
+/** The workspace's folders as rows for the help desk panel. */
+export function helpdeskFolderItems(folders: { id: string; name: string }[]): NavItem[] {
+  return folders.map((folder) =>
+    helpdeskView(`helpdesk.f.${folder.id}`, folder.name, `f:${folder.id}`, "folder"),
+  );
+}
+
+/** The workspace's saved views as rows for the help desk panel. */
+export function helpdeskSavedViewItems(views: { id: string; name: string }[]): NavItem[] {
+  return views.map((view) =>
+    helpdeskView(`helpdesk.v.${view.id}`, view.name, `v:${view.id}`, "layers"),
+  );
 }
 
 /** The inbox's tags as rows for the help desk panel. */
@@ -232,7 +297,7 @@ export function buildNav(viewer: NavViewer, attention: Attention = {}): NavTool[
       panel: "menu",
       menu: [{ id: "dashboard.main", items: [place("dashboard.home", "Dashboard", "dashboard")] }],
     },
-    helpdesk: { panel: "menu", menu: helpdeskMenu(attention) },
+    helpdesk: { panel: "menu", menu: helpdeskMenu(viewer, attention) },
     bookings: {
       panel: "menu",
       menu: [
@@ -451,7 +516,7 @@ export type PanelExtras = {
   items?: Record<string, NavItem[]>;
 };
 
-/** A menu with a page's own counts and rows laid in. Groups left empty are dropped. */
+/** A menu with a page's own counts and rows laid in. Groups left empty are dropped, unless they carry a "+". */
 export function withExtras(menu: NavGroup[], extras: PanelExtras | undefined): NavGroup[] {
   const lay = (item: NavItem): NavItem => {
     const n = extras?.counts?.[item.id];
@@ -468,7 +533,7 @@ export function withExtras(menu: NavGroup[], extras: PanelExtras | undefined): N
       ...group,
       items: [...group.items, ...(extras?.items?.[group.id] ?? [])].map(lay),
     }))
-    .filter((group) => group.items.length > 0);
+    .filter((group) => group.items.length > 0 || group.add);
 }
 
 const words = (text: string) => text.toLowerCase().split(/\s+/).filter(Boolean);

@@ -5,6 +5,10 @@ import {
   activeIn,
   buildNav,
   filterMenu,
+  HELPDESK_FOLDERS_GROUP,
+  HELPDESK_VIEWS_GROUP,
+  helpdeskFolderItems,
+  helpdeskSavedViewItems,
   helpdeskTagItems,
   hrefFor,
   placeName,
@@ -73,10 +77,7 @@ describe("buildNav: the rail", () => {
     const tools = buildNav(viewer(), { shipping: 12, helpdesk: 3, messages: 2, social: 1 });
     expect(tool(tools, "shipping").count).toBe(12);
     expect(tool(tools, "shipping").menu[0].items[0]).toMatchObject({ label: "To ship", count: 12 });
-    expect(tool(tools, "helpdesk").menu[0].items[0]).toMatchObject({
-      label: "Needs a reply",
-      count: 3,
-    });
+    expect(tool(tools, "helpdesk").menu[1].items[2]).toMatchObject({ label: "Open", count: 3 });
     expect(tool(tools, "messages").count).toBe(2);
     expect(tool(tools, "stock").count).toBeUndefined();
   });
@@ -123,20 +124,59 @@ describe("buildNav: each tool's menu", () => {
     ]);
   });
 
-  it("Help desk has the inbox's folders, an empty Tags group and its other page", () => {
+  it("Help desk has its numbers first, the views the team knows, and groups the inbox fills", () => {
     const desk = tool(buildNav(viewer()), "helpdesk");
-    expect(desk.menu.map((group) => group.name)).toEqual(["Tickets", "Tags", "More"]);
-    expect(desk.menu[0].items.map((item) => item.label)).toEqual([
-      "Needs a reply",
-      "Assigned to me",
-      "Nobody has it",
-      "Waiting on customer",
-      "Snoozed",
-      "Closed",
-      "Everything",
+    expect(desk.menu.map((group) => group.name)).toEqual([
+      undefined,
+      "Tickets",
+      "More",
+      "Folders",
+      "Views",
+      "Tags",
     ]);
-    expect(desk.menu[0].items[1].to).toBe("helpdesk?view=mine");
-    expect(desk.menu[2].items[0].to).toBe("helpdesk/reports");
+    expect(desk.menu[0].items[0].to).toBe("helpdesk/reports");
+    expect(desk.menu[1].items.map((item) => item.label)).toEqual([
+      "Your tickets",
+      "Unassigned",
+      "Open",
+      "In progress",
+      "Snoozed",
+      "Mentions",
+      "Closed",
+    ]);
+    expect(desk.menu[1].items[0].to).toBe("helpdesk?view=mine");
+    expect(desk.menu[2].items.map((item) => item.label)).toEqual(["All tickets"]);
+    expect(desk.menu[3].add?.to).toBe("settings/helpdesk#folders");
+    const member = tool(buildNav(viewer({ manager: false })), "helpdesk");
+    expect(member.menu[3].add).toBeUndefined();
+  });
+
+  it("a folder and a saved view are rows lit by their own word in the address", () => {
+    const desk = tool(buildNav(viewer()), "helpdesk");
+    const id = "33333333-3333-4333-8333-333333333333";
+    const menu = withExtras(desk.menu, {
+      items: {
+        [HELPDESK_FOLDERS_GROUP]: helpdeskFolderItems([{ id, name: "Repairs" }]),
+        [HELPDESK_VIEWS_GROUP]: helpdeskSavedViewItems([{ id: "vip", name: "VIP" }]),
+      },
+      counts: { [`helpdesk.f.${id}`]: 4 },
+    });
+    expect(menu.map((group) => group.name)).toEqual([
+      undefined,
+      "Tickets",
+      "More",
+      "Folders",
+      "Views",
+    ]);
+    expect(menu[3].items[0]).toMatchObject({
+      label: "Repairs",
+      count: 4,
+      to: `helpdesk?view=f:${id}`,
+    });
+    const lit = (view: string) =>
+      activeIn({ to: desk.to, menu }, { path: "helpdesk", query: { view } }).item;
+    expect(lit(`f:${id}`)).toBe(`helpdesk.f.${id}`);
+    expect(lit("v:vip")).toBe("helpdesk.v.vip");
   });
 
   it("Bookings, Social, Money and Assistant carry their old tabs", () => {
@@ -299,7 +339,7 @@ describe("activeIn", () => {
 
 describe("hrefFor", () => {
   const desk = tool(buildNav(viewer()), "helpdesk");
-  const [open, mine] = desk.menu[0].items;
+  const [mine, , open] = desk.menu[1].items;
   const [vip] = helpdeskTagItems(["vip"]);
 
   it("builds the address inside the workspace", () => {
@@ -340,6 +380,14 @@ describe("withExtras", () => {
 
   it("drops a group nobody filled", () => {
     expect(withExtras(desk.menu, undefined).map((group) => group.name)).toEqual([
+      undefined,
+      "Tickets",
+      "More",
+      "Folders",
+    ]);
+    const member = tool(buildNav(viewer({ manager: false })), "helpdesk");
+    expect(withExtras(member.menu, undefined).map((group) => group.name)).toEqual([
+      undefined,
       "Tickets",
       "More",
     ]);
@@ -349,7 +397,7 @@ describe("withExtras", () => {
     const menu = withExtras(desk.menu, {
       counts: { "helpdesk.open": 7, "helpdesk.mine": 5, "helpdesk.snoozed": 0 },
     });
-    const count = (id: string) => menu[0].items.find((item) => item.id === id)?.count;
+    const count = (id: string) => menu[1].items.find((item) => item.id === id)?.count;
     expect(count("helpdesk.open")).toBe(7);
     expect(count("helpdesk.mine")).toBe(5);
     expect(count("helpdesk.snoozed")).toBeUndefined();

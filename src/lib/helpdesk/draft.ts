@@ -20,6 +20,8 @@ export type DraftContext = {
    * due Dec 1". Left out when the workspace doesn't use Stock.
    */
   stock?: string[];
+  /** What the teammate asked the draft to say ("offer a refund"). Their words, not the customer's. */
+  hint?: string;
 };
 
 export type Draft =
@@ -86,7 +88,11 @@ ${context.stock.join("\n")}
 ${thread}
 </conversation>
 
-Draft the next reply from ${context.workspaceName} to the customer.`;
+Draft the next reply from ${context.workspaceName} to the customer.${
+    context.hint?.trim()
+      ? `\n\nThe teammate who asked for this draft wants it to say: ${context.hint.trim().slice(0, 300)}`
+      : ""
+  }`;
 }
 
 type DraftClient = Pick<Anthropic, "beta">;

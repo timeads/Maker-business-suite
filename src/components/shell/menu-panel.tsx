@@ -2,7 +2,25 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { BarChart3, PanelLeft, PanelLeftClose, Search, Settings, Tag, X } from "lucide-react";
+import {
+  AtSign,
+  BarChart3,
+  Check,
+  CircleHelp,
+  Clock,
+  Folder,
+  Inbox,
+  Layers,
+  Moon,
+  PanelLeft,
+  PanelLeftClose,
+  Plus,
+  Search,
+  Settings,
+  Tag,
+  User,
+  X,
+} from "lucide-react";
 import { filterMenu, hrefFor, type ItemIcon, type NavItem } from "@/lib/nav/model";
 import { cn } from "@/lib/utils";
 import { useShell } from "./nav-context";
@@ -24,7 +42,19 @@ export const PANEL_ROW_OFF = "text-text-2 hover:bg-hover hover:text-foreground";
 export const PANEL_ICON_BUTTON =
   "text-muted-foreground hover:bg-hover hover:text-foreground focus-visible:ring-ochre flex size-8 shrink-0 items-center justify-center rounded-sm outline-none focus-visible:ring-2 [&_svg]:size-4";
 
-const ITEM_ICONS: Record<ItemIcon, typeof Tag> = { chart: BarChart3, tag: Tag };
+const ITEM_ICONS: Record<ItemIcon, typeof Tag> = {
+  chart: BarChart3,
+  tag: Tag,
+  user: User,
+  help: CircleHelp,
+  inbox: Inbox,
+  clock: Clock,
+  moon: Moon,
+  at: AtSign,
+  check: Check,
+  layers: Layers,
+  folder: Folder,
+};
 
 /** A tool's menu: its groups and rows, the same list in the panel and in the sheet. */
 function MenuList({ onGo }: { onGo?: () => void }) {
@@ -84,7 +114,22 @@ function MenuList({ onGo }: { onGo?: () => void }) {
         )}
         {groups.map((group, index) => (
           <div key={group.id} className={cn(!group.name && index > 0 && "pt-3")}>
-            {group.name && <p className={PANEL_GROUP}>{group.name}</p>}
+            {group.name && (
+              <p className={cn(PANEL_GROUP, group.add && "flex items-center justify-between")}>
+                {group.name}
+                {group.add && !searching && (
+                  <Link
+                    href={`/w/${slug}/${group.add.to}`}
+                    onClick={onGo}
+                    aria-label={group.add.label}
+                    title={group.add.label}
+                    className="text-muted-foreground hover:bg-hover hover:text-foreground focus-visible:ring-ochre -my-1 flex size-6 items-center justify-center rounded-sm outline-none focus-visible:ring-2"
+                  >
+                    <Plus aria-hidden className="size-3.5" />
+                  </Link>
+                )}
+              </p>
+            )}
             <ul className="flex flex-col gap-0.5">
               {group.items.map((item) => {
                 const kids = item.children ?? [];

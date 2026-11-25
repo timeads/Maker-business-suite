@@ -20,6 +20,11 @@ import {
   replyTemplatesSchema,
 } from "../helpdesk/config";
 import {
+  DEFAULT_SAVED_VIEWS as DEFAULT_DESK_VIEWS,
+  SAVED_VIEWS_KEY as DESK_VIEWS_KEY,
+  savedViewsSchema as deskViewsSchema,
+} from "../helpdesk/saved-views";
+import {
   DEFAULT_MICHAELS_SETTINGS,
   MICHAELS_MODULE,
   MICHAELS_SETTINGS_KEY,
@@ -116,6 +121,16 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
       "Words to look for in incoming email, and what each match does: add a tag, set the priority (low, high, urgent), or both.",
     schema: autoTagRulesSchema,
     defaultBody: () => DEFAULT_RULES,
+  },
+  {
+    module: HELPDESK_MODULE,
+    key: DESK_VIEWS_KEY,
+    feature: "helpdesk",
+    name: "Help desk saved views",
+    description:
+      "Named filters in the help desk's menu. Each has conditions a conversation must meet: status (active, open, pending, snoozed, closed, any), assignee (me, none or a user id), any of some tags, a folder id or none, priorities, words in the subject or customer, and unread only.",
+    schema: deskViewsSchema,
+    defaultBody: () => DEFAULT_DESK_VIEWS,
   },
   {
     module: BOOKINGS_MODULE,

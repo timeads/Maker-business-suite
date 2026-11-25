@@ -1,35 +1,70 @@
 import { localDay, zonedTimeToUtc } from "../bookings/slots";
 import type { Priority } from "./config";
 
-/** The folders of the inbox. Every conversation is in exactly one of the first four. */
+/**
+ * The built-in views of the inbox, in the order the menu shows them. The
+ * names are the ones the team already uses: "In progress" is a conversation
+ * we answered and are waiting on (the `pending` status).
+ */
 export const VIEWS = [
-  { key: "open", label: "Needs a reply" },
-  { key: "mine", label: "Assigned to me" },
-  { key: "unassigned", label: "Nobody has it" },
-  { key: "pending", label: "Waiting on customer" },
+  { key: "mine", label: "Your tickets" },
+  { key: "unassigned", label: "Unassigned" },
+  { key: "open", label: "Open" },
+  { key: "pending", label: "In progress" },
   { key: "snoozed", label: "Snoozed" },
+  { key: "mentions", label: "Mentions" },
   { key: "closed", label: "Closed" },
-  { key: "all", label: "Everything" },
+  { key: "all", label: "All tickets" },
 ] as const;
 export type ViewKey = (typeof VIEWS)[number]["key"];
 
 export const isView = (value: unknown): value is ViewKey =>
   VIEWS.some((view) => view.key === value);
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const SAVED_ID = /^[a-z0-9-]{1,40}$/;
+
+/** What the `view` word in the address means: a built-in view, a folder (`f:<id>`) or a saved view (`v:<id>`). */
+export type ViewChoice =
+  { kind: "built"; key: ViewKey } | { kind: "folder"; id: string } | { kind: "saved"; id: string };
+
+export function parseView(value: unknown): ViewChoice {
+  const text = typeof value === "string" ? value : "";
+  if (text.startsWith("f:") && UUID.test(text.slice(2)))
+    return { kind: "folder", id: text.slice(2) };
+  if (text.startsWith("v:") && SAVED_ID.test(text.slice(2)))
+    return { kind: "saved", id: text.slice(2) };
+  return { kind: "built", key: isView(text) ? text : "open" };
+}
+
+export const viewParam = (choice: ViewChoice): string =>
+  choice.kind === "built" ? choice.key : `${choice.kind === "folder" ? "f" : "v"}:${choice.id}`;
+
 export type TicketFacts = {
   status: "open" | "pending" | "closed";
   assignee_id: string | null;
   snoozed_until: string | null;
   merged_into: string | null;
+  /** The folder it was filed in. Filed conversations leave the inbox views. */
+  folder_id?: string | null;
+  /** Whether a note on it names the person looking. */
+  mentioned?: boolean;
 };
 
 export const isSnoozed = (ticket: Pick<TicketFacts, "snoozed_until">, now: number) =>
   ticket.snoozed_until !== null && Date.parse(ticket.snoozed_until) > now;
 
-/** Whether a conversation belongs in a folder. Folded-away ones only show under Everything. */
+/**
+ * Whether a conversation belongs in a view. Joined-away ones only show under
+ * All tickets. One filed in a folder shows only there, under Mentions, Closed
+ * and All tickets (and in a search, which the page handles).
+ */
 export function inView(ticket: TicketFacts, view: ViewKey, me: string, now: number): boolean {
   if (view === "all") return true;
   if (ticket.merged_into) return false;
+  if (view === "closed") return ticket.status === "closed";
+  if (view === "mentions") return ticket.mentioned === true;
+  if (ticket.folder_id) return false;
   const snoozed = isSnoozed(ticket, now);
   switch (view) {
     case "open":
@@ -42,10 +77,14 @@ export function inView(ticket: TicketFacts, view: ViewKey, me: string, now: numb
       return ticket.status === "pending" && !snoozed;
     case "snoozed":
       return ticket.status !== "closed" && snoozed;
-    case "closed":
-      return ticket.status === "closed";
   }
 }
+
+/** A folder holds what was filed in it and isn't closed. */
+export const inFolder = (ticket: TicketFacts, folderId: string): boolean =>
+  !ticket.merged_into && ticket.status !== "closed" && ticket.folder_id === folderId;
+
+export const STATUS_LABELS = { open: "Open", pending: "In progress", closed: "Closed" } as const;
 
 export const PRIORITY_LABELS: Record<Priority, string> = {
   low: "Low",
