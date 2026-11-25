@@ -57,6 +57,7 @@
     ".time.sel{border-color:var(--action);box-shadow:inset 0 0 0 1px var(--action)}" +
     ".left{color:var(--muted);font-size:13px}.left.low{color:var(--error);font-weight:700}" +
     ".note{color:var(--muted);font-size:14px;margin:14px 0 0}" +
+    ".where{color:var(--muted);font-size:14px;margin:-8px 0 14px}" +
     ".err{color:var(--error);font-size:14px;margin:12px 0 0}.err a{color:var(--action)}" +
     ".foot{margin-top:16px;padding-top:14px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:12px}" +
     ".seats{display:flex;align-items:center;justify-content:space-between;font-weight:700}" +
@@ -457,6 +458,7 @@
           }),
           el("p", { class: "eyebrow", text: "Choose your date" }),
           el("h2", { text: data.service.name }),
+          data.service.location ? el("p", { class: "where", text: data.service.location }) : null,
           sessions.length === 0
             ? el("p", { class: "note", text: "No upcoming dates right now — check back soon!" })
             : el("div", {}, [

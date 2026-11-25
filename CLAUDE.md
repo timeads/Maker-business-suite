@@ -317,7 +317,14 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   locks through `private.lock_seats` first: shared limits by id, then dates
   by id, re-reading if a date moved between limits; never lock a date and
   then reach for a limit. Keep `tests/db/booking-shared-limits.test.ts`
-  passing.
+  passing. A date's day or time is changed with `move_session` (people keep
+  their place; a reminder already sent is not sent again for the new time,
+  as in the business's earlier app; the person ticks whether everyone is
+  emailed), a date nobody ever booked is removed with `delete_session`, and
+  `raise_limit_to_fit` lifts an oversold date's limit (and its shared
+  room's) and clears the marks. A workshop's place (`services.location`,
+  `set_service_location`) shows in the picker, on our pages and in emails.
+  All manager-only; keep `tests/db/booking-date-changes.test.ts` passing.
   A workshop can instead be sold through the business's own shop
   (`services.shop_product_id`): the date picker on the product page
   (`public/booking-widget.js`, plain JS in a shadow root, reads

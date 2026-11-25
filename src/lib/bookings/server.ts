@@ -65,6 +65,8 @@ export type ServiceRow = {
   active: boolean;
   /** Set when this is sold through the business's own shop, not here. */
   shop_product_id?: string | null;
+  /** Where a workshop happens; empty when the business hasn't said. */
+  location?: string;
 };
 
 export type SessionAvailability = {
@@ -76,7 +78,7 @@ export type SessionAvailability = {
 };
 
 const SERVICE_COLUMNS =
-  "id, kind, name, slug, description, duration_minutes, price_cents, capacity, active, shop_product_id";
+  "id, kind, name, slug, description, duration_minutes, price_cents, capacity, active, shop_product_id, location";
 
 /** How far ahead appointment times are offered. */
 export const BOOKING_WINDOW_DAYS = 28;
@@ -266,7 +268,22 @@ export async function getBookingDetails(
     p_manage_token: "token" in by ? by.token : null,
   });
   if (error) throw new Error(`Could not load booking: ${error.message}`);
-  return ((data ?? []) as BookingDetails[])[0] ?? null;
+  const details = ((data ?? []) as BookingDetails[])[0] ?? null;
+  if (!details) return null;
+  // Where a workshop happens, for the emails and the booking page. A booking
+  // without it still goes out, so a failed read is no reason to stop.
+  try {
+    const place = await withTenant(
+      details.tenant_id,
+      async (scope) =>
+        (await scope.select("services", "location").eq("id", details.service_id).maybeSingle())
+          .data as { location?: string } | null,
+      admin,
+    );
+    return { ...details, location: place?.location ?? "" };
+  } catch {
+    return details;
+  }
 }
 
 /** Tells the customer they're booked, and lets the workspace's owners know. */
@@ -309,7 +326,13 @@ export type ReserveInput = {
 
 export type ShopBookingDates = {
   workspace: { name: string; timezone: string };
-  service: { name: string; duration_minutes: number; variant_id: string | null };
+  service: {
+    name: string;
+    duration_minutes: number;
+    variant_id: string | null;
+    /** Where it happens; empty when the business hasn't said. */
+    location?: string;
+  };
   /** `zone` is the short label for the workspace's clock at that moment ("ET"). */
   sessions: { id: string; starts_at: string; seats_left: number; zone: string }[];
   /** The business's own settings for the picker, and where a shopper can turn. */

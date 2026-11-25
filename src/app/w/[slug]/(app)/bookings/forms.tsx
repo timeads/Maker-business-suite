@@ -35,6 +35,8 @@ export type ServiceValues = {
   price_cents: number;
   capacity: number;
   active: boolean;
+  /** Where a workshop happens, shown to customers. */
+  location?: string;
 };
 
 export function ServiceForm({
@@ -139,6 +141,21 @@ export function ServiceForm({
           </div>
         )}
       </div>
+      {kind === "workshop" && (
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="service-location">Where it happens</Label>
+          <Input
+            id="service-location"
+            name="location"
+            maxLength={200}
+            defaultValue={service?.location ?? ""}
+            placeholder="The studio, 2nd floor, 12 Mill Street"
+          />
+          <p className="text-muted-foreground text-xs">
+            Shown to people as they pick a date and in their emails.
+          </p>
+        </div>
+      )}
       {service && (
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" name="active" defaultChecked={service.active} />

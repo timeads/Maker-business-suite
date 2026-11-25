@@ -6,11 +6,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
-import { loadSeatFigures, overShared, sharedWords } from "@/lib/bookings/seats";
-import { formatWhen, isUpcoming } from "@/lib/bookings/slots";
+import { limitsToFit, loadSeatFigures, overShared, sharedWords } from "@/lib/bookings/seats";
+import { formatWhen, isUpcoming, localClock } from "@/lib/bookings/slots";
 import { formatMoney } from "@/lib/dashboard/format";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
+import { DeleteDateForm, MoveDateForm, RaiseToFitForm } from "../../date-forms";
 import { CancelSessionForm } from "../../forms";
 import { bookingsAccess } from "../../gate";
 import {
@@ -66,13 +67,13 @@ export default async function SessionPage({
   const { data: session } = await supabase
     .from("sessions")
     .select(
-      "id, starts_at, ends_at, capacity, cancelled_at, bookings_closed, private, notes, service_id, seat_group_id, services(name, kind)",
+      "id, starts_at, ends_at, capacity, cancelled_at, bookings_closed, private, notes, service_id, seat_group_id, services(name, kind, location)",
     )
     .eq("id", id)
     .eq("tenant_id", tenant.id)
     .maybeSingle();
   if (!session) notFound();
-  const service = session.services as unknown as { name: string; kind: string };
+  const service = session.services as unknown as { name: string; kind: string; location: string };
   const [
     { data: bookingRows },
     { data: waiting },
@@ -147,6 +148,8 @@ export default async function SessionPage({
   const groupId = session.seat_group_id as string | null;
   const figures = await loadSeatFigures(supabase, [id, ...overlapping.map((s) => s.id)]);
   const mine = figures.get(id);
+  const fit = session.cancelled_at ? null : limitsToFit(mine);
+  const startClock = localClock(new Date(session.starts_at), tenant.timezone);
   const sharedDate = (s: (typeof overlapping)[number]): SharedDate => ({
     id: s.id,
     label: `${s.services?.name ?? "Class"}, ${formatWhen(s.starts_at, s.ends_at, tenant.timezone)}`,
@@ -209,7 +212,8 @@ export default async function SessionPage({
         title={formatWhen(session.starts_at, session.ends_at, tenant.timezone)}
         description={
           <>
-            {service.name} ·{" "}
+            {service.name}
+            {service.location ? ` · ${service.location}` : ""} ·{" "}
             {live
               ? `${taken} of ${session.capacity} places booked${here ? ` · ${here} checked in` : ""}${sharedWords(mine) ? ` · ${sharedWords(mine)}` : ""}`
               : "This date was cancelled."}
@@ -409,6 +413,77 @@ export default async function SessionPage({
             </Card>
           )}
         </div>
+      )}
+
+      {manager && canWrite && fit && (
+        <Card className="print:hidden">
+          <CardHeader>
+            <CardTitle>More people are booked than there are places</CardTitle>
+            <CardDescription>
+              {fit.capacity !== null
+                ? `${taken} places are taken on a date set for ${session.capacity}. `
+                : ""}
+              {fit.shared !== null && mine?.shared_capacity != null
+                ? `The shared room has ${mine.shared_taken} taken of ${mine.shared_capacity}. `
+                : ""}
+              If you can fit everyone in, raise the limit to match and they&apos;re no longer marked
+              as over it.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <RaiseToFitForm
+              slug={tenant.slug}
+              sessionId={session.id}
+              label={[
+                fit.capacity !== null ? `Raise this date to ${fit.capacity}` : "",
+                fit.shared !== null ? `the shared room to ${fit.shared}` : "",
+              ]
+                .filter(Boolean)
+                .join(" and ")
+                .replace(/^the/, "Raise the")}
+            />
+          </CardContent>
+        </Card>
+      )}
+
+      {manager && canWrite && upcoming && service.kind === "workshop" && (
+        <Card className="print:hidden">
+          <CardHeader>
+            <CardTitle>Change the day or time</CardTitle>
+            <CardDescription>
+              Everyone booked keeps their place, and the date keeps its length.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <MoveDateForm
+              slug={tenant.slug}
+              sessionId={session.id}
+              day={startClock.day}
+              time={`${String(Math.floor(startClock.minute / 60)).padStart(2, "0")}:${String(startClock.minute % 60).padStart(2, "0")}`}
+              timezone={tenant.timezone}
+              people={coming.length}
+            />
+          </CardContent>
+        </Card>
+      )}
+
+      {manager && canWrite && service.kind === "workshop" && bookings.length === 0 && (
+        <Card className="print:hidden">
+          <CardHeader>
+            <CardTitle>Delete this date</CardTitle>
+            <CardDescription>
+              For a date added by mistake. Nobody has booked it, so nothing else changes. If someone
+              has it in their cart, their order will show under Needs a date.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <DeleteDateForm
+              slug={tenant.slug}
+              sessionId={session.id}
+              serviceId={session.service_id as string}
+            />
+          </CardContent>
+        </Card>
       )}
 
       {manager && canWrite && upcoming && (

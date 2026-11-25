@@ -100,6 +100,9 @@ export default async function ServicePage({
           {priceLabel(service.price_cents, tenant.currency)}
           {service.kind === "workshop" && service.price_cents > 0 ? " per place" : ""}
         </p>
+        {service.kind === "workshop" && service.location && (
+          <p className="text-sm">Where: {service.location}</p>
+        )}
         {service.description && <p className="whitespace-pre-line">{service.description}</p>}
       </header>
 

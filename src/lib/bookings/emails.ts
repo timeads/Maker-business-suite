@@ -21,12 +21,17 @@ export type BookingDetails = {
   workspace_name: string;
   workspace_slug: string;
   timezone: string;
+  /** Where a workshop happens; empty or missing when the business hasn't said. */
+  location?: string;
 };
 
 export type Email = { to: string; subject: string; text: string };
 
 const firstName = (name: string) => name.trim().split(/\s+/)[0] || "there";
 const when = (d: BookingDetails) => formatWhen(d.starts_at, d.ends_at, d.timezone);
+/** "Where: ..." under the time, only when the business has said where. */
+const whereLines = (d: Pick<BookingDetails, "location">) =>
+  d.location?.trim() ? [`Where: ${d.location.trim()}`] : [];
 const seats = (d: BookingDetails) => (d.seats === 1 ? "1 place" : `${d.seats} places`);
 
 export const manageUrl = (site: string, token: string) => `${site}/booking/${token}`;
@@ -44,6 +49,7 @@ export function confirmationEmail(d: BookingDetails, link: string, note?: string
       `You're booked in for ${d.service_name} with ${d.workspace_name}.`,
       "",
       `When: ${when(d)}`,
+      ...whereLines(d),
       ...(d.service_kind === "workshop" ? [`Places: ${seats(d)}`] : []),
       ...(d.amount_cents > 0 ? [`Paid: ${formatMoney(d.amount_cents / 100, d.currency)}`] : []),
       "",
@@ -66,6 +72,7 @@ export function reminderEmail(d: BookingDetails, note?: string): Email {
       `A quick reminder that ${d.service_name} with ${d.workspace_name} is coming up.`,
       "",
       `When: ${when(d)}`,
+      ...whereLines(d),
       "",
       ...noteLines(note),
       "If you can't make it, the link in your confirmation email lets you change or cancel.",
@@ -84,6 +91,7 @@ export function dayOfEmail(d: BookingDetails, note?: string): Email {
       `${d.service_name} with ${d.workspace_name} starts soon.`,
       "",
       `When: ${when(d)}`,
+      ...whereLines(d),
       "",
       ...noteLines(note),
       "See you there!",
@@ -149,6 +157,7 @@ export function ownerNoticeEmail(d: BookingDetails, to: string, link: string): E
       `${d.customer_name} (${d.customer_email}) booked ${d.service_name}.`,
       "",
       `When: ${when(d)}`,
+      ...whereLines(d),
       `Places: ${d.seats}`,
       ...(d.oversold
         ? [
@@ -188,6 +197,7 @@ export function movedEmail(d: BookingDetails, link: string | null): Email {
       `${d.workspace_name} has moved your booking for ${d.service_name}.`,
       "",
       `New time: ${when(d)}`,
+      ...whereLines(d),
       ...(link ? ["", "Your booking link:", link] : []),
       "",
       `If that doesn't work for you, reply to ${d.workspace_name} and they'll sort it out.`,
@@ -238,4 +248,33 @@ export function csvCell(value: string | number): string {
   const text = String(value);
   const safe = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
   return /[",\n\r]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
+}
+
+/**
+ * The business moved a whole date to a new day or time. Sent only when the
+ * person changing it ticks the box; one per address.
+ */
+export function dateChangedEmail(
+  to: { customer_name: string; customer_email: string },
+  d: Pick<
+    BookingDetails,
+    "service_name" | "workspace_name" | "starts_at" | "ends_at" | "timezone" | "location"
+  >,
+  was: { starts_at: string; ends_at: string },
+): Email {
+  return {
+    to: to.customer_email,
+    subject: `New time: ${d.service_name} with ${d.workspace_name}`,
+    text: [
+      `Hi ${firstName(to.customer_name)},`,
+      "",
+      `${d.workspace_name} has changed the time of ${d.service_name}. Your place is kept.`,
+      "",
+      `New time: ${formatWhen(d.starts_at, d.ends_at, d.timezone)}`,
+      ...whereLines(d),
+      `It was: ${formatWhen(was.starts_at, was.ends_at, d.timezone)}`,
+      "",
+      `If the new time doesn't work for you, reply to ${d.workspace_name} and they'll sort it out.`,
+    ].join("\n"),
+  };
 }

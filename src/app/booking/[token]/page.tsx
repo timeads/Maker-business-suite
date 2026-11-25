@@ -93,6 +93,12 @@ export default async function ManageBookingPage({
           <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
             <dt className="text-muted-foreground">When</dt>
             <dd>{when}</dd>
+            {booking.location && (
+              <>
+                <dt className="text-muted-foreground">Where</dt>
+                <dd>{booking.location}</dd>
+              </>
+            )}
             <dt className="text-muted-foreground">Name</dt>
             <dd>{booking.customer_name}</dd>
             {booking.service_kind === "workshop" && (

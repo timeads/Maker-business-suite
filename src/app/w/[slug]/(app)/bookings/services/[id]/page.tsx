@@ -33,7 +33,7 @@ export default async function ServicePage({
   const { data } = await supabase
     .from("services")
     .select(
-      "id, kind, name, description, duration_minutes, price_cents, capacity, active, shop_product_id, shop_variant_id",
+      "id, kind, name, description, duration_minutes, price_cents, capacity, active, shop_product_id, shop_variant_id, location",
     )
     .eq("id", id)
     .eq("tenant_id", tenant.id)

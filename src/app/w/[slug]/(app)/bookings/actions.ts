@@ -71,6 +71,13 @@ export async function saveService(
     p_active: serviceId ? formData.get("active") === "on" : true,
   });
   if (error) return { error: OOPS };
+  if (kind === "workshop") {
+    const { error: placeError } = await ctx.supabase.rpc("set_service_location", {
+      p_service_id: data as string,
+      p_location: text(formData, "location").slice(0, 200),
+    });
+    if (placeError) return { error: OOPS };
+  }
   revalidatePath(`/w/${slug}/bookings`, "layout");
   if (!serviceId) redirect(`/w/${slug}/bookings/services/${data as string}`);
   return { message: "Saved." };
