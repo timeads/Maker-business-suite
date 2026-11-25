@@ -20,7 +20,7 @@ const eslintConfig = defineConfig([
     files: ["public/booking-widget.js"],
     rules: { "@next/next/no-location-assign-relative-destination": "off" },
   },
-  globalIgnores([".next/**", "out/**", "build/**", "next-env.d.ts", "playwright-report/**"]),
+  globalIgnores([".next/**", "out/**", "build/**", "next-env.d.ts", "playwright-report/**", ".claude/worktrees/**"]),
 ]);
 
 export default eslintConfig;
