@@ -231,6 +231,186 @@ Three ways to run, in the order we'd suggest them:
   comment that is refused for thread control gets the same explanation but is
   not retried.
 
+## The automatic first reply (replacing Meta's instant reply)
+
+Meta Business Suite's inbox can send an "instant reply" or "away message" by
+itself. Because Meta's inbox sends it, Meta's inbox is the tool that answered
+first, and a reply from the suite to that conversation is then refused with
+"not the thread owner" (see the section above). The suite can send that first
+message itself instead: **Settings → Help desk → Automatic replies**
+(`helpdesk` / `auto_replies`; owners and admins).
+
+### Fixed words only
+
+What goes out is exactly what an owner or admin typed on that screen, with
+two placeholders filled in by code: `{{first_name}}` (the person's first name
+when the contact has one that looks like a name, "there" otherwise) and
+`{{business_name}}` (the workspace's name). Anything else in double braces is
+sent as typed, and the screen says so. **No model is asked for anything on
+this path.** `src/lib/helpdesk/auto-reply/guard.test.ts` reads the source and
+fails if the auto-reply folder, or the outbox and deliverers the words travel
+through, come to import the Anthropic SDK or any of the suite's AI helpers.
+The assistant may propose the switches, the hours and the quiet period, but a
+proposal that changes a message is refused in code (`refuse` on the registry
+entry): the words are only ever written by a person on the settings screen.
+
+### What can be set
+
+Per channel (Instagram messages, Facebook messages, email; all off by
+default):
+
+- on or off;
+- **when**: whenever someone writes (`always`), only outside opening hours
+  (`outside_hours`, the away message), or one message while open and another
+  while closed (`both`);
+- the message and the away message (plain text, up to 800 characters, and
+  checked against what one Instagram or Facebook message can hold).
+
+For the workspace: the weekly **opening hours** (the Bookings weekly-hours
+shape, read on the workspace's own clocks with the same helper Bookings uses,
+so daylight saving is followed) and the **quiet period** (1 to 168 hours,
+24 by default).
+
+The screen shows each message as it will read. "Send me a test" emails the
+saved email reply to the signed-in person's own address and nowhere else; for
+Instagram and Facebook there is only the preview, because a test would have
+to go to a real person.
+
+### When one is sent, and when not
+
+Decided in code on the worker, when an inbound message has been filed
+(`shouldAutoReply` in `auto-reply/rules.ts`), in this order. The first "no"
+wins:
+
+1. The channel's switch is off: no.
+2. It isn't a real message from a person in a private conversation: no. That
+   is a direct message, a story reply or a shared post (Instagram and
+   Facebook), or an email. **Never** a comment on a post (those are public),
+   a reaction, an unsend, a story mention, an echo of something sent from the
+   app or by us, or a change of hands.
+3. The conversation is in Spam or the Trash: no. (An archived one comes back
+   when the customer writes, and is answered.)
+4. Email only: it comes from one of the business's own addresses (the desk's
+   address on our mail domain, or one listed under "your own addresses"), or
+   it looks machine-sent: `Auto-Submitted` other than "no", `Precedence`
+   bulk, list, junk or auto_reply, any `List-Id`, `List-Unsubscribe` or
+   `List-Post`, `X-Autoreply`, `X-Autorespond`, `X-Auto-Response-Suppress`,
+   `X-Loop`, `Feedback-ID`, an empty `Return-Path`, or a sender such as
+   no-reply@, donotreply@, mailer-daemon@, postmaster@, bounce@ or
+   notifications@. No.
+5. Instagram and Facebook only: the message came on Meta's `standby` list
+   (another tool has the conversation) and the workspace has not ticked "Take
+   the conversation over when another tool has it": no.
+6. The message is more than an hour old by the time the worker gets to it
+   (a backlog, a delayed delivery): no. An "instant" reply that late only
+   confuses.
+7. Someone on the team has answered since that message, or has a reply
+   waiting to go: no.
+8. An automatic reply was already claimed for that person on that channel
+   within the quiet period: no. A claim counts whether or not the reply went,
+   so a refused one is not tried again on the person's next message.
+9. The hours: `outside_hours` while open sends nothing; otherwise the usual
+   or the away message is chosen by **when the person wrote**, not when the
+   worker ran.
+10. The chosen message is empty, or too long for one message: no.
+
+Then the database takes the claim (`claim_auto_reply`): one row per inbound
+message in `private.auto_replies`, taken under the conversation's and the
+person's locks, with rules 2, 3, 7 and 8 checked again there. Two workers, a
+redelivered webhook or a retried job get "duplicate". The claim puts the
+reply into the same outbox every reply uses (`private.outbound_queue`), due at
+once (no undo wait), with no author and marked automatic by the database (a
+person's own reply can't carry that mark: `queue_outbound` takes it off).
+
+It is sent by the same code as a person's reply (`sendSocialReply` for
+Instagram and Facebook, with Meta's 24-hour window and the channel's switch
+checked again; the mail service for email, with `Auto-Submitted:
+auto-replied` and `X-Auto-Response-Suppress: All` so no other machine answers
+it, and only ever to the person who wrote, never to anyone copied in).
+
+How it is written down:
+
+- **Sent**: filed in the conversation as the business's message, labelled
+  "Automatic reply", with no author (`messages.automatic`). It is **not** the
+  team answering: the status stays open, `first_reply_at` (the reports'
+  first-reply time) stays empty, nobody is assigned, the list still shows the
+  customer's message as the last thing said, and the manual neither reads it
+  nor counts the conversation as answered because of it.
+- **Refused** (Meta said no, thread control included, or the window had
+  closed, or the mail service refused): written down once on the outbox row
+  and on the claim, shown in the conversation as a quiet grey line ("The
+  automatic reply to … wasn't sent, and isn't tried again", Meta's words
+  under "Details"), with nothing kept to send again. It is never retried.
+- **No clear answer**: "we never heard whether it went"; never sent again.
+
+With "Take the conversation over" ticked (off by default), an automatic reply
+refused for thread control takes or asks for the conversation and is tried
+once more, exactly as a person's reply is.
+
+### Switching Meta's own instant reply off
+
+Switch the suite's on first, check a test message from a personal account
+gets it, **then** switch Meta's off. Leaving both on means the customer may
+get two automatic messages, and Meta's inbox, having answered, can take the
+conversation, after which replies from the suite are refused.
+
+Where Meta keeps it: **Meta Business Suite → Inbox → Automations** (the
+"Instant reply" and "Away message" entries; switch each off, for Instagram
+and for Messenger). **This path is from memory of Meta's product, not read
+from a Meta page on the day**: business.facebook.com and Meta's Business Help
+Centre could not be opened from the build machine. Check it against the
+screen. Instagram's own app also has automated replies of its own (saved
+replies, a welcome message, frequently asked questions under its business
+tools); turn those off as well if they are in use.
+
+Meta's inbox being off for the first message is not the whole of it. Which
+app may answer a **new** conversation is still Meta's conversation routing
+(above): if another app is the default there, the suite's automatic reply is
+refused like any other reply from it. Make the suite's app the default for
+the channel, or set no default app.
+
+### What Meta's pages say about automated replies
+
+Read on 25 November 2026 on developers.facebook.com ("Messenger Platform and
+IG Messaging API policy", "Send a message", "Instagram Messaging overview",
+"Rate limiting", and the two Conversation Routing pages):
+
+- **The 24-hour window.** "Businesses have the duration of the standard
+  messaging window to respond to a user … For most user actions, it lasts 24
+  hours", and a person sending a message opens it. An automatic reply to an
+  inbound message is always inside it; it is sent as `messaging_type:
+RESPONSE` with no tag.
+- **Saying it is automated.** "When required by applicable law, automated
+  chat experiences must disclose that a person is interacting with an
+  automated service: at the beginning of any conversation or message thread,
+  after a significant lapse of time, or when a chat moves from human
+  interaction to automated experience", with California and Germany named.
+  "Even where not legally required, we recommend informing users". The suite
+  does not add words of its own: the settings screen tells the owner to say
+  so in the message ("This is an automatic reply").
+- **A way to a person.** "Apps that use the Instagram Messaging APIs must
+  have an escalation path to a human agent." The help desk is that: the
+  conversation stays open for the team.
+- **Rate limits.** Send API: 300 calls a second per Facebook Page and 100 a
+  second per Instagram professional account for text messages; Messenger
+  overall, 200 × the number of people the business can message, per rolling
+  24 hours. One short reply per person per quiet period is far inside these.
+  Error 613 is "rate limit exceeded"; like any refusal it is written down and
+  not retried.
+- **Thread control.** With no default app, "all applications can respond to
+  the same user message without restrictions" and "coordination of responses
+  from both the application and page inbox is necessary to ensure no
+  duplicate responses". With a default app, only the thread owner may send
+  while a conversation is active and only the default app while it is idle.
+  Meta's inbox "takes control of the conversation" when someone responds
+  there in a conversation it didn't control. **Meta's pages do not say that
+  an app's own send through the Send API takes thread control**, and do not
+  say in so many words that the inbox's automated instant reply counts as
+  the inbox responding (what the owner saw on staging fits it). So the suite
+  sending the first message is not, by itself, a way to hold a conversation:
+  what removes the refusal is Meta's inbox no longer answering first, plus
+  the routing choice above.
+
 ## Comments on posts
 
 - **What comes in.** A comment on one of the business's own posts: on a
@@ -506,6 +686,14 @@ call to Meta faked in tests. Not yet seen working against Meta:
   and the other app or Meta's inbox had taken the conversation, or this app is
   the default and Meta's inbox took it when someone opened or answered it
   there. The payload isn't kept once filed, so it can't be looked at again.
+- The automatic first reply, end to end against Meta: that a `RESPONSE`
+  message sent within seconds of the inbound one is accepted on both
+  platforms, that switching Meta's instant reply off stops Meta's inbox
+  taking the conversation, where exactly that switch sits in Meta Business
+  Suite today (written from memory: Inbox → Automations), and whether Meta's
+  echo of an automatic reply carries our `app_id` (either way it is matched
+  by message id and not filed twice). The email reply has not been sent
+  through the mail service either; the request it builds is tested.
 - Which optional permissions each use case really offers in the owner's app
   dashboard. The table at the top is Meta's documentation on the day; the
   dashboard is the authority.

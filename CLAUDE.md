@@ -246,6 +246,25 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   on the person (`contacts.thread_control`, written only by
   `note_thread_control`), a heads-up that never blocks a reply. Never take
   control without that setting.
+  The automatic first reply (`lib/helpdesk/auto-reply`, Settings → Help desk
+  → Automatic replies, config `helpdesk` / `auto_replies`,
+  docs/meta-messages.md) is the ONE thing the help desk sends by itself, and
+  it is FIXED WORDS ONLY: what an owner or admin typed, with `{{first_name}}`
+  and `{{business_name}}` filled in by code (`fillWords`). NO MODEL MAY BE
+  CALLED ON THAT PATH, and nothing a model wrote may be sent by it:
+  `auto-reply/guard.test.ts` fails if that folder or the outbox and
+  deliverers behind it import an AI helper, and the assistant's registry
+  entry refuses any proposal that changes a message (`refuse`). The worker
+  decides when a message is filed (`shouldAutoReply`, pure: real messages
+  only, never a comment, reaction, echo, machine mail, Spam or Trash; opening
+  hours on the workspace's clocks; a quiet period per person and channel;
+  never once the team has answered), `claim_auto_reply` takes one claim per
+  inbound message (`private.auto_replies`) and queues it in the same outbox
+  with no author and no undo wait, and `finish_outbound` /
+  `finish_social_outbound` file it as `messages.automatic`. It never counts
+  as the team answering (status, `first_reply_at`, assignee, the list's last
+  message and the manual all ignore it), and a refusal is written down once
+  and never retried. Keep `tests/db/helpdesk-auto-replies.test.ts` passing.
   Comments on posts ride on the same connection, webhook and queue
   (`comments.ts`, `tickets.kind = 'comment'`, `comment_posts`): one
   conversation per person per post (`file_social_comment`), never mixed or

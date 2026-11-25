@@ -312,6 +312,34 @@ export const HELP_TOPICS: HelpTopic[] = [
     ],
   },
   {
+    slug: "helpdesk-automatic-replies",
+    group: "helpdesk",
+    title: "Send an automatic first reply",
+    summary:
+      "A short message of your own, sent by itself when someone writes, in place of Meta's instant reply.",
+    intro:
+      "When someone messages you on Instagram or Facebook, or emails you, the help desk can answer straight away with a few words you wrote, so they know it reached you. It is always your words, exactly as you saved them: nothing writes or rewords them for you.",
+    steps: [
+      "An owner or admin opens Settings → Help desk → Automatic replies.",
+      "For each channel (Instagram messages, Facebook messages, Email) tick “Send an automatic reply” and choose when: whenever someone writes, only outside opening hours, or one message while you are open and another while you are closed.",
+      "Write the message. {{first_name}} becomes the person's first name when we know it (“there” when we don't) and {{business_name}} becomes your workspace's name. Under the box you see the message as it will read.",
+      "If you use opening hours, tick the days you are open and set the times. They follow your workspace's own clocks, daylight saving included.",
+      "Press “Save automatic replies”. It applies to the next message that comes in.",
+      "For email, press “Send me a test” to get the saved message at your own address. For Instagram and Facebook, message your account from a personal one to see it arrive.",
+      "If you had an instant reply or away message in Meta Business Suite (Inbox → Automations), switch it off there once yours is working here.",
+    ],
+    notes: [
+      "Say that it is automatic, in your own words (“This is an automatic reply”). Instagram and Facebook ask businesses to, and in some places the law requires it.",
+      "Why switch Meta's off: while Meta's inbox sends an instant reply, Meta counts its inbox as the tool answering that customer, and replies from here can be refused with “another inbox tool is answering this conversation”. With both on, the customer may also get two automatic messages. Switch ours on first, then Meta's off.",
+      "One is sent only for a message a person really sent you. Never for a comment on a post, a like or reaction, a story mention, a newsletter, a bounce or another auto-reply, and never for anything in Spam or the Trash.",
+      "Nobody gets one more than once per channel in the quiet period you set (a day, to begin with), and none is sent once someone on the team has answered.",
+      "It doesn't count as your answer. The conversation stays open and waiting for a person, it shows in the thread as “Automatic reply”, and your reply times are measured from the first answer a person sends.",
+      "If Instagram or Facebook refuses it (another tool has the conversation, say), a quiet grey line on the conversation says so. It is not tried again.",
+      "Email is off until you tick it. The reply goes only to the person who wrote, never to others copied in.",
+      "The assistant can switch a channel on or off or change your hours if you ask, but it can't write or change the message: those words are yours to type.",
+    ],
+  },
+  {
     slug: "helpdesk-comments",
     group: "helpdesk",
     title: "Answer comments on your Instagram and Facebook posts",
