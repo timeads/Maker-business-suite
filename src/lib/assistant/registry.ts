@@ -24,6 +24,11 @@ import {
   SAVED_VIEWS_KEY as DESK_VIEWS_KEY,
   savedViewsSchema as deskViewsSchema,
 } from "../helpdesk/saved-views";
+import {
+  DEFAULT_HELP_CENTRE,
+  HELP_CENTRE_KEY,
+  helpCentreConfigSchema,
+} from "../helpdesk/help-centre/config";
 import { DEFAULT_MANUAL, MANUAL_KEY, manualConfigSchema } from "../helpdesk/manual/config";
 import { DEFAULT_DESK_SETTINGS, DESK_SETTINGS_KEY, deskSettingsSchema } from "../helpdesk/settings";
 import {
@@ -179,6 +184,16 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
       "The help desk's manual of topics and articles: its name and the first tab's name, a sentence on what belongs in it, the labels topics are sorted by (id and label, up to four), the headings a topic is written under, which conversations feed it (folder ids, saved view ids, tags), whether it updates by itself (auto) and how often (day or week), the most conversations read in a month (monthly_cap), whether Claude is shown customers' photos (read_photos) and whether reply drafts may lean on published topics (use_in_drafts).",
     schema: manualConfigSchema,
     defaultBody: () => DEFAULT_MANUAL,
+  },
+  {
+    module: HELPDESK_MODULE,
+    key: HELP_CENTRE_KEY,
+    feature: "helpdesk",
+    name: "Help centre",
+    description:
+      "The public help centre customers can read: whether it is on (while off, every page answers not found), its title and the line under it, the categories articles are grouped by in order (id and label, up to twelve), the sentence beside the contact address (contact_line), the address customers write to (contact_email, empty for the workspace's own support address) and whether search engines are asked to leave it out (noindex). Which articles are published is not a setting: an owner or admin publishes each one.",
+    schema: helpCentreConfigSchema,
+    defaultBody: () => DEFAULT_HELP_CENTRE,
   },
   {
     module: BOOKINGS_MODULE,

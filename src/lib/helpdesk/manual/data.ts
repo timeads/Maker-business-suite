@@ -37,6 +37,16 @@ export type Article = {
   tags: string[];
   shareable: boolean;
   updatedAt: string;
+  /** internal: for the team only. draft: a help article in the making. published: on the public help centre. */
+  publicState: "internal" | "draft" | "published";
+  /** The last part of its public address, once it has one. */
+  slug: string | null;
+  category: string | null;
+  /** The line for lists and search results on the help centre. */
+  summary: string;
+  publicUpdatedAt: string | null;
+  helpfulYes: number;
+  helpfulNo: number;
 };
 
 type TopicRow = {
@@ -76,7 +86,16 @@ type ArticleRow = {
   tags: string[] | null;
   shareable: boolean;
   updated_at: string;
+  public_state: string;
+  slug: string | null;
+  category: string | null;
+  summary: string | null;
+  public_updated_at: string | null;
+  helpful_yes: number | null;
+  helpful_no: number | null;
 };
+const ARTICLE_COLUMNS =
+  "id, title, body, tags, shareable, updated_at, public_state, slug, category, summary, public_updated_at, helpful_yes, helpful_no";
 const toArticle = (row: ArticleRow): Article => ({
   id: row.id,
   title: row.title,
@@ -84,6 +103,16 @@ const toArticle = (row: ArticleRow): Article => ({
   tags: row.tags ?? [],
   shareable: row.shareable,
   updatedAt: row.updated_at,
+  publicState:
+    row.public_state === "published" || row.public_state === "draft"
+      ? row.public_state
+      : "internal",
+  slug: row.slug,
+  category: row.category,
+  summary: row.summary ?? "",
+  publicUpdatedAt: row.public_updated_at,
+  helpfulYes: row.helpful_yes ?? 0,
+  helpfulNo: row.helpful_no ?? 0,
 });
 
 export async function loadManualConfig(
@@ -128,7 +157,7 @@ export async function loadTopic(
 export async function loadArticles(supabase: SupabaseClient, tenantId: string): Promise<Article[]> {
   const { data } = await supabase
     .from("manual_articles")
-    .select("id, title, body, tags, shareable, updated_at")
+    .select(ARTICLE_COLUMNS)
     .eq("tenant_id", tenantId)
     .order("title")
     .limit(500);
@@ -143,7 +172,7 @@ export async function loadArticle(
   if (!/^[0-9a-f-]{36}$/.test(id)) return null;
   const { data } = await supabase
     .from("manual_articles")
-    .select("id, title, body, tags, shareable, updated_at")
+    .select(ARTICLE_COLUMNS)
     .eq("tenant_id", tenantId)
     .eq("id", id)
     .maybeSingle();

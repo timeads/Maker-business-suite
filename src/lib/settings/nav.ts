@@ -272,6 +272,21 @@ const TOOLS: Def[] = [
           "monthly limit",
         ],
       },
+      {
+        id: "helpdesk.help-centre",
+        name: "Help centre",
+        path: "helpdesk/help-centre",
+        keywords: [
+          "help centre",
+          "help center",
+          "public articles",
+          "customers can read",
+          "categories",
+          "faq",
+          "search engines",
+          "contact us",
+        ],
+      },
     ],
   },
   {

@@ -92,3 +92,18 @@ export async function removeQueuedFiles(admin: SupabaseClient): Promise<number> 
   if (doneError) throw new Error(`Could not clear removed files: ${doneError.message}`);
   return paths.length;
 }
+
+/** The same for the public help centre's pictures (a deleted article, a removed workspace). */
+export async function removeQueuedHelpPictures(admin: SupabaseClient): Promise<number> {
+  const { data, error } = await admin.rpc("claim_help_picture_removals", { p_limit: 100 });
+  if (error) throw new Error(`Could not claim help pictures to remove: ${error.message}`);
+  const paths = ((data ?? []) as unknown[]).map(String).filter(Boolean);
+  if (paths.length === 0) return 0;
+  const { error: removeError } = await admin.storage.from("help-centre").remove(paths);
+  if (removeError) throw new Error(`Could not remove help pictures: ${removeError.message}`);
+  const { error: doneError } = await admin.rpc("finish_help_picture_removals", {
+    p_paths: paths,
+  });
+  if (doneError) throw new Error(`Could not clear removed help pictures: ${doneError.message}`);
+  return paths.length;
+}

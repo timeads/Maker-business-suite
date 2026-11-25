@@ -1,6 +1,6 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
+import { revalidatePath, updateTag } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { getEntitlements } from "@/lib/entitlements";
@@ -22,10 +22,17 @@ import {
   loadTopics,
   topicEntry,
 } from "@/lib/helpdesk/manual/data";
+import {
+  HELP_CENTRE_KEY,
+  helpCentrePath,
+  parseHelpCentre,
+} from "@/lib/helpdesk/help-centre/config";
+import { helpCentreTag } from "@/lib/helpdesk/help-centre-server";
 import { applySuggestion } from "@/lib/helpdesk/manual/plan";
 import { searchEntries } from "@/lib/helpdesk/manual/search";
 import { docText, sectionText, splitSections } from "@/lib/helpdesk/manual/sections";
 import { parseRichDoc, tidyDoc, type RichDoc } from "@/lib/helpdesk/rich";
+import { getSiteUrl } from "@/lib/site-url";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
 
@@ -305,8 +312,16 @@ export async function saveArticle(
     p_tags: tags,
     p_shareable: formData.get("shareable") === "1",
   });
-  if (error || !data) return { error: TRY_AGAIN };
+  if (error || !data) {
+    return {
+      error: error?.message.includes("Only owners and admins")
+        ? "This article is published on your help centre, so only an owner or admin can change it."
+        : TRY_AGAIN,
+    };
+  }
   refresh(slug);
+  // A published help article is on a public page: show the change there at once.
+  updateTag(helpCentreTag(slug));
   redirect(`${base(slug)}/kb/${data}`);
 }
 
@@ -318,6 +333,7 @@ export async function deleteArticle(slug: string, articleId: string): Promise<vo
     p_article_id: articleId,
   });
   refresh(slug);
+  updateTag(helpCentreTag(slug));
   if (!error) redirect(`${base(slug)}/kb`);
 }
 
@@ -421,6 +437,8 @@ export type ManualHit = {
   text: string;
   /** Its sections, for putting just one into a reply. */
   sections: { heading: string; text: string }[];
+  /** Where customers can read it: only for an article published on a help centre that is on. */
+  publicUrl: string | null;
 };
 
 /**
@@ -431,10 +449,25 @@ export type ManualHit = {
 export async function findInManual(slug: string, query: string): Promise<ManualHit[]> {
   const ctx = await context(slug);
   if ("error" in ctx) return [];
-  const [topics, articles] = await Promise.all([
+  const [topics, articles, { data: centre }, site] = await Promise.all([
     loadTopics(ctx.supabase, ctx.tenant.id),
     loadArticles(ctx.supabase, ctx.tenant.id),
+    ctx.supabase
+      .from("configs")
+      .select("body")
+      .eq("tenant_id", ctx.tenant.id)
+      .eq("module", HELPDESK_MODULE)
+      .eq("key", HELP_CENTRE_KEY)
+      .maybeSingle(),
+    getSiteUrl(),
   ]);
+  const centreOn = parseHelpCentre(centre?.body).on;
+  const links = new Map<string, string>();
+  for (const article of articles) {
+    if (centreOn && article.publicState === "published" && article.slug) {
+      links.set(article.id, `${site}${helpCentrePath(ctx.tenant.slug, article.slug)}`);
+    }
+  }
   const bodies = new Map<string, RichDoc>();
   const entries = [
     ...topics
@@ -466,6 +499,7 @@ export async function findInManual(slug: string, query: string): Promise<ManualH
           }))
           .filter((section) => section.text)
           .slice(0, 8),
+        publicUrl: entry.kind === "article" ? (links.get(entry.id) ?? null) : null,
       };
     });
 }

@@ -52,7 +52,7 @@ export default async function KnowledgeBasePage({
     <>
       <PageHeader
         title={config.name}
-        description="Articles the team writes for itself: how things work, policies, answers worth keeping."
+        description="Articles the team writes: how things work, policies, answers worth keeping. One can be made a help article for customers to read on your help centre."
       >
         {entitlements.canWrite && (
           <Button asChild>
@@ -130,7 +130,13 @@ export default async function KnowledgeBasePage({
                   {article.tags.slice(0, 4).map((name) => (
                     <Badge key={name}>{name}</Badge>
                   ))}
-                  {article.shareable && <Badge tone="good">Fine to paste to a customer</Badge>}
+                  {article.publicState === "published" ? (
+                    <Badge tone="good">On the help centre</Badge>
+                  ) : article.publicState === "draft" ? (
+                    <Badge tone="waiting">Help article · draft</Badge>
+                  ) : (
+                    article.shareable && <Badge tone="good">Fine to paste to a customer</Badge>
+                  )}
                 </div>
               </Link>
             </li>

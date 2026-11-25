@@ -71,7 +71,10 @@ export function ManualPicker({
             >
               <span className="block text-sm font-semibold">{hit.title}</span>
               <span className="text-muted-foreground block text-xs">
-                {[hit.kind === "article" ? "Article" : null, ...hit.labels]
+                {[
+                  hit.kind === "article" ? (hit.publicUrl ? "Help article" : "Article") : null,
+                  ...hit.labels,
+                ]
                   .filter(Boolean)
                   .join(" · ")}
               </span>
@@ -87,8 +90,18 @@ export function ManualPicker({
                     onClick={() => onPick(hit.text)}
                     className="bg-teal-soft text-teal-soft-ink rounded-full px-2.5 py-0.5 text-xs font-semibold"
                   >
-                    Put all of it in the reply
+                    {hit.publicUrl ? "Insert text" : "Put all of it in the reply"}
                   </button>
+                  {hit.publicUrl && (
+                    <button
+                      type="button"
+                      onClick={() => onPick(hit.publicUrl!)}
+                      title={hit.publicUrl}
+                      className="bg-teal-soft text-teal-soft-ink rounded-full px-2.5 py-0.5 text-xs font-semibold"
+                    >
+                      Insert link
+                    </button>
+                  )}
                   {hit.sections.map((section) => (
                     <button
                       key={section.heading}

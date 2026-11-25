@@ -49,7 +49,11 @@ import {
   type PostmarkInbound,
 } from "../src/lib/helpdesk/inbound";
 import { fromBase64 } from "../src/lib/helpdesk/files";
-import { keepMessageFiles, removeQueuedFiles } from "../src/lib/helpdesk/keep-files";
+import {
+  keepMessageFiles,
+  removeQueuedFiles,
+  removeQueuedHelpPictures,
+} from "../src/lib/helpdesk/keep-files";
 import { bodyOf, outgoingFrom, refusalCode, sendPayloadSchema } from "../src/lib/helpdesk/outbox";
 import { sendOutbound } from "../src/lib/helpdesk/outbound";
 import { ReplyRefused } from "../src/lib/helpdesk/reply";
@@ -1041,6 +1045,7 @@ async function main() {
       (await attempt(drainMetaMessages, 0)) +
       (await attempt(drainOutbound, 0)) +
       (await attempt(() => removeQueuedFiles(getAdminClient()), 0)) +
+      (await attempt(() => removeQueuedHelpPictures(getAdminClient()), 0)) +
       (await attempt(drainSocialPosts, 0)) +
       (await attempt(drainStockReceipts, 0)) +
       (await attempt(drainShipmentUndos, 0)) +

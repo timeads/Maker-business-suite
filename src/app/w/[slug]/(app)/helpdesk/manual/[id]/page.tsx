@@ -25,7 +25,8 @@ import {
   setTopicInDrafts,
 } from "../actions";
 import { DocView } from "../doc-view";
-import { EntryForm } from "../editor";
+import { AskButton, EntryForm } from "../editor";
+import { draftArticleFromTopic, makeArticleFromTopic } from "../help-actions";
 
 export const metadata: Metadata = { title: "Topic" };
 
@@ -303,6 +304,32 @@ export default async function TopicPage({
           </CardContent>
         </Card>
       </div>
+
+      {manager && canWrite && (
+        <Card>
+          <CardHeader>
+            <CardTitle>For your help centre</CardTitle>
+            <CardDescription>
+              A topic is for the team and is never public. To tell customers the same thing, make a
+              help article from it: the words are copied into a new draft for you to edit, and the
+              two go their own ways from there. Customers&apos; photos aren&apos;t copied.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-wrap items-start gap-2">
+            <form action={makeArticleFromTopic.bind(null, tenant.slug, topic.id)}>
+              <Button type="submit" variant="outline" size="sm">
+                Make a help article from this topic
+              </Button>
+            </form>
+            <AskButton
+              action={draftArticleFromTopic.bind(null, tenant.slug, topic.id)}
+              label="Draft a help article with Claude"
+              pendingLabel="Writing…"
+              size="sm"
+            />
+          </CardContent>
+        </Card>
+      )}
 
       {manager && canWrite && (
         <div className="border-border flex flex-wrap items-center justify-between gap-3 border-t pt-4">
