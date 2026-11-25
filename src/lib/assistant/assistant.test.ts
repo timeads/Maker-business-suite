@@ -84,6 +84,49 @@ describe("tools", () => {
     expect(calls.filter((c) => c.kind === "rpc")).toHaveLength(0);
   });
 
+  it("never lets the assistant write the words of an automatic reply", async () => {
+    const saved = {
+      version: 1,
+      instagram: { on: false, when: "always", message: "Thanks! A person will answer soon." },
+    };
+    const propose = (body: unknown, configs: unknown = { body: saved }) => {
+      const db = fakeSupabase({ configs, rpc: { propose_config_change: "p-9" } });
+      return runTool(
+        "propose_config_change",
+        { module: "helpdesk", key: "auto_replies", body, summary: "s" },
+        ctxWith(db.supabase),
+      ).then((outcome) => ({ outcome, rpcs: db.calls.filter((c) => c.kind === "rpc") }));
+    };
+    // Switching it on, new hours and a new quiet period, the words untouched: filed.
+    const fine = await propose({
+      ...saved,
+      instagram: { ...saved.instagram, on: true, when: "always" },
+      hours: [{ weekday: 6, start_minute: 600, end_minute: 900 }],
+      quiet_hours: 12,
+    });
+    expect(fine.outcome.isError).toBeFalsy();
+    expect(fine.rpcs).toHaveLength(1);
+    // Any change to a message, on any channel, is refused before anything is written.
+    for (const body of [
+      { ...saved, instagram: { ...saved.instagram, message: "Hey! We'll be right with you." } },
+      { ...saved, instagram: { ...saved.instagram, away_message: "We're closed." } },
+      { ...saved, email: { on: true, message: "Thanks for your email." } },
+      { ...saved, facebook: { on: false, away_message: "x" } },
+    ]) {
+      const refused = await propose(body);
+      expect(refused.outcome.isError).toBe(true);
+      expect(refused.outcome.content).toContain("only a person can write them");
+      expect(refused.rpcs).toEqual([]);
+    }
+    // With nothing saved yet there are no words to keep, so none can be proposed.
+    const first = await propose({ version: 1, instagram: { on: true, message: "Hi!" } }, null);
+    expect(first.outcome.isError).toBe(true);
+    expect(first.rpcs).toEqual([]);
+    expect(findConfig("helpdesk", "auto_replies")?.description).toContain(
+      "only a person may write them",
+    );
+  });
+
   it("propose files a validated value through the proposal function only", async () => {
     const { supabase, calls } = fakeSupabase({ rpc: { propose_config_change: "p-1" } });
     const outcome = await runTool(

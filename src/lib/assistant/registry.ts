@@ -29,6 +29,13 @@ import {
   HELP_CENTRE_KEY,
   helpCentreConfigSchema,
 } from "../helpdesk/help-centre/config";
+import {
+  AUTO_REPLIES_KEY,
+  DEFAULT_AUTO_REPLIES,
+  autoRepliesSchema,
+  autoReplyWordsChanged,
+  type AutoReplies,
+} from "../helpdesk/auto-reply/config";
 import { DEFAULT_MANUAL, MANUAL_KEY, manualConfigSchema } from "../helpdesk/manual/config";
 import { DEFAULT_DESK_SETTINGS, DESK_SETTINGS_KEY, deskSettingsSchema } from "../helpdesk/settings";
 import {
@@ -103,6 +110,12 @@ export type ConfigEntry = {
   description: string;
   schema: z.ZodType;
   defaultBody: () => unknown;
+  /**
+   * A rule a proposal must also pass, given the value saved now (both already
+   * parsed by the schema). Returns why it is refused, or null. For settings
+   * with a part only a person may write.
+   */
+  refuse?: (next: unknown, current: unknown) => string | null;
 };
 
 export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
@@ -164,6 +177,21 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
       "Which messages besides email come into the help desk: Instagram messages (instagram) and Facebook messages (facebook), each on or off. They only work once Facebook & Instagram is connected with the messaging permissions, which a person does under Settings → Help desk → Channels. human_agent is only for a Meta app approved for the Human Agent feature (replies up to seven days after the customer's last message) and should stay off otherwise. take_control is for a business that also uses another inbox tool on the same account: when Meta refuses a reply because that tool has the conversation, the help desk takes it over and tries once more. It pulls conversations away from the other tool, so it stays off unless the owner asks for exactly that.",
     schema: channelSettingsSchema,
     defaultBody: () => DEFAULT_CHANNEL_SETTINGS,
+  },
+  {
+    module: HELPDESK_MODULE,
+    key: AUTO_REPLIES_KEY,
+    feature: "helpdesk",
+    name: "Help desk automatic replies",
+    description:
+      "The short message the help desk sends by itself when someone writes in, per channel (instagram, facebook, email): on or off, when (always, outside_hours for only while closed, or both for one message while open and another while closed), the message and the away_message. The two messages are sent to customers by themselves, so only a person may write them, under Settings → Help desk → Automatic replies: a proposal must leave every message and away_message exactly as it is now, and one that changes any of them is refused. You can propose the switches, when, the hours and the quiet period. hours are the weekly opening hours on the workspace's own clocks (weekday 0 is Sunday, start_minute and end_minute past midnight). quiet_hours (1 to 168, usually 24) is how long before the same person can get another automatic reply on that channel. Everything is off by default.",
+    schema: autoRepliesSchema,
+    defaultBody: () => DEFAULT_AUTO_REPLIES,
+    // No model writes what the help desk sends by itself (CLAUDE.md rule 6).
+    refuse: (next, current) =>
+      autoReplyWordsChanged(next as AutoReplies, current as AutoReplies)
+        ? "The words of an automatic reply go to customers by themselves, so only a person can write them: Settings → Help desk → Automatic replies. Propose the change again with every message and away_message exactly as they are now, and tell the person where to write the words."
+        : null,
   },
   {
     module: HELPDESK_MODULE,

@@ -99,6 +99,21 @@ export function parseAutoReplies(body: unknown): AutoReplies {
   return parsed.success ? parsed.data : DEFAULT_AUTO_REPLIES;
 }
 
+/**
+ * Whether a new value carries different words from the one saved. The words
+ * go to customers by themselves, so the assistant may never be the one to
+ * write them: a proposal that changes any message is refused in code
+ * (`lib/assistant/registry.ts`), whatever a person asked it for. It can still
+ * propose the switches, the hours and the quiet period.
+ */
+export function autoReplyWordsChanged(next: AutoReplies, current: AutoReplies): boolean {
+  return AUTO_REPLY_CHANNELS.some(
+    (name) =>
+      next[name].message !== current[name].message ||
+      next[name].away_message !== current[name].away_message,
+  );
+}
+
 /** The messages a channel's "when" really uses, so the screen can ask for the right ones. */
 export function messagesNeeded(when: AutoReplyWhen): { message: boolean; away: boolean } {
   return { message: when !== "outside_hours", away: when !== "always" };

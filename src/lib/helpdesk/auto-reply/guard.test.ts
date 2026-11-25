@@ -91,6 +91,7 @@ describe("the automatic reply never asks a model", () => {
     expect(names.length).toBeGreaterThanOrEqual(5);
     expect(own.map(rel).sort()).toEqual([
       "lib/helpdesk/auto-reply/config.ts",
+      "lib/helpdesk/auto-reply/form.ts",
       "lib/helpdesk/auto-reply/rules.ts",
       "lib/helpdesk/auto-reply/worker.ts",
     ]);

@@ -361,6 +361,15 @@ export default async function ChannelsPage({
             never sent again by itself.
           </p>
           <p>
+            <strong>An automatic first reply.</strong> The help desk can send a short message of
+            your own by itself when someone writes, in place of the instant reply in Meta&apos;s
+            inbox (which takes the conversation away from here). Set it up under{" "}
+            <Link href={`/w/${tenant.slug}/settings/helpdesk/auto-replies`} className="underline">
+              Automatic replies
+            </Link>
+            .
+          </p>
+          <p>
             <strong>What goes out.</strong> Plain words, and JPEG or PNG pictures. Replies sent from
             the Instagram or Facebook app itself show up in the conversation too.
           </p>

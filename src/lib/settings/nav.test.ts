@@ -72,6 +72,7 @@ describe("settingsNav", () => {
     expect(kids(nav, "helpdesk")).toEqual([
       "helpdesk.desk",
       "helpdesk.channels",
+      "helpdesk.auto-replies",
       "helpdesk.manual",
       "helpdesk.help-centre",
     ]);

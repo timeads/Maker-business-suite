@@ -170,6 +170,23 @@ export async function runTool(
       if (!checked.ok) {
         return fail(`That value doesn't fit the setting's schema:\n${checked.problems.join("\n")}`);
       }
+      if (entry.refuse) {
+        // Held against what is saved now, read as the member.
+        const { data: saved, error: readError } = await ctx.supabase
+          .from("configs")
+          .select("body")
+          .eq("tenant_id", ctx.tenant.id)
+          .eq("module", entry.module)
+          .eq("key", entry.key)
+          .maybeSingle();
+        if (readError) return fail("That setting couldn't be read just now.");
+        const current = entry.schema.safeParse(saved?.body);
+        const refusal = entry.refuse(
+          checked.body,
+          current.success ? current.data : entry.defaultBody(),
+        );
+        if (refusal) return fail(refusal);
+      }
       const { data, error } = await ctx.supabase.rpc("propose_config_change", {
         p_tenant_id: ctx.tenant.id,
         p_module: entry.module,

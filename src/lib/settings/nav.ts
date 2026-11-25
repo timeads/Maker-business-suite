@@ -258,6 +258,22 @@ const TOOLS: Def[] = [
         ],
       },
       {
+        id: "helpdesk.auto-replies",
+        name: "Automatic replies",
+        path: "helpdesk/auto-replies",
+        keywords: [
+          "automatic reply",
+          "auto reply",
+          "auto-reply",
+          "instant reply",
+          "away message",
+          "out of office",
+          "opening hours",
+          "first reply",
+          "greeting",
+        ],
+      },
+      {
         id: "helpdesk.manual",
         name: "Manual",
         path: "helpdesk/manual",
