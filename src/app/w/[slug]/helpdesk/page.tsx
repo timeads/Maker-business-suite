@@ -1,15 +1,37 @@
 import type { Metadata } from "next";
+import { cookies } from "next/headers";
 import Link from "next/link";
-import { ChevronLeft, X } from "lucide-react";
+import {
+  Activity,
+  ChevronLeft,
+  ExternalLink,
+  Folder,
+  Mail,
+  MessageSquare,
+  Package,
+  Paperclip,
+  Search,
+  Send,
+  StickyNote,
+  Truck,
+  X,
+} from "lucide-react";
 import { PanelButton } from "@/components/shell/menu-panel";
 import { PanelExtras } from "@/components/shell/nav-context";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { localDay } from "@/lib/bookings/slots";
 import { formatMoney } from "@/lib/dashboard/format";
+import {
+  ACTIVITY_GROUPS,
+  THREAD_EVENTS,
+  buildActivity,
+  describeEvent,
+  isActivityGroup,
+  type Names,
+  type TicketEvent,
+} from "@/lib/helpdesk/activity";
 import { inboundDomain, supportAddress } from "@/lib/helpdesk/addresses";
-import { loadStockForBought, type BoughtItemStock, type BoughtLine } from "@/lib/stock/restock";
 import {
   HELPDESK_MODULE,
   TEMPLATES_KEY,
@@ -17,23 +39,64 @@ import {
   parseTemplates,
   type Priority,
 } from "@/lib/helpdesk/config";
+import { orderSummaryText } from "@/lib/helpdesk/customer";
 import {
+  SORTS,
+  isSort,
+  isUnread,
+  listTotal,
+  openedAgo,
+  passesFilters,
+  sortRows,
+  timeAgo,
+} from "@/lib/helpdesk/list";
+import { fileSize } from "@/lib/helpdesk/outbound";
+import { parseRichDoc, type RichDoc } from "@/lib/helpdesk/rich";
+import { SAVED_VIEWS_KEY, matchesConditions, parseSavedViews } from "@/lib/helpdesk/saved-views";
+import { foldThread, splitQuote } from "@/lib/helpdesk/thread";
+import {
+  PRIORITY_LABELS,
+  STATUS_LABELS,
   VIEWS,
   byUrgency,
+  inFolder,
   inView,
   isSnoozed,
-  isView,
+  parseView,
   snoozeChoices,
-  type ViewKey,
+  viewParam,
 } from "@/lib/helpdesk/views";
 import { initials, nameOf, splitBody, type Person } from "@/lib/messages/format";
-import { HELPDESK_TAGS_GROUP, helpdeskTagItems } from "@/lib/nav/model";
+import {
+  HELPDESK_FOLDERS_GROUP,
+  HELPDESK_TAGS_GROUP,
+  HELPDESK_VIEWS_GROUP,
+  helpdeskFolderItems,
+  helpdeskSavedViewItems,
+  helpdeskTagItems,
+} from "@/lib/nav/model";
+import { loadStockForBought, type BoughtItemStock, type BoughtLine } from "@/lib/stock/restock";
 import { createClient } from "@/lib/supabase/server";
+import { canManage } from "@/lib/tenants";
 import { cn } from "@/lib/utils";
-import { setTicketStatus } from "./actions";
+import { Composer } from "./composer";
+import { loadCustomerSide, type CustomerSide } from "./data";
+import {
+  AddToReply,
+  CopyButton,
+  DeskKeys,
+  FieldSelect,
+  ListTools,
+  NewEmailTo,
+  RailFrame,
+  RailShell,
+  RailToggle,
+  SubjectEdit,
+  SummarizeButton,
+  TagEditor,
+  TicketControls,
+} from "./desk-tools";
 import { helpdeskAccess } from "./gate";
-import { TagsForm } from "./tags-form";
-import { Composer, MergeForm, Shortcuts, TicketMenus } from "./ticket-tools";
 
 export const metadata: Metadata = { title: "Help desk" };
 
@@ -47,10 +110,33 @@ type Row = {
   assignee_id: string | null;
   snoozed_until: string | null;
   merged_into: string | null;
+  folder_id: string | null;
   last_message_at: string;
+  created_at: string;
   contact_id: string;
   contacts: Contact | Contact[] | null;
   ticket_tags: { tags: { name: string } | { name: string }[] | null }[] | null;
+};
+type Facts = {
+  ticket_id: string;
+  message_count: number;
+  preview: string | null;
+  last_direction: string | null;
+  last_inbound_at: string | null;
+};
+type Message = {
+  id: string;
+  direction: string;
+  kind: string | null;
+  from_email: string;
+  from_name: string | null;
+  body: string;
+  created_at: string;
+  author_id: string | null;
+  to_emails: string[] | null;
+  cc_emails: string[] | null;
+  format: unknown;
+  attachments: { name: string; size: number }[] | null;
 };
 
 const one = <T,>(value: T | T[] | null): T | null =>
@@ -61,14 +147,65 @@ const tagsOf = (row: Row) =>
     .filter((name): name is string => Boolean(name));
 
 const FIELDS =
-  "id, number, subject, status, priority, assignee_id, snoozed_until, merged_into, last_message_at, contact_id, contacts(email, name), ticket_tags(tags(name))";
+  "id, number, subject, status, priority, assignee_id, snoozed_until, merged_into, folder_id, last_message_at, created_at, contact_id, contacts(email, name), ticket_tags(tags(name))";
+const UUID = /^[0-9a-f-]{36}$/;
+const heading = "text-[13px] font-bold tracking-[-0.005em]";
+const card = "border-border border-b px-4 py-4";
+
+/** Our own reply, drawn from its small document as React nodes. Never as HTML. */
+function RichView({ doc }: { doc: RichDoc }) {
+  const run = (
+    r: RichDoc[number] extends infer B ? (B extends { runs: (infer R)[] } ? R : never) : never,
+    i: number,
+  ) => {
+    let node: React.ReactNode = r.text;
+    if (r.b) node = <strong>{node}</strong>;
+    if (r.i) node = <em>{node}</em>;
+    if (r.u) node = <u>{node}</u>;
+    if (r.s) node = <s>{node}</s>;
+    if (r.href) {
+      node = (
+        <a
+          href={r.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-ochre-text underline"
+        >
+          {node}
+        </a>
+      );
+    }
+    return <span key={i}>{node}</span>;
+  };
+  return (
+    <div className="font-read rich flex flex-col gap-2 text-sm break-words whitespace-pre-wrap">
+      {doc.map((block, i) =>
+        block.t === "p" ? (
+          <p key={i}>{block.runs.map(run)}</p>
+        ) : block.t === "ul" ? (
+          <ul key={i} className="list-disc pl-5">
+            {block.items.map((item, at) => (
+              <li key={at}>{item.map(run)}</li>
+            ))}
+          </ul>
+        ) : (
+          <ol key={i} className="list-decimal pl-5">
+            {block.items.map((item, at) => (
+              <li key={at}>{item.map(run)}</li>
+            ))}
+          </ol>
+        ),
+      )}
+    </div>
+  );
+}
 
 export default async function HelpdeskPage({
   params,
   searchParams,
 }: {
   params: Promise<{ slug: string }>;
-  searchParams: Promise<{ view?: string; tag?: string; q?: string; t?: string }>;
+  searchParams: Promise<Record<string, string | undefined>>;
 }) {
   const { slug } = await params;
   const query = await searchParams;
@@ -80,79 +217,206 @@ export default async function HelpdeskPage({
       </main>
     );
   }
-  const { tenant, user, entitlements } = access;
+  const { tenant, user, entitlements, role } = access;
+  const canWrite = entitlements.canWrite;
   const base = `/w/${tenant.slug}/helpdesk`;
-  const view: ViewKey = isView(query.view) ? query.view : "open";
+  const choice = parseView(query.view);
+  const view = viewParam(choice);
   const tag = (query.tag ?? "").trim().toLowerCase().slice(0, 30);
   const q = (query.q ?? "").trim().toLowerCase().slice(0, 80);
   const selected = /^\d{1,9}$/.test(query.t ?? "") ? Number(query.t) : null;
+  const sort = isSort(query.sort) ? query.sort : null;
+  const assignee =
+    query.assignee === "me" || query.assignee === "none" || UUID.test(query.assignee ?? "")
+      ? query.assignee
+      : undefined;
+  const priority = (["low", "normal", "high", "urgent"] as const).find((p) => p === query.priority);
+  const unreadOnly = query.unread === "1";
+  const side = query.side === "activity" || query.side === "details" ? query.side : null;
+  const act = isActivityGroup(query.act) ? query.act : "all";
   const now = new Date();
+  const nowMs = now.getTime();
 
   const supabase = await createClient();
-  const [{ data: live }, { data: closed }, { count: closedCount }, { data: team }] =
-    await Promise.all([
-      supabase
-        .from("tickets")
-        .select(FIELDS)
-        .eq("tenant_id", tenant.id)
-        .neq("status", "closed")
-        .order("last_message_at", { ascending: false })
-        .limit(500),
-      view === "closed" || view === "all" || q
-        ? supabase
-            .from("tickets")
-            .select(FIELDS)
-            .eq("tenant_id", tenant.id)
-            .eq("status", "closed")
-            .order("last_message_at", { ascending: false })
-            .limit(150)
-        : Promise.resolve({ data: [] }),
-      supabase
-        .from("tickets")
-        .select("id", { count: "exact", head: true })
-        .eq("tenant_id", tenant.id)
-        .eq("status", "closed")
-        .is("merged_into", null),
-      supabase.rpc("chat_people", { p_tenant_id: tenant.id }),
-    ]);
+  const wantsClosed =
+    (choice.kind === "built" && ["closed", "all", "mentions"].includes(choice.key)) ||
+    choice.kind === "saved" ||
+    Boolean(q);
+  const [
+    { data: live },
+    { data: closed },
+    { count: closedCount },
+    { data: team },
+    { data: folderRows },
+    { data: viewsConfig },
+    { data: readRows },
+    { data: mentionRows },
+    { data: found },
+    cookieJar,
+  ] = await Promise.all([
+    supabase
+      .from("tickets")
+      .select(FIELDS)
+      .eq("tenant_id", tenant.id)
+      .neq("status", "closed")
+      .order("last_message_at", { ascending: false })
+      .limit(500),
+    wantsClosed
+      ? supabase
+          .from("tickets")
+          .select(FIELDS)
+          .eq("tenant_id", tenant.id)
+          .eq("status", "closed")
+          .order("last_message_at", { ascending: false })
+          .limit(150)
+      : Promise.resolve({ data: [] }),
+    supabase
+      .from("tickets")
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", tenant.id)
+      .eq("status", "closed")
+      .is("merged_into", null),
+    supabase.rpc("chat_people", { p_tenant_id: tenant.id }),
+    supabase.from("ticket_folders").select("id, name").eq("tenant_id", tenant.id).order("name"),
+    supabase
+      .from("configs")
+      .select("body")
+      .eq("tenant_id", tenant.id)
+      .eq("module", HELPDESK_MODULE)
+      .eq("key", SAVED_VIEWS_KEY)
+      .maybeSingle(),
+    supabase
+      .from("ticket_reads")
+      .select("ticket_id, read_at")
+      .eq("tenant_id", tenant.id)
+      .limit(5000),
+    supabase
+      .from("ticket_notes")
+      .select("ticket_id")
+      .eq("tenant_id", tenant.id)
+      .contains("mentions", [user.id])
+      .limit(500),
+    // A search also reads what was said, as this member.
+    q.length >= 3
+      ? supabase.rpc("search_ticket_messages", { p_tenant_id: tenant.id, p_q: q })
+      : Promise.resolve({ data: [] }),
+    cookies(),
+  ]);
   const people = (team ?? []) as Person[];
   const person = (id: string | null) => people.find((p) => p.user_id === id);
+  const folders = (folderRows ?? []) as { id: string; name: string }[];
+  const savedViews = parseSavedViews(viewsConfig?.body).views;
+  const savedView = choice.kind === "saved" ? savedViews.find((v) => v.id === choice.id) : null;
+  const folder = choice.kind === "folder" ? folders.find((f) => f.id === choice.id) : null;
+  const readAt = new Map((readRows ?? []).map((r) => [r.ticket_id as string, r.read_at as string]));
+  const mentioned = new Set((mentionRows ?? []).map((r) => r.ticket_id as string));
+  const saidIn = new Set(((found ?? []) as unknown as (string | { id?: string })[]).map(String));
   const all = [...((live ?? []) as unknown as Row[]), ...((closed ?? []) as unknown as Row[])];
-  const counts = Object.fromEntries(
-    VIEWS.map((v) => [
-      v.key,
-      v.key === "closed"
-        ? (closedCount ?? 0)
-        : v.key === "all"
-          ? null
-          : all.filter((row) => inView(row, v.key, user.id, now.getTime())).length,
-    ]),
-  ) as Record<ViewKey, number | null>;
-  const matches = (row: Row) => {
-    if (tag && !tagsOf(row).includes(tag)) return false;
-    if (!q) return true;
+  const facts = (row: Row) => ({ ...row, mentioned: mentioned.has(row.id) });
+  const customerOf = (row: Row) => {
     const contact = one(row.contacts);
-    return [
-      row.subject,
-      contact?.name ?? "",
-      contact?.email ?? "",
-      `#${row.number}`,
-      ...tagsOf(row),
-    ]
+    return `${contact?.name ?? ""} ${contact?.email ?? ""}`;
+  };
+
+  const inChoice = (row: Row): boolean => {
+    if (choice.kind === "folder") return inFolder(row, choice.id);
+    if (choice.kind === "saved") {
+      if (!savedView) return false;
+      return matchesConditions(
+        { ...row, tags: tagsOf(row), customer: customerOf(row), unread: false },
+        { ...savedView.conditions, unread: undefined },
+        user.id,
+        nowMs,
+      );
+    }
+    return inView(facts(row), choice.key, user.id, nowMs);
+  };
+  const matchesSearch = (row: Row) => {
+    if (!q) return true;
+    if (saidIn.has(row.id)) return true;
+    return [row.subject, customerOf(row), `#${row.number}`, ...tagsOf(row)]
       .join(" ")
       .toLowerCase()
       .includes(q);
   };
-  const list = all
-    .filter((row) => (q ? !row.merged_into : inView(row, view, user.id, now.getTime())))
-    .filter(matches)
-    .sort(view === "closed" || view === "all" || q ? () => 0 : byUrgency)
-    .slice(0, 200);
+  // A search looks everywhere that isn't joined away; otherwise the view decides.
+  const candidates = all
+    .filter((row) => (q ? !row.merged_into : inChoice(row)))
+    .filter(matchesSearch)
+    .slice(0, 300);
+  const { data: factRows } =
+    candidates.length > 0
+      ? await supabase.rpc("ticket_list_facts", { p_ticket_ids: candidates.map((row) => row.id) })
+      : { data: [] };
+  const factOf = new Map(((factRows ?? []) as Facts[]).map((f) => [f.ticket_id, f]));
+  const listRows = candidates.map((row) => {
+    const fact = factOf.get(row.id);
+    return {
+      ...row,
+      tags: tagsOf(row),
+      last_inbound_at: fact?.last_inbound_at ?? null,
+      preview: fact?.preview ?? "",
+      messages: fact?.message_count ?? 0,
+      unread: isUnread(fact?.last_inbound_at ?? null, readAt.get(row.id) ?? null, row.status),
+    };
+  });
+  const wantUnread = unreadOnly || Boolean(savedView?.conditions.unread);
+  const filtered = listRows.filter((row) =>
+    passesFilters(row, { tag, assignee, priority, unread: wantUnread }, user.id),
+  );
+  const mixed =
+    Boolean(q) ||
+    choice.kind === "saved" ||
+    (choice.kind === "built" && ["all", "mentions", "mine"].includes(choice.key));
+  const ordered = sort
+    ? sortRows(filtered, sort)
+    : mixed || (choice.kind === "built" && choice.key === "closed")
+      ? filtered
+      : [...filtered].sort(byUrgency);
+  const list = ordered.slice(0, 200);
+  const more = ordered.length > list.length || candidates.length === 300;
   const allTags = [...new Set(all.flatMap(tagsOf))].sort().slice(0, 30);
 
+  const counts: Record<string, number> = {};
+  for (const v of VIEWS) {
+    if (v.key === "all") continue;
+    counts[`helpdesk.${v.key}`] =
+      v.key === "closed"
+        ? (closedCount ?? 0)
+        : all.filter((row) => inView(facts(row), v.key, user.id, nowMs)).length;
+  }
+  for (const f of folders)
+    counts[`helpdesk.f.${f.id}`] = all.filter((row) => inFolder(row, f.id)).length;
+  for (const v of savedViews) {
+    // "Unread only" and closed conversations can't be counted from what the list has read.
+    if (v.conditions.unread || ["closed", "any"].includes(v.conditions.status)) continue;
+    counts[`helpdesk.v.${v.id}`] = all.filter((row) =>
+      matchesConditions(
+        { ...row, tags: tagsOf(row), customer: customerOf(row), unread: false },
+        v.conditions,
+        user.id,
+        nowMs,
+      ),
+    ).length;
+  }
+
+  const kept = {
+    view,
+    tag,
+    q,
+    sort: sort ?? "",
+    assignee: assignee ?? "",
+    priority: priority ?? "",
+    unread: unreadOnly ? "1" : "",
+  };
   const href = (changes: Record<string, string | number | null>) => {
     const next = new URLSearchParams();
-    const merged = { view, tag: tag || null, q: q || null, t: selected, ...changes };
+    const merged: Record<string, string | number | null> = {
+      ...kept,
+      t: selected,
+      side,
+      ...changes,
+    };
     for (const [key, value] of Object.entries(merged)) {
       if (value !== null && value !== "" && !(key === "view" && value === "open")) {
         next.set(key, String(value));
@@ -161,37 +425,48 @@ export default async function HelpdeskPage({
     const text = next.toString();
     return text ? `${base}?${text}` : base;
   };
-  const shortTime = (instant: string) => {
-    const date = new Date(instant);
-    const sameDay = localDay(date, tenant.timezone) === localDay(now, tenant.timezone);
-    return new Intl.DateTimeFormat("en-US", {
-      timeZone: tenant.timezone,
-      ...(sameDay ? { hour: "numeric", minute: "2-digit" } : { month: "short", day: "numeric" }),
-    }).format(date);
-  };
   const when = new Intl.DateTimeFormat("en-US", {
-    dateStyle: "medium",
-    timeStyle: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
     timeZone: tenant.timezone,
   });
+  const day = new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: tenant.timezone });
   const domain = inboundDomain();
+  const title = q
+    ? "Search results"
+    : choice.kind === "folder"
+      ? (folder?.name ?? "Folder")
+      : choice.kind === "saved"
+        ? (savedView?.name ?? "View")
+        : (VIEWS.find((v) => v.key === choice.key)?.label ?? "Help desk");
 
   // ---- The open conversation -------------------------------------------------
   const { data: ticketRow } = selected
     ? await supabase
         .from("tickets")
-        .select(FIELDS)
+        .select(`${FIELDS}, ai_summary, ai_mood, ai_kind, ai_updated_at`)
         .eq("tenant_id", tenant.id)
         .eq("number", selected)
         .maybeSingle()
     : { data: null };
-  const ticket = ticketRow as unknown as Row | null;
+  const ticket = ticketRow as unknown as
+    | (Row & {
+        ai_summary: string | null;
+        ai_mood: string | null;
+        ai_kind: string | null;
+        ai_updated_at: string | null;
+      })
+    | null;
   const contact = ticket ? one(ticket.contacts) : null;
-  const [messages, notes, orders, earlier, templateConfig, mergedTarget] = ticket
+  const [messages, notes, events, earlier, templateConfig, mergedTarget, customer] = ticket
     ? await Promise.all([
         supabase
           .from("messages")
-          .select("id, direction, from_email, from_name, body, created_at, author_id")
+          .select(
+            "id, direction, kind, from_email, from_name, body, created_at, author_id, to_emails, cc_emails, format, attachments",
+          )
           .eq("tenant_id", tenant.id)
           .eq("ticket_id", ticket.id)
           .order("created_at"),
@@ -201,17 +476,13 @@ export default async function HelpdeskPage({
           .eq("tenant_id", tenant.id)
           .eq("ticket_id", ticket.id)
           .order("created_at"),
-        contact
-          ? supabase
-              .from("orders")
-              .select(
-                "id, name, processed_at, total, currency, financial_status, fulfillment_status, order_lines(title, quantity, sku, variant_title, product_external_id)",
-              )
-              .eq("tenant_id", tenant.id)
-              .eq("email", contact.email)
-              .order("processed_at", { ascending: false })
-              .limit(5)
-          : Promise.resolve({ data: [] }),
+        supabase
+          .from("ticket_events")
+          .select("id, kind, detail, actor_id, created_at")
+          .eq("tenant_id", tenant.id)
+          .eq("ticket_id", ticket.id)
+          .order("created_at")
+          .limit(300),
         supabase
           .from("tickets")
           .select("id, number, subject, status, last_message_at")
@@ -231,21 +502,29 @@ export default async function HelpdeskPage({
         ticket.merged_into
           ? supabase.from("tickets").select("number").eq("id", ticket.merged_into).maybeSingle()
           : Promise.resolve({ data: null }),
+        // The shop's side of the story. Trouble reading it never costs the conversation.
+        contact
+          ? loadCustomerSide(supabase, tenant.id, contact.email).catch(
+              (): CustomerSide | null => null,
+            )
+          : Promise.resolve(null),
       ])
-    : [null, null, null, null, null, null];
+    : [null, null, null, null, null, null, null];
 
-  const latestOrder = (orders?.data ?? [])[0];
+  const thread = (messages?.data ?? []) as unknown as Message[];
+  const eventRows = (events?.data ?? []) as TicketEvent[];
+  const latestOrder = customer?.recent[0];
   // "When is this back?": for what they bought, what is on the shelf and what
   // is on its way. Read straight from Stock as this member, only where the
   // workspace has Stock; trouble reading it never costs the conversation.
   let boughtStock: BoughtItemStock[] = [];
-  if (ticket && entitlements.can("module.stock") && (orders?.data ?? []).length > 0) {
+  if (ticket && customer && entitlements.can("module.stock") && customer.recent.length > 0) {
     try {
       boughtStock = (
         await loadStockForBought(
           supabase,
           tenant,
-          (orders?.data ?? []).flatMap((order) => (order.order_lines as BoughtLine[] | null) ?? []),
+          customer.recent.flatMap((order) => (order.order_lines as BoughtLine[] | null) ?? []),
           localDay(new Date(), tenant.timezone),
         )
       ).filter((item) => item.onHand <= 0 || item.incoming !== null);
@@ -253,10 +532,11 @@ export default async function HelpdeskPage({
       boughtStock = [];
     }
   }
+  const firstName = contact?.name?.trim().split(/\s+/)[0] ?? null;
   const templates = parseTemplates(templateConfig?.data?.body).templates.map((template) => ({
     ...template,
     body: fillTemplate(template.body, {
-      first_name: contact?.name?.trim().split(/\s+/)[0] ?? "there",
+      first_name: firstName ?? "there",
       name: contact?.name ?? "",
       email: contact?.email ?? "",
       workspace: tenant.name,
@@ -279,23 +559,16 @@ export default async function HelpdeskPage({
         : {}),
     }),
   }));
+  const names: Names = {
+    person: (id) => (id && person(id) ? nameOf(person(id)) : null),
+    when: (instant) => when.format(new Date(instant)),
+  };
   type Entry =
-    | { kind: "message"; at: string; id: string; ours: boolean; who: string; body: string }
-    | { kind: "note"; at: string; id: string; who: string; body: string };
-  const thread: Entry[] = [
-    ...(messages?.data ?? []).map((m): Entry => ({
-      kind: "message",
-      at: m.created_at as string,
-      id: m.id as string,
-      ours: m.direction === "outbound",
-      who:
-        m.direction === "outbound"
-          ? m.author_id
-            ? nameOf(person(m.author_id as string))
-            : tenant.name
-          : ((m.from_name as string | null) ?? (m.from_email as string)),
-      body: m.body as string,
-    })),
+    | { kind: "message"; at: string; id: string; m: Message }
+    | { kind: "note"; at: string; id: string; who: string; body: string }
+    | { kind: "event"; at: string; id: string; text: string };
+  const entries: Entry[] = [
+    ...thread.map((m): Entry => ({ kind: "message", at: m.created_at, id: m.id, m })),
     ...(notes?.data ?? []).map((n): Entry => ({
       kind: "note",
       at: n.created_at as string,
@@ -303,56 +576,228 @@ export default async function HelpdeskPage({
       who: nameOf(person(n.author_id as string | null)),
       body: n.body as string,
     })),
+    ...eventRows
+      .filter((e) => THREAD_EVENTS.has(e.kind))
+      .map((e): Entry => ({
+        kind: "event",
+        at: e.created_at,
+        id: e.id,
+        text: describeEvent(e, names),
+      })),
   ].sort((a, b) => a.at.localeCompare(b.at));
+  const folded = foldThread(entries);
 
   const index = ticket ? list.findIndex((row) => row.id === ticket.id) : -1;
   const neighbour = (offset: number) => {
     const row = index >= 0 ? list[index + offset] : undefined;
-    return row ? href({ t: row.number }) : null;
+    return row ? href({ t: row.number, side: null }) : null;
   };
+  const backHref = href({ t: null, side: null });
+  const afterHref = neighbour(1) ?? neighbour(-1) ?? backHref;
   const snoozedLabel =
-    ticket && isSnoozed(ticket, now.getTime()) ? shortTime(ticket.snoozed_until!) : null;
+    ticket && isSnoozed(ticket, nowMs) ? when.format(new Date(ticket.snoozed_until!)) : null;
+  const choices = snoozeChoices(now, tenant.timezone);
   const canSend = Boolean(
     domain && process.env.POSTMARK_SERVER_TOKEN && process.env.SUPABASE_SECRET_KEY,
   );
   const canDraft = Boolean(process.env.ANTHROPIC_API_KEY && process.env.SUPABASE_SECRET_KEY);
-  const day = new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: tenant.timezone });
+  const editable = Boolean(ticket && canWrite && !ticket.merged_into);
+  const ticketUnread =
+    ticket &&
+    isUnread(
+      thread.filter((m) => m.direction === "inbound").at(-1)?.created_at ?? null,
+      readAt.get(ticket.id) ?? null,
+      ticket.status,
+    );
+  const railClosed = cookieJar.get("mbs-desk-rail")?.value === "closed";
+  const money = (value: number, currency?: string | null) =>
+    formatMoney(value, currency ?? tenant.currency).replace(/\.00$/, "");
+  const peopleOptions = people.map((p) => ({ value: p.user_id, label: nameOf(p) }));
+
+  const avatar = (name: string, ours: boolean, size = "size-8 text-[11px]") => (
+    <span
+      aria-hidden
+      className={cn(
+        "flex shrink-0 items-center justify-center rounded-full font-bold",
+        size,
+        ours ? "bg-teal text-on-teal" : "bg-ochre-soft text-ochre-text",
+      )}
+    >
+      {initials(name)}
+    </span>
+  );
+
+  const drawEntry = (entry: Entry) => {
+    if (entry.kind === "event") {
+      return (
+        <li key={entry.id} className="text-muted-foreground text-center text-xs">
+          {entry.text} · {timeAgo(entry.at, nowMs)}
+        </li>
+      );
+    }
+    if (entry.kind === "note") {
+      return (
+        <li
+          key={entry.id}
+          className="bg-note border-note-border mx-auto w-full max-w-[64ch] rounded-lg border px-4 py-3"
+        >
+          <p className="text-muted-foreground mb-1 flex items-center gap-1.5 text-xs">
+            <StickyNote aria-hidden className="size-3.5" />
+            Internal note · {entry.who} · {when.format(new Date(entry.at))}
+          </p>
+          <p className="font-read text-sm break-words whitespace-pre-wrap">
+            {splitBody(entry.body, people, user.id).map((piece, i) =>
+              piece.kind === "mention" ? (
+                <span key={i} className="text-ochre-text font-semibold">
+                  {piece.text}
+                </span>
+              ) : (
+                <span key={i}>{piece.text}</span>
+              ),
+            )}
+          </p>
+        </li>
+      );
+    }
+    const m = entry.m;
+    const ours = m.direction === "outbound";
+    const who = ours
+      ? m.author_id
+        ? nameOf(person(m.author_id))
+        : tenant.name
+      : (m.from_name ?? m.from_email);
+    const doc = ours ? parseRichDoc(m.format) : null;
+    const text = ours ? { own: m.body, quoted: null } : splitQuote(m.body);
+    const to =
+      (m.to_emails ?? []).length > 0 ? (m.to_emails ?? []) : contact ? [contact.email] : [];
+    return (
+      <li
+        key={entry.id}
+        className={cn(
+          "w-full max-w-[76ch] rounded-lg border px-4 py-3.5 shadow-sm",
+          ours ? "bg-out border-out-border ml-auto" : "bg-card border-border mr-auto",
+        )}
+      >
+        <div className="mb-2.5 flex items-start gap-2.5">
+          {avatar(who, ours)}
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm leading-tight font-bold">{who}</p>
+            <p className="text-muted-foreground truncate text-xs">
+              {ours
+                ? `${m.kind === "forward" ? "forwarded to" : "to"} ${to.join(", ")}${(m.cc_emails ?? []).length > 0 ? ` · cc ${(m.cc_emails ?? []).join(", ")}` : ""}`
+                : m.from_email}
+            </p>
+          </div>
+          <time className="text-muted-foreground shrink-0 text-xs" dateTime={m.created_at}>
+            {when.format(new Date(m.created_at))}
+          </time>
+        </div>
+        {/* Plain text only: customer email is never rendered as HTML. */}
+        {doc ? (
+          <RichView doc={doc} />
+        ) : (
+          <p className="font-read text-sm break-words whitespace-pre-wrap">{text.own}</p>
+        )}
+        {text.quoted && (
+          <details className="mt-2">
+            <summary className="text-muted-foreground hover:text-foreground w-fit cursor-pointer text-xs">
+              Show the earlier email they quoted
+            </summary>
+            <p className="font-read text-muted-foreground border-border mt-1.5 border-l-2 pl-3 text-xs break-words whitespace-pre-wrap">
+              {text.quoted}
+            </p>
+          </details>
+        )}
+        {(m.attachments ?? []).length > 0 && (
+          <ul className="mt-3 flex flex-wrap gap-1.5">
+            {(m.attachments ?? []).map((file, i) => (
+              <li
+                key={i}
+                className="border-border bg-card flex items-center gap-1.5 rounded-sm border px-2 py-1 text-xs"
+              >
+                <Paperclip aria-hidden className="text-muted-foreground size-3" />
+                <span className="font-semibold">{file.name}</span>
+                <span className="text-muted-foreground">{fileSize(Number(file.size))}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </li>
+    );
+  };
 
   return (
-    <main className="flex h-dvh min-w-0 flex-1 overflow-hidden pb-[57px] md:pb-0">
-      {/* ---- Folders and the list ---- */}
+    <main className="relative flex h-dvh min-w-0 flex-1 overflow-hidden pb-[57px] md:pb-0">
+      <DeskKeys
+        slug={tenant.slug}
+        previous={neighbour(-1)}
+        next={neighbour(1)}
+        back={backHref}
+        after={afterHref}
+        ticket={ticket && editable ? { id: ticket.id, closed: ticket.status === "closed" } : null}
+        me={user.id}
+        unread={ticket && ticketUnread ? ticket.id : null}
+      />
+      {/* The menu panel's counts, folders, views and tags: what the inbox has already read. */}
+      <PanelExtras
+        tool="helpdesk"
+        counts={counts}
+        items={{
+          [HELPDESK_FOLDERS_GROUP]: helpdeskFolderItems(folders),
+          [HELPDESK_VIEWS_GROUP]: helpdeskSavedViewItems(savedViews),
+          [HELPDESK_TAGS_GROUP]: helpdeskTagItems(allTags),
+        }}
+      />
+
+      {/* ---- The list ---- */}
       <section
         aria-label="Conversations"
         className={cn(
-          "border-border bg-panel flex min-h-0 w-full shrink-0 flex-col border-r md:w-[340px]",
+          "border-border bg-panel flex min-h-0 w-full shrink-0 flex-col border-r md:w-[300px] 2xl:w-[330px]",
           ticket && "max-md:hidden",
         )}
       >
-        {/* The folders and tags live in the help desk's menu panel; the inbox tells it what it counted. */}
-        <PanelExtras
-          tool="helpdesk"
-          counts={Object.fromEntries(
-            VIEWS.filter((v) => counts[v.key] !== null).map((v) => [
-              `helpdesk.${v.key}`,
-              counts[v.key] ?? 0,
-            ]),
-          )}
-          items={{ [HELPDESK_TAGS_GROUP]: helpdeskTagItems(allTags) }}
-        />
-        <header className="flex items-center gap-2.5 px-4 pt-4 pb-2">
+        <header className="flex flex-wrap items-center gap-x-2 px-4 pt-3.5 pb-2">
           <PanelButton />
-          <h1 className="min-w-0 truncate text-xl leading-tight font-bold tracking-[-0.015em]">
-            {q ? "Search results" : (VIEWS.find((v) => v.key === view)?.label ?? "Help desk")}
+          <h1 className="min-w-0 truncate text-lg leading-tight font-bold tracking-[-0.015em]">
+            {title}
           </h1>
+          <span className="text-muted-foreground text-xs font-semibold tabular-nums">
+            {listTotal(list.length, more)}
+          </span>
+          <ListTools
+            slug={tenant.slug}
+            base={base}
+            params={Object.fromEntries(
+              Object.entries({ ...kept, view: view === "open" ? "" : view }).filter(([, v]) => v),
+            )}
+            tags={allTags}
+            people={peopleOptions.filter((p) => p.value !== user.id)}
+            sorts={SORTS.filter((s) => s.key !== "newest").map((s) => ({
+              value: s.key,
+              label: s.label,
+            }))}
+            canWrite={canWrite}
+            canSaveView={canWrite && canManage(role)}
+            canSend={canSend}
+            manageHref={`/w/${tenant.slug}/settings/helpdesk#folders`}
+          />
         </header>
-        <form className="px-4 pb-2" role="search" action={base}>
+        <form className="relative px-4 pb-2.5" role="search" action={base}>
           {view !== "open" && <input type="hidden" name="view" value={view} />}
-          <Input
+          <Search
+            aria-hidden
+            className="text-muted-foreground pointer-events-none absolute top-[9px] left-[26px] size-4"
+          />
+          <input
+            id="desk-search"
             name="q"
             type="search"
             defaultValue={q}
-            placeholder="Search name, subject, #number"
-            aria-label="Search conversations"
+            placeholder="Search tickets and messages"
+            aria-label="Search tickets and messages"
+            title="Names, emails, subjects, what was said, or #number"
+            className="border-input bg-card focus-visible:border-ochre focus-visible:ring-ochre/25 h-[34px] w-full rounded-sm border pr-2 pl-8 text-sm outline-none focus-visible:ring-2"
           />
         </form>
         {tag && (
@@ -367,9 +812,9 @@ export default async function HelpdeskPage({
             </Link>
           </p>
         )}
-        <ul className="border-border bg-card min-h-0 flex-1 overflow-y-auto border-t">
+        <ul className="border-border min-h-0 flex-1 overflow-y-auto border-t px-1.5 py-1.5">
           {list.length === 0 && (
-            <li className="text-muted-foreground p-6 text-sm">
+            <li className="text-muted-foreground p-5 text-sm">
               {all.length === 0 && (closedCount ?? 0) === 0 ? (
                 domain ? (
                   <>
@@ -383,9 +828,11 @@ export default async function HelpdeskPage({
                   "Incoming email isn't switched on for this environment yet."
                 )
               ) : q ? (
-                "Nothing matches that search."
-              ) : view === "open" ? (
-                "All caught up. Nothing needs a reply."
+                `Nothing matches “${q}” in names, emails, subjects, what was said or ticket numbers.`
+              ) : tag || assignee || priority || unreadOnly ? (
+                "No conversations match these filters."
+              ) : choice.kind === "built" && ["open", "mine", "unassigned"].includes(choice.key) ? (
+                "Inbox zero. Nothing needs a reply."
               ) : (
                 "Nothing here."
               )}
@@ -395,42 +842,104 @@ export default async function HelpdeskPage({
             const who = one(row.contacts);
             const active = ticket?.id === row.id;
             const owner = person(row.assignee_id);
+            const rowFolder = row.folder_id ? folders.find((f) => f.id === row.folder_id) : null;
+            const showStatus = mixed || isSnoozed(row, nowMs);
             return (
-              <li key={row.id} className="border-border border-b">
+              <li key={row.id}>
                 <Link
-                  href={href({ t: row.number })}
+                  href={href({ t: row.number, side: null })}
                   aria-current={active ? "true" : undefined}
                   className={cn(
-                    "flex flex-col gap-0.5 border-l-[3px] px-4 py-2.5 transition-colors duration-150",
-                    active ? "border-ochre bg-ochre-soft/50" : "hover:bg-hover border-transparent",
+                    "relative flex flex-col gap-0.5 rounded-md border py-2.5 pr-3 pl-6 transition-colors duration-150",
+                    active
+                      ? "bg-card border-border shadow-sm"
+                      : "hover:bg-hover border-transparent",
                   )}
                 >
+                  {row.unread && (
+                    <span className="bg-ochre absolute top-[15px] left-2 size-2 rounded-full">
+                      <span className="sr-only">Unread</span>
+                    </span>
+                  )}
                   <span className="flex items-baseline justify-between gap-2">
-                    <span className="font-read truncate text-sm font-semibold">
+                    <span
+                      className={cn(
+                        "font-read truncate text-sm",
+                        row.unread ? "font-bold" : "font-semibold",
+                      )}
+                    >
                       {who?.name ?? who?.email ?? "Unknown sender"}
                     </span>
-                    <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
-                      {shortTime(row.last_message_at)}
-                    </span>
+                    <time
+                      dateTime={row.last_message_at}
+                      title={when.format(new Date(row.last_message_at))}
+                      className={cn(
+                        "shrink-0 text-xs tabular-nums",
+                        row.unread ? "text-ochre-text font-semibold" : "text-muted-foreground",
+                      )}
+                    >
+                      {timeAgo(row.last_message_at, nowMs)}
+                    </time>
                   </span>
-                  <span className="text-text-2 truncate text-sm">{row.subject}</span>
-                  <span className="flex flex-wrap items-center gap-1 pt-0.5">
+                  <span className="text-foreground flex items-center gap-1.5 truncate text-[13px]">
                     {row.priority === "urgent" && <Badge tone="bad">Urgent</Badge>}
                     {row.priority === "high" && <Badge tone="waiting">High</Badge>}
-                    {isSnoozed(row, now.getTime()) && <Badge>Snoozed</Badge>}
-                    {tagsOf(row)
-                      .slice(0, 3)
-                      .map((name) => (
-                        <Badge key={name} tone="open">
-                          {name}
+                    <span className="truncate">{row.subject}</span>
+                  </span>
+                  {row.preview && (
+                    <span className="font-read text-muted-foreground line-clamp-2 text-xs leading-snug">
+                      {row.preview}
+                    </span>
+                  )}
+                  <span className="flex flex-wrap items-center gap-1 pt-1">
+                    {rowFolder && choice.kind !== "folder" && (
+                      <span className="border-border text-text-2 flex items-center gap-1 rounded-sm border px-1.5 py-0.5 text-[11px] font-semibold">
+                        <Folder aria-hidden className="size-3" />
+                        {rowFolder.name}
+                      </span>
+                    )}
+                    {isSnoozed(row, nowMs) ? (
+                      <Badge>Snoozed · {when.format(new Date(row.snoozed_until!))}</Badge>
+                    ) : (
+                      showStatus && (
+                        <Badge
+                          tone={
+                            row.status === "open"
+                              ? "open"
+                              : row.status === "pending"
+                                ? "waiting"
+                                : "closed"
+                          }
+                        >
+                          {STATUS_LABELS[row.status]}
                         </Badge>
-                      ))}
-                    {owner && (
+                      )
+                    )}
+                    {owner ? (
                       <span
-                        title={`${nameOf(owner)} has this`}
-                        className="bg-teal ml-auto flex size-5 items-center justify-center rounded-full text-[9px] font-bold text-white"
+                        title={`Assigned to ${nameOf(owner)}`}
+                        className="text-text-2 flex items-center gap-1 text-[11px] font-semibold"
                       >
-                        {initials(nameOf(owner))}
+                        {avatar(nameOf(owner), true, "size-[18px] text-[8px]")}
+                        {nameOf(owner).split(/\s+/)[0]}
+                      </span>
+                    ) : (
+                      row.status === "open" && <Badge tone="waiting">Unassigned</Badge>
+                    )}
+                    {row.tags.slice(0, 2).map((name) => (
+                      <Badge key={name} tone="open">
+                        {name}
+                      </Badge>
+                    ))}
+                    {row.tags.length > 2 && <Badge>+{row.tags.length - 2}</Badge>}
+                    {row.messages > 1 && (
+                      <span
+                        title={`${row.messages} messages`}
+                        className="text-muted-foreground ml-auto flex items-center gap-1 text-[11px] tabular-nums"
+                      >
+                        <MessageSquare aria-hidden className="size-3" />
+                        {row.messages}
+                        <span className="sr-only"> messages</span>
                       </span>
                     )}
                   </span>
@@ -438,84 +947,108 @@ export default async function HelpdeskPage({
               </li>
             );
           })}
+          {more && (
+            <li className="text-muted-foreground px-4 py-3 text-xs">
+              Showing the first {list.length}. Search or filter to find older ones.
+            </li>
+          )}
         </ul>
-        <p className="text-muted-foreground hidden px-4 py-2 text-[11px] md:block">
-          Keys: j / k next and previous · r reply · n note · e close
-        </p>
       </section>
 
-      {/* ---- The conversation ---- */}
-      <section
-        aria-label="Conversation"
-        className={cn(
-          "bg-background flex min-h-0 min-w-0 flex-1 flex-col",
-          !ticket && "max-md:hidden",
-        )}
-      >
-        {!ticket ? (
-          <div className="text-muted-foreground flex flex-1 items-center justify-center p-8 text-sm">
-            {selected ? "That conversation couldn't be found." : "Pick a conversation to read it."}
-          </div>
-        ) : (
-          <>
-            <Shortcuts
-              previous={neighbour(-1)}
-              next={neighbour(1)}
-              back={href({ t: null })}
-              closeFormId={
-                entitlements.canWrite && ticket.status !== "closed" ? "close-form" : null
-              }
-            />
-            <header className="border-border bg-card flex flex-col gap-2 border-b px-4 py-3 md:px-6">
-              <Link
-                href={href({ t: null })}
-                className="text-muted-foreground flex w-fit items-center gap-1 text-sm md:hidden"
-              >
-                <ChevronLeft className="size-4" /> Conversations
-              </Link>
-              <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
-                <div className="min-w-0">
-                  <h2 className="font-read text-lg leading-snug font-semibold text-balance">
-                    {ticket.subject}
-                  </h2>
-                  <p className="text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
-                    #{ticket.number} · {contact?.name ? `${contact.name} · ` : ""}
-                    {contact?.email}
-                    {ticket.status === "open" && <Badge tone="open">Needs a reply</Badge>}
-                    {ticket.status === "pending" && (
-                      <Badge tone="waiting">Waiting on customer</Badge>
-                    )}
-                    {ticket.status === "closed" && <Badge>Closed</Badge>}
-                  </p>
-                </div>
-                {entitlements.canWrite && !ticket.merged_into && (
-                  <form id="close-form" action={setTicketStatus.bind(null, tenant.slug, ticket.id)}>
-                    <input
-                      type="hidden"
-                      name="status"
-                      value={ticket.status === "closed" ? "open" : "closed"}
+      {/* ---- The conversation and its details ---- */}
+      <RailFrame startClosed={railClosed}>
+        <section
+          aria-label="Conversation"
+          className={cn(
+            "bg-background flex min-h-0 min-w-0 flex-1 flex-col",
+            !ticket && "max-md:hidden",
+            side && "max-md:hidden",
+          )}
+        >
+          {!ticket ? (
+            <div className="text-muted-foreground flex flex-1 flex-col items-center justify-center gap-1 p-8 text-sm">
+              <p className="text-foreground text-base font-semibold">
+                {selected
+                  ? "That conversation couldn't be found."
+                  : list.length > 0
+                    ? "Pick a conversation"
+                    : "Nothing to answer"}
+              </p>
+              <p>
+                Press{" "}
+                <kbd className="border-border bg-card rounded border px-1.5 py-0.5 font-mono text-[11px]">
+                  ?
+                </kbd>{" "}
+                for keyboard shortcuts.
+              </p>
+            </div>
+          ) : (
+            <>
+              <header className="border-border bg-card flex flex-col gap-1.5 border-b px-4 py-3 md:px-6">
+                <Link
+                  href={backHref}
+                  className="text-muted-foreground flex w-fit items-center gap-1 text-sm md:hidden"
+                >
+                  <ChevronLeft className="size-4" /> Conversations
+                </Link>
+                <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+                  <div className="min-w-0 flex-1 basis-56">
+                    <SubjectEdit
+                      key={ticket.subject}
+                      slug={tenant.slug}
+                      ticketId={ticket.id}
+                      subject={ticket.subject}
+                      canEdit={editable}
                     />
-                    <Button type="submit" variant="outline" size="sm">
-                      {ticket.status === "closed" ? "Reopen" : "Close"}
-                    </Button>
-                  </form>
-                )}
-              </div>
-              {entitlements.canWrite && !ticket.merged_into && (
-                <TicketMenus
-                  slug={tenant.slug}
-                  ticketId={ticket.id}
-                  assignee={ticket.assignee_id}
-                  priority={ticket.priority}
-                  snoozed={snoozedLabel}
-                  people={people.map((p) => ({ id: p.user_id, name: nameOf(p) }))}
-                  snoozeChoices={snoozeChoices(now, tenant.timezone)}
-                />
-              )}
-            </header>
+                    <p className="text-muted-foreground truncate text-[13px]">
+                      #{ticket.number} ·{" "}
+                      <span className="font-read">{contact?.name ?? contact?.email}</span> ·{" "}
+                      <span title={when.format(new Date(ticket.created_at))}>
+                        {openedAgo(ticket.created_at, nowMs)}
+                      </span>
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {editable ? (
+                      <TicketControls
+                        slug={tenant.slug}
+                        ticketId={ticket.id}
+                        status={ticket.status}
+                        statusLabel={STATUS_LABELS[ticket.status]}
+                        snoozed={snoozedLabel}
+                        folderId={ticket.folder_id}
+                        assignedToMe={ticket.assignee_id === user.id}
+                        me={user.id}
+                        snoozeChoices={choices}
+                        folders={folders}
+                        after={afterHref}
+                        back={backHref}
+                        others={(earlier?.data ?? [])
+                          .filter((other) => other.status !== "closed")
+                          .map((other) => ({
+                            number: other.number as number,
+                            subject: other.subject as string,
+                          }))}
+                      />
+                    ) : (
+                      <Badge
+                        tone={
+                          ticket.status === "open"
+                            ? "open"
+                            : ticket.status === "pending"
+                              ? "waiting"
+                              : "closed"
+                        }
+                      >
+                        {STATUS_LABELS[ticket.status]}
+                      </Badge>
+                    )}
+                    <RailToggle openHref={href({ side: "details" })} />
+                  </div>
+                </div>
+              </header>
 
-            <div className="flex min-h-0 flex-1">
-              <div className="flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4 md:px-6">
+              <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-4 md:px-6">
                 {ticket.merged_into && (
                   <p className="bg-sunken rounded-md px-4 py-3 text-sm">
                     This conversation was joined into{" "}
@@ -529,128 +1062,503 @@ export default async function HelpdeskPage({
                   </p>
                 )}
                 <ol className="flex flex-col gap-3">
-                  {thread.map((entry) =>
-                    entry.kind === "note" ? (
-                      <li
-                        key={entry.id}
-                        className="bg-note border-note-border mx-auto w-full max-w-[60ch] rounded-lg border px-4 py-3"
-                      >
-                        <p className="text-muted-foreground mb-1 text-xs">
-                          Note from {entry.who} · {when.format(new Date(entry.at))}
-                        </p>
-                        <p className="font-read text-sm break-words whitespace-pre-wrap">
-                          {splitBody(entry.body, people, user.id).map((piece, i) =>
-                            piece.kind === "mention" ? (
-                              <span key={i} className="text-ochre-text font-semibold">
-                                {piece.text}
-                              </span>
-                            ) : (
-                              <span key={i}>{piece.text}</span>
-                            ),
-                          )}
-                        </p>
-                      </li>
-                    ) : (
-                      <li
-                        key={entry.id}
-                        className={cn(
-                          "max-w-[72ch] rounded-lg border px-4 py-3",
-                          entry.ours
-                            ? "bg-out border-out-border ml-auto"
-                            : "bg-card border-border mr-auto",
-                        )}
-                      >
-                        <p className="text-muted-foreground mb-1 text-xs">
-                          {entry.who} · {when.format(new Date(entry.at))}
-                        </p>
-                        {/* Plain text only: customer email is never rendered as HTML. */}
-                        <p className="font-read text-sm break-words whitespace-pre-wrap">
-                          {entry.body}
-                        </p>
-                      </li>
-                    ),
+                  {folded.head.map(drawEntry)}
+                  {folded.hidden.length > 0 && (
+                    <li>
+                      <details className="group">
+                        <summary className="border-border bg-card text-text-2 hover:bg-hover mx-auto flex w-fit cursor-pointer list-none items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold">
+                          <span className="bg-sunken rounded-full px-1.5 tabular-nums">
+                            {folded.hiddenMessages}
+                          </span>
+                          earlier message{folded.hiddenMessages === 1 ? "" : "s"}
+                        </summary>
+                        <ol className="mt-3 flex flex-col gap-3">{folded.hidden.map(drawEntry)}</ol>
+                      </details>
+                    </li>
                   )}
+                  {folded.tail.map(drawEntry)}
                 </ol>
-                {entitlements.canWrite && !ticket.merged_into && (
+                {entries.length === 0 && (
+                  <p className="text-muted-foreground text-sm">
+                    Nothing has been sent on this conversation yet. Write the first email below.
+                  </p>
+                )}
+              </div>
+              {editable && (
+                <div className="border-border shrink-0 border-t px-4 py-3 md:px-6">
                   <Composer
                     key={ticket.id}
                     slug={tenant.slug}
                     ticketId={ticket.id}
+                    customerEmail={contact?.email ?? ""}
+                    customerFirstName={firstName}
                     templates={templates}
+                    snoozeChoices={choices}
                     canDraft={canDraft}
                     canSend={canSend}
+                    afterHref={afterHref}
                   />
-                )}
-
-                {/* On smaller screens the customer panel sits under the thread. */}
-                <div className="xl:hidden">{customerPanel()}</div>
-              </div>
-              <aside className="border-border bg-panel hidden w-[300px] shrink-0 overflow-y-auto border-l p-4 xl:block">
-                {customerPanel()}
-              </aside>
-            </div>
-          </>
-        )}
-      </section>
+                </div>
+              )}
+            </>
+          )}
+        </section>
+        {ticket && <RailShell open={side !== null}>{rail()}</RailShell>}
+      </RailFrame>
     </main>
   );
 
-  function customerPanel() {
+  function rail() {
     if (!ticket) return null;
-    const heading = "text-muted-foreground text-[11px] font-semibold tracking-wide uppercase";
+    const tab = side === "activity" ? "activity" : "details";
+    const row = (label: string, value: React.ReactNode) => (
+      <div className="flex min-h-8 items-center justify-between gap-3">
+        <dt className="text-muted-foreground shrink-0 text-[13px]">{label}</dt>
+        <dd className="flex min-w-0 justify-end text-right text-sm">{value}</dd>
+      </div>
+    );
+    const customerName = contact?.name ?? contact?.email ?? "Customer";
     return (
-      <div className="flex flex-col gap-5">
-        <section>
-          <p className="font-read text-base font-semibold">{contact?.name ?? contact?.email}</p>
-          {contact?.name && (
-            <a
-              href={`mailto:${contact.email}`}
-              className="text-muted-foreground text-sm break-all hover:underline"
+      <>
+        <div className="border-border flex shrink-0 items-center gap-4 border-b px-4">
+          <Link
+            href={href({ side: null })}
+            className="text-muted-foreground -ml-1 flex items-center gap-0.5 py-2 text-sm xl:hidden"
+          >
+            <ChevronLeft aria-hidden className="size-4" />
+            Back
+          </Link>
+          {(["details", "activity"] as const).map((key) => (
+            <Link
+              key={key}
+              href={href({ side: key, act: null })}
+              scroll={false}
+              aria-current={tab === key ? "page" : undefined}
+              className={cn(
+                "-mb-px border-b-2 py-2.5 text-[13px] font-semibold capitalize",
+                tab === key
+                  ? "border-ochre text-foreground"
+                  : "text-muted-foreground hover:text-foreground border-transparent",
+              )}
             >
-              {contact.email}
-            </a>
+              {key}
+            </Link>
+          ))}
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {tab === "activity" ? activity() : details(row, customerName)}
+        </div>
+      </>
+    );
+  }
+
+  function activity() {
+    if (!ticket) return null;
+    const log = buildActivity(
+      {
+        createdAt: ticket.created_at,
+        messages: thread,
+        notes: (notes?.data ?? []) as { author_id: string | null; created_at: string }[],
+        events: eventRows,
+      },
+      names,
+    ).filter((entry) => act === "all" || entry.group === act);
+    const icons = { mail: Mail, send: Send, note: StickyNote, activity: Activity };
+    return (
+      <section className={card}>
+        <div className="mb-3 flex flex-wrap items-center gap-1">
+          {ACTIVITY_GROUPS.map((group) => (
+            <Link
+              key={group.key}
+              href={href({ side: "activity", act: group.key === "all" ? null : group.key })}
+              scroll={false}
+              aria-current={act === group.key ? "true" : undefined}
+              className={cn(
+                "rounded-full px-2.5 py-1 text-xs font-semibold",
+                act === group.key ? "bg-teal text-on-teal" : "bg-sunken text-text-2 hover:bg-hover",
+              )}
+            >
+              {group.label}
+            </Link>
+          ))}
+        </div>
+        <ol className="flex flex-col gap-3">
+          {log.map((entry, i) => {
+            const Icon = icons[entry.icon];
+            return (
+              <li key={i} className="flex gap-2.5 text-sm">
+                <Icon aria-hidden className="text-muted-foreground mt-0.5 size-3.5 shrink-0" />
+                <span className="min-w-0">
+                  <span className="block">{entry.text}</span>
+                  <time className="text-muted-foreground text-xs" dateTime={entry.at}>
+                    {when.format(new Date(entry.at))}
+                  </time>
+                </span>
+              </li>
+            );
+          })}
+          {log.length === 0 && (
+            <li className="text-muted-foreground text-sm">Nothing of that kind yet.</li>
+          )}
+        </ol>
+      </section>
+    );
+  }
+
+  function details(
+    row: (label: string, value: React.ReactNode) => React.ReactNode,
+    customerName: string,
+  ) {
+    if (!ticket) return null;
+    const tiles = customer?.tiles;
+    return (
+      <>
+        <section className={card}>
+          <h3 className={cn(heading, "mb-1.5")}>Ticket</h3>
+          <dl className="flex flex-col">
+            {row(
+              "Assignee",
+              <FieldSelect
+                slug={tenant.slug}
+                ticketId={ticket.id}
+                field="assignee"
+                value={ticket.assignee_id ?? ""}
+                options={[{ value: "", label: "Unassigned" }, ...peopleOptions]}
+                canEdit={editable}
+              />,
+            )}
+            {row(
+              "Priority",
+              <FieldSelect
+                slug={tenant.slug}
+                ticketId={ticket.id}
+                field="priority"
+                value={ticket.priority}
+                options={(["urgent", "high", "normal", "low"] as const).map((p) => ({
+                  value: p,
+                  label: PRIORITY_LABELS[p],
+                }))}
+                canEdit={editable}
+              />,
+            )}
+            {row(
+              "Folder",
+              <FieldSelect
+                slug={tenant.slug}
+                ticketId={ticket.id}
+                field="folder"
+                value={ticket.folder_id ?? ""}
+                options={[
+                  { value: "", label: "Inbox" },
+                  ...folders.map((f) => ({ value: f.id, label: f.name })),
+                ]}
+                canEdit={editable}
+              />,
+            )}
+            {row(
+              "Status",
+              <Badge
+                tone={
+                  ticket.status === "open"
+                    ? "open"
+                    : ticket.status === "pending"
+                      ? "waiting"
+                      : "closed"
+                }
+              >
+                {snoozedLabel ? "Snoozed" : STATUS_LABELS[ticket.status]}
+              </Badge>,
+            )}
+            {snoozedLabel && row("Back on", snoozedLabel)}
+            {row("Created", when.format(new Date(ticket.created_at)))}
+            {row("Last message", when.format(new Date(ticket.last_message_at)))}
+            <div className="flex items-start justify-between gap-3 pt-1.5">
+              <dt className="text-muted-foreground shrink-0 pt-0.5 text-[13px]">Tags</dt>
+              <dd className="min-w-0">
+                <TagEditor
+                  slug={tenant.slug}
+                  ticketId={ticket.id}
+                  tags={tagsOf(ticket)}
+                  known={allTags}
+                  canEdit={editable}
+                />
+              </dd>
+            </div>
+          </dl>
+        </section>
+
+        {(canDraft || ticket.ai_summary) && (
+          <section className={card}>
+            <div className="flex flex-wrap items-center justify-between gap-x-2">
+              <h3 className={heading}>AI insights</h3>
+              {canDraft && editable && (
+                <SummarizeButton
+                  slug={tenant.slug}
+                  ticketId={ticket.id}
+                  has={Boolean(ticket.ai_summary)}
+                />
+              )}
+            </div>
+            {ticket.ai_summary ? (
+              <>
+                <p className="mt-1.5 text-sm">{ticket.ai_summary}</p>
+                <p className="mt-2 flex flex-wrap items-center gap-1.5">
+                  {ticket.ai_mood && (
+                    <Badge
+                      tone={
+                        ticket.ai_mood === "positive"
+                          ? "good"
+                          : ticket.ai_mood === "negative"
+                            ? "bad"
+                            : "closed"
+                      }
+                    >
+                      {ticket.ai_mood[0].toUpperCase() + ticket.ai_mood.slice(1)}
+                    </Badge>
+                  )}
+                  {ticket.ai_kind && <Badge>{ticket.ai_kind}</Badge>}
+                  {ticket.ai_updated_at && (
+                    <span className="text-muted-foreground text-xs">
+                      updated {timeAgo(ticket.ai_updated_at, nowMs)}
+                    </span>
+                  )}
+                </p>
+              </>
+            ) : (
+              <p className="text-muted-foreground mt-1.5 text-[13px]">
+                A short summary, the customer&apos;s mood and what kind of request this is. It
+                counts against your plan&apos;s AI allowance.
+              </p>
+            )}
+          </section>
+        )}
+
+        <section className={card}>
+          <div className="mb-2.5 flex items-center justify-between gap-2">
+            <h3 className={heading}>Customer</h3>
+            {customer?.customerUrl && (
+              <a
+                href={customer.customerUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-ochre-text flex items-center gap-1 text-xs font-semibold hover:underline"
+              >
+                View on {customer.shopName ?? "the shop"}
+                <ExternalLink aria-hidden className="size-3" />
+              </a>
+            )}
+          </div>
+          <div className="flex items-center gap-3">
+            {avatar(customerName, false, "size-10 text-sm")}
+            <div className="min-w-0 flex-1">
+              <p className="font-read truncate text-[15px] leading-tight font-bold">
+                {customerName}
+              </p>
+              {contact && (
+                <p className="text-muted-foreground flex items-center gap-1.5 text-xs">
+                  <span className="font-read truncate">{contact.email}</span>
+                  <CopyButton text={contact.email} label="Copy email" />
+                </p>
+              )}
+              {customer?.phone && (
+                <a
+                  href={`tel:${customer.phone.replace(/[^\d+]/g, "")}`}
+                  className="text-muted-foreground font-read block text-xs hover:underline"
+                >
+                  {customer.phone}
+                </a>
+              )}
+            </div>
+          </div>
+          {tiles && tiles.orders > 0 && (
+            <dl className="border-border divide-border mt-3 grid grid-cols-3 divide-x rounded-md border">
+              {(
+                [
+                  [String(tiles.orders), tiles.orders === 1 ? "Order" : "Orders"],
+                  [money(tiles.lifetime), "Lifetime"],
+                  [tiles.last === null ? "—" : money(tiles.last), "Last order"],
+                ] as const
+              ).map(([value, label]) => (
+                <div
+                  key={label}
+                  className="bg-card px-2.5 py-2 first:rounded-l-md last:rounded-r-md"
+                >
+                  <dd className="truncate text-sm font-bold tabular-nums">{value}</dd>
+                  <dt className="text-muted-foreground text-[11px]">{label}</dt>
+                </div>
+              ))}
+            </dl>
+          )}
+          {customer && !customer.known && (
+            <p className="bg-sunken mt-3 rounded-md px-3 py-2 text-xs">
+              {customer.shopName
+                ? "Nobody in your shop uses this email. They may have ordered with a different address."
+                : "Connect your shop to see this customer's orders here."}
+            </p>
+          )}
+          {!customer && (
+            <p className="bg-sunken mt-3 rounded-md px-3 py-2 text-xs">
+              Their orders couldn&apos;t be read just now.
+            </p>
+          )}
+          {canWrite && contact && (
+            <div className="mt-3">
+              <NewEmailTo email={contact.email} />
+            </div>
           )}
         </section>
 
-        <section className="flex flex-col gap-2">
-          <h3 className={heading}>Their orders</h3>
-          {(orders?.data ?? []).length === 0 ? (
-            <p className="text-muted-foreground text-sm">
-              None found under this email. Orders show here once your shop is connected.
-            </p>
-          ) : (
-            <ul className="flex flex-col gap-3">
-              {(orders?.data ?? []).map((order) => (
-                <li key={order.id} className="bg-card border-border rounded-md border p-3 text-sm">
-                  <span className="flex items-baseline justify-between gap-2">
-                    <span className="font-semibold">{order.name ?? "Order"}</span>
-                    <span className="tabular-nums">
-                      {formatMoney(Number(order.total), order.currency ?? tenant.currency)}
-                    </span>
-                  </span>
-                  <span className="text-muted-foreground block text-xs">
-                    {day.format(new Date(order.processed_at))}
-                    {order.financial_status
-                      ? ` · ${order.financial_status.toLowerCase().replaceAll("_", " ")}`
-                      : ""}
-                    {order.fulfillment_status
-                      ? ` · ${order.fulfillment_status.toLowerCase().replaceAll("_", " ")}`
-                      : ""}
-                  </span>
-                  <span className="text-muted-foreground font-read mt-1 block text-xs">
-                    {((order.order_lines as { title: string; quantity: number }[] | null) ?? [])
-                      .map((line) => `${line.quantity} × ${line.title}`)
-                      .join(", ")}
-                  </span>
+        {customer && customer.tiles.orders > 0 && (
+          <section className={card}>
+            <h3 className={cn(heading, "mb-2.5 flex items-center gap-2")}>
+              Orders
+              <span className="text-muted-foreground font-semibold tabular-nums">
+                {customer.tiles.orders}
+              </span>
+            </h3>
+            <ul className="flex flex-col gap-2.5">
+              {customer.cards.map((order, i) => (
+                <li key={order.id}>
+                  <details open={i === 0} className="bg-card border-border group rounded-md border">
+                    <summary className="cursor-pointer list-none px-3 py-2.5">
+                      <span className="flex items-baseline gap-2">
+                        <span className="text-sm font-bold">{order.name}</span>
+                        <span className="text-muted-foreground text-xs">
+                          {day.format(new Date(order.placedAt))}
+                        </span>
+                        <span className="ml-auto text-sm font-bold tabular-nums">
+                          {formatMoney(order.total, order.currency ?? tenant.currency)}
+                        </span>
+                      </span>
+                      <span className="mt-1.5 flex flex-wrap gap-1">
+                        {order.cancelled && <Badge tone="bad">Cancelled</Badge>}
+                        {order.paid && <Badge tone={order.paid.tone}>{order.paid.label}</Badge>}
+                        <Badge tone={order.fulfilment.tone}>{order.fulfilment.label}</Badge>
+                      </span>
+                    </summary>
+                    <div className="border-border flex flex-col gap-3 border-t px-3 py-3">
+                      <ul className="flex flex-col gap-2">
+                        {order.lines.map((line, at) => (
+                          <li key={at} className="flex items-center gap-2.5">
+                            {line.photo ? (
+                              // eslint-disable-next-line @next/next/no-img-element -- a small photo from the shop platform's own image servers
+                              <img
+                                src={line.photo}
+                                alt=""
+                                loading="lazy"
+                                className="border-border size-9 shrink-0 rounded-sm border object-cover"
+                              />
+                            ) : (
+                              <span className="bg-sunken text-muted-foreground flex size-9 shrink-0 items-center justify-center rounded-sm">
+                                <Package aria-hidden className="size-4" />
+                              </span>
+                            )}
+                            <span className="min-w-0 flex-1">
+                              <span className="font-read block text-[13px] leading-snug">
+                                {line.title}
+                              </span>
+                              {line.variant && (
+                                <span className="text-muted-foreground block text-xs">
+                                  {line.variant}
+                                </span>
+                              )}
+                            </span>
+                            <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
+                              × {line.quantity}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                      {order.tracking.length > 0 && (
+                        <div>
+                          <p className="text-muted-foreground mb-1 text-[11px] font-semibold">
+                            Tracking
+                          </p>
+                          <ul className="flex flex-col gap-1">
+                            {order.tracking.map((parcel) => (
+                              <li
+                                key={parcel.number}
+                                className="flex flex-wrap items-center gap-1.5 text-xs"
+                              >
+                                <Badge tone="good">Sent</Badge>
+                                {parcel.url ? (
+                                  <a
+                                    href={parcel.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-ochre-text font-mono break-all underline"
+                                  >
+                                    {parcel.carrier} {parcel.number}
+                                  </a>
+                                ) : (
+                                  <span className="font-mono break-all">
+                                    {parcel.carrier} {parcel.number}
+                                  </span>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {order.shipTo && (
+                        <div>
+                          <p className="text-muted-foreground mb-1 text-[11px] font-semibold">
+                            Ship to{order.shipTo.method ? ` · ${order.shipTo.method}` : ""}
+                          </p>
+                          <p className="font-read text-[13px] leading-snug whitespace-pre-line">
+                            {order.shipTo.lines.join("\n")}
+                          </p>
+                        </div>
+                      )}
+                      {order.note && (
+                        <p className="bg-note border-note-border font-read rounded-sm border px-2.5 py-1.5 text-xs whitespace-pre-wrap">
+                          {order.note}
+                        </p>
+                      )}
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {editable && (
+                          <AddToReply
+                            text={orderSummaryText(order, day.format(new Date(order.placedAt)))}
+                            closeHref={side ? href({ side: null }) : null}
+                          />
+                        )}
+                        {order.toShipId && entitlements.can("module.shipping") && (
+                          <Button asChild variant="dark" size="sm">
+                            <Link href={`/w/${tenant.slug}/shipping/orders/${order.toShipId}`}>
+                              <Truck aria-hidden />
+                              Label
+                            </Link>
+                          </Button>
+                        )}
+                        {order.shopUrl && (
+                          <a
+                            href={order.shopUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title={`Open ${order.name} in the shop`}
+                            aria-label={`Open ${order.name} in the shop`}
+                            className="text-text-2 hover:bg-hover flex size-[30px] items-center justify-center rounded-sm"
+                          >
+                            <ExternalLink aria-hidden className="size-4" />
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  </details>
                 </li>
               ))}
             </ul>
-          )}
-        </section>
+            {customer.tiles.orders > customer.cards.length && (
+              <p className="text-muted-foreground mt-2 text-xs">
+                The newest {customer.cards.length} of {customer.tiles.orders} are shown.
+              </p>
+            )}
+          </section>
+        )}
 
         {boughtStock.length > 0 && (
-          <section className="flex flex-col gap-2">
-            <h3 className={heading}>Back in stock?</h3>
+          <section className={card}>
+            <h3 className={cn(heading, "mb-2")}>Back in stock?</h3>
             <ul className="flex flex-col gap-1.5 text-sm">
               {boughtStock.slice(0, 8).map((item) => (
                 <li key={item.itemId}>
@@ -668,55 +1576,40 @@ export default async function HelpdeskPage({
                 </li>
               ))}
             </ul>
-            <p className="text-muted-foreground text-xs">
+            <p className="text-muted-foreground mt-1.5 text-xs">
               From Stock: things they bought that are sold out or have more on the way.
             </p>
           </section>
         )}
 
         {(earlier?.data ?? []).length > 0 && (
-          <section className="flex flex-col gap-2">
-            <h3 className={heading}>Other conversations</h3>
+          <section className={card}>
+            <h3 className={cn(heading, "mb-2")}>Earlier conversations</h3>
+            {editable && (earlier?.data ?? []).some((other) => other.status !== "closed") && (
+              <p className="bg-teal-soft text-teal-soft-ink mb-2 rounded-md px-3 py-2 text-xs">
+                This customer has another open conversation. “Merge…” under the ⋯ menu joins them.
+              </p>
+            )}
             <ul className="flex flex-col gap-1.5 text-sm">
               {(earlier?.data ?? []).map((other) => (
                 <li key={other.id}>
                   <Link
-                    href={href({ view: "all", t: other.number as number })}
+                    href={href({ view: "all", t: other.number as number, side: null })}
                     className="hover:underline"
                   >
                     <span className="text-muted-foreground tabular-nums">#{other.number}</span>{" "}
                     <span className="font-read">{other.subject}</span>
                   </Link>
                   <span className="text-muted-foreground block text-xs">
-                    {other.status === "closed"
-                      ? "Closed"
-                      : other.status === "pending"
-                        ? "Waiting on customer"
-                        : "Needs a reply"}{" "}
-                    · {day.format(new Date(other.last_message_at as string))}
+                    {STATUS_LABELS[other.status as keyof typeof STATUS_LABELS]} ·{" "}
+                    {timeAgo(other.last_message_at as string, nowMs)}
                   </span>
                 </li>
               ))}
             </ul>
           </section>
         )}
-
-        <section className="flex flex-col gap-2">
-          <h3 className={heading}>Tags</h3>
-          <TagsForm
-            slug={tenant.slug}
-            ticketId={ticket.id}
-            tags={tagsOf(ticket)}
-            canEdit={entitlements.canWrite && !ticket.merged_into}
-          />
-        </section>
-
-        {entitlements.canWrite && !ticket.merged_into && (
-          <section>
-            <MergeForm slug={tenant.slug} ticketId={ticket.id} />
-          </section>
-        )}
-      </div>
+      </>
     );
   }
 }

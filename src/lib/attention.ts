@@ -22,6 +22,7 @@ export async function loadAttention(
       ? count("tickets")
           .eq("status", "open")
           .is("merged_into", null)
+          .is("folder_id", null)
           .or(`snoozed_until.is.null,snoozed_until.lte.${now}`)
       : none,
     has("shipping")

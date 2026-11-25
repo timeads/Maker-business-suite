@@ -19,7 +19,19 @@ import {
   replyTemplatesSchema,
 } from "@/lib/helpdesk/config";
 import { draftReply } from "@/lib/helpdesk/draft";
-import { sendReply, replyProblem } from "@/lib/helpdesk/reply";
+import { readInsights } from "@/lib/helpdesk/insights";
+import {
+  MAX_RECIPIENTS,
+  filesProblem,
+  forwardedThread,
+  outgoingText,
+  parseRecipients,
+  sendOutbound,
+  type OutgoingFile,
+} from "@/lib/helpdesk/outbound";
+import { replyProblem } from "@/lib/helpdesk/reply";
+import { isPlain, parseRichDoc, richToText, tidyDoc, type RichDoc } from "@/lib/helpdesk/rich";
+import { SAVED_VIEWS_KEY, parseSavedViews, savedViewsSchema } from "@/lib/helpdesk/saved-views";
 import { postAlert } from "@/lib/messages/alerts";
 import { handlesFor, nameOf, type Person } from "@/lib/messages/format";
 import { getAdminClient } from "@/lib/supabase/admin";
@@ -48,76 +60,22 @@ async function context(slug: string) {
   } as const;
 }
 
-/** Sends a teammate's reply to the customer and records it on the ticket. */
-export async function sendTicketReply(
-  slug: string,
-  ticketId: string,
-  _prev: HelpdeskState,
-  formData: FormData,
-): Promise<HelpdeskState> {
-  const ctx = await context(slug);
-  if ("error" in ctx) return { error: ctx.error };
-  const body = String(formData.get("body") ?? "").trim();
-  if (!body) return { error: "Write a reply first." };
-  if (body.length > 20_000) return { error: "That reply is too long to send as one email." };
-  const domain = inboundDomain();
-  if (!domain || !process.env.POSTMARK_SERVER_TOKEN || !process.env.SUPABASE_SECRET_KEY) {
-    return { error: "Sending email isn't switched on for this environment yet." };
-  }
-
-  // Confirm the ticket is one this member can see before using elevated access.
-  const { data: ticket } = await ctx.supabase
-    .from("tickets")
-    .select("id, number")
-    .eq("id", ticketId)
-    .eq("tenant_id", ctx.tenant.id)
-    .maybeSingle();
-  if (!ticket) return { error: "That conversation couldn't be found." };
-
-  try {
-    const { data: rows, error } = await getAdminClient().rpc("ticket_reply_context", {
-      p_tenant_id: ctx.tenant.id,
-      p_ticket_id: ticketId,
-    });
-    const info = (rows as Record<string, string | null>[] | null)?.[0];
-    if (error || !info?.reply_key || !info.contact_email) throw new Error("no reply context");
-
-    const providerId = await sendReply({
-      workspaceName: ctx.tenant.name,
-      slug: ctx.tenant.slug,
-      domain,
-      replyKey: info.reply_key,
-      to: info.contact_email,
-      subject: info.subject ?? "",
-      body,
-      inReplyTo: info.last_message_id,
-    });
-    const { error: recordError } = await ctx.supabase.rpc("record_reply", {
-      p_ticket_id: ticketId,
-      p_body: body,
-      p_from_email: `support-${ctx.tenant.slug}@${domain}`,
-      p_provider_message_id: providerId,
-    });
-    if (recordError) throw new Error(recordError.message);
-  } catch (err) {
-    console.error("Reply failed", err instanceof Error ? err.message : err);
-    return { error: replyProblem(err) };
-  }
-  revalidatePath(`/w/${slug}/helpdesk`, "layout");
-  return { message: "Reply sent." };
-}
-
 /** Asks Claude for a draft. It lands in the reply box; a person decides whether to send it. */
 export async function draftTicketReply(
   slug: string,
   ticketId: string,
   _prev: HelpdeskState,
+  formData?: FormData,
 ): Promise<HelpdeskState> {
   const ctx = await context(slug);
   if ("error" in ctx) return { error: ctx.error };
   if (!process.env.ANTHROPIC_API_KEY || !process.env.SUPABASE_SECRET_KEY) {
     return { error: "Drafting isn't switched on for this environment yet." };
   }
+  // What the teammate wants the draft to say. Their own words, never the customer's.
+  const hint = String(formData?.get("hint") ?? "")
+    .trim()
+    .slice(0, 300);
 
   const monthStart = new Date();
   monthStart.setUTCDate(1);
@@ -203,6 +161,7 @@ export async function draftTicketReply(
 
   try {
     const draft = await draftReply({
+      hint,
       stock,
       workspaceName: ctx.tenant.name,
       customerName: contact?.name ?? null,
@@ -509,4 +468,411 @@ export async function mergeTicket(
   }
   done(slug);
   return { message: `Joined into #${number}.`, into: number };
+}
+
+// ---------------------------------------------------------------------------
+// Mail going out: a reply, a reply with copies, a forward, or a new conversation
+// ---------------------------------------------------------------------------
+
+export type SendState = HelpdeskState & { sent?: boolean; number?: number };
+
+const THENS = ["pending", "open", "closed", "snoozed", "keep"] as const;
+
+function readDoc(formData: FormData): RichDoc | null {
+  try {
+    const doc = parseRichDoc(JSON.parse(String(formData.get("doc") ?? "[]")));
+    return doc ? tidyDoc(doc) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function readFiles(formData: FormData): Promise<OutgoingFile[] | { error: string }> {
+  const picked = formData.getAll("files").filter((f): f is File => f instanceof File && f.size > 0);
+  const problem = filesProblem(picked.map((file) => ({ name: file.name, size: file.size })));
+  if (problem) return { error: problem };
+  return Promise.all(
+    picked.map(async (file) => ({
+      name: file.name,
+      type: file.type,
+      size: file.size,
+      base64: Buffer.from(await file.arrayBuffer()).toString("base64"),
+    })),
+  );
+}
+
+type Ctx = Exclude<Awaited<ReturnType<typeof context>>, { error: string }>;
+
+/** Sends one email from a conversation and writes down that it went. */
+async function deliver(
+  ctx: Ctx,
+  ticketId: string,
+  formData: FormData,
+  kind: "reply" | "forward",
+): Promise<SendState> {
+  const doc = readDoc(formData);
+  if (!doc) return { error: "That message couldn't be read. Try typing it again." };
+  const words = richToText(doc);
+  if (!words && kind === "reply") return { error: "Write a reply first." };
+  if (words.length > 20_000) return { error: "That is too long to send as one email." };
+  const to = parseRecipients(String(formData.get("to") ?? ""));
+  const cc = parseRecipients(String(formData.get("cc") ?? ""));
+  const bcc = parseRecipients(String(formData.get("bcc") ?? ""));
+  const bad = [...to.bad, ...cc.bad, ...bcc.bad];
+  if (bad.length > 0) return { error: `“${bad[0]}” isn't an email address.` };
+  if (to.ok.length === 0) return { error: "Add who to send it to." };
+  if (to.ok.length + cc.ok.length + bcc.ok.length > MAX_RECIPIENTS) {
+    return { error: `An email can go to ${MAX_RECIPIENTS} addresses at most.` };
+  }
+  const asked = String(formData.get("then") ?? "");
+  const then = THENS.find((one) => one === asked) ?? (kind === "forward" ? "keep" : "pending");
+  const snooze = String(formData.get("snooze_until") ?? "");
+  if (then === "snoozed" && !(Date.parse(snooze) > Date.now())) {
+    return { error: "Pick when it should come back." };
+  }
+  const files = await readFiles(formData);
+  if ("error" in files) return { error: files.error };
+  const domain = inboundDomain();
+  if (!domain || !process.env.POSTMARK_SERVER_TOKEN || !process.env.SUPABASE_SECRET_KEY) {
+    return { error: "Sending email isn't switched on for this environment yet." };
+  }
+
+  // Confirm the ticket is one this member can see before using elevated access.
+  const { data: ticket } = await ctx.supabase
+    .from("tickets")
+    .select("id, number, merged_into")
+    .eq("id", ticketId)
+    .eq("tenant_id", ctx.tenant.id)
+    .maybeSingle();
+  if (!ticket) return { error: "That conversation couldn't be found." };
+  if (ticket.merged_into) return { error: "This conversation was joined into another one." };
+
+  let appendix: string | undefined;
+  if (kind === "forward") {
+    const { data: messages } = await ctx.supabase
+      .from("messages")
+      .select("direction, from_email, from_name, body, created_at")
+      .eq("ticket_id", ticketId)
+      .eq("tenant_id", ctx.tenant.id)
+      .order("created_at", { ascending: true })
+      .limit(40);
+    const when = new Intl.DateTimeFormat("en-US", {
+      dateStyle: "medium",
+      timeStyle: "short",
+      timeZone: ctx.tenant.timezone,
+    });
+    appendix = forwardedThread(
+      (messages ?? []).map((m) => ({
+        from:
+          m.direction === "outbound"
+            ? ctx.tenant.name
+            : m.from_name
+              ? `${m.from_name} <${m.from_email}>`
+              : String(m.from_email),
+        at: when.format(new Date(String(m.created_at))),
+        body: String(m.body),
+      })),
+    );
+  }
+
+  try {
+    const { data: rows, error } = await getAdminClient().rpc("ticket_reply_context", {
+      p_tenant_id: ctx.tenant.id,
+      p_ticket_id: ticketId,
+    });
+    const info = (rows as Record<string, string | null>[] | null)?.[0];
+    if (error || !info?.reply_key) throw new Error("no reply context");
+    const providerId = await sendOutbound({
+      kind,
+      workspaceName: ctx.tenant.name,
+      slug: ctx.tenant.slug,
+      domain,
+      replyKey: info.reply_key,
+      to: to.ok,
+      cc: cc.ok,
+      bcc: bcc.ok,
+      subject: info.subject ?? "",
+      doc,
+      appendix,
+      inReplyTo: info.last_message_id,
+      files,
+    });
+    const { error: recordError } = await ctx.supabase.rpc("record_outbound", {
+      p_ticket_id: ticketId,
+      p_body: outgoingText(doc, kind === "forward" ? undefined : appendix) || "(forwarded)",
+      p_from_email: `support-${ctx.tenant.slug}@${domain}`,
+      p_provider_message_id: providerId,
+      p_kind: kind,
+      p_to: to.ok,
+      p_cc: cc.ok,
+      p_format: isPlain(doc) ? null : doc,
+      p_attachments: files.map((file) => ({ name: file.name.slice(0, 120), size: file.size })),
+      p_then: then,
+      p_snooze_until: then === "snoozed" ? new Date(snooze).toISOString() : null,
+    });
+    if (recordError) throw new Error(recordError.message);
+  } catch (err) {
+    console.error("Send failed", err instanceof Error ? err.message : err);
+    return { error: replyProblem(err) };
+  }
+  // Whoever sent it has read it.
+  await ctx.supabase.rpc("mark_ticket_read", { p_ticket_id: ticketId });
+  revalidatePath(`/w/${ctx.tenant.slug}/helpdesk`, "layout");
+  return { sent: true, number: ticket.number as number };
+}
+
+/** A reply (with or without copies) or a forward, from the composer. */
+export async function sendMail(
+  slug: string,
+  ticketId: string,
+  formData: FormData,
+): Promise<SendState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  return deliver(ctx, ticketId, formData, formData.get("mode") === "forward" ? "forward" : "reply");
+}
+
+/** Starts a conversation with a customer: a new ticket, then its first email. */
+export async function startConversation(slug: string, formData: FormData): Promise<SendState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const to = parseRecipients(String(formData.get("to") ?? ""));
+  if (to.bad.length > 0 || to.ok.length !== 1) {
+    return { error: "Type one email address to write to." };
+  }
+  const subject = String(formData.get("subject") ?? "").trim();
+  if (!subject) return { error: "Give it a subject." };
+  const doc = readDoc(formData);
+  if (!doc || !richToText(doc)) return { error: "Write the email first." };
+  if (!inboundDomain() || !process.env.POSTMARK_SERVER_TOKEN || !process.env.SUPABASE_SECRET_KEY) {
+    return { error: "Sending email isn't switched on for this environment yet." };
+  }
+  const { data, error } = await ctx.supabase.rpc("start_ticket", {
+    p_tenant_id: ctx.tenant.id,
+    p_email: to.ok[0],
+    p_name: String(formData.get("name") ?? "").trim() || null,
+    p_subject: subject,
+  });
+  const made = (data as { id: string; number: number }[] | null)?.[0];
+  if (error || !made)
+    return { error: "That conversation couldn't be started. Try again in a moment." };
+  const sent = await deliver(ctx, made.id, formData, "reply");
+  // The conversation exists either way; if the email didn't go it can be sent from there.
+  return sent.error
+    ? {
+        error: `${sent.error} The conversation was started as #${made.number}; open it to try again.`,
+        number: made.number,
+      }
+    : sent;
+}
+
+// ---------------------------------------------------------------------------
+// The ticket's own fields
+// ---------------------------------------------------------------------------
+
+export async function setStatus(slug: string, ticketId: string, status: string): Promise<void> {
+  const ctx = await context(slug);
+  if ("error" in ctx || !["open", "pending", "closed"].includes(status)) return;
+  await ctx.supabase.rpc("set_ticket_status", { p_ticket_id: ticketId, p_status: status });
+  done(slug);
+}
+
+export async function setTags(
+  slug: string,
+  ticketId: string,
+  tags: string[],
+): Promise<string | null> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return ctx.error ?? null;
+  const clean = [...new Set(tags.map((tag) => tag.trim().toLowerCase()).filter(Boolean))];
+  const bad = clean.find((tag) => !TAG_PATTERN.test(tag));
+  if (bad) return `“${bad}” can't be a tag. Use letters, numbers, spaces and dashes.`;
+  if (clean.length > 10) return "Ten tags is the most a conversation can have.";
+  const { error } = await ctx.supabase.rpc("set_ticket_tags", {
+    p_ticket_id: ticketId,
+    p_tags: clean,
+  });
+  if (error) return TRY_AGAIN;
+  done(slug);
+  return null;
+}
+
+/** Files a conversation in a folder ("" puts it back in the inbox). */
+export async function fileTicket(slug: string, ticketId: string, folderId: string): Promise<void> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return;
+  await ctx.supabase.rpc("file_ticket", { p_ticket_id: ticketId, p_folder_id: folderId || null });
+  done(slug);
+}
+
+export async function renameTicket(slug: string, ticketId: string, subject: string): Promise<void> {
+  const ctx = await context(slug);
+  if ("error" in ctx || !subject.trim()) return;
+  await ctx.supabase.rpc("set_ticket_subject", { p_ticket_id: ticketId, p_subject: subject });
+  done(slug);
+}
+
+/** This person has seen the conversation (or wants it marked as not seen). */
+export async function markRead(slug: string, ticketId: string, read: boolean): Promise<void> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return;
+  await ctx.supabase.rpc(read ? "mark_ticket_read" : "mark_ticket_unread", {
+    p_ticket_id: ticketId,
+  });
+  done(slug);
+}
+
+/** "Summarize": a few lines for the team, kept on the ticket. Never sent anywhere. */
+export async function summarizeTicket(slug: string, ticketId: string): Promise<HelpdeskState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  if (!process.env.ANTHROPIC_API_KEY || !process.env.SUPABASE_SECRET_KEY) {
+    return { error: "Summaries aren't switched on for this environment yet." };
+  }
+  const monthStart = new Date();
+  monthStart.setUTCDate(1);
+  monthStart.setUTCHours(0, 0, 0, 0);
+  const [{ data: ticket }, { data: messages }, { data: usage }] = await Promise.all([
+    ctx.supabase
+      .from("tickets")
+      .select("id, subject")
+      .eq("id", ticketId)
+      .eq("tenant_id", ctx.tenant.id)
+      .maybeSingle(),
+    ctx.supabase
+      .from("messages")
+      .select("direction, body, created_at")
+      .eq("ticket_id", ticketId)
+      .eq("tenant_id", ctx.tenant.id)
+      .order("created_at", { ascending: true })
+      .limit(30),
+    ctx.supabase
+      .from("usage_events")
+      .select("quantity")
+      .eq("tenant_id", ctx.tenant.id)
+      .eq("type", "ai_tokens")
+      .gte("occurred_at", monthStart.toISOString()),
+  ]);
+  if (!ticket || !messages?.length) return { error: "There is nothing to summarize yet." };
+  const used = (usage ?? []).reduce((sum, row) => sum + Number(row.quantity), 0);
+  if (used >= ctx.entitlements.limit("ai_credits")) {
+    return {
+      error:
+        "You've used this month's AI allowance. It resets next month, or you can upgrade your plan for more.",
+    };
+  }
+  try {
+    const result = await readInsights({
+      subject: ticket.subject,
+      thread: messages.map((m) => ({
+        from: m.direction === "inbound" ? ("customer" as const) : ("us" as const),
+        body: String(m.body).slice(0, 6000),
+        at: String(m.created_at).slice(0, 10),
+      })),
+    });
+    const { error: usageError } = await getAdminClient().rpc("record_usage", {
+      p_tenant_id: ctx.tenant.id,
+      p_type: "ai_tokens",
+      p_quantity: result.tokens,
+    });
+    if (usageError) console.error(`Could not record AI usage: ${usageError.message}`);
+    if (!result.ok) return { error: "Claude couldn't summarize this one." };
+    const { error } = await ctx.supabase.rpc("set_ticket_insights", {
+      p_ticket_id: ticketId,
+      p_summary: result.insights.summary,
+      p_mood: result.insights.mood,
+      p_kind: result.insights.kind,
+    });
+    if (error) return { error: TRY_AGAIN };
+  } catch (err) {
+    console.error("Summary failed", err instanceof Error ? err.message : err);
+    return { error: "We couldn't get a summary just now. Try again in a moment." };
+  }
+  done(slug);
+  return { message: "Summarized." };
+}
+
+// ---------------------------------------------------------------------------
+// Folders (owners and admins make them) and saved views (a config)
+// ---------------------------------------------------------------------------
+
+const folderProblem = (message: string) =>
+  message.includes("owners and admins")
+    ? "Only owners and admins can change folders."
+    : message.includes("duplicate") || message.includes("ticket_folders_name_idx")
+      ? "There is already a folder with that name."
+      : message.includes("Forty")
+        ? "Forty folders is the most a workspace can have."
+        : TRY_AGAIN;
+
+export async function saveFolder(slug: string, _prev: HelpdeskState, formData: FormData) {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const name = String(formData.get("name") ?? "").trim();
+  if (!name || name.length > 40) return { error: "A folder needs a name of up to 40 characters." };
+  const id = String(formData.get("id") ?? "");
+  const { error } = id
+    ? await ctx.supabase.rpc("rename_ticket_folder", { p_folder_id: id, p_name: name })
+    : await ctx.supabase.rpc("create_ticket_folder", { p_tenant_id: ctx.tenant.id, p_name: name });
+  if (error) return { error: folderProblem(error.message) };
+  done(slug);
+  revalidatePath(`/w/${slug}/settings`, "layout");
+  return { message: id ? "Renamed." : "Folder made." };
+}
+
+export async function deleteFolder(slug: string, _prev: HelpdeskState, formData: FormData) {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const { error } = await ctx.supabase.rpc("delete_ticket_folder", {
+    p_folder_id: String(formData.get("id") ?? ""),
+  });
+  if (error) return { error: folderProblem(error.message) };
+  done(slug);
+  revalidatePath(`/w/${slug}/settings`, "layout");
+  return { message: "Folder removed. What was in it is back in the inbox." };
+}
+
+/** Saves a view: a name and the filters it keeps. Owners and admins, like every config. */
+export async function saveView(slug: string, _prev: HelpdeskState, formData: FormData) {
+  return saveHelpdeskConfig(slug, SAVED_VIEWS_KEY, (current) => {
+    const existing = parseSavedViews(current).views;
+    const name = String(formData.get("name") ?? "").trim();
+    const text = (key: string) => String(formData.get(key) ?? "").trim() || undefined;
+    const tags = (text("tags") ?? "")
+      .split(",")
+      .map((tag) => tag.trim().toLowerCase())
+      .filter(Boolean);
+    const priority = formData.getAll("priority").map(String).filter(Boolean);
+    const parsed = savedViewsSchema.safeParse({
+      version: 1,
+      views: [
+        ...existing,
+        {
+          id: `${slugify(name)}-${Date.now().toString(36)}`,
+          name,
+          conditions: {
+            status: text("status") ?? "active",
+            assignee: text("assignee"),
+            tags_any: tags.length > 0 ? tags : undefined,
+            folder: text("folder"),
+            priority: priority.length > 0 ? priority : undefined,
+            text: text("text"),
+            unread: formData.get("unread") ? true : undefined,
+          },
+        },
+      ],
+    });
+    return parsed.success
+      ? { body: parsed.data }
+      : { error: "A view needs a name (up to 40 characters), and its filters have to make sense." };
+  });
+}
+
+export async function deleteView(slug: string, _prev: HelpdeskState, formData: FormData) {
+  return saveHelpdeskConfig(slug, SAVED_VIEWS_KEY, (current) => {
+    const id = formData.get("id");
+    return {
+      body: { version: 1, views: parseSavedViews(current).views.filter((v) => v.id !== id) },
+    };
+  });
 }

@@ -14,7 +14,8 @@ import {
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
 import { helpdeskAccess } from "@/app/w/[slug]/helpdesk/gate";
-import { AddRuleForm, AddTemplateForm, DeleteButton } from "./forms";
+import { SAVED_VIEWS_KEY, describeConditions, parseSavedViews } from "@/lib/helpdesk/saved-views";
+import { AddRuleForm, AddTemplateForm, AddViewForm, DeleteButton, FolderForm } from "./forms";
 
 export const metadata: Metadata = { title: "Help desk settings" };
 
@@ -37,18 +38,21 @@ export default async function HelpdeskSettingsPage({
   const canEdit = canManage(role) && entitlements.canWrite;
 
   const supabase = await createClient();
-  const [{ data }, { data: team }] = await Promise.all([
+  const [{ data }, { data: team }, { data: folderRows }] = await Promise.all([
     supabase
       .from("configs")
       .select("key, body")
       .eq("tenant_id", tenant.id)
       .eq("module", HELPDESK_MODULE),
     supabase.rpc("chat_people", { p_tenant_id: tenant.id }),
+    supabase.from("ticket_folders").select("id, name").eq("tenant_id", tenant.id).order("name"),
   ]);
+  const folders = (folderRows ?? []) as { id: string; name: string }[];
   const people = ((team ?? []) as Person[]).map((p) => ({ id: p.user_id, name: nameOf(p) }));
   const stored = new Map((data ?? []).map((row) => [row.key as string, row.body as unknown]));
   const templates = parseTemplates(stored.get(TEMPLATES_KEY)).templates;
   const rules = parseRules(stored.get(RULES_KEY)).rules;
+  const views = parseSavedViews(stored.get(SAVED_VIEWS_KEY)).views;
   const domain = inboundDomain();
 
   return (
@@ -174,6 +178,87 @@ export default async function HelpdeskSettingsPage({
               Only owners and admins can change these settings.
             </p>
           )}
+        </CardContent>
+      </Card>
+
+      <Card id="folders" className="scroll-mt-6">
+        <CardHeader>
+          <CardTitle>Folders</CardTitle>
+          <CardDescription>
+            Somewhere to put conversations that are waiting on something, like a repair. A filed
+            conversation leaves the inbox views and stays in its folder until it is closed or moved
+            back. Anyone on the team can file; owners and admins make the folders.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          {folders.length === 0 ? (
+            <p className="text-muted-foreground text-sm">No folders yet.</p>
+          ) : (
+            <ul className="divide-border flex flex-col divide-y">
+              {folders.map((folder) => (
+                <li
+                  key={folder.id}
+                  className="flex flex-wrap items-center justify-between gap-2 py-2"
+                >
+                  {canEdit ? (
+                    <FolderForm slug={tenant.slug} folder={folder} />
+                  ) : (
+                    <span className="text-sm font-semibold">{folder.name}</span>
+                  )}
+                  {canEdit && (
+                    <DeleteButton
+                      slug={tenant.slug}
+                      id={folder.id}
+                      kind="folder"
+                      label={`Remove the ${folder.name} folder`}
+                    />
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+          {canEdit && <FolderForm slug={tenant.slug} />}
+        </CardContent>
+      </Card>
+
+      <Card id="views" className="scroll-mt-6">
+        <CardHeader>
+          <CardTitle>Saved views</CardTitle>
+          <CardDescription>
+            A view is a filter with a name, kept in the help desk&apos;s menu for the whole team.
+            You can also save one from the filter row above the list.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          {views.length === 0 ? (
+            <p className="text-muted-foreground text-sm">No saved views yet.</p>
+          ) : (
+            <ul className="divide-border flex flex-col divide-y">
+              {views.map((view) => (
+                <li key={view.id} className="flex items-start justify-between gap-3 py-2">
+                  <span className="min-w-0">
+                    <span className="block text-sm font-semibold">{view.name}</span>
+                    <span className="text-muted-foreground block text-xs">
+                      {describeConditions(view.conditions, {
+                        person: (id) => people.find((p) => p.id === id)?.name ?? "someone who left",
+                        folder: (id) =>
+                          folders.find((f) => f.id === id)?.name ?? "a removed folder",
+                      })}
+                    </span>
+                  </span>
+                  {canEdit && (
+                    <DeleteButton
+                      slug={tenant.slug}
+                      id={view.id}
+                      kind="view"
+                      label={`Remove the ${view.name} view`}
+                    />
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+          {canEdit && <AddViewForm slug={tenant.slug} people={people} folders={folders} />}
         </CardContent>
       </Card>
     </>

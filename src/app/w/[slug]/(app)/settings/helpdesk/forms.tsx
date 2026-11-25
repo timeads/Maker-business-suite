@@ -6,7 +6,11 @@ import { Input, Label, Select } from "@/components/ui/input";
 import { SubmitButton } from "@/components/ui/submit-button";
 import {
   deleteAutoTagRule,
+  deleteFolder,
   deleteReplyTemplate,
+  deleteView,
+  saveFolder,
+  saveView,
   saveAutoTagRule,
   saveReplyTemplate,
   type HelpdeskState,
@@ -139,11 +143,16 @@ export function DeleteButton({
 }: {
   slug: string;
   id: string;
-  kind: "template" | "rule";
+  kind: "template" | "rule" | "folder" | "view";
   label: string;
 }) {
   const [state, action] = useSettingsAction(
-    kind === "template" ? deleteReplyTemplate : deleteAutoTagRule,
+    {
+      template: deleteReplyTemplate,
+      rule: deleteAutoTagRule,
+      folder: deleteFolder,
+      view: deleteView,
+    }[kind],
     slug,
   );
   return (
@@ -153,6 +162,126 @@ export function DeleteButton({
         Remove
       </SubmitButton>
       {state.error && <span className="text-destructive text-xs">{state.error}</span>}
+    </form>
+  );
+}
+
+/** Make a folder, or (with `folder`) rename one. */
+export function FolderForm({
+  slug,
+  folder,
+}: {
+  slug: string;
+  folder?: { id: string; name: string };
+}) {
+  const [state, action, saves] = useSettingsAction(saveFolder, slug);
+  const id = folder ? `folder-${folder.id}` : "folder-new";
+  return (
+    <form action={action} key={saves} className="flex flex-wrap items-end gap-2">
+      {folder && <input type="hidden" name="id" value={folder.id} />}
+      <div className="flex flex-col gap-1">
+        <Label htmlFor={id} className={folder ? "sr-only" : undefined}>
+          {folder ? `Rename ${folder.name}` : "New folder"}
+        </Label>
+        <Input
+          id={id}
+          name="name"
+          maxLength={40}
+          defaultValue={folder?.name}
+          placeholder="Repairs"
+          required
+          className="w-56"
+        />
+      </div>
+      <SubmitButton variant="outline" size="default" pendingText="Saving…">
+        {folder ? "Rename" : "Add folder"}
+      </SubmitButton>
+      <FormMessage>{state.error}</FormMessage>
+    </form>
+  );
+}
+
+/** A saved view: a name and the conditions a conversation must meet. */
+export function AddViewForm({
+  slug,
+  people,
+  folders,
+}: {
+  slug: string;
+  people: { id: string; name: string }[];
+  folders: { id: string; name: string }[];
+}) {
+  const [state, action, saves] = useSettingsAction(saveView, slug);
+  return (
+    <form action={action} key={saves} className="grid gap-3 sm:grid-cols-2">
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="view-name">Name</Label>
+        <Input id="view-name" name="name" maxLength={40} placeholder="VIP" required />
+      </div>
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="view-status">Status</Label>
+        <Select id="view-status" name="status" defaultValue="active">
+          <option value="active">Open or in progress</option>
+          <option value="open">Open</option>
+          <option value="pending">In progress</option>
+          <option value="snoozed">Snoozed</option>
+          <option value="closed">Closed</option>
+          <option value="any">Any status</option>
+        </Select>
+      </div>
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="view-tags">Has any of these tags</Label>
+        <Input id="view-tags" name="tags" placeholder="vip, wholesale" autoComplete="off" />
+      </div>
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="view-assignee">Assigned to</Label>
+        <Select id="view-assignee" name="assignee" defaultValue="">
+          <option value="">Anyone</option>
+          <option value="me">Whoever is looking</option>
+          <option value="none">Nobody</option>
+          {people.map((person) => (
+            <option key={person.id} value={person.id}>
+              {person.name}
+            </option>
+          ))}
+        </Select>
+      </div>
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="view-folder">Folder</Label>
+        <Select id="view-folder" name="folder" defaultValue="">
+          <option value="">Not filed (the inbox)</option>
+          <option value="none">Not in any folder, any status</option>
+          {folders.map((folder) => (
+            <option key={folder.id} value={folder.id}>
+              {folder.name}
+            </option>
+          ))}
+        </Select>
+      </div>
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="view-priority">Priority</Label>
+        <Select id="view-priority" name="priority" defaultValue="">
+          <option value="">Any</option>
+          <option value="urgent">Urgent</option>
+          <option value="high">High</option>
+          <option value="normal">Normal</option>
+          <option value="low">Low</option>
+        </Select>
+      </div>
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="view-text">Words in the subject or the customer</Label>
+        <Input id="view-text" name="text" maxLength={80} placeholder="order status" />
+      </div>
+      <label className="flex items-center gap-2 self-end pb-2 text-sm">
+        <input type="checkbox" name="unread" value="1" />
+        Unread only
+      </label>
+      <div className="flex flex-col gap-2 sm:col-span-2">
+        <FormMessage>{state.error}</FormMessage>
+        <SubmitButton variant="outline" size="default" pendingText="Saving…" className="w-fit">
+          Add view
+        </SubmitButton>
+      </div>
     </form>
   );
 }
