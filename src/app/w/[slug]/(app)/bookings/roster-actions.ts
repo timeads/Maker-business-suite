@@ -457,3 +457,151 @@ export async function saveBookingEmails(
         : "Saved.",
   };
 }
+
+/** A stored shop order, as "add a shop order by its number" shows it. */
+export type FoundShopOrder = {
+  order_id: string;
+  provider: string;
+  name: string;
+  cancelled: boolean;
+  customer_name: string;
+  customer_email: string;
+  lines: {
+    line_id: string;
+    title: string;
+    seats: number;
+    amount_cents: number;
+    /** open: can be added. placed / booked: already on a date. refunded: nothing left. */
+    state: "open" | "placed" | "booked" | "refunded";
+    on_session: string | null;
+  }[];
+};
+export type FindOrderState = BookingsState & { found?: FoundShopOrder; currency?: string };
+
+/**
+ * Looks a shop order up by its number among the orders the shop sync has
+ * already brought in. Nothing is asked of the shop. Owners and admins only.
+ */
+export async function findShopOrder(
+  slug: string,
+  sessionId: string,
+  _prev: FindOrderState,
+  formData: FormData,
+): Promise<FindOrderState> {
+  const ctx = await context(slug, true);
+  if ("error" in ctx) return { error: ctx.error };
+  const number = text(formData, "number").slice(0, 40);
+  if (!number) return { error: "Type the order number, like #1042." };
+  const { data, error } = await ctx.supabase.rpc("find_shop_order_for_session", {
+    p_session_id: sessionId,
+    p_number: number,
+  });
+  if (error) return { error: OOPS };
+  if (!data) {
+    return {
+      error: `We don't have an order ${number} from your shop yet. New orders arrive within a few minutes; older ones come in with a full sync from Connections.`,
+    };
+  }
+  return { found: data as FoundShopOrder, currency: ctx.tenant.currency };
+}
+
+const PLACE_ERRORS: Record<string, string> = {
+  date_cancelled: "That date was cancelled. Pick another one.",
+  order_missing:
+    "We couldn't find that order line any more. Sync your shop from Connections and try again.",
+  order_cancelled: "That order was cancelled in your shop, so there's nothing to book.",
+  line_refunded: "That line was refunded in your shop, so there's nothing to book.",
+  already_on_date:
+    "This order already has a booking on that date, from the date they picked themselves. Pick another date, or cancel that one first.",
+};
+
+/**
+ * Puts one line of a shop order onto a date: from the "needs a date" list
+ * (the date comes from the form) or from a roster by the order's number.
+ * A full date still takes them, flagged as over its limit: a paid place is
+ * never turned away. Owners and admins only.
+ */
+export async function placeShopLine(
+  slug: string,
+  line: { provider: string; orderId: string; lineId: string; sessionId?: string },
+  _prev: BookingsState,
+  formData: FormData,
+): Promise<BookingsState> {
+  const ctx = await context(slug, true);
+  if ("error" in ctx) return { error: ctx.error };
+  const sessionId = line.sessionId ?? text(formData, "session");
+  if (!/^[0-9a-f-]{36}$/i.test(sessionId)) return { error: "Pick a date to put them on." };
+  const token = randomBytes(24).toString("base64url");
+  const { data, error } = await ctx.supabase.rpc("place_shop_order_line", {
+    p_session_id: sessionId,
+    p_provider: line.provider,
+    p_order_id: line.orderId,
+    p_line_id: line.lineId,
+    p_manage_token: token,
+  });
+  if (error) {
+    const known = Object.keys(PLACE_ERRORS).find((key) => error.message.includes(key));
+    return { error: known ? PLACE_ERRORS[known] : OOPS };
+  }
+  const placed = data as {
+    result: "booked" | "already";
+    booking_id: string;
+    oversold?: boolean;
+    has_email?: boolean;
+  };
+  done(slug);
+  if (placed.result === "already") {
+    return { message: "They're already on a date, so nothing was added twice." };
+  }
+  let emailed = false;
+  if (formData.get("tell") === "on" && placed.has_email) {
+    const details = await detailsFor(ctx, placed.booking_id);
+    if (details) {
+      const { data: config } = await ctx.supabase
+        .from("configs")
+        .select("body")
+        .eq("tenant_id", ctx.tenant.id)
+        .eq("module", BOOKINGS_MODULE)
+        .eq("key", EMAILS_KEY)
+        .maybeSingle();
+      emailed = await sendEmail(
+        confirmationEmail(
+          details,
+          manageUrl(await getSiteUrl(), token),
+          parseBookingEmails(config?.body).confirmation_note,
+        ),
+      );
+    }
+  }
+  return {
+    message: [
+      "They're booked in.",
+      placed.oversold ? "That date was already full, so it's now over its limit." : "",
+      emailed
+        ? "They've been emailed the details."
+        : placed.has_email
+          ? ""
+          : "The order has no email address, so let them know yourself.",
+      "A refund in your shop will free the place here.",
+    ]
+      .filter(Boolean)
+      .join(" "),
+  };
+}
+
+/** Sets a waiting order aside (dealt with some other way), or brings it back. */
+export async function setUndatedAside(
+  slug: string,
+  lineId: string,
+  aside: boolean,
+): Promise<BookingsState> {
+  const ctx = await context(slug, true);
+  if ("error" in ctx) return { error: ctx.error };
+  const { error } = await ctx.supabase.rpc("set_shop_undated_line_aside", {
+    p_line: lineId,
+    p_aside: aside,
+  });
+  if (error) return { error: OOPS };
+  done(slug);
+  return {};
+}

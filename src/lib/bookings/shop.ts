@@ -83,15 +83,10 @@ export async function applyShopOrders(
       });
       if (error) throw new Error(`book_from_shop failed: ${error.message}`);
       const outcome = data as Result;
-      if (outcome.result === "no_session" && line.seats > 0) {
-        await postAlert(
-          admin,
-          tenantId,
-          "bookings",
-          `Order ${order.name} in your shop was for a workshop date we can't find. Check the order and add the person to the right date by hand.`,
-        );
-        continue;
-      }
+      // A date we can't find is not dropped: the sync hands every line to
+      // `noteShopOrderLines` next, which writes it down under "Needs a date"
+      // and tells the team once.
+      if (outcome.result === "no_session") continue;
       // A refund took the last place: the customer is told, where that is switched on.
       if (outcome.result === "cancelled" && outcome.booking_id && open) {
         await queueCancelEmails(admin, tenantId, [outcome.booking_id]);

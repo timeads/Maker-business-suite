@@ -8,6 +8,7 @@ import type {
   SnapshotRow,
   ShippingOrderRow,
   ShopBookingOrder,
+  ShopOrderLines,
   StockItemRow,
   StockTagsRow,
   SyncStore,
@@ -23,6 +24,7 @@ export function memoryStore() {
     shipping: [] as ShippingOrderRow[],
     snapshots: [] as SnapshotRow[],
     shopBookings: [] as ShopBookingOrder[],
+    shopOrderLines: [] as ShopOrderLines[],
     productPhotos: [] as ProductPhotoRow[],
     variantPhotos: [] as VariantPhotoRow[],
     stockTags: [] as StockTagsRow[],
@@ -54,6 +56,9 @@ export function memoryStore() {
     },
     async setStockTags(items) {
       state.stockTags.push(...items);
+    },
+    async noteShopOrderLines(orders) {
+      state.shopOrderLines.push(...orders);
     },
     async bookShopOrders(orders) {
       state.shopBookings.push(...orders);

@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { applyShopOrders } from "../bookings/shop";
+import { noteShopOrderLines } from "../bookings/undated";
 import type { SyncStore } from "./types";
 
 /**
@@ -32,6 +33,8 @@ export function rpcSyncStore(
     setVariantPhotos: (items) => call("set_variant_photos", { p_items: items }),
     setStockTags: (items) => call("set_stock_item_tags", { p_items: items }),
     bookShopOrders: (orders) => applyShopOrders(admin, scope.tenantId, orders),
+    noteShopOrderLines: (orders) =>
+      noteShopOrderLines(admin, scope.tenantId, scope.provider, orders),
     saveSnapshots: (rows) => call("save_financial_snapshots", { p_snapshots: rows }),
     importBookPayments: (rows) => call("import_book_payments", { p_rows: rows }),
     async bookPaymentsWanted() {

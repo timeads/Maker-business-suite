@@ -142,6 +142,27 @@ function shippingMenu(attention: Attention): NavGroup[] {
   ];
 }
 
+function bookingsMenu(attention: Attention): NavGroup[] {
+  const items = [
+    first("bookings.coming-up", "Coming up", "bookings"),
+    place("bookings.calendar", "Calendar", "bookings/calendar"),
+    place("bookings.customers", "Customers", "bookings/customers"),
+  ];
+  // Shop orders that paid for a workshop with no date: a place only while
+  // some are waiting (the page itself is always reachable from a roster).
+  if (attention.bookings && attention.bookings > 0) {
+    items.splice(
+      1,
+      0,
+      place("bookings.needs-date", "Needs a date", "bookings/needs-date", {
+        ...count(attention.bookings),
+        keywords: ["buy again", "no date", "shop order", "undated"],
+      }),
+    );
+  }
+  return [{ id: "bookings.main", items }];
+}
+
 function stockMenu(viewer: NavViewer): NavGroup[] {
   const items = [
     first("stock.to-order", "To order", "stock"),
@@ -331,19 +352,7 @@ export function buildNav(viewer: NavViewer, attention: Attention = {}): NavTool[
       menu: [{ id: "dashboard.main", items: [place("dashboard.home", "Dashboard", "dashboard")] }],
     },
     helpdesk: { panel: "menu", menu: helpdeskMenu(viewer, attention) },
-    bookings: {
-      panel: "menu",
-      menu: [
-        {
-          id: "bookings.main",
-          items: [
-            first("bookings.coming-up", "Coming up", "bookings"),
-            place("bookings.calendar", "Calendar", "bookings/calendar"),
-            place("bookings.customers", "Customers", "bookings/customers"),
-          ],
-        },
-      ],
-    },
+    bookings: { panel: "menu", menu: bookingsMenu(attention) },
     social: {
       panel: "menu",
       menu: [

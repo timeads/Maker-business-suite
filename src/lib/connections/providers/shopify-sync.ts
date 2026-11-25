@@ -5,6 +5,7 @@ import type {
   ProductRow,
   ShippingOrderRow,
   ShopBookingOrder,
+  ShopOrderLines,
   StockItemRow,
   StockTagsRow,
   VariantPhotoRow,
@@ -701,6 +702,31 @@ export function shopBookingsFrom(orders: ShopifyOrder[]): ShopBookingOrder[] {
 }
 
 /**
+ * Every line of every order, with the date it carries when it has the shape
+ * of one. Bookings uses it to spot a workshop that was paid for without a
+ * date ("Buy again" strips it) and to keep such a booking in step with
+ * refunds; which lines matter is decided in the database.
+ */
+export function shopOrderLinesFrom(orders: ShopifyOrder[]): ShopOrderLines[] {
+  return orders
+    .map((order) => ({
+      external_id: order.legacyResourceId,
+      name: order.name,
+      cancelled: order.cancelledAt !== null,
+      lines: order.lineItems.nodes.map((line) => {
+        const id = line.customAttributes?.find((a) => a.key === SESSION_KEY)?.value?.trim() ?? "";
+        return {
+          line_id: line.id.split("/").pop() ?? line.id,
+          product_id: line.product?.legacyResourceId ?? null,
+          seats: Math.max(0, Math.trunc(line.currentQuantity)),
+          session_id: UUID.test(id) ? id.toLowerCase() : null,
+        };
+      }),
+    }))
+    .filter((order) => order.lines.length > 0);
+}
+
+/**
  * The search that finds every order changed since a moment. Written the way
  * the shop's search reads it for certain: whole seconds, no quotes, and
  * `status:any` so closed (sent and archived) orders are included, not just
@@ -782,6 +808,7 @@ async function pullOrders(
       await ctx.store.upsertCommerce(mapShopifyOrders(data.orders.nodes));
       const dated = shopBookingsFrom(data.orders.nodes);
       if (dated.length > 0) await ctx.store.bookShopOrders(dated);
+      await ctx.store.noteShopOrderLines(shopOrderLinesFrom(data.orders.nodes));
       // One refusal means the shop hasn't shared addresses; don't ask again this run.
       if (addresses) {
         addresses = await pullShipping(
@@ -860,6 +887,7 @@ async function handleWebhook(ctx: SyncContext, graphql: ShopifyGraphql): Promise
       await ctx.store.upsertCommerce(mapShopifyOrders([data.order]));
       const dated = shopBookingsFrom([data.order]);
       if (dated.length > 0) await ctx.store.bookShopOrders(dated);
+      await ctx.store.noteShopOrderLines(shopOrderLinesFrom([data.order]));
       await pullShipping(ctx, graphql, [data.order.legacyResourceId]);
     }
     await ctx.store.recordUsage(2);

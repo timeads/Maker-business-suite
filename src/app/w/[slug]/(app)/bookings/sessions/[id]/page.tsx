@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Download } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -19,6 +20,7 @@ import {
   SessionSettingsForm,
   type RosterPerson,
 } from "../../roster";
+import { AddShopOrderForm } from "../../shop-orders";
 
 export const metadata: Metadata = { title: "Who's coming" };
 
@@ -74,6 +76,7 @@ export default async function SessionPage({
     { data: waiting },
     { data: siblings },
     { data: sent },
+    { count: shopWorkshops },
     { data: mailRows },
   ] = await Promise.all([
     supabase
@@ -103,6 +106,13 @@ export default async function SessionPage({
       .eq("session_id", id)
       .order("created_at", { ascending: false })
       .limit(10),
+    // Does this workspace sell any workshop through its shop? Then a shop
+    // order can be added here by its number.
+    supabase
+      .from("services")
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", tenant.id)
+      .not("shop_product_id", "is", null),
     // Automatic emails that didn't go, or may not have: someone should know.
     supabase
       .from("booking_emails")
@@ -264,6 +274,24 @@ export default async function SessionPage({
               />
             </CardContent>
           </Card>
+
+          {service.kind === "workshop" && Boolean(shopWorkshops) && (
+            <Card className="lg:col-span-2">
+              <CardHeader>
+                <CardTitle>Add an order from your shop</CardTitle>
+                <CardDescription>
+                  For someone who paid in your shop but isn&apos;t on a date: type the order number
+                  and add them here. A refund in your shop will then free their place.{" "}
+                  <Link href={`${base}/needs-date`} className="underline">
+                    See orders waiting for a date
+                  </Link>
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <AddShopOrderForm slug={tenant.slug} sessionId={session.id} />
+              </CardContent>
+            </Card>
+          )}
 
           {coming.length > 0 && (
             <Card className="lg:col-span-2">

@@ -202,6 +202,26 @@ export type ShopBookingOrder = {
   lines: { session_id: string; seats: number; amount_cents: number }[];
 };
 
+/**
+ * Every line of a shop order with the date it carries, if any, so Bookings
+ * can spot a workshop paid for without one. The database decides which lines
+ * matter; nothing here says anything about who bought.
+ */
+export type ShopOrderLines = {
+  external_id: string;
+  /** The order number as the shopper sees it, e.g. #1042. */
+  name: string;
+  cancelled: boolean;
+  lines: {
+    line_id: string;
+    product_id: string | null;
+    /** What the order holds now: 0 once refunded. */
+    seats: number;
+    /** The date's id from the cart line, only when it has the shape of one. */
+    session_id: string | null;
+  }[];
+};
+
 /** Where a sync puts what it fetched. Always scoped to the job's workspace and provider. */
 export type SyncStore = {
   upsertCommerce(batch: {
@@ -218,6 +238,12 @@ export type SyncStore = {
   setStockTags(items: StockTagsRow[]): Promise<void>;
   /** Turns orders with workshop dates on them into bookings. Safe to repeat. */
   bookShopOrders(orders: ShopBookingOrder[]): Promise<void>;
+  /**
+   * Writes down workshop lines that came with no usable date, and keeps a
+   * booking made from one in step with its order. For orders already stored
+   * with upsertCommerce. Safe to repeat.
+   */
+  noteShopOrderLines(orders: ShopOrderLines[]): Promise<void>;
   /** For orders already stored with upsertCommerce. */
   upsertShipping(orders: ShippingOrderRow[]): Promise<void>;
   saveSnapshots(rows: SnapshotRow[]): Promise<void>;

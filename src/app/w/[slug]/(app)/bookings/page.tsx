@@ -42,40 +42,55 @@ export default async function BookingsPage({ params }: { params: Promise<{ slug:
 
   const supabase = await createClient();
   const days = daysFromNow;
-  const [{ data: services }, { data: sessions }, { data: payout }, site, { data: recent }] =
-    await Promise.all([
-      supabase
-        .from("services")
-        .select("id, kind, name, slug, duration_minutes, price_cents, active")
-        .eq("tenant_id", tenant.id)
-        .order("name"),
-      supabase
-        .from("sessions")
-        .select(
-          "id, starts_at, ends_at, capacity, private, bookings_closed, services(name), bookings(seats, status, oversold, amount_cents, attendance, confirmed_at)",
-        )
-        .eq("tenant_id", tenant.id)
-        .is("cancelled_at", null)
-        .gte("starts_at", days(0))
-        .order("starts_at")
-        .limit(60),
-      supabase
-        .from("connections")
-        .select("status, display_name, metadata")
-        .eq("tenant_id", tenant.id)
-        .eq("provider", "stripe")
-        .maybeSingle(),
-      getSiteUrl(),
-      // The last 90 days, for the turnout figure.
-      supabase
-        .from("sessions")
-        .select("bookings(seats, status, attendance)")
-        .eq("tenant_id", tenant.id)
-        .is("cancelled_at", null)
-        .gte("starts_at", days(-90))
-        .lt("starts_at", days(0))
-        .limit(500),
-    ]);
+  const [
+    { data: services },
+    { data: sessions },
+    { data: payout },
+    site,
+    { data: recent },
+    { count: needDate },
+  ] = await Promise.all([
+    supabase
+      .from("services")
+      .select("id, kind, name, slug, duration_minutes, price_cents, active")
+      .eq("tenant_id", tenant.id)
+      .order("name"),
+    supabase
+      .from("sessions")
+      .select(
+        "id, starts_at, ends_at, capacity, private, bookings_closed, services(name), bookings(seats, status, oversold, amount_cents, attendance, confirmed_at)",
+      )
+      .eq("tenant_id", tenant.id)
+      .is("cancelled_at", null)
+      .gte("starts_at", days(0))
+      .order("starts_at")
+      .limit(60),
+    supabase
+      .from("connections")
+      .select("status, display_name, metadata")
+      .eq("tenant_id", tenant.id)
+      .eq("provider", "stripe")
+      .maybeSingle(),
+    getSiteUrl(),
+    // The last 90 days, for the turnout figure.
+    supabase
+      .from("sessions")
+      .select("bookings(seats, status, attendance)")
+      .eq("tenant_id", tenant.id)
+      .is("cancelled_at", null)
+      .gte("starts_at", days(-90))
+      .lt("starts_at", days(0))
+      .limit(500),
+    // Shop orders that paid for a workshop and are waiting for a date.
+    supabase
+      .from("shop_undated_lines")
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", tenant.id)
+      .is("booking_id", null)
+      .is("dismissed_at", null)
+      .gt("seats", 0)
+      .eq("order_cancelled", false),
+  ]);
   const upcoming = ((sessions ?? []) as unknown as SessionRow[]).filter(
     (s) => s.bookings.some((b) => b.status === "confirmed") || s.capacity > 1,
   );
@@ -137,6 +152,17 @@ export default async function BookingsPage({ params }: { params: Promise<{ slug:
           <a href={bookingUrl}>See your booking page</a>
         </Button>
       </PageHeader>
+
+      {Boolean(needDate) && (
+        <p className="bg-note rounded-md px-4 py-3 text-sm">
+          {needDate === 1
+            ? "1 order from your shop paid for a workshop without a date."
+            : `${needDate} orders from your shop paid for a workshop without a date.`}{" "}
+          <Link href={`${base}/needs-date`} className="font-semibold underline">
+            Put {needDate === 1 ? "it" : "them"} on a date
+          </Link>
+        </p>
+      )}
 
       <dl className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         {stats.map((stat) => (

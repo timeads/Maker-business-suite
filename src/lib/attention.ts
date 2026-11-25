@@ -17,7 +17,7 @@ export async function loadAttention(
   const count = (table: string) =>
     supabase.from(table).select("id", { count: "exact", head: true }).eq("tenant_id", tenantId);
   const none = Promise.resolve({ count: null as number | null, data: null });
-  const [tickets, parcels, failed, chat] = await Promise.all([
+  const [tickets, parcels, failed, chat, undated] = await Promise.all([
     has("helpdesk")
       ? count("tickets")
           .eq("status", "open")
@@ -35,6 +35,14 @@ export async function loadAttention(
       : none,
     has("social") ? count("social_posts").eq("status", "failed") : none,
     has("messages") ? supabase.rpc("chat_overview", { p_tenant_id: tenantId }) : none,
+    // Shop orders that paid for a workshop and are still waiting for a date.
+    has("bookings")
+      ? count("shop_undated_lines")
+          .is("booking_id", null)
+          .is("dismissed_at", null)
+          .gt("seats", 0)
+          .eq("order_cancelled", false)
+      : none,
   ]);
   const unread = ((chat.data ?? []) as { unread?: number }[]).reduce(
     (n, row) => n + Number(row.unread ?? 0),
@@ -45,5 +53,6 @@ export async function loadAttention(
   if (parcels.count) out.shipping = parcels.count;
   if (failed.count) out.social = failed.count;
   if (unread) out.messages = unread;
+  if (undated.count) out.bookings = undated.count;
   return out;
 }
