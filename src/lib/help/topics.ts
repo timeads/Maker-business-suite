@@ -288,6 +288,33 @@ export const HELP_TOPICS: HelpTopic[] = [
     ],
   },
   {
+    slug: "helpdesk-comments",
+    group: "helpdesk",
+    title: "Answer comments on your Instagram and Facebook posts",
+    summary:
+      "Comments on your posts as conversations, answered in public or with one private message.",
+    intro:
+      "Comments people leave on your Instagram posts and reels, or on your Facebook Page's posts, can come into the help desk too. Each person's comments on one post are one conversation, with the post it is about beside it.",
+    steps: [
+      "An owner or admin opens Settings → Help desk → Channels and, under “Comments on your posts”, presses “Allow Instagram comments”, “Allow Facebook comments” or each in turn. Facebook asks for permission to read and answer comments. Leave every permission ticked and pick the same Page.",
+      "Back on Channels, tick Instagram comments, Facebook comments or both, choose which comments start a conversation, and save.",
+      "A comment arrives as “Instagram comment: …” or “Facebook comment: …” under “Instagram & Facebook”. The details rail shows the start of the post's caption and a link to open the post.",
+      "To answer where everyone can see it, leave “Reply publicly” chosen, write, and press “Reply publicly”. The box and the button both say it is public: don't put an order number, an address or an email in it.",
+      "For anything personal, choose “Message privately” and press “Send privately”. Instagram and Facebook allow one private message per comment, within seven days of it. Once it is used, the choice says so.",
+      "If they answer your private message, it arrives as an ordinary Instagram or Facebook message conversation, listed under “Earlier conversations” in the rail.",
+      "Under a comment, “Hide” takes it out of everyone else's sight on the platform (“Show again” brings it back). “Delete…” removes it for good; only owners and admins can, and it asks first.",
+    ],
+    notes: [
+      "By default a comment that is only emoji, a tagged friend or a one-word cheer (“🔥”, “love it”) doesn't start a conversation. You can take every comment instead, or only questions and comments with your own words in them (“order”, “refund”).",
+      "On a conversation that is already going, every comment from that person on that post is kept, emoji and all.",
+      "Replies you write in the Instagram or Facebook app show up here as the team's. What you send from here is never listed twice.",
+      "If someone edits a Facebook comment, its words change here and it is marked “Edited”; if a comment is removed, its words are removed here too. Instagram only tells us about new comments, so one a person later deletes there stays here as it was.",
+      "Not brought in: likes and reactions, your own posts and comments that don't answer a customer, comments during an Instagram live broadcast, and mentions of you on other people's posts.",
+      "Macros, the manual and the AI draft work as they do for email. A draft only fills the box; you choose public or private and press the button.",
+      "Use the filter above the list to see only messages or only comments, and save that as a view if you like.",
+    ],
+  },
+  {
     slug: "helpdesk-manual",
     group: "helpdesk",
     title: "Keep a manual of what the team has learned",

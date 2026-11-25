@@ -235,7 +235,29 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   `sendSocialReply` → `record_social_outbound` / `finish_social_outbound`);
   Meta's 24-hour window is worked out on read (`replyWindow`) and re-checked
   on the server, and the HUMAN_AGENT tag is used only where the config says
-  the app is approved (off by default). What the
+  the app is approved (off by default).
+  Comments on posts ride on the same connection, webhook and queue
+  (`comments.ts`, `tickets.kind = 'comment'`, `comment_posts`): one
+  conversation per person per post (`file_social_comment`), never mixed or
+  joined with that person's message conversation, which shares only the
+  contact. Their own switches (`instagram_comments`, `facebook_comments`) and
+  permissions gate them (`commentState()`, `private.meta_comment_channel`).
+  Which comments start a conversation is a setting (`comment_filter`,
+  `comment_words`) read by `startsConversation()`; never add a word list for
+  one business. A post is asked about once, for its address and caption only
+  (`readPost`, `postLink`: the platform's own hosts), never its media.
+  Replies go through the one outbox with `via` on the payload
+  (`sendCommentReply`): "public" is a comment under the comment, "private"
+  is Meta's one message per comment, which `claim_private_reply` holds (a
+  refusal releases the claim; no clear answer keeps it). The reply box and
+  its buttons always say when a reply is public. Hide and delete ask Meta
+  first, then `mark_comment_hidden` (the team) / `mark_comment_deleted`
+  (owners and admins).
+  A login to Facebook asks only for the uses a workspace is switching on
+  plus what its connection had (`lib/connections/meta-access.ts`: posting,
+  messages, each platform's comments), and records what was granted;
+  Social posts only where `canPost()` says so. Keep
+  `tests/db/helpdesk-comments.test.ts` passing. What the
   old help desk does that this one doesn't is in
   `docs/helpdesk-side-by-side.md`.
 - Bookings: seats are never stored as a count. `hold_booking`,
