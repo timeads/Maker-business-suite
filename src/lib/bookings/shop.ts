@@ -19,6 +19,32 @@ type Result = {
   date_cancelled?: boolean;
 };
 
+/**
+ * Queues the "your booking was cancelled" email for bookings the shop just
+ * cancelled. The database decides whether one is wanted (the workspace's
+ * switch, a date still to come, emails on for that person) and the worker
+ * sends it with the reminders. Never throws: the cancellation stands.
+ */
+export async function queueCancelEmails(
+  admin: SupabaseClient,
+  tenantId: string,
+  bookingIds: string[],
+): Promise<void> {
+  for (const id of bookingIds) {
+    try {
+      const { error } = await admin.rpc("queue_booking_cancel_email", {
+        p_tenant_id: tenantId,
+        p_booking_id: id,
+      });
+      if (error) console.error(`Could not queue cancellation email: ${error.message}`);
+    } catch (err) {
+      console.error(
+        `Could not queue cancellation email: ${err instanceof Error ? err.message : "unknown"}`,
+      );
+    }
+  }
+}
+
 export async function applyShopOrders(
   admin: SupabaseClient,
   tenantId: string,
@@ -34,11 +60,12 @@ export async function applyShopOrders(
   const open = await (deps.open ?? ((id) => moduleOpen(id, "bookings")))(tenantId);
   for (const order of orders) {
     if (order.cancelled) {
-      const { error } = await admin.rpc("cancel_shop_order", {
+      const { data, error } = await admin.rpc("cancel_shop_order_bookings", {
         p_tenant_id: tenantId,
         p_order_id: order.external_id,
       });
-      if (error) throw new Error(`cancel_shop_order failed: ${error.message}`);
+      if (error) throw new Error(`cancel_shop_order_bookings failed: ${error.message}`);
+      if (open) await queueCancelEmails(admin, tenantId, (data ?? []) as string[]);
       continue;
     }
     for (const line of order.lines) {
@@ -64,6 +91,10 @@ export async function applyShopOrders(
           `Order ${order.name} in your shop was for a workshop date we can't find. Check the order and add the person to the right date by hand.`,
         );
         continue;
+      }
+      // A refund took the last place: the customer is told, where that is switched on.
+      if (outcome.result === "cancelled" && outcome.booking_id && open) {
+        await queueCancelEmails(admin, tenantId, [outcome.booking_id]);
       }
       if (outcome.result !== "booked" || !outcome.booking_id) continue;
       if (outcome.date_cancelled) {

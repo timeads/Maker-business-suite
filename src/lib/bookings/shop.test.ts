@@ -118,10 +118,25 @@ describe("turning shop orders into bookings", () => {
     expect(told).toBe(0);
   });
 
-  it("cancels the bookings of a cancelled order without booking anything", async () => {
-    const { admin, calls } = fakeAdmin({ cancel_shop_order: 1 });
+  it("cancels the bookings of a cancelled order without booking anything, and queues the email for each", async () => {
+    const { admin, calls } = fakeAdmin({ cancel_shop_order_bookings: ["b1", "b2"] });
     await applyShopOrders(admin, "t1", [{ ...dated, cancelled: true }], { open: async () => true });
-    expect(calls.map((c) => c.fn)).toEqual(["cancel_shop_order"]);
+    expect(calls.map((c) => c.fn)).toEqual([
+      "cancel_shop_order_bookings",
+      "queue_booking_cancel_email",
+      "queue_booking_cancel_email",
+    ]);
+    expect(calls[2].args).toEqual({ p_tenant_id: "t1", p_booking_id: "b2" });
+  });
+
+  it("queues the email when a refund takes a booking's last place, but not off the plan", async () => {
+    const refunded = { book_from_shop: { result: "cancelled", booking_id: "b1" } };
+    const on = fakeAdmin(refunded);
+    await applyShopOrders(on.admin, "t1", [dated], { open: async () => true });
+    expect(on.calls.map((c) => c.fn)).toEqual(["book_from_shop", "queue_booking_cancel_email"]);
+    const off = fakeAdmin(refunded);
+    await applyShopOrders(off.admin, "t1", [dated], { open: async () => false });
+    expect(off.calls.map((c) => c.fn)).toEqual(["book_from_shop"]);
   });
 
   it("still books when bookings isn't on the plan, but sends no email", async () => {

@@ -356,3 +356,119 @@ describe("the day-of reminder", () => {
     await done();
   });
 });
+
+describe("when the shop cancels a booking", () => {
+  const order = async (tenant: string, session: string, id: string, seats: number) =>
+    (
+      await service<{ r: { result: string; booking_id: string } }>(
+        "select public.book_from_shop($1, $2, $3, '#2001', 'Sam Shopper', 'shopper@example.com', $4, 9000, $5) as r",
+        [tenant, session, id, seats, `shop-mail-${id}-${session}`],
+      )
+    )[0].r;
+  const queue = async (tenant: string, booking: string) =>
+    (
+      await service<{ q: boolean }>("select public.queue_booking_cancel_email($1, $2) as q", [
+        tenant,
+        booking,
+      ])
+    )[0].q;
+
+  it("the customer's email is queued once, sent by the worker, and retried like the rest", async () => {
+    const svc = await workshop(alice, tenantA);
+    const session = await date(alice, svc, 72);
+    const made = await order(tenantA, session, "9001", 2);
+    await settle();
+    // Not for a booking that is still on.
+    expect(await queue(tenantA, made.booking_id)).toBe(false);
+    // A refund of every place cancels it.
+    expect((await order(tenantA, session, "9001", 0)).result).toBe("cancelled");
+    expect(await queue(tenantA, made.booking_id)).toBe(true);
+    expect(await queue(tenantA, made.booking_id)).toBe(false);
+
+    let got = (await claim()).filter((c) => c.booking_id === made.booking_id);
+    expect(got.map((c) => [c.kind, c.tries])).toEqual([["cancelled", 1]]);
+    await finish(got[0].send_id, "refused");
+    await dueNow(made.booking_id);
+    got = (await claim()).filter((c) => c.booking_id === made.booking_id);
+    expect(got.map((c) => c.tries)).toEqual([2]);
+    expect(await finish(got[0].send_id, "sent")).toMatchObject({ status: "sent" });
+    expect((await claim()).filter((c) => c.booking_id === made.booking_id)).toEqual([]);
+  });
+
+  it("a cancelled order says which bookings went; nothing is queued for a past date, a switched-off workspace or another workspace", async () => {
+    const svc = await workshop(bob, tenantB);
+    const coming = await date(bob, svc, 72);
+    const past = await date(bob, svc, 80);
+    const a = await order(tenantB, coming, "9100", 1);
+    const b = await order(tenantB, past, "9100", 1);
+    await settle();
+    const gone = await service<{ id: string }>(
+      "select public.cancel_shop_order_bookings($1, '9100') as id",
+      [tenantB],
+    );
+    expect(gone.map((g) => g.id).sort()).toEqual([a.booking_id, b.booking_id].sort());
+    expect(
+      await service("select public.cancel_shop_order_bookings($1, '9100') as id", [tenantB]),
+    ).toEqual([]);
+
+    await db.query(
+      "update public.sessions set starts_at = now() - interval '2 hours' where id = $1",
+      [past],
+    );
+    expect(await queue(tenantB, b.booking_id)).toBe(false);
+    // Another workspace can't queue it.
+    expect(await queue(tenantA, a.booking_id)).toBe(false);
+    await setEmails(bob, tenantB, { shop_cancel_email: false });
+    expect(await queue(tenantB, a.booking_id)).toBe(false);
+    await setEmails(bob, tenantB, { shop_cancel_email: true });
+    expect(await queue(tenantB, a.booking_id)).toBe(true);
+    await settle();
+
+    for (const call of [
+      `select public.cancel_shop_order_bookings('${tenantB}', '9100')`,
+      `select public.queue_booking_cancel_email('${tenantB}', '${a.booking_id}')`,
+    ]) {
+      await expect(asUser(db, bob, (tx) => tx.query(call))).rejects.toThrow(/permission denied/);
+    }
+  });
+});
+
+describe("sending the confirmation again", () => {
+  it("gives the booking a new link, for its own managers only", async () => {
+    const owner = { id: await createUser(db, "resend@e.test"), email: "resend@e.test" };
+    const member = { id: await createUser(db, "member@e.test"), email: "member@e.test" };
+    const tenant = await tenantFor(owner, "Resend Studio");
+    await db.query(
+      "insert into public.memberships (tenant_id, user_id, role) values ($1, $2, 'member')",
+      [tenant, member.id],
+    );
+    const svc = await workshop(owner, tenant);
+    const booking = await book(tenant, await date(owner, svc, 48));
+    const oldToken = `mail-token-${n}`;
+    const fresh = "a-brand-new-link-token-of-good-length";
+    const byToken = async (token: string) =>
+      (
+        await service<{ booking_id: string }>(
+          "select booking_id from public.booking_details(null, null, $1)",
+          [token],
+        )
+      ).map((r) => r.booking_id);
+    expect(await byToken(oldToken)).toEqual([booking]);
+
+    const renew = (who: User, token = fresh) =>
+      asUser(db, who, (tx) =>
+        tx.query("select public.renew_booking_link($1, $2)", [booking, token]),
+      );
+    await expect(renew(member)).rejects.toThrow(/owners and admins/i);
+    await expect(renew(bob)).rejects.toThrow(/not found/i);
+    await expect(renew(owner, "short")).rejects.toThrow(/too short/i);
+    await expect(
+      asAnon(db, (tx) => tx.query("select public.renew_booking_link($1, $2)", [booking, fresh])),
+    ).rejects.toThrow(/permission denied/);
+    expect(await byToken(oldToken)).toEqual([booking]);
+
+    await renew(owner);
+    expect(await byToken(fresh)).toEqual([booking]);
+    expect(await byToken(oldToken)).toEqual([]);
+  });
+});
