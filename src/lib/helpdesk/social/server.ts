@@ -22,7 +22,14 @@ import {
 } from "./channels";
 import { privateReplyState } from "./comments";
 import { deliverSocial, type Delivered, type SocialPayload } from "./deliver";
-import { MetaRefused, replyToComment, sendPrivateReply } from "./graph";
+import {
+  MetaRefused,
+  ownedElsewhere,
+  replyToComment,
+  requestThreadControl,
+  sendPrivateReply,
+  takeThreadControl,
+} from "./graph";
 import { replyWindow } from "./window";
 
 /**
@@ -130,7 +137,7 @@ export async function sendSocialReply(
     throw new SocialNotSent("no_conversation");
   }
   const channel = context.channel;
-  const facts = await loadChannelFacts(admin, where.tenantId);
+  const facts = await (deps.facts?.() ?? loadChannelFacts(admin, where.tenantId));
   if (channelState(channel, facts.settings, facts.connection).state !== "on") {
     throw new SocialNotSent("not_connected");
   }
@@ -159,17 +166,14 @@ export async function sendSocialReply(
   const stored = await getProviderToken(where.tenantId, "meta", deps.tokenDeps);
   const bucket = admin.storage.from(FILES_BUCKET);
   const staged: string[] = [];
-  const went = await deliverSocial(
-    {
-      pageId: stored.externalAccountId,
-      token: stored.token.access_token,
-      recipientId: context.external_id,
-      humanAgent: window.needsHumanAgentTag,
-    },
-    channel,
-    text,
-    files,
-    {
+  const target = {
+    pageId: stored.externalAccountId,
+    token: stored.token.access_token,
+    recipientId: context.external_id,
+    humanAgent: window.needsHumanAgentTag,
+  };
+  const deliver = () =>
+    deliverSocial(target, channel, text, files, {
       fetchImpl: deps.fetchImpl,
       // Meta fetches a picture by address. It is put in the private bucket
       // under a name of our own and handed over as a link that works for a
@@ -190,9 +194,66 @@ export async function sendSocialReply(
       async unstage() {
         if (staged.length > 0) await bucket.remove(staged);
       },
-    },
-  );
+    });
+  // What Meta said about who answers this person, for the team to see. A
+  // note only: trouble writing it never changes how the send went.
+  const note = async (state: "ours" | "other") => {
+    try {
+      await admin.rpc("note_thread_control", {
+        p_tenant_id: where.tenantId,
+        p_channel: channel,
+        p_external_id: context.external_id,
+        p_state: state,
+        p_app_id: null,
+        p_at: new Date((deps.now ?? Date.now)()).toISOString(),
+      });
+    } catch {
+      // Nothing to do about it here.
+    }
+  };
+  let went: Delivered;
+  try {
+    went = await deliver();
+  } catch (err) {
+    // Another tool has the conversation. Meta said no, so nothing went.
+    if (!(err instanceof MetaRefused) || !ownedElsewhere(err)) throw err;
+    // Only a workspace that chose to may pull a conversation over to here.
+    if (!facts.settings.take_control || !(await gainControl(target, deps.fetchImpl))) {
+      await note("other");
+      throw err;
+    }
+    try {
+      went = await deliver();
+    } catch (again) {
+      if (again instanceof MetaRefused && ownedElsewhere(again)) await note("other");
+      throw again;
+    }
+  }
+  await note("ours");
   return { ...went, channel };
+}
+
+/**
+ * Tries to make this app the one that answers, in the two ways Meta offers.
+ * Taking works where the business set a default app and allowed this one to
+ * "Take control of conversations"; asking works where it set none. Whichever
+ * doesn't apply is refused by Meta, which is why both are tried. True when
+ * Meta said yes to one: the reply is then worth one more try (the first was
+ * refused outright, so nothing can go twice).
+ */
+async function gainControl(
+  target: { pageId: string; token: string; recipientId: string },
+  fetchImpl: typeof fetch | undefined,
+): Promise<boolean> {
+  for (const ask of [takeThreadControl, requestThreadControl]) {
+    try {
+      await ask(target, fetchImpl);
+      return true;
+    } catch {
+      // Refused, or no clear answer: the other way, then give up.
+    }
+  }
+  return false;
 }
 
 /** The customer's latest standing comment on a conversation, as the database tells it. */

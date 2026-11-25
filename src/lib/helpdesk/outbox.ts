@@ -3,7 +3,7 @@ import { TAG_PATTERN } from "./config";
 import { outgoingText, type Outgoing } from "./outbound";
 import { ReplyRefused, refusalWords } from "./reply";
 import { richDocSchema } from "./rich";
-import { refusalWords as metaRefusalWords } from "./social/graph";
+import { refusalDetails, refusalWords as metaRefusalWords } from "./social/graph";
 
 /**
  * Email waiting to go. "Undo send" is a short wait on the server: the email
@@ -119,6 +119,15 @@ export function outboxWords(row: Pick<OutboxRow, "state" | "error" | "summary">)
   }
   const code = /^postmark:\d+:(\d+)$/.exec(row.error ?? "")?.[1];
   return `${an} to ${to} wasn't sent. ${refusalWords(code ? Number(code) : null)}`;
+}
+
+/**
+ * Meta's own words for a message that wasn't sent, for a "Details" line under
+ * ours. Null for an email, and when our words already quote them.
+ */
+export function outboxDetails(row: Pick<OutboxRow, "state" | "error" | "summary">): string | null {
+  if (row.state !== "failed" || row.summary?.kind !== "social") return null;
+  return refusalDetails(row.error);
 }
 
 /** Seconds left before a waiting email goes (never negative). */

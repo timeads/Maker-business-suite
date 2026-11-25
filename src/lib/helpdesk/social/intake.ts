@@ -46,6 +46,23 @@ type MessageEvent = Extract<SocialEvent, { type: "message" }>;
 type EchoEvent = Extract<SocialEvent, { type: "echo" }>;
 type ReactionEvent = Extract<SocialEvent, { type: "reaction" }>;
 
+/** Who Meta lets answer a conversation, as far as we know. */
+export type ThreadControl = "ours" | "other";
+
+/**
+ * What a change of hands means for us. Meta tells the receiving app about a
+ * "pass" and the losing app about a "take"; where it names the new app and we
+ * know our own id, that settles it instead.
+ */
+export function controlAfter(
+  change: "pass" | "take",
+  appId: string | null,
+  ourAppId: string | null,
+): ThreadControl {
+  if (appId && ourAppId) return appId === ourAppId ? "ours" : "other";
+  return change === "pass" ? "ours" : "other";
+}
+
 export type IntakeDeps = {
   now(): number;
   /** Our own Meta app's id: an echo carrying it is something the help desk sent, already on file. */
@@ -62,6 +79,18 @@ export type IntakeDeps = {
   echo(where: SocialWhere, event: EchoEvent): Promise<FileResult>;
   remove(where: SocialWhere, mid: string): Promise<void>;
   react(where: SocialWhere, event: ReactionEvent, id: string): Promise<void>;
+  /**
+   * Writes down who is answering a person's conversation at Meta, as far as
+   * we were told: this app ("ours") or another tool ("other", with its app id
+   * when Meta gave one). A note for the team, never a rule: Meta decides.
+   */
+  noteControl?(
+    where: SocialWhere,
+    personId: string,
+    state: ThreadControl,
+    appId: string | null,
+    at: string,
+  ): Promise<void>;
   /** Reads the person's name and handle from Meta and keeps them on the contact. */
   refreshProfile?(where: SocialWhere, personId: string, contactId: string): Promise<string | null>;
   /** Fetches the message's files from Meta's hosts. */
@@ -201,7 +230,25 @@ export async function processMetaPayload(payload: unknown, deps: IntakeDeps): Pr
       outcomes.push("dropped");
       continue;
     }
-    if (event.type === "removed") {
+    if (event.type === "control") {
+      // Another tool asking us for the conversation changes nothing by itself:
+      // handing one over is a person's choice, made in Meta's settings.
+      if (event.change === "request") {
+        outcomes.push("control asked");
+        continue;
+      }
+      const state = controlAfter(event.change, event.appId, deps.ourAppId);
+      await deps
+        .noteControl?.(
+          where,
+          event.personId,
+          state,
+          state === "other" ? event.appId : null,
+          event.at,
+        )
+        .catch(() => undefined);
+      outcomes.push(`control ${state}`);
+    } else if (event.type === "removed") {
       await deps.remove(where, event.mid);
       outcomes.push("removed");
     } else if (event.type === "reaction") {
@@ -237,7 +284,13 @@ export async function processMetaPayload(payload: unknown, deps: IntakeDeps): Pr
           await deps.keepFiles(where, result, await deps.fetchFiles(event));
         }
       }
-      outcomes.push(result.result);
+      // It came on Meta's standby channel: another tool was answering then.
+      if (event.standby && result.result !== "ignored") {
+        await deps
+          .noteControl?.(where, event.personId, "other", null, event.at)
+          .catch(() => undefined);
+      }
+      outcomes.push(event.standby ? `${result.result} (standby)` : result.result);
     }
   }
   return outcomes;

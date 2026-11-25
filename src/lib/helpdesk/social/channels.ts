@@ -69,6 +69,13 @@ export const channelSettingsSchema = z.object({
    * Without that approval Meta refuses such replies, so this stays off.
    */
   human_agent: z.boolean().default(false),
+  /**
+   * For a business that also uses another inbox tool on the same account:
+   * when Meta refuses a reply because that tool has the conversation, take
+   * it (or ask for it) and try once more. Off unless an owner chooses it,
+   * because it pulls the conversation away from the other tool.
+   */
+  take_control: z.boolean().default(false),
   /** Comments on the business's own posts, one platform at a time. */
   instagram_comments: z.boolean().default(false),
   facebook_comments: z.boolean().default(false),
@@ -82,6 +89,7 @@ export const DEFAULT_CHANNEL_SETTINGS: ChannelSettings = {
   instagram: false,
   facebook: false,
   human_agent: false,
+  take_control: false,
   instagram_comments: false,
   facebook_comments: false,
   comment_filter: "skip_noise",

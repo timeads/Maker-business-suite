@@ -204,7 +204,7 @@ describe("the Meta connection and messages", () => {
       expect.objectContaining({ method: "POST", auth: "Bearer made-up-page-token" }),
     ]);
     expect(new URL(live.calls[0].url).searchParams.get("subscribed_fields")).toBe(
-      "messages,message_echoes,message_reactions",
+      "messages,message_echoes,message_reactions,standby,messaging_handovers",
     );
 
     // Comments granted as well: the Page's feed is asked for too.
@@ -214,7 +214,7 @@ describe("the Meta connection and messages", () => {
       "https://app",
     );
     expect(new URL(both.calls[0].url).searchParams.get("subscribed_fields")).toBe(
-      "messages,message_echoes,message_reactions,feed",
+      "messages,message_echoes,message_reactions,standby,messaging_handovers,feed",
     );
     const commentsOnly = fakeMeta([["subscribed_apps", { success: true }]]);
     await createMetaAdapter(commentsOnly.impl).afterConnect!(

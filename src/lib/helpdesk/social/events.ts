@@ -4,7 +4,10 @@ import { CHANNEL_LABELS, channelOfObject, type SocialChannel } from "./channels"
  * Meta's webhook payload, read into the few things the help desk files.
  * Messenger and Instagram use one shape: `entry[].messaging[]`, each with a
  * sender, a recipient, a timestamp and one of `message`, `reaction`, `read`,
- * `postback`… Comments arrive beside them as `entry[].changes[]`: a Page's
+ * `postback`… When another tool is the one answering a conversation (Meta's
+ * "thread control"), the same items arrive as `entry[].standby[]` instead,
+ * and changes of who answers arrive in `messaging[]` as `pass_thread_control`,
+ * `take_thread_control` and `request_thread_control`. Comments arrive beside them as `entry[].changes[]`: a Page's
  * `feed` field and an Instagram account's `comments` field. Everything here is data from outside: nothing is trusted beyond
  * its type, and anything we don't file is simply left out.
  */
@@ -32,6 +35,23 @@ export type SocialEvent =
       media: { kind: MediaKind; url: string }[];
       /** A few of our own words for a message that isn't only text ("Sent a photo"). */
       summary: string | null;
+      /**
+       * Set when Meta delivered it on its "standby" channel: another tool was
+       * the one answering this conversation when it was sent.
+       */
+      standby?: true;
+    })
+  | (Common & {
+      /**
+       * Who answers this conversation changed hands, or someone asked for it.
+       * "pass": handed to an app (Meta tells the one receiving it). "take":
+       * taken by an app (Meta tells the one it was taken from). "request":
+       * another app asks the one answering to hand it over.
+       */
+      type: "control";
+      change: "pass" | "take" | "request";
+      /** The app that has (or, for a request, wants) the conversation, when Meta says. */
+      appId: string | null;
     })
   | (Common & {
       type: "echo";
@@ -202,6 +222,27 @@ function readMessage(common: Common, message: Record<string, unknown>): SocialEv
   return { ...common, type: "message", mid, text: body, kind, media, summary };
 }
 
+/** A change of who answers a conversation (`messaging_handovers`), or a request for it. */
+function readControl(common: Common, item: Record<string, unknown>): SocialEvent | null {
+  const app = (value: unknown) => {
+    const raw = id(value);
+    return raw && /^\d{1,40}$/.test(raw) ? raw : null;
+  };
+  if (item.pass_thread_control !== undefined) {
+    const appId = app(object(item.pass_thread_control).new_owner_app_id);
+    return { ...common, type: "control", change: "pass", appId };
+  }
+  if (item.take_thread_control !== undefined) {
+    const appId = app(object(item.take_thread_control).new_owner_app_id);
+    return { ...common, type: "control", change: "take", appId };
+  }
+  if (item.request_thread_control !== undefined) {
+    const appId = app(object(item.request_thread_control).requested_owner_app_id);
+    return { ...common, type: "control", change: "request", appId };
+  }
+  return null;
+}
+
 /** One of a Facebook Page's `feed` changes, when it is about a comment. */
 function readFeedChange(
   accountId: string,
@@ -296,7 +337,7 @@ function readInstagramComment(
 
 /**
  * Every event in one webhook delivery that the help desk files, in Meta's
- * order. Reads, deliveries, postbacks, hand-offs, a Page's other feed changes
+ * order. Reads, deliveries, postbacks, changes of an app's role, a Page's other feed changes
  * (posts, reactions, shares), Instagram's live comments and mentions, and
  * anything unknown are left out.
  */
@@ -319,7 +360,16 @@ export function parseMetaPayload(payload: unknown, now: number = Date.now()): So
             : null;
       if (event) events.push(event);
     }
-    for (const item of list(entry.messaging).slice(0, 100)) {
+    const items = [
+      ...list(entry.messaging)
+        .slice(0, 100)
+        .map((item) => ({ item, standby: false })),
+      // The same shapes, delivered to a tool that isn't the one answering.
+      ...list(entry.standby)
+        .slice(0, 100)
+        .map((item) => ({ item, standby: true })),
+    ];
+    for (const { item, standby } of items) {
       const sender = id(object(item.sender).id);
       const recipient = id(object(item.recipient).id);
       if (!sender || !recipient) continue;
@@ -332,7 +382,13 @@ export function parseMetaPayload(payload: unknown, now: number = Date.now()): So
       const common: Common = { channel, accountId, personId, at };
       if (item.message !== undefined) {
         const event = readMessage(common, message);
-        if (event) events.push(event);
+        if (event)
+          events.push(event.type === "message" && standby ? { ...event, standby: true } : event);
+        continue;
+      }
+      const control = readControl(common, item);
+      if (control) {
+        events.push(control);
         continue;
       }
       const reaction = object(item.reaction);

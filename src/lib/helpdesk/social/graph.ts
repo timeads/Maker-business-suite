@@ -293,6 +293,73 @@ export async function readPost(
     : { permalink: words(data.permalink_url) || null, caption: words(data.message) };
 }
 
+/**
+ * Meta lets one tool at a time answer a conversation ("thread control", part
+ * of its Conversation Routing). These are its refusals to a tool that isn't
+ * the one: Instagram's (#100, 2534037: "not the thread owner"), Messenger's
+ * (#10, 2018300: "another app controls the conversation"), and the same said
+ * in other words by older versions (secondary receiver, standby).
+ */
+export function ownedElsewhere(refusal: {
+  code: number | null;
+  subcode: number | null;
+  reason: string;
+}): boolean {
+  return (
+    (refusal.code === 100 && refusal.subcode === 2534037) ||
+    (refusal.code === 10 && refusal.subcode === 2018300) ||
+    /thread[ _]owner|another app (controls|is controlling|has control)|controls the conversation|thread control|secondary receiver|standby/i.test(
+      refusal.reason,
+    )
+  );
+}
+
+const asked = (data: { success?: unknown }) => {
+  if (data.success !== true && data.success !== "true") throw new MetaUnsure();
+};
+
+/**
+ * Makes this app the one that answers a conversation. Meta only allows it
+ * where the business has a default app set for the channel AND has allowed
+ * this app to "Take control of conversations"; otherwise it refuses
+ * (`MetaRefused`). Never called unless the workspace switched it on.
+ */
+export async function takeThreadControl(
+  target: { pageId: string; token: string; recipientId: string },
+  fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+  asked(
+    await call<{ success?: unknown }>(
+      fetchImpl,
+      target.token,
+      `/${encodeURIComponent(target.pageId)}/take_thread_control`,
+      { method: "POST", json: { recipient: { id: target.recipientId } } },
+      15_000,
+    ),
+  );
+}
+
+/**
+ * Asks for a conversation. Meta only offers this where the business has NOT
+ * set a default app: an idle conversation is handed over at once, and for one
+ * another tool is answering, that tool is asked and may or may not pass it on.
+ * "Yes" here means the asking was heard, not that the conversation is ours.
+ */
+export async function requestThreadControl(
+  target: { pageId: string; token: string; recipientId: string },
+  fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+  asked(
+    await call<{ success?: unknown }>(
+      fetchImpl,
+      target.token,
+      `/${encodeURIComponent(target.pageId)}/request_thread_control`,
+      { method: "POST", json: { recipient: { id: target.recipientId } } },
+      15_000,
+    ),
+  );
+}
+
 /** What we ask a Page to send us for messages. Instagram's messages ride on the Page's `messages` field. */
 export const SUBSCRIBED_FIELDS = ["messages", "message_echoes", "message_reactions"] as const;
 /**
@@ -302,9 +369,21 @@ export const SUBSCRIBED_FIELDS = ["messages", "message_echoes", "message_reactio
  */
 export const COMMENT_FIELDS = ["feed"] as const;
 
+/**
+ * And for a business that has more than one inbox tool on the account:
+ * `standby` carries the messages of a conversation another tool is answering
+ * (without it they never reach us at all), and `messaging_handovers` says
+ * when a conversation changes hands. Asked for with messages; if Meta won't
+ * have them, the Page is subscribed without (`subscribePage`).
+ */
+export const CONTROL_FIELDS = ["standby", "messaging_handovers"] as const;
+
 /** The fields a Page should be subscribed with, for what is granted and switched on. */
 export function subscribedFieldsFor(want: { messages: boolean; comments: boolean }): string[] {
-  return [...(want.messages ? SUBSCRIBED_FIELDS : []), ...(want.comments ? COMMENT_FIELDS : [])];
+  return [
+    ...(want.messages ? [...SUBSCRIBED_FIELDS, ...CONTROL_FIELDS] : []),
+    ...(want.comments ? COMMENT_FIELDS : []),
+  ];
 }
 
 /** Asks Meta to send this Page's (and its Instagram account's) activity to our webhook. */
@@ -314,10 +393,22 @@ export async function subscribePage(
   fetchImpl: typeof fetch = fetch,
   fields: readonly string[] = SUBSCRIBED_FIELDS,
 ): Promise<void> {
-  await call(fetchImpl, token, `/${encodeURIComponent(pageId)}/subscribed_apps`, {
-    method: "POST",
-    query: { subscribed_fields: fields.join(",") },
-  });
+  const ask = (list: readonly string[]) =>
+    call(fetchImpl, token, `/${encodeURIComponent(pageId)}/subscribed_apps`, {
+      method: "POST",
+      query: { subscribed_fields: list.join(",") },
+    });
+  try {
+    await ask(fields);
+  } catch (err) {
+    // The two hand-over fields are a nicety: a Page Meta won't subscribe with
+    // them is subscribed without, so messages still arrive.
+    const plain = fields.filter((field) => !CONTROL_FIELDS.some((one) => one === field));
+    if (!(err instanceof MetaRefused) || plain.length === fields.length || plain.length === 0) {
+      throw err;
+    }
+    await ask(plain);
+  }
 }
 
 /** Stops them. Best effort: a Page that was never subscribed is fine. */
@@ -337,6 +428,54 @@ export const refusalText = (err: MetaRefused, partial = false): string =>
     0,
     200,
   );
+
+/** A stored refusal read back into Meta's numbers and sentence. Null for our own codes. */
+function refusalParts(stored: string | null) {
+  const match = /^meta:([^:]*):([^:]*):(partial|none):([\s\S]*)$/.exec(stored ?? "");
+  if (!match) return null;
+  const number = (raw: string) => (/^\d+$/.test(raw) ? Number(raw) : null);
+  return {
+    code: number(match[1]),
+    subcode: number(match[2]),
+    partial: match[3] === "partial",
+    reason: match[4].trim(),
+  };
+}
+
+/**
+ * For the team, when another tool has the conversation. Waiting isn't
+ * offered as a way out: Meta's documentation says that once a conversation
+ * has gone quiet only the business's chosen ("default") app may write.
+ */
+export const OWNED_ELSEWHERE =
+  "Another inbox tool is answering this conversation just now, and Meta lets only one tool reply at a time, so nothing was sent. You can answer from that tool (Meta's own inbox counts as one). To answer from here, an owner can choose which tool replies in Meta Business Suite → Settings → Conversation routing: see Settings → Help desk → Channels.";
+
+/** Whether a stored refusal is Meta saying another tool has the conversation. */
+export const storedOwnedElsewhere = (stored: string | null): boolean => {
+  const parts = refusalParts(stored);
+  return parts !== null && ownedElsewhere(parts);
+};
+
+/**
+ * Meta's own words and numbers for a refusal, for a "Details" line under our
+ * plain ones. Null when there are none, or our words already quote them.
+ */
+export function refusalDetails(stored: string | null): string | null {
+  const parts = refusalParts(stored);
+  if (!parts || !parts.reason) return null;
+  if (refusalWords(stored).includes(parts.reason)) return null;
+  const numbers = [
+    parts.code === null ? null : `code ${parts.code}`,
+    parts.subcode === null ? null : `subcode ${parts.subcode}`,
+  ].filter(Boolean);
+  return `Meta said: “${parts.reason}”${numbers.length ? ` (${numbers.join(", ")})` : ""}`;
+}
+
+/** Our words and, after them, Meta's own: for a place with one line to say it in. */
+export function refusalWithDetails(stored: string | null): string {
+  const details = refusalDetails(stored);
+  return details ? `${refusalWords(stored)} Details: ${details}.` : refusalWords(stored);
+}
 
 /** The words for the team about a send that didn't go (or only partly went). */
 export function refusalWords(stored: string | null): string {
@@ -369,13 +508,12 @@ export function refusalWords(stored: string | null): string {
     return "Comments aren't switched on and connected just now. See Settings → Help desk → Channels.";
   }
   if (stored === "files") return "The pictures couldn't be read. Attach them again.";
-  const match = /^meta:([^:]*):([^:]*):(partial|none):([\s\S]*)$/.exec(stored ?? "");
-  if (!match) return "Meta didn't take it. Try again in a moment.";
-  const code = Number(match[1]);
-  const subcode = Number(match[2]);
-  const reason = match[4].trim();
-  const start = match[3] === "partial" ? "Your words were sent, but the pictures weren't. " : "";
+  const parts = refusalParts(stored);
+  if (!parts) return "Meta didn't take it. Try again in a moment.";
+  const { code, subcode, reason } = parts;
+  const start = parts.partial ? "Your words were sent, but the pictures weren't. " : "";
   const said = reason ? ` Meta said: “${reason}”` : "";
+  if (ownedElsewhere(parts)) return `${start}${OWNED_ELSEWHERE}`;
   if (code === 190) {
     return `${start}Meta no longer accepts this connection. Reconnect Facebook & Instagram in Settings → Connections.`;
   }

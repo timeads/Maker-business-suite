@@ -544,6 +544,8 @@ describe("where comments stand", () => {
       "messages",
       "message_echoes",
       "message_reactions",
+      "standby",
+      "messaging_handovers",
     ]);
     expect(subscribedFieldsFor({ messages: false, comments: true })).toEqual(["feed"]);
     expect(subscribedFieldsFor({ messages: true, comments: true })).toContain("feed");

@@ -104,6 +104,18 @@ function intakeDeps(admin: SupabaseClient, tokenDeps: TokenDeps): IntakeDeps {
       });
       check("could not note a reaction", error);
     },
+    async noteControl(where, personId, state, appId, at) {
+      const { error } = await admin.rpc("note_thread_control", {
+        p_tenant_id: where.tenantId,
+        p_channel: where.channel,
+        p_external_id: personId,
+        p_state: state,
+        p_app_id: appId,
+        p_at: at,
+      });
+      // A note for the team; never a reason to file the delivery again.
+      if (error) console.error(`could not note who answers a conversation: ${error.message}`);
+    },
     async refreshProfile(where, personId, contactId) {
       const profile = await readProfile(where.channel, await token(where.tenantId), personId);
       const { error } = await admin.rpc("set_social_profile", {
