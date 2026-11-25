@@ -39,6 +39,8 @@ export default async function HelpdeskReportsPage({
         "status, assignee_id, created_at, first_reply_at, closed_at, merged_into, ticket_tags(tags(name))",
       )
       .eq("tenant_id", tenant.id)
+      // Spam and what was thrown away were never real requests.
+      .or("shelf.is.null,shelf.eq.archived")
       .gte("created_at", daysFromNow(-DAYS))
       .order("created_at")
       .limit(5000),

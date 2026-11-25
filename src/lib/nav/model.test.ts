@@ -145,7 +145,18 @@ describe("buildNav: each tool's menu", () => {
       "Closed",
     ]);
     expect(desk.menu[1].items[0].to).toBe("helpdesk?view=mine");
-    expect(desk.menu[2].items.map((item) => item.label)).toEqual(["All tickets"]);
+    expect(desk.menu[2].items.map((item) => item.label)).toEqual([
+      "All tickets",
+      "Archived",
+      "Spam",
+      "Trash",
+    ]);
+    expect(desk.menu[2].items.map((item) => item.to)).toEqual([
+      "helpdesk?view=all",
+      "helpdesk?view=archived",
+      "helpdesk?view=spam",
+      "helpdesk?view=trash",
+    ]);
     expect(desk.menu[3].add?.to).toBe("settings/helpdesk#folders");
     const member = tool(buildNav(viewer({ manager: false })), "helpdesk");
     expect(member.menu[3].add).toBeUndefined();

@@ -66,6 +66,9 @@ export function matchesConditions(
   now: number,
 ): boolean {
   if (ticket.merged_into) return false;
+  // Spam and Trash are in no view; archived only where a view asks for any status.
+  if (ticket.shelf === "spam" || ticket.shelf === "trash") return false;
+  if (ticket.shelf && conditions.status !== "any") return false;
   const snoozed = isSnoozed(ticket, now);
   switch (conditions.status) {
     case "active":

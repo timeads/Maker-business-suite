@@ -12,17 +12,21 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
+  Archive,
   Check,
   ChevronDown,
   Copy,
   Filter,
+  Inbox,
   Mail,
   MoreHorizontal,
+  OctagonAlert,
   PanelRightClose,
   PanelRightOpen,
   Plus,
   RefreshCw,
   Sparkles,
+  Trash2,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -34,6 +38,8 @@ import { textToRich } from "@/lib/helpdesk/rich";
 import { cn } from "@/lib/utils";
 import {
   assignTicket,
+  deleteForGood,
+  emptyTrash,
   fileTicket,
   markRead,
   mergeTicket,
@@ -42,6 +48,7 @@ import {
   setStatus,
   setTags,
   setTicketPriority,
+  shelveTicket,
   snoozeTicket,
   startConversation,
   summarizeTicket,
@@ -762,6 +769,8 @@ export function TicketControls({
   statusLabel,
   snoozed,
   folderId,
+  shelf = null,
+  canDelete = false,
   assignedToMe,
   me,
   snoozeChoices,
@@ -776,6 +785,10 @@ export function TicketControls({
   statusLabel: string;
   snoozed: string | null;
   folderId: string | null;
+  /** Archived, in Spam or in the Trash. */
+  shelf?: "archived" | "spam" | "trash" | null;
+  /** Owners and admins can delete for good, from the Trash. */
+  canDelete?: boolean;
   assignedToMe: boolean;
   me: string;
   snoozeChoices: Snooze[];
@@ -811,6 +824,25 @@ export function TicketControls({
       await snoozeTicket(slug, ticketId, until);
       if (until) router.push(after);
     });
+  const shelve = (next: "" | "archived" | "spam" | "trash") =>
+    start(async () => {
+      await shelveTicket(slug, ticketId, next);
+      if (next) router.push(after);
+    });
+  const forGood = () => {
+    if (
+      !window.confirm(
+        "Delete this conversation for good? Its emails, notes and files go too. This can't be undone.",
+      )
+    )
+      return;
+    start(async () => {
+      const result = await deleteForGood(slug, ticketId);
+      if (result.error) window.alert(result.error);
+      else router.push(back);
+    });
+  };
+  const shelfWords = { archived: "Archived", spam: "Spam", trash: "In the Trash" } as const;
   const tone = snoozed
     ? "bg-sunken text-muted-foreground"
     : status === "open"
@@ -882,8 +914,8 @@ export function TicketControls({
         )}
         button={
           <>
-            {closed && <Check aria-hidden />}
-            {snoozed ? `Snoozed · ${snoozed}` : statusLabel}
+            {closed && !shelf && <Check aria-hidden />}
+            {shelf ? shelfWords[shelf] : snoozed ? `Snoozed · ${snoozed}` : statusLabel}
             <ChevronDown aria-hidden />
           </>
         }
@@ -901,12 +933,12 @@ export function TicketControls({
                 key={value}
                 type="button"
                 role="menuitemradio"
-                aria-checked={status === value}
-                className={cn(item, status === value && "font-semibold")}
+                aria-checked={!shelf && status === value}
+                className={cn(item, !shelf && status === value && "font-semibold")}
                 onClick={() => (close(), change(value))}
               >
                 {label}
-                {status === value && <Check aria-hidden className="ml-auto size-3.5" />}
+                {!shelf && status === value && <Check aria-hidden className="ml-auto size-3.5" />}
               </button>
             ))}
             {!closed && (
@@ -919,9 +951,17 @@ export function TicketControls({
         type="button"
         variant="outline"
         size="sm"
-        onClick={() => change(closed ? "open" : "closed")}
+        onClick={() => (shelf ? shelve("") : change(closed ? "open" : "closed"))}
       >
-        {closed ? "Reopen" : "Close"}
+        {shelf === "spam"
+          ? "Not spam"
+          : shelf === "trash"
+            ? "Restore"
+            : shelf === "archived"
+              ? "Unarchive"
+              : closed
+                ? "Reopen"
+                : "Close"}
       </Button>
       <Menu
         label="More actions"
@@ -1010,6 +1050,62 @@ export function TicketControls({
                   Back to inbox
                 </button>
               )}
+              <div className="border-border mt-1 border-t pt-1">
+                {shelf !== "archived" && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className={item}
+                    onClick={() => (close(), shelve("archived"))}
+                  >
+                    <Archive aria-hidden className="size-3.5" />
+                    Archive
+                  </button>
+                )}
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={item}
+                  onClick={() => (close(), shelve(shelf === "spam" ? "" : "spam"))}
+                >
+                  <OctagonAlert aria-hidden className="size-3.5" />
+                  {shelf === "spam" ? "Not spam" : "Mark as spam"}
+                </button>
+                {shelf === "trash" ? (
+                  <>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={item}
+                      onClick={() => (close(), shelve(""))}
+                    >
+                      <Inbox aria-hidden className="size-3.5" />
+                      Restore
+                    </button>
+                    {canDelete && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className={cn(item, "text-brick")}
+                        onClick={() => (close(), forGood())}
+                      >
+                        <Trash2 aria-hidden className="size-3.5" />
+                        Delete for good…
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className={cn(item, "text-brick")}
+                    onClick={() => (close(), shelve("trash"))}
+                  >
+                    <Trash2 aria-hidden className="size-3.5" />
+                    Delete
+                  </button>
+                )}
+              </div>
             </>
           );
         }}
@@ -1293,5 +1389,35 @@ export function AddToReply({ text, closeHref }: { text: string; closeHref: strin
       <Plus aria-hidden />
       Add to reply
     </Button>
+  );
+}
+
+/** "Empty Trash": everything in it, gone for good. Owners and admins; asks first. */
+export function EmptyTrash({ slug }: { slug: string }) {
+  const [pending, start] = useTransition();
+  const [problem, setProblem] = useState<string | null>(null);
+  return (
+    <>
+      <button
+        type="button"
+        disabled={pending}
+        className="text-brick font-semibold hover:underline disabled:opacity-60"
+        onClick={() => {
+          if (
+            !window.confirm(
+              "Delete everything in the Trash for good? Emails, notes and files go too. This can't be undone.",
+            )
+          )
+            return;
+          start(async () => {
+            const result = await emptyTrash(slug);
+            setProblem(result.error ?? null);
+          });
+        }}
+      >
+        {pending ? "Emptying…" : "Empty Trash"}
+      </button>
+      {problem && <span role="alert">{problem}</span>}
+    </>
   );
 }

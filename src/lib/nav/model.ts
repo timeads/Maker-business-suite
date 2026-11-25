@@ -47,7 +47,10 @@ export type ItemIcon =
   | "at"
   | "check"
   | "layers"
-  | "folder";
+  | "folder"
+  | "archive"
+  | "spam"
+  | "trash";
 
 export type NavItem = {
   id: string;
@@ -175,6 +178,9 @@ const VIEW_ICONS: Record<(typeof VIEWS)[number]["key"], ItemIcon> = {
   mentions: "at",
   closed: "check",
   all: "layers",
+  archived: "archive",
+  spam: "spam",
+  trash: "trash",
 };
 
 /** A row for one way of looking at the inbox: `view` is the word in the address. */
@@ -194,6 +200,13 @@ function helpdeskView(id: string, label: string, view: string, icon: ItemIcon): 
   };
 }
 
+const HELPDESK_MORE = new Set([
+  "helpdesk.all",
+  "helpdesk.archived",
+  "helpdesk.spam",
+  "helpdesk.trash",
+]);
+
 function helpdeskMenu(viewer: NavViewer, attention: Attention): NavGroup[] {
   const built = VIEWS.map((view) => ({
     ...helpdeskView(`helpdesk.${view.key}`, view.label, view.key, VIEW_ICONS[view.key]),
@@ -207,12 +220,13 @@ function helpdeskMenu(viewer: NavViewer, attention: Attention): NavGroup[] {
     {
       id: "helpdesk.tickets",
       name: "Tickets",
-      items: built.filter((item) => item.id !== "helpdesk.all"),
+      items: built.filter((item) => !HELPDESK_MORE.has(item.id)),
     },
     {
+      // Everything, and the three shelves: archived, spam and the Trash.
       id: "helpdesk.more",
       name: "More",
-      items: built.filter((item) => item.id === "helpdesk.all"),
+      items: built.filter((item) => HELPDESK_MORE.has(item.id)),
     },
     {
       id: HELPDESK_FOLDERS_GROUP,

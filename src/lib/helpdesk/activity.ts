@@ -53,13 +53,26 @@ export function describeEvent(event: TicketEvent, names: Names): string {
       return `${who} merged ${d}`;
     case "forwarded":
       return `${who} forwarded to ${d}`;
+    case "shelf":
+      if (d === "restored") {
+        return source === "spam"
+          ? `${who} marked this as not spam`
+          : source === "trash"
+            ? `${who} restored this from the Trash`
+            : `${who} took this out of the archive`;
+      }
+      return d === "spam"
+        ? `${who} marked this as spam`
+        : d === "trash"
+          ? `${who} moved this to the Trash`
+          : `${who} archived this`;
     default:
       return `${event.kind} ${event.detail}`.trim();
   }
 }
 
 /** The events worth a line in the conversation itself. */
-export const THREAD_EVENTS = new Set(["status", "assigned", "merged", "forwarded"]);
+export const THREAD_EVENTS = new Set(["status", "assigned", "merged", "forwarded", "shelf"]);
 
 export const ACTIVITY_GROUPS = [
   { key: "all", label: "Everything" },

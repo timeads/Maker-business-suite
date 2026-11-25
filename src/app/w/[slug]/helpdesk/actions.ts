@@ -44,6 +44,7 @@ import { replyProblem } from "@/lib/helpdesk/reply";
 import { isPlain, parseRichDoc, richToText, tidyDoc, type RichDoc } from "@/lib/helpdesk/rich";
 import { SAVED_VIEWS_KEY, parseSavedViews, savedViewsSchema } from "@/lib/helpdesk/saved-views";
 import { DESK_SETTINGS_KEY, deskSettingsSchema, parseDeskSettings } from "@/lib/helpdesk/settings";
+import { isShelf } from "@/lib/helpdesk/views";
 import { postAlert } from "@/lib/messages/alerts";
 import { handlesFor, nameOf, type Person } from "@/lib/messages/format";
 import { getAdminClient } from "@/lib/supabase/admin";
@@ -1012,4 +1013,46 @@ export async function saveDeskSettings(slug: string, _prev: HelpdeskState, formD
       ? { body: parsed.data }
       : { error: "Up to ten addresses, and choices from the lists." };
   });
+}
+
+// ---------------------------------------------------------------------------
+// Archive, Spam and the Trash
+// ---------------------------------------------------------------------------
+
+/** Puts a conversation on a shelf ("archived", "spam", "trash"), or ("") takes it off and reopens it. */
+export async function shelveTicket(slug: string, ticketId: string, shelf: string): Promise<void> {
+  const ctx = await context(slug);
+  if ("error" in ctx || (shelf !== "" && !isShelf(shelf))) return;
+  await ctx.supabase.rpc("shelve_ticket", { p_ticket_id: ticketId, p_shelf: shelf || null });
+  done(slug);
+}
+
+/** Removes one conversation from the Trash for good. Owners and admins; the database checks again. */
+export async function deleteForGood(slug: string, ticketId: string): Promise<HelpdeskState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  if (!canManage(ctx.role)) return { error: "Only owners and admins can delete for good." };
+  const { error } = await ctx.supabase.rpc("delete_ticket_for_good", { p_ticket_id: ticketId });
+  if (error) {
+    return {
+      error: error.message.includes("Trash first")
+        ? "Move it to the Trash first."
+        : "That couldn't be deleted. Try again in a moment.",
+    };
+  }
+  done(slug);
+  return { message: "Deleted for good." };
+}
+
+/** Empties the Trash: every conversation in it, with its emails, notes and files. */
+export async function emptyTrash(slug: string): Promise<HelpdeskState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  if (!canManage(ctx.role)) return { error: "Only owners and admins can empty the Trash." };
+  const { data, error } = await ctx.supabase.rpc("empty_ticket_trash", {
+    p_tenant_id: ctx.tenant.id,
+  });
+  if (error) return { error: "The Trash couldn't be emptied. Try again in a moment." };
+  done(slug);
+  return { message: `${Number(data ?? 0)} deleted for good.` };
 }

@@ -58,15 +58,18 @@ import { DESK_SETTINGS_KEY, parseDeskSettings } from "@/lib/helpdesk/settings";
 import { foldThread, placeInline, splitQuote } from "@/lib/helpdesk/thread";
 import {
   PRIORITY_LABELS,
+  SHELF_LABELS,
   STATUS_LABELS,
   VIEWS,
   byUrgency,
   inFolder,
   inView,
+  isShelf,
   isSnoozed,
   parseView,
   snoozeChoices,
   viewParam,
+  type Shelf,
 } from "@/lib/helpdesk/views";
 import { initials, nameOf, splitBody, type Person } from "@/lib/messages/format";
 import {
@@ -87,6 +90,7 @@ import { loadCustomerSide, type CustomerSide } from "./data";
 import {
   AddToReply,
   CopyButton,
+  EmptyTrash,
   DeskKeys,
   FieldSelect,
   ListTools,
@@ -124,6 +128,7 @@ type Row = {
   snoozed_until: string | null;
   merged_into: string | null;
   folder_id: string | null;
+  shelf: Shelf | null;
   last_message_at: string;
   created_at: string;
   contact_id: string;
@@ -160,7 +165,7 @@ const tagsOf = (row: Row) =>
     .filter((name): name is string => Boolean(name));
 
 const FIELDS =
-  "id, number, subject, status, priority, assignee_id, snoozed_until, merged_into, folder_id, last_message_at, created_at, contact_id, contacts(email, name), ticket_tags(tags(name))";
+  "id, number, subject, status, priority, assignee_id, snoozed_until, merged_into, folder_id, shelf, last_message_at, created_at, contact_id, contacts(email, name), ticket_tags(tags(name))";
 const UUID = /^[0-9a-f-]{36}$/;
 const heading = "text-[13px] font-bold tracking-[-0.005em]";
 const card = "border-border border-b px-4 py-4";
@@ -251,6 +256,7 @@ export default async function HelpdeskPage({
   const nowMs = now.getTime();
 
   const supabase = await createClient();
+  const shelfView = choice.kind === "built" && isShelf(choice.key) ? choice.key : null;
   const wantsClosed =
     (choice.kind === "built" && ["closed", "all", "mentions"].includes(choice.key)) ||
     choice.kind === "saved" ||
@@ -265,6 +271,8 @@ export default async function HelpdeskPage({
     { data: readRows },
     { data: mentionRows },
     { data: found },
+    { data: shelved },
+    { count: spamCount },
     cookieJar,
   ] = await Promise.all([
     supabase
@@ -280,6 +288,8 @@ export default async function HelpdeskPage({
           .select(FIELDS)
           .eq("tenant_id", tenant.id)
           .eq("status", "closed")
+          // Spam and the Trash are read only when someone is looking at them.
+          .or("shelf.is.null,shelf.eq.archived")
           .order("last_message_at", { ascending: false })
           .limit(150)
       : Promise.resolve({ data: [] }),
@@ -288,6 +298,7 @@ export default async function HelpdeskPage({
       .select("id", { count: "exact", head: true })
       .eq("tenant_id", tenant.id)
       .eq("status", "closed")
+      .is("shelf", null)
       .is("merged_into", null),
     supabase.rpc("chat_people", { p_tenant_id: tenant.id }),
     supabase.from("ticket_folders").select("id, name").eq("tenant_id", tenant.id).order("name"),
@@ -314,6 +325,20 @@ export default async function HelpdeskPage({
     q.length >= 3
       ? supabase.rpc("search_ticket_messages", { p_tenant_id: tenant.id, p_q: q })
       : Promise.resolve({ data: [] }),
+    shelfView
+      ? supabase
+          .from("tickets")
+          .select(FIELDS)
+          .eq("tenant_id", tenant.id)
+          .eq("shelf", shelfView)
+          .order("last_message_at", { ascending: false })
+          .limit(300)
+      : Promise.resolve({ data: [] }),
+    supabase
+      .from("tickets")
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", tenant.id)
+      .eq("shelf", "spam"),
     cookies(),
   ]);
   const people = (team ?? []) as Person[];
@@ -328,7 +353,15 @@ export default async function HelpdeskPage({
   const readAt = new Map((readRows ?? []).map((r) => [r.ticket_id as string, r.read_at as string]));
   const mentioned = new Set((mentionRows ?? []).map((r) => r.ticket_id as string));
   const saidIn = new Set(((found ?? []) as unknown as (string | { id?: string })[]).map(String));
-  const all = [...((live ?? []) as unknown as Row[]), ...((closed ?? []) as unknown as Row[])];
+  const all = [
+    ...new Map(
+      [
+        ...((live ?? []) as unknown as Row[]),
+        ...((closed ?? []) as unknown as Row[]),
+        ...((shelved ?? []) as unknown as Row[]),
+      ].map((row) => [row.id, row]),
+    ).values(),
+  ];
   const facts = (row: Row) => ({ ...row, mentioned: mentioned.has(row.id) });
   const customerOf = (row: Row) => {
     const contact = one(row.contacts);
@@ -356,9 +389,13 @@ export default async function HelpdeskPage({
       .toLowerCase()
       .includes(q);
   };
-  // A search looks everywhere that isn't joined away; otherwise the view decides.
+  // A search looks everywhere that isn't joined away, in Spam or in the Trash
+  // (or only on the shelf you are looking at); otherwise the view decides.
+  const searchable = (row: Row) =>
+    !row.merged_into &&
+    (shelfView ? row.shelf === shelfView : row.shelf !== "spam" && row.shelf !== "trash");
   const candidates = all
-    .filter((row) => (q ? !row.merged_into : inChoice(row)))
+    .filter((row) => (q ? searchable(row) : inChoice(row)))
     .filter(matchesSearch)
     .slice(0, 300);
   const { data: factRows } =
@@ -396,7 +433,11 @@ export default async function HelpdeskPage({
 
   const counts: Record<string, number> = {};
   for (const v of VIEWS) {
-    if (v.key === "all") continue;
+    if (v.key === "all" || v.key === "archived" || v.key === "trash") continue;
+    if (v.key === "spam") {
+      counts["helpdesk.spam"] = spamCount ?? 0;
+      continue;
+    }
     counts[`helpdesk.${v.key}`] =
       v.key === "closed"
         ? (closedCount ?? 0)
@@ -900,6 +941,18 @@ export default async function HelpdeskPage({
             </Link>
           </p>
         )}
+        {shelfView && (
+          <p className="text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1 px-4 pb-2 text-xs">
+            {shelfView === "trash"
+              ? "Deleted conversations stay here until an owner or admin removes them for good."
+              : shelfView === "spam"
+                ? "More mail on a conversation in Spam stays in Spam."
+                : "Archived conversations come back to the inbox if the customer writes again."}
+            {shelfView === "trash" && canWrite && canManage(role) && list.length > 0 && (
+              <EmptyTrash slug={tenant.slug} />
+            )}
+          </p>
+        )}
         <ul className="border-border min-h-0 flex-1 overflow-y-auto border-t px-1.5 py-1.5">
           {list.length === 0 && (
             <li className="text-muted-foreground p-5 text-sm">
@@ -921,6 +974,12 @@ export default async function HelpdeskPage({
                 "No conversations match these filters."
               ) : choice.kind === "built" && ["open", "mine", "unassigned"].includes(choice.key) ? (
                 "Inbox zero. Nothing needs a reply."
+              ) : shelfView === "trash" ? (
+                "The Trash is empty."
+              ) : shelfView === "spam" ? (
+                "No spam. Lovely."
+              ) : shelfView === "archived" ? (
+                "Nothing has been archived yet."
               ) : (
                 "Nothing here."
               )}
@@ -986,7 +1045,9 @@ export default async function HelpdeskPage({
                         {rowFolder.name}
                       </span>
                     )}
-                    {isSnoozed(row, nowMs) ? (
+                    {row.shelf && !shelfView ? (
+                      <Badge>{SHELF_LABELS[row.shelf]}</Badge>
+                    ) : row.shelf ? null : isSnoozed(row, nowMs) ? (
                       <Badge>Snoozed · {when.format(new Date(row.snoozed_until!))}</Badge>
                     ) : (
                       showStatus && (
@@ -1105,6 +1166,8 @@ export default async function HelpdeskPage({
                         statusLabel={STATUS_LABELS[ticket.status]}
                         snoozed={snoozedLabel}
                         folderId={ticket.folder_id}
+                        shelf={ticket.shelf}
+                        canDelete={canManage(role)}
                         assignedToMe={ticket.assignee_id === user.id}
                         me={user.id}
                         snoozeChoices={choices}
@@ -1140,6 +1203,15 @@ export default async function HelpdeskPage({
                 id="desk-thread"
                 className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-4 md:px-6"
               >
+                {ticket.shelf && (
+                  <p className="bg-sunken rounded-md px-4 py-3 text-sm">
+                    {ticket.shelf === "spam"
+                      ? "This conversation is in Spam. More mail on it stays there until someone marks it as not spam."
+                      : ticket.shelf === "trash"
+                        ? "This conversation is in the Trash. More mail on it stays there until someone restores it."
+                        : "This conversation is archived. It comes back to the inbox if the customer writes again."}
+                  </p>
+                )}
                 {ticket.merged_into && (
                   <p className="bg-sunken rounded-md px-4 py-3 text-sm">
                     This conversation was joined into{" "}
@@ -1359,7 +1431,11 @@ export default async function HelpdeskPage({
                       : "closed"
                 }
               >
-                {snoozedLabel ? "Snoozed" : STATUS_LABELS[ticket.status]}
+                {ticket.shelf
+                  ? SHELF_LABELS[ticket.shelf]
+                  : snoozedLabel
+                    ? "Snoozed"
+                    : STATUS_LABELS[ticket.status]}
               </Badge>,
             )}
             {snoozedLabel && row("Back on", snoozedLabel)}

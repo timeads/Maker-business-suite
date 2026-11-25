@@ -15,8 +15,21 @@ export const VIEWS = [
   { key: "mentions", label: "Mentions" },
   { key: "closed", label: "Closed" },
   { key: "all", label: "All tickets" },
+  { key: "archived", label: "Archived" },
+  { key: "spam", label: "Spam" },
+  { key: "trash", label: "Trash" },
 ] as const;
 export type ViewKey = (typeof VIEWS)[number]["key"];
+
+/** The three shelves a conversation can be put on. Each has a view of the same name. */
+export const SHELVES = ["archived", "spam", "trash"] as const;
+export type Shelf = (typeof SHELVES)[number];
+export const isShelf = (value: unknown): value is Shelf => SHELVES.some((s) => s === value);
+export const SHELF_LABELS: Record<Shelf, string> = {
+  archived: "Archived",
+  spam: "Spam",
+  trash: "In the Trash",
+};
 
 export const isView = (value: unknown): value is ViewKey =>
   VIEWS.some((view) => view.key === value);
@@ -49,6 +62,8 @@ export type TicketFacts = {
   folder_id?: string | null;
   /** Whether a note on it names the person looking. */
   mentioned?: boolean;
+  /** Archived, in Spam or in the Trash: out of every working view. */
+  shelf?: Shelf | null;
 };
 
 export const isSnoozed = (ticket: Pick<TicketFacts, "snoozed_until">, now: number) =>
@@ -57,11 +72,17 @@ export const isSnoozed = (ticket: Pick<TicketFacts, "snoozed_until">, now: numbe
 /**
  * Whether a conversation belongs in a view. Joined-away ones only show under
  * All tickets. One filed in a folder shows only there, under Mentions, Closed
- * and All tickets (and in a search, which the page handles).
+ * and All tickets (and in a search, which the page handles). A shelved one
+ * (archived, spam, trash) shows on its own shelf and nowhere in the working
+ * folders; Spam and Trash are left out of All tickets and Mentions as well.
  */
 export function inView(ticket: TicketFacts, view: ViewKey, me: string, now: number): boolean {
+  const shelf = ticket.shelf ?? null;
+  if (isShelf(view)) return shelf === view && !ticket.merged_into;
+  if (shelf === "spam" || shelf === "trash") return false;
   if (view === "all") return true;
   if (ticket.merged_into) return false;
+  if (shelf) return view === "mentions" && ticket.mentioned === true;
   if (view === "closed") return ticket.status === "closed";
   if (view === "mentions") return ticket.mentioned === true;
   if (ticket.folder_id) return false;
@@ -77,12 +98,17 @@ export function inView(ticket: TicketFacts, view: ViewKey, me: string, now: numb
       return ticket.status === "pending" && !snoozed;
     case "snoozed":
       return ticket.status !== "closed" && snoozed;
+    default:
+      return false;
   }
 }
 
 /** A folder holds what was filed in it and isn't closed. */
 export const inFolder = (ticket: TicketFacts, folderId: string): boolean =>
-  !ticket.merged_into && ticket.status !== "closed" && ticket.folder_id === folderId;
+  !ticket.merged_into &&
+  !ticket.shelf &&
+  ticket.status !== "closed" &&
+  ticket.folder_id === folderId;
 
 export const STATUS_LABELS = { open: "Open", pending: "In progress", closed: "Closed" } as const;
 

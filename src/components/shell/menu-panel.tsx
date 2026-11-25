@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
+  Archive,
   AtSign,
   BarChart3,
   Check,
@@ -12,12 +13,14 @@ import {
   Inbox,
   Layers,
   Moon,
+  OctagonAlert,
   PanelLeft,
   PanelLeftClose,
   Plus,
   Search,
   Settings,
   Tag,
+  Trash2,
   User,
   X,
 } from "lucide-react";
@@ -54,6 +57,9 @@ const ITEM_ICONS: Record<ItemIcon, typeof Tag> = {
   check: Check,
   layers: Layers,
   folder: Folder,
+  archive: Archive,
+  spam: OctagonAlert,
+  trash: Trash2,
 };
 
 /** A tool's menu: its groups and rows, the same list in the panel and in the sheet. */

@@ -1,6 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { actionsFor, autoTagRulesSchema } from "./config";
-import { byUrgency, formatDuration, inView, median, snoozeChoices, VIEWS } from "./views";
+import { describeEvent } from "./activity";
+import { matchesConditions } from "./saved-views";
+import {
+  byUrgency,
+  formatDuration,
+  inFolder,
+  inView,
+  isShelf,
+  median,
+  parseView,
+  snoozeChoices,
+  VIEWS,
+} from "./views";
 
 const NOW = Date.parse("2026-11-20T15:00:00Z");
 const ME = "11111111-1111-4111-8111-111111111111";
@@ -43,6 +55,80 @@ describe("inbox folders", () => {
       { id: "c", priority: "low" as const, last_message_at: "2026-11-20T12:00:00Z" },
     ];
     expect(rows.sort(byUrgency).map((r) => r.id)).toEqual(["b", "c", "a"]);
+  });
+});
+
+describe("archive, spam and the trash", () => {
+  const base = {
+    status: "closed" as const,
+    assignee_id: "me",
+    snoozed_until: null,
+    merged_into: null,
+    folder_id: null,
+  };
+  const working = ["mine", "unassigned", "open", "pending", "snoozed", "closed"] as const;
+
+  it("a shelved conversation shows on its own shelf and in no working folder", () => {
+    for (const shelf of ["archived", "spam", "trash"] as const) {
+      const ticket = { ...base, shelf, mentioned: true };
+      for (const view of working) expect(inView(ticket, view, "me", 0)).toBe(false);
+      for (const other of ["archived", "spam", "trash"] as const) {
+        expect(inView(ticket, other, "me", 0)).toBe(other === shelf);
+      }
+      expect(inFolder({ ...ticket, status: "open", folder_id: "f1" }, "f1")).toBe(false);
+    }
+  });
+
+  it("archived is still under All tickets and Mentions; spam and trash are not", () => {
+    expect(inView({ ...base, shelf: "archived" }, "all", "me", 0)).toBe(true);
+    expect(inView({ ...base, shelf: "archived", mentioned: true }, "mentions", "me", 0)).toBe(true);
+    for (const shelf of ["spam", "trash"] as const) {
+      expect(inView({ ...base, shelf }, "all", "me", 0)).toBe(false);
+      expect(inView({ ...base, shelf, mentioned: true }, "mentions", "me", 0)).toBe(false);
+    }
+  });
+
+  it("a conversation that isn't shelved is on no shelf", () => {
+    for (const shelf of ["archived", "spam", "trash"] as const) {
+      expect(inView({ ...base, shelf: null }, shelf, "me", 0)).toBe(false);
+      expect(inView({ ...base, status: "open" }, shelf, "me", 0)).toBe(false);
+    }
+    expect(inView({ ...base, shelf: null }, "closed", "me", 0)).toBe(true);
+    expect(isShelf("spam")).toBe(true);
+    expect(isShelf("open")).toBe(false);
+    expect(parseView("trash")).toEqual({ kind: "built", key: "trash" });
+  });
+
+  it("saved views never hold spam or trash, and archived only under any status", () => {
+    const row = {
+      ...base,
+      priority: "normal" as const,
+      tags: [],
+      subject: "s",
+      customer: "c",
+      unread: false,
+    };
+    expect(matchesConditions({ ...row, shelf: "spam" }, { status: "any" }, "me", 0)).toBe(false);
+    expect(matchesConditions({ ...row, shelf: "trash" }, { status: "closed" }, "me", 0)).toBe(
+      false,
+    );
+    expect(matchesConditions({ ...row, shelf: "archived" }, { status: "closed" }, "me", 0)).toBe(
+      false,
+    );
+    expect(matchesConditions({ ...row, shelf: "archived" }, { status: "any" }, "me", 0)).toBe(true);
+    expect(matchesConditions({ ...row, shelf: null }, { status: "closed" }, "me", 0)).toBe(true);
+  });
+
+  it("the log says who shelved what", () => {
+    const names = { person: () => "Amy", when: (x: string) => x };
+    const event = (detail: string) =>
+      describeEvent({ id: "1", kind: "shelf", detail, actor_id: "u", created_at: "" }, names);
+    expect(event("archived")).toBe("Amy archived this");
+    expect(event("spam")).toBe("Amy marked this as spam");
+    expect(event("trash")).toBe("Amy moved this to the Trash");
+    expect(event("restored|spam")).toBe("Amy marked this as not spam");
+    expect(event("restored|trash")).toBe("Amy restored this from the Trash");
+    expect(event("restored|archived")).toBe("Amy took this out of the archive");
   });
 });
 
