@@ -157,14 +157,21 @@ export function parseBalanceSheet(report: QuickBooksReport, asOf: string): Snaps
     const cells = summary(row);
     return cells.length > 1 ? number(cells[cells.length - 1]?.value) : null;
   };
-  // Each bank account's own line, for "where this number came from".
-  const accounts: { name: string; cents: number }[] = [];
+  // Each bank account's own line, for "where this number came from" and the
+  // emergency fund's account: its name, its amount and, where the report
+  // gives one on the line's first cell, the books' own id for the account.
+  const accounts: { name: string; cents: number; id?: string }[] = [];
   const collect = (list: ReportRow[] | undefined) => {
     for (const row of list ?? []) {
       const cells = row.ColData ?? [];
       const name = (cells[0]?.value ?? "").trim();
       if (row.type === "Data" && name && cells.length > 1 && accounts.length < 50) {
-        accounts.push({ name: name.slice(0, 120), cents: cents(cells[cells.length - 1]?.value) });
+        const id = (cells[0]?.id ?? "").trim();
+        accounts.push({
+          name: name.slice(0, 120),
+          cents: cents(cells[cells.length - 1]?.value),
+          ...(/^[A-Za-z0-9_-]{1,60}$/.test(id) ? { id } : {}),
+        });
       }
       collect(row.Rows?.Row);
     }

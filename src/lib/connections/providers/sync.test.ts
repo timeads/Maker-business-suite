@@ -954,7 +954,7 @@ describe("QuickBooks reports", () => {
             Rows: {
               Row: [
                 { type: "Data", ColData: [{ value: "Checking" }, { value: "1,000.00" }] },
-                { type: "Data", ColData: [{ value: "Savings" }, { value: "500.25" }] },
+                { type: "Data", ColData: [{ value: "Savings", id: "35" }, { value: "500.25" }] },
               ],
             },
           },
@@ -963,7 +963,8 @@ describe("QuickBooks reports", () => {
     };
     expect(parseBalanceSheet(sheet, "2026-11-21")?.data.bank_accounts).toEqual([
       { name: "Checking", cents: 100000 },
-      { name: "Savings", cents: 50025 },
+      // The books' own id for the account, where the report gives one.
+      { name: "Savings", cents: 50025, id: "35" },
     ]);
   });
 

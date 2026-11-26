@@ -5,11 +5,14 @@ import { SectionHeading } from "@/components/settings/section-heading";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { describeConfig, findConfig } from "@/lib/assistant/registry";
 import { requireUser } from "@/lib/auth";
-import { loadDebtSettings } from "@/lib/dashboard/debt/data";
+import { loadDebtSettings, sheetBanks } from "@/lib/dashboard/debt/data";
+import { bankKey, emergencyFund, pickedBanks } from "@/lib/dashboard/debt/figures";
+import { formatMoney } from "@/lib/dashboard/format";
 import { DEBT_FIELDS } from "@/lib/dashboard/figure-fields";
 import { getEntitlements } from "@/lib/entitlements";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
+import { EmergencyAccountPicker } from "../../../dashboard/debt-forms";
 import { FigureSettingsForm } from "../../../dashboard/money-figure-forms";
 
 export const metadata: Metadata = { title: "Debt payoff and emergency fund" };
@@ -41,9 +44,10 @@ export default async function DebtSettingsPage({ params }: { params: Promise<{ s
       .limit(1)
       .maybeSingle(),
   ]);
-  const banks = Array.isArray(sheet.data?.data?.bank_accounts)
-    ? (sheet.data.data.bank_accounts as { name: string }[]).map((a) => a.name)
-    : [];
+  const banks = sheetBanks((sheet.data as { data?: Record<string, unknown> } | null)?.data) ?? [];
+  const money = (cents: number) => formatMoney(cents / 100, tenant.currency);
+  const picked = pickedBanks(settings, banks);
+  const unread = emergencyFund(settings, [], banks).missing;
   const entry = findConfig("dashboard", "debt")!;
 
   return (
@@ -84,9 +88,44 @@ export default async function DebtSettingsPage({ params }: { params: Promise<{ s
               ))}
             </ul>
           )}
-          {banks.length > 0 && (
-            <p className="text-muted-foreground text-xs">
-              Bank accounts on your latest balance sheet: {banks.join(", ")}.
+        </CardContent>
+      </Card>
+      <Card id="emergency-accounts">
+        <CardHeader>
+          <CardTitle>The emergency fund&apos;s accounts</CardTitle>
+          <CardDescription>
+            Tick the bank accounts the fund is kept in. Its balance is read from your books each
+            time they sync, so it&apos;s always up to date.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          {banks.length === 0 ? (
+            <p className="text-muted-foreground text-sm">
+              No bank accounts on a balance sheet yet. Once QuickBooks has synced, they show up here
+              to tick.
+            </p>
+          ) : entitlements.canWrite ? (
+            <EmergencyAccountPicker
+              slug={tenant.slug}
+              banks={banks.map((bank) => ({
+                key: bankKey(bank),
+                id: bank.id ?? null,
+                name: bank.name,
+                balance: money(bank.cents),
+              }))}
+              picked={picked.map(bankKey)}
+            />
+          ) : (
+            <p className="text-sm">
+              {picked.length > 0
+                ? `Kept in ${picked.map((bank) => bank.name).join(", ")}.`
+                : "No account chosen yet."}
+            </p>
+          )}
+          {unread.length > 0 && (
+            <p className="text-ochre-text text-sm">
+              Your latest balance sheet doesn&apos;t have {unread.join(", ")}. Tick the account the
+              fund is in now.
             </p>
           )}
         </CardContent>

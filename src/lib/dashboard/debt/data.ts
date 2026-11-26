@@ -23,6 +23,7 @@ import {
   type Debt,
   type DebtTotals,
   type EmergencyFund,
+  type SheetBank,
 } from "./figures";
 import { liabilityTypeWords } from "./books";
 import { DEBT_KEY, DEBT_MODULE, parseDebtSettings, type DebtSettings } from "./settings";
@@ -39,6 +40,18 @@ const num = (value: unknown) => {
   return Number.isFinite(parsed) ? Math.round(parsed) : 0;
 };
 const numOrNull = (value: unknown) => (value === null || value === undefined ? null : num(value));
+
+/** The bank accounts on a balance sheet snapshot, as stored (an id only where the books gave one). */
+export function sheetBanks(data: Record<string, unknown> | null | undefined): SheetBank[] | null {
+  if (!data || !Array.isArray(data.bank_accounts)) return null;
+  return (data.bank_accounts as Record<string, unknown>[])
+    .filter((a) => a && typeof a.name === "string" && a.name.trim() !== "")
+    .map((a) => ({
+      name: String(a.name),
+      cents: num(a.cents),
+      id: typeof a.id === "string" && a.id ? a.id : null,
+    }));
+}
 
 /** The debt plan's setting (owners and admins only; the defaults for anyone else). */
 export async function loadDebtSettings(
@@ -243,6 +256,8 @@ export type DebtView = {
   milestones: Milestone[];
   cards: DebtCard[];
   emergency: EmergencyFund;
+  /** The bank accounts on the latest balance sheet, to pick the fund's from. */
+  banks: SheetBank[];
   emergencyAt: string | null;
   after: AfterDebt;
   overrides: Map<string, PlanOverride>;
@@ -309,9 +324,7 @@ export async function loadDebtView(
   );
   const averageRevenue = Math.max(0, averageCents(complete.slice(-12).map((m) => m.income)));
   const sheetData = (sheet.data as { data?: Record<string, unknown> } | null)?.data ?? null;
-  const bankAccounts = Array.isArray(sheetData?.bank_accounts)
-    ? (sheetData.bank_accounts as { name: string; cents: number }[])
-    : null;
+  const bankAccounts = sheetBanks(sheetData);
   const emergency = emergencyFund(settings, complete, bankAccounts);
 
   const input: DebtView["input"] = {
@@ -347,6 +360,7 @@ export async function loadDebtView(
     milestones: milestones(result.chosen, result.poolDebts, result.schedule),
     cards: debtCards(result.chosen, result.poolDebts),
     emergency,
+    banks: bankAccounts ?? [],
     emergencyAt:
       emergency.target > 0
         ? (emergencyReached(result.plan, emergency.target)?.month ?? null)

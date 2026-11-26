@@ -101,12 +101,53 @@ export function usualMonthlyExpenses(complete: readonly BookMonth[]): number {
   return Math.max(0, averageCents(recent.map((m) => m.expenses + (m.otherExpenses ?? 0))));
 }
 
+/** A bank account on the latest balance sheet. */
+export type SheetBank = { name: string; cents: number; id?: string | null };
+
+/** The accounts the fund is kept in: the ones picked, then any named the earlier way. */
+export const emergencyChoices = (settings: DebtSettings) => [
+  ...settings.emergency_picks,
+  ...settings.emergency_accounts
+    .filter((name) => !settings.emergency_picks.some((p) => sameAccount(p.name, name)))
+    .map((name) => ({ id: null, name })),
+];
+
+/** One chosen account on the sheet: by the books' id where both have one, else by its name. */
+export function findBank(
+  banks: readonly SheetBank[],
+  pick: { id: string | null; name: string },
+): SheetBank | null {
+  if (pick.id) {
+    const byId = banks.find((bank) => bank.id === pick.id);
+    if (byId) return byId;
+  }
+  const byName = banks.filter(
+    (bank) => (!pick.id || !bank.id) && sameAccount(bank.name, pick.name),
+  );
+  return byName.length === 1 ? byName[0] : null;
+}
+
+/** The sheet's banks the setting picks out (each once), for ticking them in the picker. */
+export function pickedBanks(settings: DebtSettings, banks: readonly SheetBank[]): SheetBank[] {
+  const out: SheetBank[] = [];
+  for (const pick of emergencyChoices(settings)) {
+    const found = findBank(banks, pick);
+    if (found && !out.includes(found)) out.push(found);
+  }
+  return out;
+}
+
+/** A key for one of the sheet's banks in a form. */
+export const bankKey = (bank: SheetBank) => (bank.id ? `id:${bank.id}` : `name:${bank.name}`);
+
 export type EmergencyFund = {
   target: number;
   targetFrom: "amount" | "months";
   usualMonth: number | null;
   current: number;
   currentFrom: "books" | "typed" | "none";
+  /** The accounts it was read from, as the sheet names them now. */
+  accounts: string[];
   /** Accounts chosen that the latest balance sheet didn't have. */
   missing: string[];
   /** 0–1. */
@@ -116,7 +157,7 @@ export type EmergencyFund = {
 export function emergencyFund(
   settings: DebtSettings,
   complete: readonly BookMonth[],
-  bankAccounts: readonly { name: string; cents: number }[] | null,
+  bankAccounts: readonly SheetBank[] | null,
 ): EmergencyFund {
   const usualMonth = settings.emergency_target === "months" ? usualMonthlyExpenses(complete) : null;
   const target =
@@ -126,13 +167,22 @@ export function emergencyFund(
   let current = 0;
   let currentFrom: EmergencyFund["currentFrom"] = "none";
   const missing: string[] = [];
-  if (settings.emergency_accounts.length > 0) {
+  const accounts: string[] = [];
+  const chosen = emergencyChoices(settings);
+  if (chosen.length > 0) {
     currentFrom = "books";
-    for (const name of settings.emergency_accounts) {
-      const found = (bankAccounts ?? []).filter((a) => sameAccount(a.name, name));
-      if (found.length === 0) missing.push(name);
+    const used = new Set<SheetBank>();
+    for (const pick of chosen) {
+      const found = findBank(bankAccounts ?? [], pick);
+      if (!found) {
+        missing.push(pick.name);
+        continue;
+      }
+      if (used.has(found)) continue;
+      used.add(found);
+      accounts.push(found.name);
       // The dashboard takes the account's balance as a positive amount.
-      current += found.reduce((s, a) => s + Math.abs(a.cents), 0);
+      current += Math.abs(found.cents);
     }
   } else if (settings.emergency_current_cents !== null) {
     current = settings.emergency_current_cents;
@@ -144,6 +194,7 @@ export function emergencyFund(
     usualMonth,
     current,
     currentFrom,
+    accounts,
     missing,
     progress: target > 0 ? Math.min(1, current / target) : 0,
   };

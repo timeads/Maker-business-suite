@@ -3,6 +3,8 @@ import { breakEven, blanksFromAverage } from "../budget";
 import type { BookMonth } from "../health";
 import {
   afterDebt,
+  bankKey,
+  pickedBanks,
   debtBudgetRows,
   debtHealth,
   debtHomeLine,
@@ -158,6 +160,57 @@ describe("the emergency fund", () => {
       missing: ["Gone"],
     });
     expect(fund.progress).toBeCloseTo(150_000 / 320_001);
+  });
+
+  it("reads picked accounts by the books' id, so a renamed account keeps counting", () => {
+    const fund = emergencyFund(
+      {
+        ...DEFAULT_DEBT_SETTINGS,
+        emergency_picks: [
+          { id: "35", name: "Rainy Day" },
+          { id: null, name: "Tin Box" },
+        ],
+        // Named the earlier way, and the same as a pick: counted once.
+        emergency_accounts: ["rainy day", "Old Name"],
+      },
+      books,
+      [
+        { name: "Rainy Day Renamed", cents: 200_000, id: "35" },
+        { name: "Rainy Day", cents: 5, id: "36" },
+        { name: "Tin Box", cents: -30_000 },
+      ],
+    );
+    expect(fund).toMatchObject({
+      current: 230_000,
+      currentFrom: "books",
+      accounts: ["Rainy Day Renamed", "Tin Box"],
+      missing: ["Old Name"],
+    });
+  });
+
+  it("ticks the picked accounts in the picker, each once", () => {
+    const banks = [
+      { name: "Rainy Day", cents: 1, id: "35" },
+      { name: "Tin Box", cents: 2 },
+    ];
+    const settings = {
+      ...DEFAULT_DEBT_SETTINGS,
+      emergency_picks: [{ id: "35", name: "Old" }],
+      emergency_accounts: ["tin  box", "Tin Box"],
+    };
+    expect(pickedBanks(settings, banks).map(bankKey)).toEqual(["id:35", "name:Tin Box"]);
+  });
+
+  it("never guesses between two accounts of the same name", () => {
+    const fund = emergencyFund(
+      { ...DEFAULT_DEBT_SETTINGS, emergency_picks: [{ id: null, name: "Savings" }] },
+      books,
+      [
+        { name: "Savings", cents: 100, id: "1" },
+        { name: "Savings", cents: 200, id: "2" },
+      ],
+    );
+    expect(fund).toMatchObject({ current: 0, missing: ["Savings"] });
   });
 
   it("uses a typed target and a typed amount when no account is chosen", () => {

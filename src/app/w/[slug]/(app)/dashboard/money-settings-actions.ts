@@ -17,6 +17,7 @@ import { HEALTH_KEY, healthSettingsSchema } from "@/lib/dashboard/health";
 import { PROFIT_KEY, PROFIT_MODULE, profitSettingsSchema } from "@/lib/dashboard/profit";
 import { CUTTER_KEY, cutterSettingsSchema } from "@/lib/dashboard/recurring";
 import { DEBT_KEY, debtSettingsSchema } from "@/lib/dashboard/debt/settings";
+import { loadDebtSettings } from "@/lib/dashboard/debt/data";
 import { getEntitlements } from "@/lib/entitlements";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
@@ -213,11 +214,7 @@ async function saveFigures(
   how: {
     path: string;
     key: string;
-    schema:
-      | typeof healthSettingsSchema
-      | typeof budgetSettingsSchema
-      | typeof cutterSettingsSchema
-      | typeof debtSettingsSchema;
+    schema: typeof healthSettingsSchema | typeof budgetSettingsSchema | typeof cutterSettingsSchema;
     done: string;
   },
 ): Promise<MoneySettingsState> {
@@ -272,16 +269,32 @@ export async function saveCutterSettings(
   });
 }
 
-/** Settings → Money → Debt payoff and emergency fund (owners and admins only). */
+/**
+ * Settings → Money → Debt payoff and emergency fund (owners and admins only).
+ * The figures form holds only some of the setting: what it doesn't hold (the
+ * fund's accounts, picked on their own) is kept as stored.
+ */
 export async function saveDebtSettings(
   slug: string,
   _prev: MoneySettingsState,
   formData: FormData,
 ): Promise<MoneySettingsState> {
-  return saveFigures(slug, formData, {
-    path: "debts",
-    key: DEBT_KEY,
-    schema: debtSettingsSchema,
-    done: "Saved. Your payoff plan and emergency fund are worked out this way from now on.",
+  const ctx = await settingsContext(slug, "debts");
+  if ("error" in ctx) return { error: ctx.error };
+  const stored = await loadDebtSettings(ctx.supabase, ctx.tenant.id);
+  const parsed = debtSettingsSchema.safeParse({
+    ...stored,
+    ...((readBody(formData) as Record<string, unknown> | null) ?? {}),
+    version: 1,
   });
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? "Something in there doesn't look right." };
+  }
+  return save(
+    ctx,
+    slug,
+    DEBT_KEY,
+    parsed.data,
+    "Saved. Your payoff plan and emergency fund are worked out this way from now on.",
+  );
 }

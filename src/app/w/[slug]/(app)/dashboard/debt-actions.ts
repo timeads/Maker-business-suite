@@ -3,7 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireUser } from "@/lib/auth";
-import { loadDebtSettings, loadDebtView } from "@/lib/dashboard/debt/data";
+import { loadDebtSettings, loadDebtView, sheetBanks } from "@/lib/dashboard/debt/data";
+import { findBank } from "@/lib/dashboard/debt/figures";
 import {
   QUESTION_MAX,
   WHAT_IF_DEBTS,
@@ -376,6 +377,67 @@ export async function removeWhatIf(slug: string, id: string): Promise<DebtAction
   if (error) return { error: "We couldn't remove that. Try again in a moment." };
   refresh(slug);
   return { message: "Removed." };
+}
+
+const picksSchema = z
+  .array(z.object({ id: z.string().max(60).nullable(), name: z.string().trim().min(1).max(200) }))
+  .max(10);
+
+/**
+ * The emergency fund's accounts, ticked from the latest balance sheet. Kept
+ * by the books' id where the sheet gives one, else by the name; only
+ * accounts the sheet really has are kept. Replaces names typed in earlier.
+ */
+export async function chooseEmergencyAccounts(
+  slug: string,
+  picks: unknown,
+): Promise<DebtActionState> {
+  const ctx = await debtContext(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const parsed = picksSchema.safeParse(picks);
+  if (!parsed.success) return { error: "Tick up to ten accounts." };
+  const [current, sheet] = await Promise.all([
+    loadDebtSettings(ctx.supabase, ctx.tenant.id),
+    ctx.supabase
+      .from("financial_snapshots")
+      .select("data")
+      .eq("tenant_id", ctx.tenant.id)
+      .eq("kind", "balance_sheet")
+      .order("period_start", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
+  if (sheet.error) return { error: "We couldn't read your balance sheet. Try again in a moment." };
+  const banks = sheetBanks((sheet.data as { data?: Record<string, unknown> } | null)?.data) ?? [];
+  const kept = parsed.data.flatMap((pick) => {
+    const found = findBank(banks, { id: pick.id || null, name: pick.name });
+    return found ? [{ id: found.id ?? null, name: found.name }] : [];
+  });
+  if (kept.length < parsed.data.length) {
+    return {
+      error: "Your latest balance sheet doesn't have one of those. Reload the page and try again.",
+    };
+  }
+  const body = debtSettingsSchema.parse({
+    ...current,
+    emergency_picks: kept,
+    emergency_accounts: [],
+  });
+  const { error } = await ctx.supabase.rpc("save_config", {
+    p_tenant_id: ctx.tenant.id,
+    p_module: DEBT_MODULE,
+    p_key: DEBT_KEY,
+    p_body: body,
+  });
+  if (error) return { error: "We couldn't save that. Try again in a moment." };
+  refresh(slug);
+  revalidatePath(`/w/${slug}/settings`, "layout");
+  return {
+    message:
+      kept.length === 0
+        ? "Saved. No account is chosen for the fund now."
+        : "Saved. The fund's balance is read from your books each time they sync.",
+  };
 }
 
 /** "Use this order": the plan's strategy, saved in its setting (a new version, as any change). */

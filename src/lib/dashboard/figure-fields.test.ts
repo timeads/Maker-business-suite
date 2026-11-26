@@ -22,6 +22,12 @@ describe("the settings screens' boxes", () => {
     expect(keys(HEALTH_FIELDS)).toEqual(settable(DEFAULT_HEALTH_SETTINGS));
     expect(keys(BUDGET_FIELDS)).toEqual(settable(DEFAULT_BUDGET_SETTINGS));
     expect(keys(CUTTER_FIELDS)).toEqual(settable(DEFAULT_CUTTER_SETTINGS));
-    expect(keys(DEBT_FIELDS)).toEqual(settable(DEFAULT_DEBT_SETTINGS));
+    // The emergency fund's accounts are ticked in a picker of their own
+    // (the earlier typed names are only read now).
+    expect(keys(DEBT_FIELDS)).toEqual(
+      settable(DEFAULT_DEBT_SETTINGS).filter(
+        (key) => key !== "emergency_picks" && key !== "emergency_accounts",
+      ),
+    );
   });
 });

@@ -15,14 +15,14 @@ import {
   addMonth,
   strategiesConverge,
 } from "@/lib/dashboard/debt/engine";
-import { scheduleLength } from "@/lib/dashboard/debt/figures";
+import { bankKey, scheduleLength } from "@/lib/dashboard/debt/figures";
 import { bpWords } from "@/lib/dashboard/debt/settings";
 import { formatMoney, formatPercent, prepareTimeChart } from "@/lib/dashboard/format";
 import { periodLabel } from "@/lib/dashboard/range";
 import { getEntitlements } from "@/lib/entitlements";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
-import { ScheduleEditor, UseStrategy } from "../debt-forms";
+import { EmergencyAccountPicker, ScheduleEditor, UseStrategy } from "../debt-forms";
 
 export const metadata: Metadata = { title: "Payoff plan" };
 
@@ -491,10 +491,12 @@ export default async function PayoffPlanPage({
                 ? `${settings.emergency_months} months of your usual ${money(emergency.usualMonth)} of expenses.`
                 : "The amount you chose."}{" "}
               {emergency.currentFrom === "books"
-                ? `Read from ${settings.emergency_accounts.join(", ")} in your books.`
+                ? emergency.accounts.length > 0
+                  ? `Read from ${emergency.accounts.join(", ")} in your books, at every sync.`
+                  : "None of its accounts is on your latest balance sheet."
                 : emergency.currentFrom === "typed"
                   ? "The amount you typed in."
-                  : "Choose the account it's kept in under plan settings."}
+                  : "Tick the account it's kept in and its balance comes from your books."}
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
@@ -527,9 +529,27 @@ export default async function PayoffPlanPage({
             </span>
             {emergency.missing.length > 0 && (
               <span className="text-ochre-text text-sm">
-                Your latest balance sheet doesn&apos;t have {emergency.missing.join(", ")}. Check
-                the names in plan settings.
+                Your latest balance sheet doesn&apos;t have {emergency.missing.join(", ")}.{" "}
+                <Link
+                  href={`${base}/settings/money/debts#emergency-accounts`}
+                  className="underline underline-offset-4"
+                >
+                  Tick the account it&apos;s in now
+                </Link>
+                .
               </span>
+            )}
+            {emergency.currentFrom !== "books" && canEdit && view.banks.length > 0 && (
+              <EmergencyAccountPicker
+                slug={tenant.slug}
+                banks={view.banks.map((bank) => ({
+                  key: bankKey(bank),
+                  id: bank.id ?? null,
+                  name: bank.name,
+                  balance: money(bank.cents),
+                }))}
+                picked={[]}
+              />
             )}
           </CardContent>
         </Card>

@@ -301,15 +301,9 @@ export const DEBT_FIELDS: FigureGroup[] = [
       },
       { kind: "money", key: "emergency_target_cents", label: "Or this amount" },
       {
-        kind: "list",
-        key: "emergency_accounts",
-        label: "Bank accounts the fund is kept in",
-        help: "Their names as your books' balance sheet has them, one per line. The fund's balance is read from them each time your books sync.",
-      },
-      {
         kind: "optional_money",
         key: "emergency_current_cents",
-        label: "With no account: what's in the fund now",
+        label: "With no account ticked below: what's in the fund now",
       },
       pct("emergency_split_pct", "Share of freed payments into the fund", undefined, 0),
       {

@@ -15,6 +15,7 @@ import {
 import { syncNow, type ConnectionState } from "../connections/actions";
 import {
   chooseBookLiability,
+  chooseEmergencyAccounts,
   hideBookLiability,
   noteBalance,
   removeBalance,
@@ -517,6 +518,75 @@ export function HideLiabilityButton({
       </Button>
       {say(said)}
     </span>
+  );
+}
+
+/**
+ * The emergency fund's accounts, ticked from the bank accounts on the latest
+ * balance sheet (their names and balances as the books have them).
+ */
+export function EmergencyAccountPicker({
+  slug,
+  banks,
+  picked,
+}: {
+  slug: string;
+  banks: { key: string; id: string | null; name: string; balance: string }[];
+  /** Keys of the banks already chosen. */
+  picked: string[];
+}) {
+  const [ticked, setTicked] = useState<Set<string>>(() => new Set(picked));
+  const [said, setSaid] = useState<DebtActionState>({});
+  const [pending, start] = useTransition();
+  const changed = ticked.size !== picked.length || [...ticked].some((key) => !picked.includes(key));
+  return (
+    <div className="flex flex-col gap-3">
+      <fieldset className="flex flex-col gap-2">
+        <legend className="mb-1 text-sm font-medium">Where the fund is kept</legend>
+        {banks.map((bank) => (
+          <label key={bank.key} className="flex items-center justify-between gap-3 text-sm">
+            <span className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                className="size-4"
+                checked={ticked.has(bank.key)}
+                onChange={(event) => {
+                  const next = new Set(ticked);
+                  if (event.target.checked) next.add(bank.key);
+                  else next.delete(bank.key);
+                  setTicked(next);
+                }}
+              />
+              {bank.name}
+            </span>
+            <span className="text-muted-foreground tabular-nums">{bank.balance}</span>
+          </label>
+        ))}
+      </fieldset>
+      <span className="flex flex-wrap items-center gap-2">
+        <Button
+          size="sm"
+          variant={changed ? "dark" : "outline"}
+          className="w-fit"
+          disabled={pending || ticked.size > 10}
+          onClick={() =>
+            start(async () =>
+              setSaid(
+                await chooseEmergencyAccounts(
+                  slug,
+                  banks
+                    .filter((bank) => ticked.has(bank.key))
+                    .map((bank) => ({ id: bank.id, name: bank.name })),
+                ),
+              ),
+            )
+          }
+        >
+          {pending ? "Saving…" : "Use these accounts"}
+        </Button>
+        {say(said)}
+      </span>
+    </div>
   );
 }
 

@@ -41,7 +41,25 @@ export const debtSettingsSchema = z
     emergency_target: z.enum(["amount", "months"]).default("months"),
     emergency_target_cents: cents.default(0),
     emergency_months: z.number().int().min(1).max(24).default(6),
-    /** The books' bank accounts (as named on the balance sheet) the fund is kept in. */
+    /**
+     * The books' bank accounts the fund is kept in, picked from the latest
+     * balance sheet: by the books' own id where the sheet gives one, else by
+     * the name. Never an account name or number in code.
+     */
+    emergency_picks: z
+      .array(
+        z.object({
+          id: z
+            .string()
+            .regex(/^[A-Za-z0-9_-]{1,60}$/)
+            .nullable()
+            .default(null),
+          name: z.string().trim().min(1).max(200),
+        }),
+      )
+      .max(10)
+      .default([]),
+    /** Earlier: the accounts typed in by name. Still read; the picker replaces them. */
     emergency_accounts: z.array(z.string().trim().min(1).max(200)).max(10).default([]),
     /** With no account chosen: what's in the fund, typed in. */
     emergency_current_cents: cents.nullable().default(null),
