@@ -505,6 +505,29 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   The composer picks a brand first, then its accounts; the calendar and
   review queue filter by `brand` / `account` in the address. Another network
   is a further `network` value.
+  TikTok and LinkedIn (docs/tiktok-linkedin.md) are providers `tiktok` /
+  `linkedin`, offered only where their keys are set, ALL their HTTP through
+  `lib/tiktok/client.ts` / `lib/linkedin/client.ts` (reads retried, writes
+  never). One connection holds SEVERAL logins (a TikTok account, a LinkedIn
+  person): tokens under `login:<id>` in the connection's Vault secret, read
+  only through `getLoginToken` (`lib/connections/logins.ts`, on top of
+  `getProviderToken`, renewing one login under the connection's lock); a
+  login that ran out marks its accounts `needs_login`. Accounts carry
+  `login_id`; `note_login_accounts` offers them, `forget_social_login` lets
+  one login go. Each network's rules are ONE table, `PLACE_RULES` in
+  `lib/social/networks.ts` = `private.social_place_rule` (kept equal by
+  `tests/db/social-networks.test.ts`), checked in the composer and whenever
+  a post becomes scheduled; never per-customer code. TikTok is video only,
+  sent as a file; its per-post choices are `social_posts.target_options`
+  (`lib/social/tiktok-options.ts`, safe defaults, no privacy chosen for the
+  person; "Only you" until `TIKTOK_APP_AUDITED`). Sending once: the worker
+  claims only places it can send (`claim_due_social_posts_for`; the older
+  `claim_due_social_posts` hands out Facebook and Instagram only), marks a
+  target `sending` before the one write (`begin_social_target`), keeps a
+  video still being prepared `pending` (asked about, never resent) and a
+  lost answer `unsure` (a person settles it, `settle_social_target`); a
+  trigger stops anything wiping those. Media only from our own bucket
+  (`fetchOwnMedia`). Keep `tests/db/social-networks.test.ts` passing.
   Photos and videos (the Assets tab) sit in the public `social` storage
   bucket under the workspace's id (Instagram fetches by URL). The browser
   sends a file straight to storage with a one-time link from `startUpload`;

@@ -225,7 +225,9 @@ Open decisions and deferrals:
 
 - Facebook Pages and Instagram business accounts only, one photo or text
   per post. Carousels, video, Reels and Stories came later (see
-  docs/social-side-by-side.md); TikTok is not built.
+  docs/social-side-by-side.md). TikTok (videos) and LinkedIn (a company
+  page or the person) came later still, each through our own app
+  (docs/tiktok-linkedin.md); Pinterest is not built.
 - When someone manages several Pages, the one with Instagram linked is
   connected; there is no Page chooser yet.
 - The plan's `assets` table is `social_assets`, and scheduling lives on the
