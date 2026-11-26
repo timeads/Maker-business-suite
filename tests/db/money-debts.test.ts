@@ -1300,3 +1300,105 @@ describe("debts paid through a plan", () => {
     expect(r).toMatchObject({ covered: 0, missing: 1 });
   });
 });
+
+describe("the assistant's proposals about debts", () => {
+  const propose = (user: User, tenant: string, kind: string, target: string, body: object) =>
+    as<{ id: string }>(
+      user,
+      "select public.propose_action($1, $2, $3, $4::jsonb, 'A suggestion') as id",
+      [tenant, kind, target, JSON.stringify(body)],
+    ).then((r) => r[0].id);
+  const anyAccount = async () =>
+    (
+      await as<{ id: string }>(
+        alice,
+        "select id from public.money_book_accounts where tenant_id = $1 order by name limit 1",
+        [tenantA],
+      )
+    )[0].id;
+
+  it("are filed, read and applied only by owners and admins", async () => {
+    const id = await propose(dan, tenantA, "money.debt_details", cardA, { rate_bp: 1999 });
+    const seen = await as<{ id: string; kind: string }>(
+      alice,
+      "select id, kind from public.action_proposals where tenant_id = $1",
+      [tenantA],
+    );
+    expect(seen.map((r) => r.id)).toContain(id);
+    const [taken] = await as<{ kind: string; target: string; body: Record<string, number> }>(
+      alice,
+      "select kind, target, body from public.claim_action_proposal($1)",
+      [id],
+    );
+    expect(taken).toEqual({ kind: "money.debt_details", target: cardA, body: { rate_bp: 1999 } });
+    // Taken once: a second press gets nothing.
+    await expect(as(dan, "select * from public.claim_action_proposal($1)", [id])).rejects.toThrow(
+      /already_decided/,
+    );
+    // Put back by the one who took it, if the checked function refused.
+    await as(alice, "select public.reopen_action_proposal($1)", [id]);
+    const [{ status }] = await as<{ status: string }>(
+      alice,
+      "select status from public.action_proposals where id = $1",
+      [id],
+    );
+    expect(status).toBe("pending");
+    await as(alice, "select public.dismiss_action_proposal($1)", [id]);
+  });
+
+  it("don't exist for a plain member", async () => {
+    const account = await anyAccount();
+    await propose(alice, tenantA, "money.liability_choice", account, { choice: "not_debt" });
+    expect(await as(carol, "select * from public.action_proposals")).toEqual([]);
+    await expect(
+      propose(carol, tenantA, "money.debt_details", cardA, { rate_bp: 0 }),
+    ).rejects.toThrow(/Only owners and admins/);
+    const [{ id }] = await as<{ id: string }>(
+      alice,
+      "select id from public.action_proposals where tenant_id = $1 and status = 'pending' limit 1",
+      [tenantA],
+    );
+    await expect(as(carol, "select * from public.claim_action_proposal($1)", [id])).rejects.toThrow(
+      /Only owners and admins/,
+    );
+    await expect(as(carol, "select public.dismiss_action_proposal($1)", [id])).rejects.toThrow(
+      /Only owners and admins/,
+    );
+    await expect(
+      as(
+        carol,
+        "insert into public.action_proposals (tenant_id, kind, target, body, summary) values ($1, 'money.debt_details', $2, '{}', 'x')",
+        [tenantA, cardA],
+      ),
+    ).rejects.toThrow(/permission denied/i);
+  });
+
+  it("never cross workspaces, and only name this workspace's debts and accounts", async () => {
+    expect(
+      await as(bob, "select * from public.action_proposals where tenant_id = $1", [tenantA]),
+    ).toEqual([]);
+    await expect(propose(bob, tenantA, "money.debt_details", cardA, {})).rejects.toThrow(
+      /Only owners and admins/,
+    );
+    await expect(propose(bob, tenantB, "money.debt_details", cardA, {})).rejects.toThrow(
+      /isn't here/,
+    );
+    await expect(
+      propose(bob, tenantB, "money.liability_hide", await anyAccount(), { hidden: true }),
+    ).rejects.toThrow(/isn't here/);
+    const [{ id }] = await as<{ id: string }>(
+      alice,
+      "select id from public.action_proposals where tenant_id = $1 and status = 'pending' limit 1",
+      [tenantA],
+    );
+    await expect(as(bob, "select * from public.claim_action_proposal($1)", [id])).rejects.toThrow(
+      /Only owners and admins/,
+    );
+    await expect(propose(alice, tenantA, "money.sell_the_kiln", cardA, {})).rejects.toThrow(
+      /no such proposal/,
+    );
+    await expect(
+      asAnon(db, (tx) => tx.query("select * from public.action_proposals")),
+    ).rejects.toThrow(/permission denied/i);
+  });
+});
