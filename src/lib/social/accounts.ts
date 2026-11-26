@@ -1,6 +1,10 @@
+import { NETWORK_LABELS } from "./networks";
+
 /**
  * The workspace's social accounts as people see them: one Facebook Page and
- * the Instagram account linked to it, per Page. Pure, so it can be tested.
+ * the Instagram account linked to it, per Page; one TikTok account per
+ * login; a LinkedIn person and the company pages they look after, per login.
+ * Pure, so it can be tested.
  */
 
 export type AccountRow = {
@@ -13,15 +17,20 @@ export type AccountRow = {
   brand_id: string;
   active: boolean;
   offered: boolean;
+  /** Which of its connection's logins posts as it (TikTok, LinkedIn). */
+  login_id?: string | null;
+  /** Its login has to be connected again before it can post. */
+  needs_login?: boolean | null;
 };
 
 export const ACCOUNT_COLUMNS =
-  "id, network, platform_id, page_id, name, handle, brand_id, active, offered";
+  "id, network, platform_id, page_id, name, handle, brand_id, active, offered, login_id, needs_login";
 
-export const NETWORK_LABELS: Record<string, string> = {
-  facebook: "Facebook",
-  instagram: "Instagram",
-};
+export { NETWORK_LABELS };
+
+/** A LinkedIn account is a company page or the person themself. */
+export const isLinkedInPerson = (account: Pick<AccountRow, "network" | "platform_id">) =>
+  account.network === "linkedin" && account.platform_id.startsWith("urn:li:person:");
 
 /** "@handle" for an Instagram account, the Page's name for a Page. */
 export function accountName(account: Pick<AccountRow, "handle" | "name" | "network">): string {
@@ -33,13 +42,17 @@ export function accountName(account: Pick<AccountRow, "handle" | "name" | "netwo
 export const accountLabel = (account: Pick<AccountRow, "handle" | "name" | "network">) =>
   `${NETWORK_LABELS[account.network] ?? account.network} · ${accountName(account)}`;
 
-/** Accounts grouped by the Page they go through, Pages in use first, each Page's Facebook row first. */
+/**
+ * Accounts grouped by what they go through (a Facebook Page, or a TikTok or
+ * LinkedIn login), groups in use first, each Page's Facebook row first.
+ */
 export function accountsByPage<T extends AccountRow>(
   accounts: readonly T[],
 ): { pageId: string; accounts: T[] }[] {
   const pages = new Map<string, T[]>();
   for (const account of accounts) {
-    const key = account.page_id ?? account.id;
+    const key =
+      account.page_id ?? (account.login_id ? `${account.network}:${account.login_id}` : account.id);
     pages.set(key, [...(pages.get(key) ?? []), account]);
   }
   return [...pages]
@@ -77,14 +90,11 @@ export function checkAccountChoices(
   }
   for (const [network, count] of counts) {
     if (count > limit) {
+      const unit =
+        network === "facebook" ? "Page" : network === "linkedin" ? "page or profile" : "account";
+      const units = network === "linkedin" ? "pages or profiles" : `${unit}s`;
       return `Your plan uses up to ${limit} ${NETWORK_LABELS[network] ?? network} ${
-        network === "facebook"
-          ? limit === 1
-            ? "Page"
-            : "Pages"
-          : limit === 1
-            ? "account"
-            : "accounts"
+        limit === 1 ? unit : units
       } at a time. Untick one, or upgrade your plan.`;
     }
   }

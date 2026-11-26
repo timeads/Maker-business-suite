@@ -75,6 +75,12 @@ import { trackWithUps } from "../src/lib/shipping/label-access";
 import { SourceError } from "../src/lib/shipping/sources/types";
 import type { UpsTracking } from "../src/lib/shipping/sources/ups";
 import { publishPost } from "../src/lib/social/publish";
+import { createLinkedInSender } from "../src/lib/social/send/linkedin";
+import { createTikTokSender } from "../src/lib/social/send/tiktok";
+import { tiktokAudited } from "../src/lib/social/tiktok-options";
+import { getLoginToken, type LoginDeps } from "../src/lib/connections/logins";
+import { tiktokConfigured } from "../src/lib/connections/providers/tiktok";
+import { linkedinConfigured } from "../src/lib/connections/providers/linkedin";
 import { publishDuePosts } from "../src/lib/social/worker";
 import {
   billsTokenOf,
@@ -1073,6 +1079,29 @@ async function drainManualRuns(): Promise<number> {
   return runs.length;
 }
 
+/** One TikTok or LinkedIn login's access token, for the worker's senders. Never logged. */
+function loginAccess(provider: "tiktok" | "linkedin") {
+  const admin = getAdminClient();
+  const deps: LoginDeps = {
+    store: vaultTokenStore(admin),
+    adapter: getAdapter,
+    now: Date.now,
+    wait: sleep,
+    onNeedsReconnect: notifyNeedsReconnect,
+    async markLogin({ tenantId, loginId, needs }) {
+      const { error } = await admin.rpc("mark_social_login", {
+        p_tenant_id: tenantId,
+        p_provider: provider,
+        p_login_id: loginId,
+        p_needs: needs,
+      });
+      if (error) console.error(`could not mark a ${provider} login: ${error.message}`);
+    },
+  };
+  return async (tenantId: string, loginId: string) =>
+    (await getLoginToken(tenantId, provider, loginId, deps)).token.access_token;
+}
+
 /** Sends scheduled social posts whose time has come. */
 async function drainSocialPosts(): Promise<number> {
   const admin = getAdminClient();
@@ -1089,6 +1118,21 @@ async function drainSocialPosts(): Promise<number> {
         onNeedsReconnect: notifyNeedsReconnect,
       }),
     publish: publishPost,
+    // TikTok and LinkedIn, only where this deployment has their apps. Each
+    // account posts with its own login's token, renewed under the lock.
+    senders: {
+      ...(tiktokConfigured()
+        ? {
+            tiktok: createTikTokSender({
+              accessToken: loginAccess("tiktok"),
+              audited: tiktokAudited,
+            }),
+          }
+        : {}),
+      ...(linkedinConfigured()
+        ? { linkedin: createLinkedInSender({ accessToken: loginAccess("linkedin") }) }
+        : {}),
+    },
     async notifyFailed(tenantId, caption, reason) {
       const { data: tenants } = await admin.from("tenants").select("slug").eq("id", tenantId);
       const slug = (tenants as { slug: string }[] | null)?.[0]?.slug;

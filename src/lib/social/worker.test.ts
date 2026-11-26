@@ -94,7 +94,7 @@ describe("posting to several accounts", () => {
     const admin = {
       from: (table: string) => ({ select: () => query(table) }),
       rpc: async (name: string, args: Record<string, unknown>) => {
-        if (name === "claim_due_social_posts") return { data: [post], error: null };
+        if (name === "claim_due_social_posts_for") return { data: [post], error: null };
         if (name === "finish_social_post") {
           finished.push(args);
           return { data: "published", error: null };

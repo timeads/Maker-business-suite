@@ -1,4 +1,4 @@
-import type { Channel } from "./publish";
+import { PLACE_RULES, placeNetwork, type Place } from "./networks";
 
 /**
  * Where a post goes: each of its accounts, with the places of that
@@ -13,18 +13,20 @@ export type PostAccount = {
   network: string;
   platform_id: string;
   page_id: string | null;
+  /** Which of its connection's logins posts as it (TikTok, LinkedIn). */
+  login_id?: string | null;
+  /** Its login has to be connected again first. */
+  needs_login?: boolean | null;
   name: string | null;
   handle: string | null;
   tasks: string[] | null;
   active: boolean;
 };
 
-/** Which network a place is on. */
-export const placeNetwork = (place: Channel): "facebook" | "instagram" =>
-  place === "facebook" ? "facebook" : "instagram";
+export { placeNetwork };
 
 /** One target's name in a post's answers. */
-export const targetKey = (accountId: string, place: Channel) => `${accountId}:${place}`;
+export const targetKey = (accountId: string, place: Place) => `${accountId}:${place}`;
 
 /**
  * Where a post goes: each account with the places of its network, and the
@@ -32,9 +34,9 @@ export const targetKey = (accountId: string, place: Channel) => `${accountId}:${
  * places by their bare names, through the connection's own Page.
  */
 export function postTargets(
-  post: { channels: Channel[]; account_ids?: string[] | null },
+  post: { channels: Place[]; account_ids?: string[] | null },
   accounts: readonly PostAccount[],
-): { account: PostAccount | null; places: { place: Channel; key: string }[] }[] {
+): { account: PostAccount | null; places: { place: Place; key: string }[] }[] {
   const ids = post.account_ids ?? [];
   if (ids.length === 0) {
     return [{ account: null, places: post.channels.map((place) => ({ place, key: place })) }];
@@ -51,13 +53,10 @@ export function postTargets(
 
 /** "Instagram (@handle)", "Facebook (Page name)": a target's name for people. */
 export function targetLabel(key: string, accounts: readonly PostAccount[]): string {
-  const [id, place] = key.includes(":") ? key.split(":") : [null, key];
-  const where =
-    place === "instagram_story"
-      ? "Instagram Story"
-      : place === "instagram"
-        ? "Instagram"
-        : "Facebook";
+  // An account id never holds a colon; a LinkedIn place name doesn't either.
+  const cut = key.indexOf(":");
+  const [id, place] = cut >= 0 ? [key.slice(0, cut), key.slice(cut + 1)] : [null, key];
+  const where = PLACE_RULES[place as Place]?.label ?? "Facebook";
   const account = id ? accounts.find((each) => each.id === id) : undefined;
   const who = account ? (account.handle ? `@${account.handle}` : account.name) : null;
   return who ? `${where} (${who})` : where;
