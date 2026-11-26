@@ -121,12 +121,20 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   `is_move`: never sorted, listed or counted. Sorting is a line, a split
   (whole percents, `splitByPercent`: leftover cents to the largest share),
   shared or set aside; a person's choice (`sort_book_expenses`, owners and
-  admins) always wins, and "Put back in the inbox" sets `rules_off`. Payee
-  defaults and rules are a config (`dashboard` / `expenses`,
-  `lib/dashboard/expenses.ts`, Settings → Money → Sorting expenses;
-  `decideExpense`: firm rules, payee default, other rules) applied in code
-  as expenses arrive and on "Apply my rules to what's waiting"
-  (`note_expense_decisions`), only ever to unsorted rows; never a payee,
+  admins) always wins, and "Put back in the inbox" sets `rules_off`. The
+  ACCOUNT is the unit of sorting: one choice per books account (a line,
+  split, shared, set aside or "decide each one"; `accounts` in the
+  `dashboard` / `expenses` config, keyed by the books' account id, else the
+  exact name) sorts every expense in it, applied in the database
+  (`private.money_follow_accounts`, `apply_expense_accounts`,
+  `sorted_by = 'account'`, re-decided on every sync). An account with no
+  choice counts as shared and never fills the inbox. Payee defaults and
+  rules (payee, account, memo, class, location) make exceptions
+  (`decideExpense`: firm rules, payee default, other rules, then the
+  account; its last step is the database's twin, held by
+  `tests/db/money-expense-accounts.test.ts`), applied in code as expenses
+  arrive and on "Apply my rules to what's waiting"
+  (`note_expense_decisions`), never over a person's choice; never a payee,
   bank or account name in code. Money calls a model in two places only,
   each a person's press with structured output and no tools: "Suggest
   lines for these" (`expense-suggest.ts`, `E1`/`L1` references,
@@ -210,7 +218,17 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   dashboard with its quirks, tests in `engine.test.ts`) is pure on whole
   cents: interest = balance × rate bp ÷ 120,000 and every share rounded to
   the nearest cent, half up, in exact integers (`shareOf`); change a rule
-  only with its test. The what-if (`what-if.ts`): Claude only picks which
+  only with its test. The plan marks one order "Recommended"
+  (`debt/recommend.ts`, pure: clears the debts, then least interest, then
+  sooner, then avalanche, snowball, hybrid, custom) and follows it while
+  the setting's `strategy_from` is `recommended`; "Use this order" sets
+  `person` and sticks. The fund's accounts are `emergency_picks` (books'
+  id, else name; earlier `emergency_accounts` names still read), ticked
+  from the latest balance sheet. "Also in your books" can be hidden
+  (`hide_book_liability`, `money_book_accounts.hidden_at`: the list only).
+  Debt details come across from a CSV (`debt/import.ts`,
+  `import_money_debt_details` under a request key, filling only what nobody
+  set; docs/money-import.md). The what-if (`what-if.ts`): Claude only picks which
   figures a question changes (`D1` references, `tidyWhatIf`), the engine
   answers, the reply is the engine's figures, nothing is kept unless a
   person presses "Keep this what-if", and it counts against the AI
