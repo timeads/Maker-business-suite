@@ -224,7 +224,8 @@ Drafts and the calendar work without them.
 Open decisions and deferrals:
 
 - Facebook Pages and Instagram business accounts only, one photo or text
-  per post. Carousels, video, Reels, Stories and TikTok come later.
+  per post. Carousels, video, Reels and Stories came later (see
+  docs/social-side-by-side.md); TikTok is not built.
 - When someone manages several Pages, the one with Instagram linked is
   connected; there is no Page chooser yet.
 - The plan's `assets` table is `social_assets`, and scheduling lives on the
@@ -234,7 +235,9 @@ Open decisions and deferrals:
   because Instagram has to fetch them.
 - Caption drafts are metered against the same monthly AI allowance as help
   desk drafts.
-- No approval step between writing and scheduling; any member can post.
+- An approval step is built (Review, in Social's menu); a workspace switches
+  "approve posts before they go out" on under Settings → Social & emails →
+  Post review. It is off by default, so any member can still post.
 - Likes, comments and reach are not pulled back in.
 
 ## Phase 7: Claude customization layer

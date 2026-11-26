@@ -492,6 +492,27 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   schedules it. The content plan and link page are `configs` (module
   `social`); link-page links are https only. The public `/links/[slug]` page
   reads through `lib/social/links-server.ts`, like the booking pages.
+  Review (`social/review`, a menu row with a count): a draft is sent for
+  review (`submit_social_post`), sent back with a note or approved, which
+  schedules it (`approve_social_post`, "approve all" through the one checked
+  `approve_social_posts`). Who approves and whether approval is required are
+  the `social` / `review` config (`lib/social/review.ts`, read by the
+  database itself; off by default, owners always approve); where it is on a
+  trigger refuses any post scheduled without an approver. Approval is always
+  a person's press. A carousel's slides stay one design on the post
+  (`social_posts.slides`) while it is a draft; scheduling or approving draws
+  them in that person's browser (`send-prep.ts`), uploads them through
+  `startUpload` / `finishUpload`'s checks and attaches them first
+  (`attach_social_slide_pictures`, for that version only: `slides_key`).
+  Instagram Stories are a third place (`instagram_story`, one photo or one
+  video, `media_type` STORIES, same permission). Every photo's size is read
+  by the server from its own bytes (`lib/social/image-size.ts`); one Instagram
+  wouldn't take gets a copy cropped from the middle in the browser
+  (`lib/social/fit.ts`, pure; `fitted_from` / `channel_media`), the original
+  never changes, and the database won't schedule a photo whose stored size
+  doesn't fit (`private.social_photo_fits`, kept in step by a test). No image
+  library on the server: don't add one. Keep `tests/db/social-review.test.ts`,
+  `social-slides.test.ts` and `social-sizes.test.ts` passing.
 - Stock: `stock_items` mirror the shop's variants and are written only by
   the sync (`upsert_stock_items`), which leaves the workspace's own planning
   columns alone. Every reorder figure is worked out on read by the pure
