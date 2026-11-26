@@ -15,6 +15,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { PageHeader } from "@/components/ui/page-header";
 import { formatMoney } from "@/lib/dashboard/format";
 import { requireUser } from "@/lib/auth";
+import { bookingsHomeLines, loadBookingsHomeFacts } from "@/lib/bookings/home-summary";
 import { daysFromNow, formatTime, localDay } from "@/lib/bookings/slots";
 import { getEntitlements } from "@/lib/entitlements";
 import type { ModuleKey } from "@/lib/modules";
@@ -165,6 +166,13 @@ export default async function WorkspaceHomePage({ params }: { params: Promise<{ 
       }))
       .filter((s) => s.seats > 0);
     const today = localDay(new Date(now), tenant.timezone);
+    // A line or two of good news from Bookings. Never allowed to cost the page.
+    let bookingLines: string[] = [];
+    try {
+      bookingLines = bookingsHomeLines(await loadBookingsHomeFacts(supabase, tenant));
+    } catch {
+      bookingLines = [];
+    }
     const todays = booked.filter((s) => localDay(new Date(s.starts_at), tenant.timezone) === today);
     const next = booked[0];
     rows.push({
@@ -180,16 +188,22 @@ export default async function WorkspaceHomePage({ params }: { params: Promise<{ 
         : booked.length
           ? `${plural(booked.length, "session", "sessions")} with bookings this week`
           : "Nobody booked in this week",
-      detail: next
-        ? `Next: ${next.services?.name ?? "a session"}, ${
-            localDay(new Date(next.starts_at), tenant.timezone) === today
-              ? "today"
-              : new Intl.DateTimeFormat("en-US", {
-                  timeZone: tenant.timezone,
-                  weekday: "long",
-                }).format(new Date(next.starts_at))
-          } at ${formatTime(next.starts_at, tenant.timezone)}`
-        : undefined,
+      detail:
+        [
+          next
+            ? `Next: ${next.services?.name ?? "a session"}, ${
+                localDay(new Date(next.starts_at), tenant.timezone) === today
+                  ? "today"
+                  : new Intl.DateTimeFormat("en-US", {
+                      timeZone: tenant.timezone,
+                      weekday: "long",
+                    }).format(new Date(next.starts_at))
+              } at ${formatTime(next.starts_at, tenant.timezone)}`
+            : "",
+          bookingLines.length > 0 ? sentence(bookingLines.slice(0, 2).join(" · ")) : "",
+        ]
+          .filter(Boolean)
+          .join(" · ") || undefined,
       waiting: todays.length > 0,
       href: `${base}/bookings`,
     });

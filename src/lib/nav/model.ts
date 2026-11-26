@@ -146,6 +146,12 @@ function bookingsMenu(attention: Attention): NavGroup[] {
   const items = [
     first("bookings.coming-up", "Coming up", "bookings"),
     place("bookings.calendar", "Calendar", "bookings/calendar"),
+    place("bookings.all", "All bookings", "bookings/all", {
+      keywords: ["search", "find a booking", "order number", "cancelled"],
+    }),
+    place("bookings.runsheet", "Runsheet", "bookings/runsheet", {
+      keywords: ["print", "pdf", "check in", "roster", "who's coming"],
+    }),
     place("bookings.customers", "Customers", "bookings/customers"),
     place("bookings.emails", "Emails sent", "bookings/emails", {
       keywords: ["message log", "reminders", "failed", "thank-you"],

@@ -199,6 +199,8 @@ describe("buildNav: each tool's menu", () => {
     expect(labels(tool(tools, "bookings"))).toEqual([
       "Coming up",
       "Calendar",
+      "All bookings",
+      "Runsheet",
       "Customers",
       "Emails sent",
     ]);
@@ -208,6 +210,8 @@ describe("buildNav: each tool's menu", () => {
       "Coming up",
       "Needs a date",
       "Calendar",
+      "All bookings",
+      "Runsheet",
       "Customers",
       "Emails sent",
     ]);

@@ -58,6 +58,10 @@ export type RosterPerson = {
   answers: [string, string][];
   /** Automatic emails that didn't go, or may not have, in plain words. */
   mailTrouble?: string[];
+  /** Has booked with this business before (worked out on read, by email). */
+  returning?: boolean;
+  /** The shop order that made this booking: its number, and its page in the shop when known. */
+  order?: { label: string; href: string | null } | null;
 };
 
 /** "Send the confirmation again": one press, and the result said in words. */
@@ -86,7 +90,13 @@ function ResendConfirmation({ slug, person }: { slug: string; person: RosterPers
 }
 
 /** Two big tap targets: here, or didn't come. Tapping the lit one clears it. */
-function CheckIn({ slug, person }: { slug: string; person: RosterPerson }) {
+export function CheckIn({
+  slug,
+  person,
+}: {
+  slug: string;
+  person: Pick<RosterPerson, "id" | "attendance">;
+}) {
   const [mark, setMark] = useState(person.attendance);
   const [pending, start] = useTransition();
   const set = (next: "attended" | "no_show") => {
@@ -271,6 +281,7 @@ export function Roster({
             <div className="min-w-0 flex-1 basis-56">
               <p className="flex flex-wrap items-center gap-x-2 gap-y-1 font-semibold">
                 <span className="font-read">{p.name}</span>
+                {p.returning && <Badge tone="good">Returning</Badge>}
                 {p.seats > 1 && <Badge tone="open">{p.seats} places</Badge>}
                 {p.oversold && <Badge tone="bad">Over the limit</Badge>}
                 {p.manual && <Badge>Added by you</Badge>}
@@ -303,6 +314,23 @@ export function Roster({
                   </>
                 )}
                 {p.paid && ` · paid ${p.paid}`}
+                {p.order && (
+                  <>
+                    {" · "}
+                    {p.order.href ? (
+                      <a
+                        href={p.order.href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="hover:underline"
+                      >
+                        order {p.order.label} in your shop
+                      </a>
+                    ) : (
+                      `order ${p.order.label}`
+                    )}
+                  </>
+                )}
               </p>
               {p.notes && <p className="font-read mt-1 text-sm">{p.notes}</p>}
               {p.answers.map(([question, answer]) => (

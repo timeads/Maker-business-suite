@@ -1,11 +1,13 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Download } from "lucide-react";
+import { Download, FileText } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
+import { shopLinks } from "@/lib/helpdesk/customer";
+import { loadReturning } from "@/lib/bookings/runsheet-data";
 import { limitsToFit, loadSeatFigures, overShared, sharedWords } from "@/lib/bookings/seats";
 import { formatWhen, isUpcoming, localClock } from "@/lib/bookings/slots";
 import { formatMoney } from "@/lib/dashboard/format";
@@ -44,6 +46,8 @@ type BookingRow = {
   tags: string[];
   source: "online" | "manual";
   email_opt_in: boolean;
+  shop_order_id: string | null;
+  shop_order_name: string | null;
 };
 
 const MAIL_WORDS: Record<string, string> = {
@@ -83,11 +87,12 @@ export default async function SessionPage({
     { count: shopWorkshops },
     { data: mailRows },
     { data: sameTime },
+    { data: shop },
   ] = await Promise.all([
     supabase
       .from("bookings")
       .select(
-        "id, customer_name, customer_email, customer_phone, seats, status, oversold, answers, confirmed_at, amount_cents, currency, attendance, notes, tags, source, email_opt_in",
+        "id, customer_name, customer_email, customer_phone, seats, status, oversold, answers, confirmed_at, amount_cents, currency, attendance, notes, tags, source, email_opt_in, shop_order_id, shop_order_name",
       )
       .eq("session_id", id)
       .order("created_at"),
@@ -135,6 +140,13 @@ export default async function SessionPage({
       .gt("ends_at", session.starts_at)
       .order("starts_at")
       .limit(20),
+    // The shop's own name, so a shop-made booking can link to its order there.
+    supabase
+      .from("connections")
+      .select("provider, external_account_id")
+      .eq("tenant_id", tenant.id)
+      .eq("provider", "shopify")
+      .maybeSingle(),
   ]);
   const overlapping = (
     (sameTime ?? []) as unknown as {
@@ -182,6 +194,25 @@ export default async function SessionPage({
     mailTrouble.set(row.booking_id, [...(mailTrouble.get(row.booking_id) ?? []), words]);
   }
 
+  // Who has come before: worked out now, from the workspace's own earlier bookings.
+  const returning = await loadReturning(
+    supabase,
+    tenant.id,
+    shown.map((b) => ({ id: b.id, email: b.customer_email, starts_at: session.starts_at })),
+  );
+  const shopAccount = shop as { provider: string; external_account_id: string | null } | null;
+  const orderLink = (b: BookingRow) => {
+    if (!b.shop_order_id) return null;
+    const href = shopLinks(
+      shopAccount?.provider ?? null,
+      shopAccount?.external_account_id ?? null,
+      {
+        order: b.shop_order_id,
+      },
+    ).order;
+    return { label: b.shop_order_name || "Shop order", href };
+  };
+
   const people: RosterPerson[] = shown.map((b) => ({
     id: b.id,
     name: b.customer_name,
@@ -197,6 +228,8 @@ export default async function SessionPage({
     paid: b.amount_cents > 0 ? formatMoney(b.amount_cents / 100, b.currency) : null,
     answers: Object.entries(b.answers ?? {}),
     mailTrouble: mailTrouble.get(b.id) ?? [],
+    returning: returning.has(b.id),
+    order: orderLink(b),
   }));
   const otherDates = (siblings ?? []).map((s) => ({
     id: s.id as string,
@@ -229,6 +262,11 @@ export default async function SessionPage({
         {shown.length > 0 && (
           <>
             <PrintButton />
+            <Button asChild variant="outline" size="sm" className="print:hidden">
+              <a href={`${base}/sessions/${session.id}/roster-pdf`} target="_blank" rel="noopener">
+                <FileText /> PDF
+              </a>
+            </Button>
             <Button asChild variant="outline" size="sm" className="print:hidden">
               <a href={`${base}/sessions/${session.id}/roster`}>
                 <Download /> Spreadsheet
