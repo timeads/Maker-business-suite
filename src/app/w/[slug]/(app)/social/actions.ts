@@ -26,6 +26,8 @@ import {
 import { FIT_PLACES, needsCopy, type FitPlace } from "@/lib/social/fit";
 import { imageSize, type ImageSize } from "@/lib/social/image-size";
 import { REVIEW_KEY, reviewError, reviewSettingsSchema } from "@/lib/social/review";
+import { placeRuleError } from "@/lib/social/networks";
+import { tiktokOptionsSchema, type TikTokOptions } from "@/lib/social/tiktok-options";
 import { publicAssetUrl } from "@/lib/social/worker";
 import { getAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -69,6 +71,22 @@ const SAVE_ERRORS: Record<string, string> = {
   "Brand not found": "Pick one of your brands (not one that's put away).",
   photo_size:
     "One of the photos isn't a size Instagram takes. Open the post and schedule it again so a copy that fits is made.",
+  tiktok_needs_privacy: "Choose who can see it on TikTok.",
+  tiktok_privacy_not_allowed:
+    "TikTok doesn't offer that choice of who can see it for this account. Pick another.",
+  tiktok_branded_private:
+    "TikTok doesn't allow branded content to be private. Choose who can see it, or untick “Branded content”.",
+  options_not_valid: "Those TikTok choices didn't read. Please choose again.",
+  in_flight:
+    "This post is with a network right now, or we're waiting to hear whether it went. It can't be changed until that's settled.",
+  settle_unsure:
+    "We never heard back about one of the accounts. Look on that network first, then say whether it's there.",
+};
+
+/** A refusal from the database in plain words. */
+const refusalWords = (message: string) => {
+  const known = Object.keys(SAVE_ERRORS).find((key) => message.includes(key));
+  return known ? SAVE_ERRORS[known] : (placeRuleError(message) ?? reviewError(message));
 };
 
 type Ctx = Exclude<Awaited<ReturnType<typeof context>>, { error: string }>;
@@ -273,6 +291,7 @@ export async function savePost(
     accountIds: string[];
     channels: string[];
     captions: Record<string, string>;
+    options: Record<string, TikTokOptions>;
   } | null = null;
   if (formData.get("accounts_shown") === "1") {
     const accountIds = [
@@ -290,7 +309,30 @@ export async function savePost(
           .eq("tenant_id", ctx.tenant.id)
           .in("id", accountIds)
       : { data: [] };
-    const networks = new Set(((accountRows ?? []) as { network: string }[]).map((a) => a.network));
+    const found = (accountRows ?? []) as { id: string; network: string }[];
+    const networks = new Set(found.map((a) => a.network));
+    // TikTok's choices, for each TikTok account ticked (checked again by the database).
+    const options: Record<string, TikTokOptions> = {};
+    for (const account of found.filter((a) => a.network === "tiktok")) {
+      const flag = (name: string) => formData.get(`tt_${name}_${account.id}`) === "on";
+      const privacy = String(formData.get(`tt_privacy_${account.id}`) ?? "");
+      const parsed = tiktokOptionsSchema.safeParse({
+        privacy_level: privacy || null,
+        allow_comment: flag("comment"),
+        allow_duet: flag("duet"),
+        allow_stitch: flag("stitch"),
+        brand_organic: flag("disclose") && flag("brand_organic"),
+        brand_content: flag("disclose") && flag("brand_content"),
+      });
+      if (!parsed.success) return { error: SAVE_ERRORS.options_not_valid };
+      if (flag("disclose") && !parsed.data.brand_organic && !parsed.data.brand_content) {
+        return {
+          error:
+            "You said the TikTok video promotes something: tick whether it's your own brand, branded content, or both.",
+        };
+      }
+      options[account.id] = parsed.data;
+    }
     const feed = formData.get("channel_instagram") === "on";
     const story = formData.get("channel_instagram_story") === "on";
     if (networks.has("instagram") && !feed && !story) {
@@ -302,7 +344,10 @@ export async function savePost(
         ...(networks.has("facebook") ? ["facebook"] : []),
         ...(networks.has("instagram") && feed ? ["instagram"] : []),
         ...(networks.has("instagram") && story ? ["instagram_story"] : []),
+        ...(networks.has("tiktok") ? ["tiktok"] : []),
+        ...(networks.has("linkedin") ? ["linkedin"] : []),
       ],
+      options,
       captions: Object.fromEntries(
         accountIds.map((id) => [
           id,
@@ -314,7 +359,7 @@ export async function savePost(
     };
   }
   const { data: savedId, error } = targets
-    ? await ctx.supabase.rpc("save_social_post_to", {
+    ? await ctx.supabase.rpc("save_social_post_with_options", {
         p_tenant_id: ctx.tenant.id,
         p_post_id: postId,
         p_brand_id: brandId,
@@ -328,6 +373,7 @@ export async function savePost(
         p_topic: String(formData.get("topic") ?? "").slice(0, 40) || null,
         p_ai_draft: String(formData.get("ai_draft") ?? "").slice(0, 2200) || null,
         p_planned_for: plannedFor,
+        p_target_options: targets.options,
       })
     : await ctx.supabase.rpc("save_social_post_full", {
         p_tenant_id: ctx.tenant.id,
@@ -350,12 +396,7 @@ export async function savePost(
         p_planned_for: plannedFor,
       });
   if (error) {
-    const known = Object.keys(SAVE_ERRORS).find((key) => error.message.includes(key));
-    return {
-      error: known
-        ? SAVE_ERRORS[known]
-        : (reviewError(error.message) ?? "That didn't save. Please try again."),
-    };
+    return { error: refusalWords(error.message) ?? "That didn't save. Please try again." };
   }
   if (slidesChanged && !postId && slides) {
     const { error: slidesError } = await ctx.supabase.rpc("set_social_post_slides", {
@@ -493,15 +534,49 @@ export async function retryPost(
     p_post_id: postId,
   });
   if (error) {
-    const known = Object.keys(SAVE_ERRORS).find((key) => error.message.includes(key));
     return {
-      error: known
-        ? SAVE_ERRORS[known]
-        : (reviewError(error.message) ?? "It couldn't be tried again. Please try again."),
+      error: refusalWords(error.message) ?? "It couldn't be tried again. Please try again.",
     };
   }
   revalidatePath(`/w/${slug}/social`, "layout");
   redirect(`/w/${slug}/social?saved=schedule`);
+}
+
+/**
+ * A person looked on the network after we never heard back about one
+ * account: it's there (counts as posted, never sent again) or it isn't (it
+ * can be tried again).
+ */
+export async function settleTarget(
+  slug: string,
+  postId: string,
+  target: string,
+  went: boolean,
+  _prev: SocialState,
+  _formData: FormData,
+): Promise<SocialState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  if (!UUID.test(postId) || target.length > 200) return { error: OOPS };
+  const { error } = await ctx.supabase.rpc("settle_social_target", {
+    p_tenant_id: ctx.tenant.id,
+    p_post_id: postId,
+    p_target: target,
+    p_went: went,
+  });
+  if (error) {
+    return {
+      error: error.message.includes("nothing_to_settle")
+        ? "That's already settled. Refresh the page to see where it is."
+        : OOPS,
+    };
+  }
+  revalidatePath(`/w/${slug}/social`, "layout");
+  return {
+    message: went
+      ? "Marked as posted. It won't be sent again."
+      : "Noted. Press “Try the rest again” to send it.",
+  };
 }
 
 export async function deletePost(

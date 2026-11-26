@@ -1,7 +1,10 @@
 import { localDay } from "@/lib/bookings/slots";
 import { canPost, canPostAs } from "@/lib/connections/meta-access";
 import { loadBrandKit, loadBrands, pickBrand } from "@/lib/brand/brands";
+import { loginsOf } from "@/lib/connections/logins";
+import { linkedinCanPost } from "@/lib/connections/providers/linkedin";
 import { accountName } from "@/lib/social/accounts";
+import { NETWORK_PROVIDER, isNetwork, type Network } from "@/lib/social/networks";
 import { toDesignKit } from "@/lib/brand/kit";
 import type { BrandKit } from "@/lib/design/brands";
 import { matchPhotos } from "@/lib/social/photo-match";
@@ -21,12 +24,20 @@ type Supabase = Awaited<ReturnType<typeof createClient>>;
  */
 export async function socialChannels(supabase: Supabase, tenantId: string) {
   // Named columns only: members can't read the whole row.
-  const { data } = await supabase
-    .from("connections")
-    .select("status, display_name, metadata, scopes")
-    .eq("tenant_id", tenantId)
-    .eq("provider", "meta")
-    .maybeSingle();
+  const [{ data }, { count: others }] = await Promise.all([
+    supabase
+      .from("connections")
+      .select("status, display_name, metadata, scopes")
+      .eq("tenant_id", tenantId)
+      .eq("provider", "meta")
+      .maybeSingle(),
+    supabase
+      .from("social_accounts")
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", tenantId)
+      .eq("active", true)
+      .in("network", ["tiktok", "linkedin"]),
+  ]);
   const active = data?.status === "active";
   const scopes = Array.isArray(data?.scopes) ? (data.scopes as string[]) : [];
   const metadata = (data?.metadata ?? {}) as { instagram_username?: string | null };
@@ -38,16 +49,20 @@ export async function socialChannels(supabase: Supabase, tenantId: string) {
     needsReconnect: data?.status === "needs_reconnect",
     /** Connected and live, but without permission to post (connected for the help desk only). */
     needsPosting: active && !facebook,
+    /** TikTok or LinkedIn accounts are in use, so Facebook isn't the only way out. */
+    otherNetworks: (others ?? 0) > 0,
   };
 }
 
 /** One account the composer offers. Nothing secret. */
 export type ComposerAccount = {
   id: string;
-  network: "facebook" | "instagram";
+  network: Network;
   label: string;
-  /** The login was granted posting, and Meta says whoever connected may post on its Page. */
+  /** The login was granted posting, and (for Meta) whoever connected may post on its Page. */
   canPost: boolean;
+  /** Why it can't post yet, in a few words, when it can't. */
+  why?: string;
 };
 
 /**
@@ -57,43 +72,70 @@ export type ComposerAccount = {
  * what it saw before brands and accounts were lists.
  */
 export async function postTargets(supabase: Supabase, tenantId: string, brandId?: string | null) {
-  const [brands, { data: rows }, { data: connection }] = await Promise.all([
+  const [brands, { data: rows }, { data: connections }] = await Promise.all([
     loadBrands(supabase, tenantId),
     supabase
       .from("social_accounts")
-      .select("id, network, name, handle, brand_id, active, tasks")
+      .select(
+        "id, network, platform_id, name, handle, brand_id, active, tasks, login_id, needs_login",
+      )
       .eq("tenant_id", tenantId)
       .eq("active", true)
       .order("created_at"),
     // Named columns only: members can't read the whole row.
     supabase
       .from("connections")
-      .select("status, scopes")
+      .select("provider, status, scopes, metadata")
       .eq("tenant_id", tenantId)
-      .eq("provider", "meta")
-      .maybeSingle(),
+      .in("provider", ["meta", "tiktok", "linkedin"]),
   ]);
   const brand = pickBrand(brands, brandId);
-  const live = connection?.status === "active";
-  const scopes = Array.isArray(connection?.scopes) ? (connection.scopes as string[]) : [];
+  const byProvider = new Map(
+    (
+      (connections ?? []) as {
+        provider: string;
+        status: string;
+        scopes: unknown;
+        metadata: unknown;
+      }[]
+    ).map((row) => [row.provider, row]),
+  );
+  const meta = byProvider.get("meta");
+  const metaLive = meta?.status === "active";
+  const metaScopes = Array.isArray(meta?.scopes) ? (meta.scopes as string[]) : [];
   const accounts: ComposerAccount[] = (
     (rows ?? []) as {
       id: string;
       network: string;
+      platform_id: string;
       name: string | null;
       handle: string | null;
       brand_id: string;
       tasks: string[] | null;
+      login_id: string | null;
+      needs_login: boolean | null;
     }[]
   )
-    .filter((row) => row.brand_id === brand?.id)
-    .filter((row) => row.network === "facebook" || row.network === "instagram")
-    .map((row) => ({
-      id: row.id,
-      network: row.network as "facebook" | "instagram",
-      label: accountName(row),
-      canPost: live && canPostAs(row, scopes),
-    }));
+    .filter((row) => row.brand_id === brand?.id && isNetwork(row.network))
+    .map((row) => {
+      const network = row.network as Network;
+      const base = { id: row.id, network, label: accountName(row) };
+      if (network === "facebook" || network === "instagram") {
+        return { ...base, canPost: metaLive && canPostAs(row, metaScopes) };
+      }
+      const connection = byProvider.get(NETWORK_PROVIDER[network]);
+      const login = loginsOf(connection?.metadata).find((each) => each.id === row.login_id);
+      if (connection?.status !== "active" || !login || row.needs_login) {
+        return { ...base, canPost: false, why: "needs connecting again" };
+      }
+      const allowed =
+        network === "tiktok"
+          ? login.scopes.includes("video.publish")
+          : linkedinCanPost(row.platform_id, login.scopes);
+      return allowed
+        ? { ...base, canPost: true }
+        : { ...base, canPost: false, why: "no permission to post" };
+    });
   return {
     brands: brands
       .filter((each) => !each.archived_at || each.id === brand?.id)

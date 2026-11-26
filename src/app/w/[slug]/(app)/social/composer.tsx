@@ -11,6 +11,21 @@ import { starterDesignFor } from "@/lib/brand/slides";
 import type { BrandKit } from "@/lib/design/brands";
 import type { SlideDesign } from "@/lib/design/slide-design";
 import { renderSlideBlob } from "@/lib/design/slide-render";
+import {
+  NETWORK_LABELS,
+  checkPlace,
+  placesOf,
+  problemWords,
+  type Place,
+} from "@/lib/social/networks";
+import {
+  PRIVACY_LABELS,
+  checkTikTokOptions,
+  privacyChoices,
+  tiktokOptionsFor,
+  type CreatorChoices,
+  type TikTokOptions,
+} from "@/lib/social/tiktok-options";
 import { cn } from "@/lib/utils";
 import {
   deletePost,
@@ -19,11 +34,13 @@ import {
   loadAssetDesign,
   retryPost,
   savePost,
+  settleTarget,
   type SocialState,
 } from "./actions";
 import { designTitle, saveDesignAsPictures } from "./designed";
 import { getReadyToSend } from "./send-prep";
 import type { ComposerAccount } from "./shared";
+import { loadTikTokChoices } from "./tiktok-actions";
 
 const textarea =
   "border-input bg-card placeholder:text-muted-foreground focus-visible:border-ochre focus-visible:ring-ochre/25 font-read w-full rounded-sm border px-[11px] py-2 text-sm outline-none focus-visible:ring-2";
@@ -67,6 +84,8 @@ export type ComposerPost = {
   slides?: SlideDesign | null;
   /** Approved or scheduled: the slides were drawn and are fixed now. */
   slidesFixed?: boolean;
+  /** Each account's own choices for its network (TikTok's), by account id. */
+  targetOptions?: Record<string, unknown>;
 };
 
 export function Composer({
@@ -114,14 +133,41 @@ export function Composer({
   const [own, setOwn] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(accounts.map((account) => [account.id, Boolean(ownWords(account))])),
   );
+  const [ownCaptions, setOwnCaptions] = useState<Record<string, string>>(() =>
+    Object.fromEntries(accounts.map((account) => [account.id, ownWords(account) ?? ""])),
+  );
   const startTicked = (account: ComposerAccount) =>
     post?.accountIds.length
       ? post.accountIds.includes(account.id)
       : post?.channels.length
-        ? post.channels.some(
-            (c) => (c === "facebook" ? "facebook" : "instagram") === account.network,
-          )
-        : account.canPost;
+        ? post.channels.some((c) => placesOf(account.network).includes(c as Place))
+        : // A new post starts on the brand's Facebook and Instagram, as it always did;
+          // TikTok and LinkedIn are ticked by choice.
+          account.canPost && (account.network === "facebook" || account.network === "instagram");
+  const [ticked, setTicked] = useState<string[]>(() =>
+    accounts.filter((account) => account.canPost && startTicked(account)).map((a) => a.id),
+  );
+  const [feed, setFeed] = useState(
+    post?.channels.length ? post.channels.includes("instagram") : true,
+  );
+  const [story, setStory] = useState(post?.channels.includes("instagram_story") ?? false);
+  // TikTok's choices, per TikTok account, and what TikTok says each may choose.
+  const [tiktok, setTiktok] = useState<Record<string, TikTokOptions & { disclose: boolean }>>(() =>
+    Object.fromEntries(
+      accounts
+        .filter((account) => account.network === "tiktok")
+        .map((account) => {
+          const options = tiktokOptionsFor(post?.targetOptions ?? {}, account.id);
+          return [
+            account.id,
+            { ...options, disclose: options.brand_organic || options.brand_content },
+          ];
+        }),
+    ),
+  );
+  const [creators, setCreators] = useState<
+    Record<string, { choices: CreatorChoices | null; audited: boolean; error?: string }>
+  >({});
   // Photos that arrived after the page was drawn: ones just designed, or matched to a draft.
   const [extra, setExtra] = useState<LibraryPhoto[]>([]);
   // Why a photo was put on the post without being asked for, by photo.
@@ -168,7 +214,6 @@ export function Composer({
     {},
   );
   const connected = accounts.some((account) => account.canPost);
-  const instagramAccounts = accounts.filter((account) => account.network === "instagram");
   const byId = new Map([...library, ...extra].map((photo) => [photo.id, photo]));
   // A video goes out on its own, so picking one replaces what was picked,
   // and picking a photo afterwards replaces the video.
@@ -179,6 +224,41 @@ export function Composer({
       return now.length < 10 ? [...now, id] : now;
     });
   const hasVideo = picked.some((id) => byId.get(id)?.video);
+  const photoCount =
+    picked.filter((id) => !byId.get(id)?.video).length + (slides?.slides.length ?? 0);
+  const tickedAccounts = accounts.filter((account) => ticked.includes(account.id));
+  const instagramAccounts = accounts.filter((account) => account.network === "instagram");
+  const tiktokTicked = tickedAccounts.filter((account) => account.network === "tiktok");
+  // Each ticked account's network rules, and TikTok's choices, before anything is scheduled.
+  // The database checks the same rules again.
+  const problems = [
+    ...new Set([
+      ...tickedAccounts.flatMap((account) =>
+        placesOf(account.network)
+          .filter(
+            (place) =>
+              account.network !== "instagram" ||
+              (place === "instagram" ? feed : place === "instagram_story" ? story : false),
+          )
+          .flatMap((place) =>
+            checkPlace(place, {
+              words: own[account.id] ? (ownCaptions[account.id] ?? caption) : caption,
+              photos: photoCount,
+              video: Boolean(hasVideo),
+            }).map(problemWords),
+          ),
+      ),
+      ...tiktokTicked.flatMap((account) => {
+        const creator = creators[account.id];
+        const problem = checkTikTokOptions(
+          tiktok[account.id],
+          creator?.choices ?? null,
+          creator?.audited ?? false,
+        );
+        return problem ? [`${account.label}: ${problem}`] : [];
+      }),
+    ]),
+  ];
   const firstPhoto = picked.map((id) => byId.get(id)).find((photo) => photo && !photo.video);
 
   const slidesFixed = Boolean(post?.slidesFixed);
@@ -213,6 +293,11 @@ export function Composer({
     const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
     const intent = submitter?.value ?? "draft";
     if (intent !== "schedule" && intent !== "now") return;
+    if (problems.length > 0) {
+      event.preventDefault();
+      setPrepError(problems.join(" "));
+      return;
+    }
     // Slides are drawn and Instagram's photos sized in this browser first.
     const data = new FormData(event.currentTarget);
     const toInstagram =
@@ -395,7 +480,7 @@ export function Composer({
           />
           <p className="text-muted-foreground text-xs tabular-nums">{caption.length} / 2,200</p>
           {accounts.map((account) => {
-            const name = `${account.network === "facebook" ? "Facebook" : "Instagram"} (${account.label})`;
+            const name = `${NETWORK_LABELS[account.network]} (${account.label})`;
             return (
               <div key={account.id} className="flex flex-col gap-2">
                 <label className="flex items-center gap-2 text-sm">
@@ -413,6 +498,9 @@ export function Composer({
                     rows={4}
                     maxLength={2200}
                     defaultValue={ownWords(account) ?? caption}
+                    onChange={(event) =>
+                      setOwnCaptions({ ...ownCaptions, [account.id]: event.target.value })
+                    }
                     aria-label={`Caption for ${name}`}
                     className={textarea}
                   />
@@ -659,7 +747,7 @@ export function Composer({
             <p className="text-muted-foreground text-xs">
               JPEG or PNG, up to 5 MB each. Instagram needs JPEGs. Several photos become one
               swipe-through post. For a video, add it under Assets first, then pick it here; it goes
-              out on its own, as a Reel on Instagram.
+              out on its own, as a Reel on Instagram. TikTok takes a video only.
             </p>
           </div>
         </fieldset>
@@ -675,12 +763,21 @@ export function Composer({
                 type="checkbox"
                 name="account"
                 value={account.id}
-                defaultChecked={startTicked(account)}
+                checked={ticked.includes(account.id)}
+                onChange={(event) =>
+                  setTicked((now) =>
+                    event.target.checked
+                      ? [...now, account.id]
+                      : now.filter((id) => id !== account.id),
+                  )
+                }
                 disabled={!account.canPost}
               />
-              {account.network === "facebook" ? "Facebook" : "Instagram"} · {account.label}
+              {NETWORK_LABELS[account.network]} · {account.label}
               {!account.canPost && (
-                <span className="text-muted-foreground text-xs">(can&apos;t post yet)</span>
+                <span className="text-muted-foreground text-xs">
+                  ({account.why ?? "can't post yet"})
+                </span>
               )}
             </label>
           ))}
@@ -691,9 +788,8 @@ export function Composer({
                 <input
                   type="checkbox"
                   name="channel_instagram"
-                  defaultChecked={
-                    post?.channels.length ? post.channels.includes("instagram") : true
-                  }
+                  checked={feed}
+                  onChange={(event) => setFeed(event.target.checked)}
                 />
                 A post (or a Reel, for a video)
               </label>
@@ -701,7 +797,8 @@ export function Composer({
                 <input
                   type="checkbox"
                   name="channel_instagram_story"
-                  defaultChecked={post?.channels.includes("instagram_story") ?? false}
+                  checked={story}
+                  onChange={(event) => setStory(event.target.checked)}
                 />
                 A Story
               </label>
@@ -713,19 +810,40 @@ export function Composer({
               </p>
             </div>
           )}
+          {tiktokTicked.map((account) => (
+            <TikTokChoices
+              key={account.id}
+              slug={slug}
+              account={account}
+              value={tiktok[account.id]}
+              onChange={(next) => setTiktok((now) => ({ ...now, [account.id]: next }))}
+              creator={creators[account.id]}
+              onCreator={(found) => setCreators((now) => ({ ...now, [account.id]: found }))}
+            />
+          ))}
           {accounts.length === 0 ? (
             <p className="text-muted-foreground text-xs">
               {brands.length > 1 && brand
-                ? `${brand.name} has no Facebook Page or Instagram account yet. Give it one under Settings → Social accounts. You can still save drafts.`
-                : "Connect Facebook & Instagram on the Connections page to schedule posts. You can still save drafts."}
+                ? `${brand.name} has no social accounts yet. Give it one under Settings → Social accounts. You can still save drafts.`
+                : "Connect Facebook & Instagram, TikTok or LinkedIn on the Connections page to schedule posts. You can still save drafts."}
             </p>
           ) : (
             !connected && (
               <p className="text-muted-foreground text-xs">
-                Facebook hasn&apos;t given permission to post to these yet. You can still save
-                drafts.
+                None of these accounts can be posted to yet (see why beside each). You can still
+                save drafts.
               </p>
             )
+          )}
+          {problems.length > 0 && tickedAccounts.length > 0 && (
+            <div className="bg-note rounded-sm px-3 py-2 text-xs" role="status">
+              <p className="font-semibold">Before this can be scheduled:</p>
+              <ul className="list-disc pl-4">
+                {problems.map((problem) => (
+                  <li key={problem}>{problem}</li>
+                ))}
+              </ul>
+            </div>
           )}
         </fieldset>
 
@@ -898,6 +1016,48 @@ export function RetryPostForm({ slug, postId }: { slug: string; postId: string }
   );
 }
 
+/**
+ * For an account we never heard back about: a person looks on the network
+ * and says whether the post is there. Nothing is sent again until they do.
+ */
+export function SettleTargetForm({
+  slug,
+  postId,
+  target,
+  network,
+}: {
+  slug: string;
+  postId: string;
+  target: string;
+  network: string;
+}) {
+  const [wentState, went] = useActionState(settleTarget.bind(null, slug, postId, target, true), {});
+  const [notState, notThere] = useActionState(
+    settleTarget.bind(null, slug, postId, target, false),
+    {},
+  );
+  const state = wentState.error || wentState.message ? wentState : notState;
+  return (
+    <div className="flex flex-col gap-1">
+      <p className="text-xs">Look on {network}. Is the post there?</p>
+      <div className="flex flex-wrap gap-2">
+        <form action={went}>
+          <SubmitButton variant="outline" size="sm" pendingText="Saving…">
+            Yes, it&apos;s there
+          </SubmitButton>
+        </form>
+        <form action={notThere}>
+          <SubmitButton variant="ghost" size="sm" pendingText="Saving…">
+            No, it isn&apos;t
+          </SubmitButton>
+        </form>
+      </div>
+      <FormMessage>{state.error}</FormMessage>
+      <FormMessage kind="success">{state.message}</FormMessage>
+    </div>
+  );
+}
+
 export function DeletePostForm({ slug, postId }: { slug: string; postId: string }) {
   const [state, action] = useActionState(deletePost.bind(null, slug, postId), {});
   return (
@@ -907,5 +1067,176 @@ export function DeletePostForm({ slug, postId }: { slug: string; postId: string 
         Delete this post
       </SubmitButton>
     </form>
+  );
+}
+
+/**
+ * TikTok's own choices for one account's post, as its rules for apps ask:
+ * who can see it (from what TikTok says this account may choose, with no
+ * choice made for the person), comments, duets and stitches (off until
+ * switched on, and off for good where the creator switched them off in
+ * TikTok), and whether it promotes a brand. Shown only while a TikTok
+ * account is ticked.
+ */
+function TikTokChoices({
+  slug,
+  account,
+  value,
+  onChange,
+  creator,
+  onCreator,
+}: {
+  slug: string;
+  account: ComposerAccount;
+  value: TikTokOptions & { disclose: boolean };
+  onChange(next: TikTokOptions & { disclose: boolean }): void;
+  creator?: { choices: CreatorChoices | null; audited: boolean; error?: string };
+  onCreator(found: { choices: CreatorChoices | null; audited: boolean; error?: string }): void;
+}) {
+  useEffect(() => {
+    if (creator) return;
+    let live = true;
+    void loadTikTokChoices(slug, account.id).then((found) => {
+      if (!live) return;
+      onCreator(
+        found.ok
+          ? { choices: found.choices, audited: found.audited }
+          : { choices: null, audited: found.audited, error: found.error },
+      );
+    });
+    return () => {
+      live = false;
+    };
+    // Asked once each time the account is shown, as TikTok asks.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [account.id]);
+  const audited = creator?.audited ?? false;
+  const levels = privacyChoices(creator?.choices ?? null, audited);
+  const field = (name: string) => `tt_${name}_${account.id}`;
+  const set = (patch: Partial<TikTokOptions & { disclose: boolean }>) =>
+    onChange({ ...value, ...patch });
+  const off = {
+    comment: Boolean(creator?.choices?.commentDisabled),
+    duet: Boolean(creator?.choices?.duetDisabled),
+    stitch: Boolean(creator?.choices?.stitchDisabled),
+  };
+  return (
+    <div className="border-border flex flex-col gap-2 rounded-md border p-3">
+      <p className="text-sm font-semibold">On TikTok, as {account.label}</p>
+      {!audited && (
+        <p className="bg-ochre-soft text-ochre-text rounded-sm px-3 py-2 text-xs">
+          TikTok hasn&apos;t reviewed our app yet, so for now TikTok only lets us post videos that
+          only you can see. Once it&apos;s up you can change who sees it in the TikTok app.
+        </p>
+      )}
+      {creator?.error && <p className="text-brick text-xs">{creator.error}</p>}
+      {!creator && (
+        <p className="text-muted-foreground text-xs">Asking TikTok what you can choose…</p>
+      )}
+      <label className="flex flex-col gap-1 text-sm">
+        <span>Who can see it</span>
+        <Select
+          name={field("privacy")}
+          value={value.privacy_level ?? ""}
+          onChange={(event) =>
+            set({ privacy_level: (event.target.value || null) as TikTokOptions["privacy_level"] })
+          }
+        >
+          <option value="">Choose who can see it</option>
+          {levels.map((level) => (
+            <option key={level} value={level}>
+              {PRIVACY_LABELS[level]}
+            </option>
+          ))}
+        </Select>
+      </label>
+      <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
+        {(
+          [
+            ["comment", "allow_comment", "Comments"],
+            ["duet", "allow_duet", "Duets"],
+            ["stitch", "allow_stitch", "Stitches"],
+          ] as const
+        ).map(([name, key, label]) => (
+          <label key={name} className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              name={field(name)}
+              checked={value[key] && !off[name]}
+              disabled={off[name]}
+              onChange={(event) => set({ [key]: event.target.checked })}
+            />
+            Allow {label.toLowerCase()}
+            {off[name] && <span className="text-muted-foreground text-xs">(off in TikTok)</span>}
+          </label>
+        ))}
+      </div>
+      <label className="flex items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          name={field("disclose")}
+          checked={value.disclose}
+          onChange={(event) =>
+            set(
+              event.target.checked
+                ? { disclose: true }
+                : { disclose: false, brand_organic: false, brand_content: false },
+            )
+          }
+        />
+        This video promotes a brand, a product or a service
+      </label>
+      {value.disclose && (
+        <div className="flex flex-col gap-1 pl-6 text-sm">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              name={field("brand_organic")}
+              checked={value.brand_organic}
+              onChange={(event) => set({ brand_organic: event.target.checked })}
+            />
+            Your brand (it promotes your own business)
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              name={field("brand_content")}
+              checked={value.brand_content}
+              onChange={(event) => set({ brand_content: event.target.checked })}
+            />
+            Branded content (a paid partnership with another brand; it can&apos;t be private)
+          </label>
+          <p className="text-muted-foreground text-xs">
+            TikTok labels it as{" "}
+            {value.brand_content ? "“Paid partnership”" : "“Promotional content”"}.
+          </p>
+        </div>
+      )}
+      <p className="text-muted-foreground text-xs">
+        By posting, you agree to TikTok&apos;s{" "}
+        {value.brand_content ? (
+          <>
+            <a
+              className="text-ochre-text hover:underline"
+              href="https://www.tiktok.com/legal/page/global/bc-policy/en"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Branded Content Policy
+            </a>{" "}
+            and{" "}
+          </>
+        ) : null}
+        <a
+          className="text-ochre-text hover:underline"
+          href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Music Usage Confirmation
+        </a>
+        . TikTok can take a few minutes to finish a video after it&apos;s sent.
+      </p>
+    </div>
   );
 }

@@ -198,27 +198,29 @@ export default async function SocialPage({
           </CardContent>
         </Card>
       )}
-      {channels.facebook === null && !channels.needsPosting && (
-        <Card>
-          <CardHeader>
-            <CardTitle>
-              {channels.needsReconnect
-                ? "Facebook & Instagram need reconnecting"
-                : "Connect Facebook & Instagram"}
-            </CardTitle>
-            <CardDescription>
-              {channels.needsReconnect
-                ? "Scheduled posts can't go out until the connection is renewed."
-                : "You can write drafts now. Connect your Facebook Page to schedule and publish them."}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Button asChild variant="outline">
-              <Link href={`/w/${tenant.slug}/connections`}>Go to Connections</Link>
-            </Button>
-          </CardContent>
-        </Card>
-      )}
+      {channels.facebook === null &&
+        !channels.needsPosting &&
+        (channels.needsReconnect || !channels.otherNetworks) && (
+          <Card>
+            <CardHeader>
+              <CardTitle>
+                {channels.needsReconnect
+                  ? "Facebook & Instagram need reconnecting"
+                  : "Connect Facebook & Instagram"}
+              </CardTitle>
+              <CardDescription>
+                {channels.needsReconnect
+                  ? "Scheduled posts can't go out until the connection is renewed."
+                  : "You can write drafts now. Connect your Facebook Page to schedule and publish them."}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button asChild variant="outline">
+                <Link href={`/w/${tenant.slug}/connections`}>Go to Connections</Link>
+              </Button>
+            </CardContent>
+          </Card>
+        )}
 
       {(failed ?? []).length > 0 && (
         <Card>

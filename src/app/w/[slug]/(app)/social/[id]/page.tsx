@@ -8,7 +8,7 @@ import { ownDesign } from "@/lib/brand/slides";
 import { publicAssetUrl } from "@/lib/social/worker";
 import { createClient } from "@/lib/supabase/server";
 import { Badge } from "@/components/ui/badge";
-import { Composer, DeletePostForm, RetryPostForm } from "../composer";
+import { Composer, DeletePostForm, RetryPostForm, SettleTargetForm } from "../composer";
 import { socialAccess } from "../gate";
 import { SendBackForm } from "../review-forms";
 import {
@@ -22,16 +22,34 @@ import {
   postTargets,
   reviewFor,
 } from "../shared";
-import type { Channel } from "@/lib/social/publish";
+import { NETWORK_LABELS, PLACE_RULES, isPlace, placeNetwork } from "@/lib/social/networks";
 import { postTargets as postTargetsOf, targetLabel, type PostAccount } from "@/lib/social/targets";
 
 export const metadata: Metadata = { title: "Post" };
 
-const CHANNEL_NAMES: Record<string, string> = {
-  facebook: "Facebook",
-  instagram: "Instagram",
-  instagram_story: "Instagram Story",
+const CHANNEL_NAMES: Record<string, string> = Object.fromEntries(
+  Object.entries(PLACE_RULES).map(([place, rule]) => [place, rule.label]),
+);
+
+type Result = {
+  id?: string;
+  error?: string;
+  pending?: string;
+  unsure?: string;
+  sending?: string;
+  checked_by?: string;
 };
+
+/** What happened for one target, in a few words. */
+function resultWords(result: Result | undefined): string {
+  if (!result) return "waiting to go out";
+  if (result.id && result.checked_by) return "posted (you checked)";
+  if (result.id) return "posted";
+  if (result.pending) return "sent, and still being prepared there";
+  if (result.unsure) return result.unsure;
+  if (result.sending) return "being sent";
+  return result.error ?? "waiting to go out";
+}
 
 export default async function PostPage({
   params,
@@ -52,7 +70,7 @@ export default async function PostPage({
     supabase
       .from("social_posts")
       .select(
-        "id, caption, captions, channels, account_ids, brand_id, status, scheduled_for, planned_for, published_at, results, error, asset_id, asset_ids, project_id, topic, ai_draft, review, review_note, slides, slide_asset_ids",
+        "id, caption, captions, channels, account_ids, brand_id, status, scheduled_for, planned_for, published_at, results, error, asset_id, asset_ids, project_id, topic, ai_draft, review, review_note, slides, slide_asset_ids, target_options",
       )
       .eq("id", id)
       .eq("tenant_id", tenant.id)
@@ -99,19 +117,24 @@ export default async function PostPage({
     const found = choices.library.find((photo) => photo.id === photoId);
     return found ? [found.url] : [];
   });
-  const results = (post.results ?? {}) as Record<string, { id?: string; error?: string }>;
+  const results = (post.results ?? {}) as Record<string, Result>;
   const partlyOut = Object.values(results).some((r) => r.id);
+  // Something with a network, or that we never heard back about, can't be changed either.
+  const inFlight = Object.values(results).some(
+    (r) => !r.id && (r.pending || r.unsure || r.sending),
+  );
   const editable =
     entitlements.canWrite &&
     ["draft", "scheduled", "failed"].includes(post.status as string) &&
-    !partlyOut;
+    !partlyOut &&
+    !inFlight;
   const meantFor = (post.scheduled_for ?? post.planned_for) as string | null;
   const when = meantFor
     ? localFields(new Date(meantFor), tenant.timezone)
     : defaultSlot(new Date(), tenant.timezone);
   const captions = (post.captions ?? {}) as Record<string, string>;
   const targetsOut = postTargetsOf(
-    { channels: post.channels as Channel[], account_ids: accountIds },
+    { channels: ((post.channels as string[]) ?? []).filter(isPlace), account_ids: accountIds },
     named,
   ).flatMap((t) => t.places);
   const captionLabel = (key: string) => {
@@ -136,8 +159,8 @@ export default async function PostPage({
           {targetsOut
             .filter((t) => results[t.key]?.error)
             .map((t) => `${targetLabel(t.key, named)}: ${results[t.key].error}.`)
-            .join(" ") || `${post.error}.`}
-          {partlyOut
+            .join(" ") || (inFlight ? "" : `${post.error}.`)}
+          {partlyOut || inFlight
             ? " What was posted stays up and is never sent again."
             : " Fix it below and schedule it again."}
         </FormMessage>
@@ -194,6 +217,7 @@ export default async function PostPage({
                   ),
                   slides: ownDesign(post.slides, publicAssetUrl(`${tenant.id}/`)),
                   slidesFixed: post.status === "scheduled",
+                  targetOptions: (post.target_options ?? {}) as Record<string, unknown>,
                   projectId: (post.project_id as string | null) ?? null,
                   topic: (post.topic as string | null) ?? null,
                   aiDraft: (post.ai_draft as string | null) ?? null,
@@ -251,15 +275,27 @@ export default async function PostPage({
                   <p className="font-read text-sm whitespace-pre-line">{words}</p>
                 </div>
               ))}
-            <ul className="text-muted-foreground text-sm">
+            <ul className="text-muted-foreground flex flex-col gap-2 text-sm">
               {targetsOut.map((t) => (
-                <li key={t.key}>
-                  {targetLabel(t.key, named)}:{" "}
-                  {results[t.key]?.id ? "posted" : (results[t.key]?.error ?? "waiting to go out")}
+                <li key={t.key} className="flex flex-col gap-1">
+                  <span>
+                    {targetLabel(t.key, named)}: {resultWords(results[t.key])}
+                  </span>
+                  {post.status === "failed" &&
+                    entitlements.canWrite &&
+                    !results[t.key]?.id &&
+                    (results[t.key]?.unsure || results[t.key]?.sending) && (
+                      <SettleTargetForm
+                        slug={tenant.slug}
+                        postId={post.id as string}
+                        target={t.key}
+                        network={NETWORK_LABELS[placeNetwork(t.place)] ?? "the network"}
+                      />
+                    )}
                 </li>
               ))}
             </ul>
-            {post.status === "failed" && partlyOut && entitlements.canWrite && (
+            {post.status === "failed" && (partlyOut || inFlight) && entitlements.canWrite && (
               <RetryPostForm slug={tenant.slug} postId={post.id as string} />
             )}
           </CardContent>

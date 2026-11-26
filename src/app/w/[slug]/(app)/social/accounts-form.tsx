@@ -4,7 +4,24 @@ import { useActionState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { FormMessage } from "@/components/ui/form-message";
 import { SubmitButton } from "@/components/ui/submit-button";
-import { NETWORK_LABELS, accountName, type AccountRow } from "@/lib/social/accounts";
+import {
+  NETWORK_LABELS,
+  accountName,
+  isLinkedInPerson,
+  type AccountRow,
+} from "@/lib/social/accounts";
+
+/** A group's heading: the Facebook Page, or the TikTok account, or who signed in to LinkedIn. */
+function groupName(accounts: AccountRow[]): string {
+  const first = accounts[0];
+  if (!first) return "Accounts";
+  if (first.network === "tiktok") return `TikTok · ${accountName(first)}`;
+  if (first.network === "linkedin") {
+    const person = accounts.find(isLinkedInPerson);
+    return person ? `LinkedIn · signed in as ${person.name ?? "someone"}` : "LinkedIn";
+  }
+  return first.name ?? "A Facebook Page";
+}
 import { saveSocialAccounts, type AccountsState } from "./accounts-actions";
 
 /**
@@ -33,7 +50,7 @@ export function AccountsForm({
       <fieldset disabled={!canEdit} className="flex flex-col gap-3">
         {pages.map(({ pageId, accounts }) => (
           <section key={pageId} className="bg-card flex flex-col gap-1 rounded-lg border p-4">
-            <h3 className="text-sm font-semibold">{accounts[0]?.name ?? "A Facebook Page"}</h3>
+            <h3 className="text-sm font-semibold">{groupName(accounts)}</h3>
             <ul className="divide-border flex flex-col divide-y">
               {accounts.map((account) => (
                 <li key={account.id} className="flex flex-wrap items-center gap-3 py-2">
@@ -49,10 +66,17 @@ export function AccountsForm({
                     <span>
                       {NETWORK_LABELS[account.network] ?? account.network}:{" "}
                       <span className="font-semibold">{accountName(account)}</span>
+                      {isLinkedInPerson(account) && (
+                        <span className="text-muted-foreground"> (their own profile)</span>
+                      )}
                     </span>
                   </label>
                   {!account.offered ? (
-                    <Badge tone="closed">Not shared any more</Badge>
+                    <Badge tone="closed">
+                      {account.login_id ? "Not connected any more" : "Not shared any more"}
+                    </Badge>
+                  ) : account.needs_login ? (
+                    <Badge tone="bad">Needs connecting again</Badge>
                   ) : account.active ? (
                     <Badge tone="good">In use</Badge>
                   ) : (

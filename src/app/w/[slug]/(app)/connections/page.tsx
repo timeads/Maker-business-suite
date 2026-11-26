@@ -219,13 +219,20 @@ export default async function ConnectionsPage({
                   </p>
                 ) : (
                   <>
-                    {status !== "active" && entitlements.canWrite && (
+                    {/* A connection of several logins can always take another. */}
+                    {(status !== "active" || adapter.multiLogin) && entitlements.canWrite && (
                       <ConnectForm
                         slug={tenant.slug}
                         provider={key}
                         providerName={adapter.name}
                         fields={adapter.connectFields.filter((field) => !field.hidden)}
-                        label={live ? `Reconnect ${adapter.name}` : `Connect ${adapter.name}`}
+                        label={
+                          status === "active" && adapter.multiLogin
+                            ? `Add another ${adapter.name} account`
+                            : live
+                              ? `Reconnect ${adapter.name}`
+                              : `Connect ${adapter.name}`
+                        }
                         withKey={withKey}
                       />
                     )}

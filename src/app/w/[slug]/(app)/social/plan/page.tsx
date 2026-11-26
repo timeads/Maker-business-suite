@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { PLACE_RULES, type Place } from "@/lib/social/networks";
 import Link from "next/link";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
@@ -102,7 +103,7 @@ export default async function SocialPlanPage({ params }: { params: Promise<{ slu
                 {review.posted} posted
                 {review.failed > 0 && `, ${review.failed} didn't go out`}
                 {review.channels.length > 0 &&
-                  ` · ${review.channels.map(([channel, n]) => `${n} on ${channel === "facebook" ? "Facebook" : channel === "instagram_story" ? "Instagram Stories" : "Instagram"}`).join(", ")}`}
+                  ` · ${review.channels.map(([channel, n]) => `${n} on ${channel === "instagram_story" ? "Instagram Stories" : (PLACE_RULES[channel as Place]?.label ?? channel)}`).join(", ")}`}
               </CardDescription>
             </CardHeader>
             <CardContent>

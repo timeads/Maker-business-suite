@@ -2,6 +2,9 @@
 
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/auth";
+import { changeLogins, loginToken, withoutLogin } from "@/lib/connections/logins";
+import { getAdapter } from "@/lib/connections/registry";
+import { vaultTokenStore } from "@/lib/connections/tokens";
 import { getEntitlements } from "@/lib/entitlements";
 import { loadChannelFacts } from "@/lib/helpdesk/social/server";
 import { syncPageSubscriptions } from "@/lib/helpdesk/social/subscriptions";
@@ -92,4 +95,67 @@ export async function saveSocialAccounts(
     }
   }
   return { message: `Saved.${note}` };
+}
+
+/**
+ * Lets go of one TikTok or LinkedIn login (owners and admins): its accounts
+ * stop posting (the database checks the role and puts them out of use),
+ * then its tokens are revoked where the network allows and forgotten, under
+ * the connection's lock so the other logins are kept as they are. The last
+ * login going disconnects the connection.
+ */
+export async function forgetSocialLogin(
+  slug: string,
+  provider: string,
+  loginId: string,
+  _prev: AccountsState,
+  _formData: FormData,
+): Promise<AccountsState> {
+  const user = await requireUser(`/w/${slug}/settings/social/accounts`);
+  const ctx = await getTenantContext(slug, user.id);
+  if (!ctx) return { error: "We couldn't find that workspace." };
+  if (!canManage(ctx.role)) return { error: "Only owners and admins can disconnect an account." };
+  if ((provider !== "tiktok" && provider !== "linkedin") || !loginId || loginId.length > 200) {
+    return { error: "That login isn't here." };
+  }
+  const { data: left, error } = await (
+    await createClient()
+  ).rpc("forget_social_login", {
+    p_tenant_id: ctx.tenant.id,
+    p_provider: provider,
+    p_login_id: loginId,
+  });
+  if (error) return { error: "We couldn't disconnect that just now. Please try again." };
+  try {
+    const admin = getAdminClient();
+    const store = vaultTokenStore(admin);
+    const adapter = getAdapter(provider);
+    const stored = await store.read(ctx.tenant.id, provider);
+    const login = stored ? loginToken(stored.token, loginId) : null;
+    if (login) await adapter.disconnectLogin?.(login, loginId).catch(() => undefined);
+    if (stored && Number(left) === 0) {
+      await admin.rpc("mark_connection", {
+        p_connection_id: stored.connectionId,
+        p_status: "disconnected",
+        p_error: null,
+        p_actor: user.id,
+      });
+    } else if (stored) {
+      await changeLogins(ctx.tenant.id, provider, (token) => withoutLogin(token, loginId), {
+        store,
+        wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      });
+    }
+  } catch (err) {
+    console.error(
+      `${provider} login forget failed`,
+      err instanceof Error ? err.message : "unknown",
+    );
+    return {
+      message:
+        "It's disconnected here and won't post again. We couldn't tidy away its access just now; that does no harm.",
+    };
+  }
+  revalidatePath(`/w/${slug}`, "layout");
+  return { message: "Disconnected. It won't post again." };
 }
