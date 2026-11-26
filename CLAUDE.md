@@ -232,7 +232,17 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   figures a question changes (`D1` references, `tidyWhatIf`), the engine
   answers, the reply is the engine's figures, nothing is kept unless a
   person presses "Keep this what-if", and it counts against the AI
-  allowance. Keep `tests/db/money-debts.test.ts` passing.
+  allowance. A debt paid through a plan (a consolidated debt:
+  `money_debts.consolidated`, one `fixed` payment, written only by
+  `save_money_debt_plan` / `cover_money_debt` / `import_money_debt_plans`)
+  covers debts that point at it (`covered_by`, one plan each); its balance
+  is the covered debts added up on read, its books account's, or typed in.
+  `foldDebts` / `foldPayments` (`debt/plans.ts`, pure) fold covered debts
+  in inside `loadDebtBook`, so NOTHING counts a covered debt on its own
+  (totals, plan, tiles, budget, home card, what-if, recommended order); never
+  sum or change a covered debt elsewhere, and a sync never writes any of it.
+  The projection is small multiples (`debt/projection.ts`). Keep
+  `tests/db/money-debts.test.ts` passing.
 - Help desk: inbound email is authenticated by a secret in the webhook URL,
   queued (`private.inbound_emails`) and filed by the worker through
   `file_inbound_email` (the older `ingest_inbound_email` hands over to it),
