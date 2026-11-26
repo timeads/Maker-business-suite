@@ -50,6 +50,15 @@ export const widgetSchema = z.discriminatedUnion("type", [
   z.object({ ...base, type: z.literal("sales_by_channel") }),
   z.object({ ...base, type: z.literal("cash_on_hand") }),
   z.object({ ...base, type: z.literal("ar_aging") }),
+  // Revenue split into the workspace's own business lines (Settings → Money).
+  z.object({ ...base, type: z.literal("revenue_by_line") }),
+  z.object({
+    ...base,
+    type: z.literal("revenue_by_line_over_time"),
+    grouping: z.enum(["auto", "day", "week", "month"]).default("auto"),
+  }),
+  // What's already paid for classes still to come.
+  z.object({ ...base, type: z.literal("deferred_revenue") }),
 ]);
 export type WidgetConfig = z.infer<typeof widgetSchema>;
 export type WidgetType = WidgetConfig["type"];

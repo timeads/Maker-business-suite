@@ -495,6 +495,33 @@ const TOOLS: Def[] = [
     path: "money",
     module: "dashboard",
     keywords: ["dashboard", "sales", "margins", "cash", "charts", "layout"],
+    children: [
+      {
+        id: "money.where",
+        name: "Where things live",
+        path: "money",
+        keywords: ["dashboard", "layout", "charts", "currency", "time zone"],
+      },
+      {
+        id: "money.lines",
+        name: "Revenue and business lines",
+        path: "money/lines",
+        keywords: [
+          "business lines",
+          "revenue",
+          "net sales",
+          "order totals",
+          "with tax",
+          "workshops",
+          "classes",
+          "order tags",
+          "product tags",
+          "product type",
+          "deferred",
+          "split",
+        ],
+      },
+    ],
   },
   {
     id: "messages",

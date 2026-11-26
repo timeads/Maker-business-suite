@@ -93,6 +93,7 @@ describe("settingsNav", () => {
       "helpdesk.manual",
       "helpdesk.help-centre",
     ]);
+    expect(kids(nav, "money")).toEqual(["money.where", "money.lines"]);
     expect(kids(nav, "stock")).toEqual([
       "stock.planning",
       "stock.seasons",

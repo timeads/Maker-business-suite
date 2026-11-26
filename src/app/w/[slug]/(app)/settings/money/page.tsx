@@ -15,6 +15,12 @@ export default async function MoneySettingsPage({ params }: { params: Promise<{ 
       description="What your sales, margins and cash are read from, and how they're shown."
       pointers={[
         {
+          name: "Revenue and business lines",
+          about:
+            "Net sales or order totals, classes in the month they run, and your own business lines.",
+          href: "settings/money/lines",
+        },
+        {
           name: "Dashboard layout",
           about: "Pick a layout on Money itself, or ask the Assistant to change what it shows.",
           href: "dashboard",

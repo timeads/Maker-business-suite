@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { agingLabel } from "./data";
-import { formatMoney, formatPercent, niceTicks } from "./format";
+import { formatMoney, formatPercent, niceTicks, prepareSharedTimeCharts } from "./format";
 
 describe("formatting", () => {
   it("writes money plainly and compactly", () => {
@@ -28,5 +28,19 @@ describe("formatting", () => {
     expect(agingLabel("1 - 30")).toBe("1–30 days late");
     expect(agingLabel("91 and over")).toBe("91+ days late");
     expect(agingLabel("Something else")).toBe("Something else");
+  });
+
+  it("puts small multiples on one scale, each with its own words", () => {
+    const shared = prepareSharedTimeCharts(
+      [
+        [{ value: 120 }, { value: 80 }],
+        [{ value: 4300 }, { value: null }],
+      ],
+      "money",
+      "USD",
+    );
+    expect(shared.ticks.map((t) => t.value)).toEqual([0, 2000, 4000, 6000]);
+    expect(shared.series[0].map((p) => p.text)).toEqual(["$120.00", "$80.00"]);
+    expect(shared.series[1].map((p) => p.text)).toEqual(["$4,300", "—"]);
   });
 });

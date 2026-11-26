@@ -1,4 +1,4 @@
-import { dashboardSchema, type DashboardConfig } from "./schema";
+import { dashboardSchema, type DashboardConfig, type WidgetConfig } from "./schema";
 
 export type TemplateKey = "maker_basics" | "wholesale_retail";
 
@@ -53,4 +53,27 @@ export function templateConfig(key: TemplateKey): DashboardConfig {
 
 export function templateBlurb(key: TemplateKey): string {
   return raw[key].blurb;
+}
+
+/** The business-line widgets a standard layout gains once lines are set up. */
+const LINE_WIDGETS: WidgetConfig[] = [
+  { id: "lines-over-time", type: "revenue_by_line_over_time", size: "full", grouping: "auto" },
+  { id: "lines", type: "revenue_by_line", size: "half" },
+  { id: "classes-ahead", type: "deferred_revenue", size: "half" },
+];
+
+/**
+ * A starting layout with the business-line widgets placed after the sales
+ * chart (or after the first widget when there is none). Widgets already
+ * there, by type or id, aren't added twice.
+ */
+export function withLineWidgets(config: DashboardConfig): DashboardConfig {
+  const types = new Set(config.widgets.map((w) => w.type));
+  const ids = new Set(config.widgets.map((w) => w.id));
+  const adding = LINE_WIDGETS.filter((w) => !types.has(w.type) && !ids.has(w.id));
+  if (adding.length === 0) return config;
+  const after = config.widgets.findIndex((w) => w.type === "sales_over_time");
+  const at = (after >= 0 ? after : 0) + 1;
+  const widgets = [...config.widgets.slice(0, at), ...adding, ...config.widgets.slice(at)];
+  return dashboardSchema.parse({ ...config, widgets: widgets.slice(0, 24) });
 }

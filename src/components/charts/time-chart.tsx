@@ -20,6 +20,10 @@ type Props = {
   variant: "column" | "line";
   /** What the values are, for the tooltip, the table and screen readers. */
   valueLabel: string;
+  /** Shorter plots for small multiples sharing one scale. */
+  plotHeight?: number;
+  /** Small multiples share one table beneath them instead of one each. */
+  table?: boolean;
 };
 
 const PLOT_HEIGHT = 200;
@@ -31,7 +35,14 @@ const LEFT = 52;
  * A single-series chart over time. Columns for totals, a line for rates.
  * Every value is also in the table view below it, and reachable by keyboard.
  */
-export function TimeChart({ points, ticks, variant, valueLabel }: Props) {
+export function TimeChart({
+  points,
+  ticks,
+  variant,
+  valueLabel,
+  plotHeight = PLOT_HEIGHT,
+  table = true,
+}: Props) {
   const frame = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(640);
   const [active, setActive] = useState<number | null>(null);
@@ -50,7 +61,7 @@ export function TimeChart({ points, ticks, variant, valueLabel }: Props) {
   const right = variant === "line" ? 56 : 8;
   const plotWidth = Math.max(40, width - LEFT - right);
   const [min, max] = [ticks[0].value, ticks[ticks.length - 1].value];
-  const y = (value: number) => TOP + PLOT_HEIGHT - ((value - min) / (max - min)) * PLOT_HEIGHT;
+  const y = (value: number) => TOP + plotHeight - ((value - min) / (max - min)) * plotHeight;
   const band = plotWidth / Math.max(1, points.length);
   const x = (index: number) => LEFT + band * index + band / 2;
   const barWidth = Math.max(2, Math.min(24, band - 2));
@@ -78,7 +89,7 @@ export function TimeChart({ points, ticks, variant, valueLabel }: Props) {
       <div ref={frame} className="relative" onPointerLeave={() => setActive(null)}>
         <svg
           width={width}
-          height={TOP + PLOT_HEIGHT + AXIS_BAND}
+          height={TOP + plotHeight + AXIS_BAND}
           role="group"
           aria-labelledby={titleId}
           className="block max-w-full"
@@ -156,7 +167,7 @@ export function TimeChart({ points, ticks, variant, valueLabel }: Props) {
                   x1={x(active)}
                   x2={x(active)}
                   y1={TOP}
-                  y2={TOP + PLOT_HEIGHT}
+                  y2={TOP + plotHeight}
                   stroke="var(--muted-foreground)"
                   strokeWidth={1}
                 />
@@ -201,7 +212,7 @@ export function TimeChart({ points, ticks, variant, valueLabel }: Props) {
               <text
                 key={point.key}
                 x={x(index)}
-                y={TOP + PLOT_HEIGHT + 17}
+                y={TOP + plotHeight + 17}
                 textAnchor="middle"
                 className="fill-muted-foreground text-[11px]"
               >
@@ -217,7 +228,7 @@ export function TimeChart({ points, ticks, variant, valueLabel }: Props) {
               x={LEFT + band * index}
               y={TOP}
               width={band}
-              height={PLOT_HEIGHT}
+              height={plotHeight}
               fill="transparent"
               tabIndex={0}
               role="img"
@@ -246,27 +257,29 @@ export function TimeChart({ points, ticks, variant, valueLabel }: Props) {
         )}
       </div>
 
-      <details className="text-sm">
-        <summary className="text-muted-foreground hover:text-foreground w-fit cursor-pointer text-xs">
-          View as a table
-        </summary>
-        <table className="mt-2 w-full max-w-sm text-left text-sm">
-          <thead>
-            <tr className="text-muted-foreground border-border border-b text-xs">
-              <th className="py-1 font-medium">Period</th>
-              <th className="py-1 text-right font-medium">{valueLabel}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {points.map((point) => (
-              <tr key={point.key} className="border-border border-b last:border-0">
-                <td className="py-1">{point.longLabel}</td>
-                <td className="py-1 text-right tabular-nums">{point.text}</td>
+      {table && (
+        <details className="text-sm">
+          <summary className="text-muted-foreground hover:text-foreground w-fit cursor-pointer text-xs">
+            View as a table
+          </summary>
+          <table className="mt-2 w-full max-w-sm text-left text-sm">
+            <thead>
+              <tr className="text-muted-foreground border-border border-b text-xs">
+                <th className="py-1 font-medium">Period</th>
+                <th className="py-1 text-right font-medium">{valueLabel}</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </details>
+            </thead>
+            <tbody>
+              {points.map((point) => (
+                <tr key={point.key} className="border-border border-b last:border-0">
+                  <td className="py-1">{point.longLabel}</td>
+                  <td className="py-1 text-right tabular-nums">{point.text}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </details>
+      )}
     </div>
   );
 }

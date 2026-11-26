@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { FormMessage } from "@/components/ui/form-message";
 import { PageHeader } from "@/components/ui/page-header";
 import { requireUser } from "@/lib/auth";
-import { loadDashboardConfig, loadDashboardData } from "@/lib/dashboard/data";
+import { loadDashboardConfig, loadDashboardData, loadRevenueSettings } from "@/lib/dashboard/data";
 import { resolveRange } from "@/lib/dashboard/range";
 import { RANGE_LABELS, RANGE_PRESETS, type RangePreset } from "@/lib/dashboard/schema";
 import { TEMPLATE_ORDER, templateBlurb, templateConfig } from "@/lib/dashboard/templates";
@@ -67,11 +67,12 @@ export default async function DashboardPage({
   }
 
   const supabase = await createClient();
-  const { config, source } = await loadDashboardConfig(supabase, tenant.id);
+  const revenue = await loadRevenueSettings(supabase, tenant.id);
+  const { config, source } = await loadDashboardConfig(supabase, tenant.id, revenue);
   const preset = isRange(query.range) ? query.range : config.range;
   // One range for the whole page, so every number agrees with its neighbours.
   const range = resolveRange(preset, new Date(), tenant.timezone);
-  const data = await loadDashboardData(supabase, tenant, config, range);
+  const data = await loadDashboardData(supabase, tenant, config, range, revenue);
 
   return (
     <>
@@ -143,6 +144,7 @@ export default async function DashboardPage({
               currency={tenant.currency}
               rangeLabel={RANGE_LABELS[preset]}
               connectionsHref={`${base}/connections`}
+              linesHref={`${base}/settings/money/lines`}
             />
           ))}
         </div>

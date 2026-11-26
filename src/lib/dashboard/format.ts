@@ -62,3 +62,21 @@ export function prepareTimeChart<P extends { value: number | null }>(
     ticks: ticks.map((value) => ({ value, label: formatValue(value, kind, currency, true) })),
   };
 }
+
+/**
+ * Several series drawn as small multiples on one scale: each keeps its own
+ * points and text, and they share one set of ticks so a taller bar always
+ * means more, whichever chart it is in. Worked out once on the server.
+ */
+export function prepareSharedTimeCharts<P extends { value: number | null }>(
+  series: P[][],
+  kind: ValueKind,
+  currency: string,
+): { series: (P & { text: string })[][]; ticks: { value: number; label: string }[] } {
+  const all = series.flat();
+  const { ticks } = prepareTimeChart(all, kind, currency);
+  return {
+    series: series.map((points) => prepareTimeChart(points, kind, currency).points),
+    ticks,
+  };
+}
