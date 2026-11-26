@@ -127,10 +127,11 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   `decideExpense`: firm rules, payee default, other rules) applied in code
   as expenses arrive and on "Apply my rules to what's waiting"
   (`note_expense_decisions`), only ever to unsorted rows; never a payee,
-  bank or account name in code. "Suggest lines for these" is the ONE model
-  call in Money (`expense-suggest.ts`: a person's press, structured output,
-  no tools, `E1`/`L1` references, `tidySuggestions`); it only writes a
-  suggestion, applied by a person's "Use this". Profit by line
+  bank or account name in code. Money calls a model in two places only,
+  each a person's press with structured output and no tools: "Suggest
+  lines for these" (`expense-suggest.ts`, `E1`/`L1` references,
+  `tidySuggestions`; it only writes a suggestion, applied by a person's
+  "Use this") and the debt what-if (below). Profit by line
   (`lib/dashboard/profit.ts`, config `dashboard` / `profit`, Settings →
   Money → Profit by line) is revenue − cost of goods (only when counted from
   the shop's item costs) − its expenses − its share of shared ones − its
@@ -167,6 +168,35 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   `money_charge_decisions` through `decide_money_charge`, a note for the
   team that cancels nothing. No model call in either. Keep
   `tests/db/money-budget.test.ts` and `money-cash-flow.test.ts` passing.
+  Debt payoff and the emergency fund (Money → Payoff plan / Debts / What
+  if…, Settings → Money → Debt payoff) are for OWNERS AND ADMINS ONLY, held
+  in the database: `money_debts`, `money_debt_balances`,
+  `money_debt_plan_months` and `money_debt_scenarios` are readable only by
+  them and written only through checked functions; moves in
+  `book_expenses` (payments into a card or loan) and the `dashboard` /
+  `debt` config, its versions and proposals are hidden from everyone else
+  (`private.config_owners_only`, which must list the same settings as the
+  registry's `ownersOnly`). Everything else reads debts as the member, so
+  for anyone else there are none: the menu rows, pages (404), the two cash
+  health tiles and notes, the budget's debt rows, the home card's debt line
+  and the assistant's view of the setting are simply absent; keep it that
+  way for anything new. A debt's kind is a field (`plan`: pool, fixed,
+  revenue_share; `revolving_bp`), never a name match; never a lender or
+  bank name in code. Balances are dated entries: typed by a person, or the
+  liability lines of the balance sheet the sync already reads, kept only
+  for a debt linked to an account of that name
+  (`note_debt_balances_from_books`); the current one is the latest
+  (`money_debt_current`). Payments
+  are moves into the debt's linked account (`money_debt_payments`). The
+  engine (`lib/dashboard/debt/engine.ts`, ported from the earlier
+  dashboard with its quirks, tests in `engine.test.ts`) is pure on whole
+  cents: interest = balance × rate bp ÷ 120,000 and every share rounded to
+  the nearest cent, half up, in exact integers (`shareOf`); change a rule
+  only with its test. The what-if (`what-if.ts`): Claude only picks which
+  figures a question changes (`D1` references, `tidyWhatIf`), the engine
+  answers, the reply is the engine's figures, nothing is kept unless a
+  person presses "Keep this what-if", and it counts against the AI
+  allowance. Keep `tests/db/money-debts.test.ts` passing.
 - Help desk: inbound email is authenticated by a secret in the webhook URL,
   queued (`private.inbound_emails`) and filed by the worker through
   `file_inbound_email` (the older `ingest_inbound_email` hands over to it),
