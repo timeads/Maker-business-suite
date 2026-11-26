@@ -634,6 +634,11 @@ const WIDGET_NAMES: Record<string, string> = {
   deferred_revenue: "Paid for classes still to come",
   profit_by_line: "Profit by line",
   expenses_by_line: "Expenses by line",
+  health_check: "Cash health check",
+  runway: "Runway and burn",
+  revenue_growth: "Revenue growth",
+  cash_flow: "Cash flow",
+  operating_profit: "Operating profit",
 };
 
 /**

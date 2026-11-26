@@ -8,7 +8,12 @@ import { PageHeader } from "@/components/ui/page-header";
 import { requireUser } from "@/lib/auth";
 import { loadDashboardConfig, loadDashboardData, loadRevenueSettings } from "@/lib/dashboard/data";
 import { resolveRange } from "@/lib/dashboard/range";
-import { RANGE_LABELS, RANGE_PRESETS, type RangePreset } from "@/lib/dashboard/schema";
+import {
+  RANGE_LABELS,
+  RANGE_PHRASES,
+  RANGE_PRESETS,
+  type RangePreset,
+} from "@/lib/dashboard/schema";
 import { TEMPLATE_ORDER, templateBlurb, templateConfig } from "@/lib/dashboard/templates";
 import { getEntitlements } from "@/lib/entitlements";
 import { createClient } from "@/lib/supabase/server";
@@ -142,7 +147,7 @@ export default async function DashboardPage({
               widget={widget}
               data={data[widget.id]}
               currency={tenant.currency}
-              rangeLabel={RANGE_LABELS[preset]}
+              rangePhrase={RANGE_PHRASES[preset]}
               connectionsHref={`${base}/connections`}
               linesHref={`${base}/settings/money/lines`}
               inboxHref={`${base}/dashboard/expenses`}

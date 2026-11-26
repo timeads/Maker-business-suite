@@ -61,25 +61,75 @@ const shiftDays = (date: LocalDate, days: number): LocalDate => {
   };
 };
 
-/** Turns a preset into instants and a sensible bucket size, in the workspace's timezone. */
+/** The first month of the quarter a month is in (1, 4, 7 or 10). */
+const quarterStart = (month: number) => month - ((month - 1) % 3);
+
+/**
+ * Turns a preset into instants and a sensible bucket size, in the workspace's
+ * timezone. Ranges that run "so far" end with today; a finished month,
+ * quarter or year ends where the next one starts. Every edge is local
+ * midnight, worked out for that day, so a clock change inside the range
+ * never moves it.
+ */
 export function resolveRange(preset: RangePreset, now: Date, timeZone: string): ResolvedRange {
   const today = localDate(now, timeZone);
   // Through the end of today, so today's sales are included.
   const to = startOfLocalDay(shiftDays(today, 1), timeZone);
   const from = (date: LocalDate) => startOfLocalDay(date, timeZone);
+  const thisMonth = { year: today.year, month: today.month, day: 1 };
+  const thisQuarter = { year: today.year, month: quarterStart(today.month), day: 1 };
   switch (preset) {
+    case "this_month":
+      return { from: from(thisMonth), to, grouping: "day" };
+    case "last_month":
+      return { from: from(shiftMonths(thisMonth, -1)), to: from(thisMonth), grouping: "day" };
     case "last_30_days":
       return { from: from(shiftDays(today, -29)), to, grouping: "day" };
     case "last_90_days":
       return { from: from(shiftDays(today, -89)), to, grouping: "week" };
+    case "this_quarter":
+      return { from: from(thisQuarter), to, grouping: "week" };
+    case "last_quarter":
+      return { from: from(shiftMonths(thisQuarter, -3)), to: from(thisQuarter), grouping: "week" };
     case "last_6_months":
       return { from: from(shiftMonths(today, -5)), to, grouping: "month" };
     case "this_year":
       return { from: from({ year: today.year, month: 1, day: 1 }), to, grouping: "month" };
+    case "last_year":
+      return {
+        from: from({ year: today.year - 1, month: 1, day: 1 }),
+        to: from({ year: today.year, month: 1, day: 1 }),
+        grouping: "month",
+      };
     case "last_12_months":
     default:
       return { from: from(shiftMonths(today, -11)), to, grouping: "month" };
   }
+}
+
+/**
+ * The calendar months a range touches, as `YYYY-MM`, in the workspace's
+ * timezone: the first is the month `from` falls in, the last the month of
+ * the range's final day. The books are kept by calendar month, so this is
+ * how a range picks its months from them.
+ */
+export function rangeMonths(range: { from: Date; to: Date }, timeZone: string): string[] {
+  const first = localDate(range.from, timeZone);
+  const last = localDate(new Date(range.to.getTime() - 1), timeZone);
+  const months: string[] = [];
+  let cursor = { year: first.year, month: first.month, day: 1 };
+  const end = last.year * 12 + last.month;
+  while (cursor.year * 12 + cursor.month <= end && months.length < 240) {
+    months.push(`${cursor.year}-${String(cursor.month).padStart(2, "0")}`);
+    cursor = shiftMonths(cursor, 1);
+  }
+  return months;
+}
+
+/** The month it is now in the workspace's timezone, `YYYY-MM`. */
+export function currentMonth(now: Date, timeZone: string): string {
+  const today = localDate(now, timeZone);
+  return `${today.year}-${String(today.month).padStart(2, "0")}`;
 }
 
 const key = (date: LocalDate) =>

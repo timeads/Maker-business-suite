@@ -7,20 +7,44 @@ import { z } from "zod";
  */
 
 export const RANGE_PRESETS = [
+  "this_month",
+  "last_month",
   "last_30_days",
   "last_90_days",
+  "this_quarter",
+  "last_quarter",
   "last_6_months",
   "last_12_months",
   "this_year",
+  "last_year",
 ] as const;
 export type RangePreset = (typeof RANGE_PRESETS)[number];
 
 export const RANGE_LABELS: Record<RangePreset, string> = {
+  this_month: "This month",
+  last_month: "Last month",
   last_30_days: "30 days",
   last_90_days: "90 days",
+  this_quarter: "This quarter",
+  last_quarter: "Last quarter",
   last_6_months: "6 months",
   last_12_months: "12 months",
-  this_year: "This year",
+  this_year: "Year to date",
+  last_year: "Last year",
+};
+
+/** The range in a sentence: "over the last 30 days", "last month", "this quarter so far". */
+export const RANGE_PHRASES: Record<RangePreset, string> = {
+  this_month: "this month so far",
+  last_month: "last month",
+  last_30_days: "over the last 30 days",
+  last_90_days: "over the last 90 days",
+  this_quarter: "this quarter so far",
+  last_quarter: "last quarter",
+  last_6_months: "over the last 6 months",
+  last_12_months: "over the last 12 months",
+  this_year: "this year so far",
+  last_year: "last year",
 };
 
 const base = {
@@ -63,6 +87,12 @@ export const widgetSchema = z.discriminatedUnion("type", [
   z.object({ ...base, type: z.literal("profit_by_line") }),
   // The books' expenses as sorted into lines.
   z.object({ ...base, type: z.literal("expenses_by_line") }),
+  // Cash health, from the books (Settings → Money → Cash health).
+  z.object({ ...base, type: z.literal("health_check") }),
+  z.object({ ...base, type: z.literal("runway") }),
+  z.object({ ...base, type: z.literal("revenue_growth") }),
+  z.object({ ...base, type: z.literal("cash_flow") }),
+  z.object({ ...base, type: z.literal("operating_profit") }),
 ]);
 export type WidgetConfig = z.infer<typeof widgetSchema>;
 export type WidgetType = WidgetConfig["type"];

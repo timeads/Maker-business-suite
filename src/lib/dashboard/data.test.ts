@@ -15,7 +15,13 @@ type Call = { fn: string; args: Record<string, unknown>; range?: [number, number
  */
 function fakeSupabase(
   answers: Record<string, (call: Call) => unknown[]>,
-  options: { orders?: number; config?: unknown } = {},
+  options: {
+    orders?: number;
+    config?: unknown;
+    /** Config bodies by key, for loaders that read more than one. */
+    configs?: Record<string, unknown>;
+    snapshots?: { kind: string; period_start: string; data: Record<string, unknown> }[];
+  } = {},
 ) {
   const calls: Call[] = [];
   const rpc = (fn: string, args: Record<string, unknown>) => {
@@ -32,20 +38,50 @@ function fakeSupabase(
     };
   };
   const from = (table: string) => {
+    const filters: Record<string, unknown> = {};
+    let kinds: string[] | null = null;
+    const snapshots = () =>
+      (options.snapshots ?? []).filter(
+        (row) =>
+          (kinds === null || kinds.includes(row.kind)) &&
+          (filters.kind === undefined || row.kind === filters.kind),
+      );
     const chain = {
       select: () => chain,
-      eq: () => chain,
+      eq: (column: string, value: unknown) => {
+        filters[column] = value;
+        return chain;
+      },
+      in: (column: string, values: string[]) => {
+        if (column === "kind") kinds = values;
+        return chain;
+      },
       order: () => chain,
-      maybeSingle: () =>
-        Promise.resolve({
-          data: options.config === undefined ? null : { body: options.config },
+      limit: () => chain,
+      maybeSingle: () => {
+        if (table === "financial_snapshots") {
+          const rows = snapshots().sort((a, b) => b.period_start.localeCompare(a.period_start));
+          return Promise.resolve({ data: rows[0] ?? null, error: null });
+        }
+        const body =
+          table === "configs" && filters.key !== undefined && options.configs
+            ? options.configs[String(filters.key)]
+            : options.config;
+        return Promise.resolve({
+          data: body === undefined ? null : { body },
           error: null,
-        }),
+        });
+      },
       then: (resolve: (v: unknown) => unknown) =>
         Promise.resolve(
           table === "orders"
             ? { count: options.orders ?? 1, data: null, error: null }
-            : { data: [], error: null },
+            : table === "financial_snapshots"
+              ? {
+                  data: snapshots().sort((a, b) => a.period_start.localeCompare(b.period_start)),
+                  error: null,
+                }
+              : { data: [], error: null },
         ).then(resolve),
     };
     return chain;
@@ -319,5 +355,144 @@ describe("profit and expenses by line", () => {
       NOW,
     );
     expect(data.p).toEqual({ type: "empty", needs: "lines" });
+  });
+});
+
+describe("cash health from the books", () => {
+  const pnl = (month: string, income: number, cogs: number, expenses: number, extra = {}) => ({
+    kind: "profit_and_loss",
+    period_start: `${month}-01`,
+    data: { income, cogs, expenses, gross_profit: income - cogs, net_income: 0, ...extra },
+  });
+  const cash = (month: string, operating: number) => ({
+    kind: "cash_flow",
+    period_start: `${month}-01`,
+    data: {
+      operating_cents: operating,
+      investing_cents: 0,
+      financing_cents: 0,
+      net_change_cents: operating,
+    },
+  });
+  const sheet = (day: string, dollars: number) => ({
+    kind: "balance_sheet",
+    period_start: day,
+    data: {
+      cash: dollars,
+      bank_accounts: [{ name: "Checking", cents: Math.round(dollars * 100) }],
+    },
+  });
+  const snapshots = [
+    pnl("2026-05", 1000, 300, 500),
+    pnl("2026-06", 1000, 300, 500),
+    pnl("2026-07", 1000, 300, 500),
+    pnl("2026-08", 1100, 330, 500, { other_income_cents: 50000, other_expenses_cents: 0 }),
+    pnl("2026-09", 1100, 330, 500, { other_income_cents: 0, other_expenses_cents: 0 }),
+    pnl("2026-10", 1100, 330, 500, { other_income_cents: 0, other_expenses_cents: 1000 }),
+    // The month in progress: partly booked, left out of the health check.
+    pnl("2026-11", 10, 0, 900),
+    cash("2026-08", -20000),
+    cash("2026-09", -30000),
+    cash("2026-10", -40000),
+    cash("2026-11", -999999),
+    // Years of daily balance sheets: only the latest one counts.
+    sheet("2025-01-01", 1),
+    sheet("2026-11-20", 1500),
+    sheet("2026-11-21", 1800),
+  ];
+  const widgets = [
+    { id: "h", type: "health_check" },
+    { id: "r", type: "runway" },
+    { id: "g", type: "revenue_growth" },
+    { id: "c", type: "cash_flow" },
+    { id: "o", type: "operating_profit" },
+    { id: "m", type: "cash_on_hand" },
+  ];
+
+  it("works out runway, growth and margin from complete months only", async () => {
+    const { supabase } = fakeSupabase({}, { snapshots });
+    const data = await loadDashboardData(supabase, TENANT, config(widgets), RANGE, undefined, NOW);
+    // Burn: the average of the last three complete months' operating cash, $300.
+    expect(data.r).toMatchObject({
+      type: "runway",
+      cash: 180000,
+      asOf: "2026-11-21",
+      burn: { cents: 30000, source: "cash_flow", months: ["2026-08", "2026-09", "2026-10"] },
+      months: 6,
+      standing: "watch",
+      accounts: [{ name: "Checking", cents: 180000 }],
+    });
+    expect(data.m).toMatchObject({ type: "cash_on_hand", cash: 1800 });
+    const growth = data.g;
+    if (growth.type !== "revenue_growth") throw new Error(growth.type);
+    expect(growth.growth).toBeCloseTo(0.1);
+    expect(growth.standing).toBe("good");
+    expect(growth.points.map((p) => p.key)).toEqual([
+      "2026-05-01",
+      "2026-06-01",
+      "2026-07-01",
+      "2026-08-01",
+      "2026-09-01",
+      "2026-10-01",
+    ]);
+    const health = data.h;
+    if (health.type !== "health_check") throw new Error(health.type);
+    expect(health.through).toBe("2026-10");
+    expect(health.partial).toBe("2026-11");
+    expect(health.margin?.gross).toBeCloseTo(0.7);
+    expect(health.runway).toMatchObject({ months: 6, standing: "watch" });
+  });
+
+  it("charts cash flow and operating profit for the page's months", async () => {
+    const { supabase } = fakeSupabase({}, { snapshots });
+    const lastMonth = resolveRange("last_month", NOW, TENANT.timezone);
+    const data = await loadDashboardData(
+      supabase,
+      TENANT,
+      config(widgets),
+      lastMonth,
+      undefined,
+      NOW,
+    );
+    expect(data.c).toMatchObject({
+      type: "cash_flow",
+      points: [{ key: "2026-10-01", value: -400 }],
+      months: [{ key: "2026-10", operating: -40000, net: -40000 }],
+    });
+    expect(data.o).toMatchObject({
+      type: "operating_profit",
+      revenue: 110000,
+      profit: 110000 - 33000 - 50000,
+      otherIncome: 0,
+      otherExpenses: 1000,
+      partial: null,
+    });
+  });
+
+  it("says so when the books' history doesn't have other income yet", async () => {
+    const { supabase } = fakeSupabase({}, { snapshots });
+    const data = await loadDashboardData(supabase, TENANT, config(widgets), RANGE, undefined, NOW);
+    // June and July were stored before other income was read.
+    expect(data.o).toMatchObject({ otherIncome: null, partial: "2026-11" });
+  });
+
+  it("follows the workspace's own thresholds", async () => {
+    const { supabase } = fakeSupabase(
+      {},
+      {
+        snapshots,
+        configs: { health: { version: 1, runway_good_months: 4, runway_watch_months: 2 } },
+      },
+    );
+    const data = await loadDashboardData(supabase, TENANT, config(widgets), RANGE, undefined, NOW);
+    expect(data.r).toMatchObject({ months: 6, standing: "good" });
+  });
+
+  it("asks for the books when there are none", async () => {
+    const { supabase } = fakeSupabase({});
+    const data = await loadDashboardData(supabase, TENANT, config(widgets), RANGE, undefined, NOW);
+    for (const id of ["h", "r", "g", "c", "o", "m"]) {
+      expect(data[id]).toEqual({ type: "empty", needs: "quickbooks" });
+    }
   });
 });

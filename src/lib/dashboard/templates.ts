@@ -1,6 +1,6 @@
 import { dashboardSchema, type DashboardConfig, type WidgetConfig } from "./schema";
 
-export type TemplateKey = "maker_basics" | "wholesale_retail" | "lines_and_profit";
+export type TemplateKey = "maker_basics" | "wholesale_retail" | "lines_and_profit" | "cash_health";
 
 const raw: Record<TemplateKey, { blurb: string; config: unknown }> = {
   maker_basics: {
@@ -57,12 +57,31 @@ const raw: Record<TemplateKey, { blurb: string; config: unknown }> = {
       ],
     },
   },
+  cash_health: {
+    blurb:
+      "How long your cash lasts, whether revenue is growing and what running the business really makes, from your books.",
+    config: {
+      version: 1,
+      name: "Cash and health",
+      range: "last_12_months",
+      widgets: [
+        { id: "health", type: "health_check", size: "full" },
+        { id: "runway", type: "runway" },
+        { id: "growth", type: "revenue_growth" },
+        { id: "cash-flow", type: "cash_flow", size: "full" },
+        { id: "operating", type: "operating_profit", size: "full" },
+        { id: "margin", type: "gross_margin" },
+        { id: "owed", type: "ar_aging" },
+      ],
+    },
+  },
 };
 
 export const TEMPLATE_ORDER: readonly TemplateKey[] = [
   "maker_basics",
   "wholesale_retail",
   "lines_and_profit",
+  "cash_health",
 ];
 export const DEFAULT_TEMPLATE: TemplateKey = "maker_basics";
 

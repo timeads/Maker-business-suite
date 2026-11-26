@@ -12,6 +12,7 @@ import {
   prepareTimeChart,
 } from "@/lib/dashboard/format";
 import { FIGURE_WORDS, type RevenueFigure } from "@/lib/dashboard/lines";
+import { CashFlow, HealthCheck, OperatingProfit, RevenueGrowth, Runway } from "./health-widgets";
 import { ProfitTable } from "./profit-table";
 import type { WidgetConfig, WidgetType } from "@/lib/dashboard/schema";
 
@@ -28,6 +29,11 @@ const TITLES: Record<WidgetType, string> = {
   deferred_revenue: "Paid for classes still to come",
   profit_by_line: "Profit by line",
   expenses_by_line: "Expenses by line",
+  health_check: "How the business is doing",
+  runway: "Runway and burn",
+  revenue_growth: "Revenue growth",
+  cash_flow: "Cash flow",
+  operating_profit: "Operating profit",
 };
 
 const PROVIDER_NAMES = { shopify: "Shopify", quickbooks: "QuickBooks" } as const;
@@ -46,23 +52,23 @@ const asOf = (iso: string) =>
     new Date(`${iso}T00:00:00Z`),
   );
 
-function describe(data: WidgetData, rangeLabel: string, currency: string): string | null {
+function describe(data: WidgetData, range: string, currency: string): string | null {
   switch (data.type) {
     case "key_figures":
       return null;
     case "sales_over_time":
-      return `${formatMoney(data.total, currency)} over the last ${rangeLabel}, in ${figureWords(data.figure)}`;
+      return `${formatMoney(data.total, currency)} ${range}, in ${figureWords(data.figure)}`;
     case "gross_margin":
       if (data.overall === null) return null;
       return data.source === "books"
         ? `${formatPercent(data.overall)} overall, from your QuickBooks profit and loss`
         : `${formatPercent(data.overall)} on items with a cost recorded in Shopify`;
     case "sales_by_channel":
-      return `${formatMoney(data.total, currency)} over the last ${rangeLabel}, in ${figureWords(data.figure)}`;
+      return `${formatMoney(data.total, currency)} ${range}, in ${figureWords(data.figure)}`;
     case "top_products":
-      return `By what the items sold for after discounts, over the last ${rangeLabel}`;
+      return `By what the items sold for after discounts, ${range}`;
     case "revenue_by_line":
-      return `${formatMoney(data.total, currency)} over the last ${rangeLabel}, in ${figureWords(data.figure)}.${classWords(data.byClassDate)}`;
+      return `${formatMoney(data.total, currency)} ${range}, in ${figureWords(data.figure)}.${classWords(data.byClassDate)}`;
     case "revenue_by_line_over_time":
       return `${FIGURE_WORDS[data.figure].name} per line, each on the same scale.${classWords(data.byClassDate)}`;
     case "deferred_revenue":
@@ -72,13 +78,25 @@ function describe(data: WidgetData, rangeLabel: string, currency: string): strin
           : " These already count in the month they were bought."
       }`;
     case "profit_by_line":
-      return `${formatMoney(data.profit / 100, currency)} across your lines over the last ${rangeLabel}: revenue in ${figureWords(data.figure)}, less what each line costs.${classWords(data.byClassDate)}`;
+      return `${formatMoney(data.profit / 100, currency)} across your lines ${range}: revenue in ${figureWords(data.figure)}, less what each line costs.${classWords(data.byClassDate)}`;
     case "expenses_by_line":
-      return `From your books over the last ${rangeLabel}: what's sorted to each line and its share of the shared costs. Money moved between your own accounts never counts.`;
+      return `From your books ${range}: what's sorted to each line and its share of the shared costs. Money moved between your own accounts never counts.`;
     case "cash_on_hand":
       return `Across your bank accounts in QuickBooks, as of ${asOf(data.asOf)}`;
     case "ar_aging":
       return `${formatMoney(data.total, currency)} in unpaid invoices, as of ${asOf(data.asOf)}`;
+    case "health_check":
+      return "Healthy, worth watching or needing attention, by the thresholds in Settings → Money → Cash health.";
+    case "runway":
+      return `How long the cash in the bank would last, as of ${asOf(data.asOf)}`;
+    case "revenue_growth":
+      return "Revenue in your books, complete months only";
+    case "cash_flow":
+      return `Cash in less cash out each month ${range}, from your cash flow statement (cash basis)`;
+    case "operating_profit":
+      return `${formatMoney(data.profit / 100, currency)} ${range}: revenue less cost of goods and running costs, from your books${
+        data.margin === null ? "" : `, ${formatPercent(data.margin)} of revenue`
+      }`;
     default:
       return null;
   }
@@ -88,7 +106,7 @@ export function Widget({
   widget,
   data,
   currency,
-  rangeLabel,
+  rangePhrase,
   connectionsHref,
   linesHref,
   inboxHref,
@@ -97,7 +115,8 @@ export function Widget({
   widget: WidgetConfig;
   data: WidgetData;
   currency: string;
-  rangeLabel: string;
+  /** The page's range in a sentence: "over the last 30 days", "last month". */
+  rangePhrase: string;
   connectionsHref: string;
   /** Settings → Money, where business lines are set up. */
   linesHref: string;
@@ -107,7 +126,7 @@ export function Widget({
   profitHref: string;
 }) {
   const title = widget.title ?? TITLES[widget.type];
-  const description = describe(data, rangeLabel.toLowerCase(), currency);
+  const description = describe(data, rangePhrase, currency);
 
   let body: React.ReactNode;
   switch (data.type) {
@@ -136,7 +155,7 @@ export function Widget({
           <StatTile
             label={FIGURE_WORDS[data.figure].name}
             value={formatMoney(data.sales, currency)}
-            note={`Last ${rangeLabel.toLowerCase()}, ${
+            note={`${rangePhrase.charAt(0).toUpperCase()}${rangePhrase.slice(1)}, ${
               data.figure === "net_sales"
                 ? "before tax and shipping"
                 : "with tax and shipping, refunds out"
@@ -291,6 +310,21 @@ export function Widget({
           />
         </div>
       );
+      break;
+    case "health_check":
+      body = <HealthCheck data={data} currency={currency} linesHref={linesHref} />;
+      break;
+    case "runway":
+      body = <Runway data={data} currency={currency} />;
+      break;
+    case "revenue_growth":
+      body = <RevenueGrowth data={data} currency={currency} />;
+      break;
+    case "cash_flow":
+      body = <CashFlow data={data} currency={currency} />;
+      break;
+    case "operating_profit":
+      body = <OperatingProfit data={data} currency={currency} />;
       break;
     case "ar_aging":
       body = (

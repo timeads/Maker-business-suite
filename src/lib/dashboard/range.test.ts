@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { localDate, periodKeys, periodLabel, resolveRange, startOfLocalDay } from "./range";
+import {
+  currentMonth,
+  localDate,
+  periodKeys,
+  periodLabel,
+  rangeMonths,
+  resolveRange,
+  startOfLocalDay,
+} from "./range";
 
 const NY = "America/New_York";
 
@@ -67,6 +75,78 @@ describe("resolveRange", () => {
     const range = resolveRange("this_year", now, NY);
     expect(range.from.toISOString()).toBe("2026-01-01T05:00:00.000Z");
     expect(periodKeys(range, NY)).toHaveLength(11);
+  });
+
+  it("runs this month and this quarter from their first day to the end of today", () => {
+    const month = resolveRange("this_month", now, NY);
+    expect(month.from.toISOString()).toBe("2026-11-01T04:00:00.000Z");
+    expect(month.to.toISOString()).toBe("2026-11-22T05:00:00.000Z");
+    expect(month.grouping).toBe("day");
+    expect(periodKeys(month, NY)).toHaveLength(21);
+    // The clocks went back on Nov 1: the month still starts at local midnight.
+    const quarter = resolveRange("this_quarter", now, NY);
+    expect(quarter.from.toISOString()).toBe("2026-10-01T04:00:00.000Z");
+    expect(quarter.grouping).toBe("week");
+  });
+
+  it("ends last month, last quarter and last year where the next one starts", () => {
+    const month = resolveRange("last_month", now, NY);
+    expect(month.from.toISOString()).toBe("2026-10-01T04:00:00.000Z");
+    expect(month.to.toISOString()).toBe("2026-11-01T04:00:00.000Z");
+    expect(periodKeys(month, NY)).toHaveLength(31);
+    expect(periodKeys(month, NY).at(-1)).toBe("2026-10-31");
+
+    const quarter = resolveRange("last_quarter", now, NY);
+    expect(quarter.from.toISOString()).toBe("2026-07-01T04:00:00.000Z");
+    expect(quarter.to.toISOString()).toBe("2026-10-01T04:00:00.000Z");
+
+    const year = resolveRange("last_year", now, NY);
+    expect(year.from.toISOString()).toBe("2025-01-01T05:00:00.000Z");
+    expect(year.to.toISOString()).toBe("2026-01-01T05:00:00.000Z");
+    expect(periodKeys(year, NY)).toHaveLength(12);
+  });
+
+  it("goes back across a year end and a spring clock change", () => {
+    // Jan 3: last month is December of the year before.
+    const january = resolveRange("last_month", new Date("2027-01-03T12:00:00Z"), NY);
+    expect(january.from.toISOString()).toBe("2026-12-01T05:00:00.000Z");
+    expect(january.to.toISOString()).toBe("2027-01-01T05:00:00.000Z");
+    const lastQuarter = resolveRange("last_quarter", new Date("2027-01-03T12:00:00Z"), NY);
+    expect(lastQuarter.from.toISOString()).toBe("2026-10-01T04:00:00.000Z");
+    // March 2026 had its clocks go forward on the 8th: the month is still 31 days.
+    const march = resolveRange("last_month", new Date("2026-04-02T12:00:00Z"), NY);
+    expect(march.from.toISOString()).toBe("2026-03-01T05:00:00.000Z");
+    expect(march.to.toISOString()).toBe("2026-04-01T04:00:00.000Z");
+    expect(periodKeys(march, NY)).toHaveLength(31);
+  });
+
+  it("knows this month by the workspace's clock at a month's edge", () => {
+    // 02:00 UTC on Dec 1 is still Nov 30 in New York, already Dec 1 in Tokyo.
+    const edge = new Date("2026-12-01T02:00:00Z");
+    expect(resolveRange("this_month", edge, NY).from.toISOString()).toBe(
+      "2026-11-01T04:00:00.000Z",
+    );
+    expect(resolveRange("this_month", edge, "Asia/Tokyo").from.toISOString()).toBe(
+      "2026-11-30T15:00:00.000Z",
+    );
+    expect(currentMonth(edge, NY)).toBe("2026-11");
+    expect(currentMonth(edge, "Asia/Tokyo")).toBe("2026-12");
+  });
+
+  it("lists the calendar months a range touches, in the workspace's timezone", () => {
+    expect(rangeMonths(resolveRange("last_quarter", now, NY), NY)).toEqual([
+      "2026-07",
+      "2026-08",
+      "2026-09",
+    ]);
+    expect(rangeMonths(resolveRange("this_month", now, NY), NY)).toEqual(["2026-11"]);
+    // Local midnight on Jan 1 in Berlin is still Dec 31 in UTC: it's January.
+    expect(
+      rangeMonths(
+        resolveRange("last_month", new Date("2026-02-10T12:00:00Z"), "Europe/Berlin"),
+        "Europe/Berlin",
+      ),
+    ).toEqual(["2026-01"]);
   });
 
   it("uses the workspace's 'today', not UTC's", () => {

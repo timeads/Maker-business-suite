@@ -1,5 +1,17 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { formatPercent } from "./format";
+import { formatMoney, formatPercent } from "./format";
+import {
+  HEALTH_KEY,
+  HEALTH_MODULE,
+  bookMonthOf,
+  cashMonthOf,
+  healthCheck,
+  parseHealthSettings,
+  type Burn,
+  type HealthNote,
+  type HealthSettings,
+  type Standing,
+} from "./health";
 import {
   DEFAULT_REVENUE_SETTINGS,
   REVENUE_KEY,
@@ -27,9 +39,11 @@ import {
   type ProfitSum,
 } from "./profit";
 import {
+  currentMonth,
   localDate,
   periodKeys,
   periodLabel,
+  rangeMonths,
   startOfLocalDay,
   type Grouping,
   type ResolvedRange,
@@ -118,6 +132,63 @@ export type WidgetData =
       setAside: number;
       sharedUnsplit: number;
     }
+  | {
+      type: "health_check";
+      /** The last complete month the figures run to, `YYYY-MM`. */
+      through: string | null;
+      partial: string | null;
+      runway: { months: number | null; standing: Standing; burn: Burn } | null;
+      growth: { value: number; standing: Standing; window: number } | null;
+      margin: { gross: number; operating: number | null; standing: Standing } | null;
+      concentration: { share: number; name: string; standing: Standing } | null;
+      /** Lines are set up: a missing concentration means no revenue yet, not no lines. */
+      hasLines: boolean;
+      notes: HealthNote[];
+    }
+  | {
+      type: "runway";
+      /** In whole cents. */
+      cash: number;
+      asOf: string;
+      accounts: { name: string; cents: number }[];
+      burn: Burn | null;
+      months: number | null;
+      standing: Standing | null;
+    }
+  | {
+      type: "revenue_growth";
+      growth: number | null;
+      standing: Standing | null;
+      window: number;
+      /** Whole cents a month. */
+      recentAverage: number;
+      priorAverage: number;
+      points: Point[];
+    }
+  | {
+      type: "cash_flow";
+      points: Point[];
+      /** One row per month in the range, whole cents. */
+      months: {
+        key: string;
+        label: string;
+        operating: number;
+        investing: number;
+        financing: number;
+        net: number;
+      }[];
+    }
+  | {
+      type: "operating_profit";
+      points: Point[];
+      /** Whole cents over the range. */
+      revenue: number;
+      profit: number;
+      margin: number | null;
+      otherIncome: number | null;
+      otherExpenses: number | null;
+      partial: string | null;
+    }
   /** Nothing to show yet, and what would fill it: a connection, or lines set up in Settings. */
   | { type: "empty"; needs: "shopify" | "quickbooks" | "lines" };
 
@@ -141,6 +212,22 @@ export async function loadProfitSettings(
     .maybeSingle();
   if (error) throw new Error(`Could not load the profit settings: ${error.message}`);
   return parseProfitSettings(data?.body);
+}
+
+/** The workspace's cash health thresholds (Settings → Money → Cash health), or the defaults. */
+export async function loadHealthSettings(
+  supabase: SupabaseClient,
+  tenantId: string,
+): Promise<HealthSettings> {
+  const { data, error } = await supabase
+    .from("configs")
+    .select("body")
+    .eq("tenant_id", tenantId)
+    .eq("module", HEALTH_MODULE)
+    .eq("key", HEALTH_KEY)
+    .maybeSingle();
+  if (error) throw new Error(`Could not load the cash health settings: ${error.message}`);
+  return parseHealthSettings(data?.body);
 }
 
 /** A plain day, YYYY-MM-DD, as the books write it. */
@@ -219,7 +306,7 @@ const num = (value: unknown): number => {
  */
 export async function loadDashboardData(
   supabase: SupabaseClient,
-  tenant: { id: string; timezone: string },
+  tenant: { id: string; timezone: string; currency?: string },
   config: DashboardConfig,
   range: ResolvedRange,
   revenue: RevenueSettings = DEFAULT_REVENUE_SETTINGS,
@@ -406,6 +493,52 @@ export async function loadDashboardData(
     return out;
   };
 
+  // Cash health reads the books' complete months; concentration reads each
+  // line's revenue over the same recent months.
+  const wantsHealth = needs("health_check", "runway", "revenue_growth");
+  const healthSettings = wantsHealth ? await loadHealthSettings(supabase, tenant.id) : null;
+  const thisMonth = currentMonth(now, tenant.timezone);
+  const monthStart = (month: string) => {
+    const [year, m] = month.split("-").map(Number);
+    return startOfLocalDay({ year, month: m, day: 1 }, tenant.timezone);
+  };
+  const recentLines =
+    healthSettings && hasLines(revenue) && needs("health_check")
+      ? (() => {
+          const [year, m] = thisMonth.split("-").map(Number);
+          const back = new Date(Date.UTC(year, m - 1 - healthSettings.compare_months, 1));
+          return lineGroups({
+            from: monthStart(
+              `${back.getUTCFullYear()}-${String(back.getUTCMonth() + 1).padStart(2, "0")}`,
+            ),
+            to: monthStart(thisMonth),
+            grouping: "month",
+            datedOnly: false,
+          });
+        })()
+      : Promise.resolve(null);
+
+  // The books' monthly reports (a few years of months at most), and only the
+  // latest of the reports kept by day, so a long history never crowds them out.
+  const wantsMonths = needs(
+    "gross_margin",
+    "key_figures",
+    "health_check",
+    "runway",
+    "revenue_growth",
+    "cash_flow",
+    "operating_profit",
+  );
+  const latestOf = (kind: string) =>
+    supabase
+      .from("financial_snapshots")
+      .select("kind, period_start, data")
+      .eq("tenant_id", tenant.id)
+      .eq("kind", kind)
+      .order("period_start", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
   const [
     salesEntries,
     revenueEntries,
@@ -413,11 +546,14 @@ export async function loadDashboardData(
     deferredGroups,
     products,
     channels,
-    snapshots,
+    monthly,
+    balance,
+    aging,
     anyOrder,
     expenseRows,
     costsByLine,
     anyExpense,
+    healthLines,
   ] = await Promise.all([
     Promise.all([...groupings].map(async (g) => [g, await salesFor(g)] as const)),
     figure === "net_sales"
@@ -449,13 +585,17 @@ export async function loadDashboardData(
         ? supabase.rpc("dashboard_sales_by_channel", window)
         : supabase.rpc("money_sales_by_channel", { ...window, p_figure: figure })
       : null,
-    needs("gross_margin", "cash_on_hand", "ar_aging", "key_figures")
+    wantsMonths
       ? supabase
           .from("financial_snapshots")
           .select("kind, period_start, data")
           .eq("tenant_id", tenant.id)
+          .in("kind", ["profit_and_loss", "cash_flow"])
           .order("period_start", { ascending: true })
+          .limit(1000)
       : null,
+    needs("cash_on_hand", "runway", "health_check") ? latestOf("balance_sheet") : null,
+    needs("ar_aging") ? latestOf("ar_aging") : null,
     supabase.from("orders").select("id", { count: "exact", head: true }).eq("tenant_id", tenant.id),
     wantsProfit ? expenseGroups() : Promise.resolve([] as ExpenseGroup[]),
     profitSettings?.cost_of_goods === "shop_item_costs" ? itemCosts() : Promise.resolve(null),
@@ -465,8 +605,9 @@ export async function loadDashboardData(
           .select("id", { count: "exact", head: true })
           .eq("tenant_id", tenant.id)
       : Promise.resolve({ count: 0 }),
+    recentLines,
   ]);
-  for (const result of [products, channels, snapshots]) {
+  for (const result of [products, channels, monthly, balance, aging]) {
     if (result?.error) throw new Error(`Could not load the dashboard: ${result.error.message}`);
   }
 
@@ -481,15 +622,47 @@ export async function loadDashboardData(
       : (new Map(revenueEntries).get(grouping) ?? []);
   const lines = new Map(lineEntries);
   const hasOrders = (anyOrder.count ?? 0) > 0;
-  const snaps = ((snapshots?.data as Snapshot[] | null) ?? []).map((s) => ({
+  const snaps = ((monthly?.data as Snapshot[] | null) ?? []).map((s) => ({
     ...s,
     data: s.data ?? {},
   }));
-  const latest = (kind: string) => snaps.filter((s) => s.kind === kind).at(-1) ?? null;
-  const fromMonth = range.from.toISOString().slice(0, 7);
+  const asSnapshot = (row: unknown): Snapshot | null =>
+    row ? { ...(row as Snapshot), data: (row as Snapshot).data ?? {} } : null;
+  const latestSheet = asSnapshot(balance?.data);
+  const latestAging = asSnapshot(aging?.data);
+  // The calendar months the range touches, in the workspace's timezone.
+  const inRange = new Set(rangeMonths(range, tenant.timezone));
   const profitMonths = snaps.filter(
-    (s) => s.kind === "profit_and_loss" && s.period_start.slice(0, 7) >= fromMonth,
+    (s) => s.kind === "profit_and_loss" && inRange.has(s.period_start.slice(0, 7)),
   );
+  const bookMonths = snaps.filter((s) => s.kind === "profit_and_loss").map(bookMonthOf);
+  const cashMonths = snaps.filter((s) => s.kind === "cash_flow").map(cashMonthOf);
+  const cashCents = latestSheet ? Math.round(num(latestSheet.data.cash) * 100) : null;
+  const health =
+    healthSettings && bookMonths.length > 0
+      ? healthCheck(
+          {
+            books: bookMonths,
+            cash: cashMonths,
+            current: thisMonth,
+            cashOnHand: cashCents,
+            lines: healthLines
+              ? totalsByLine(revenue, healthLines).map((line) => ({
+                  name: line.name,
+                  cents: line.cents,
+                }))
+              : null,
+            settings: healthSettings,
+          },
+          (cents) => formatMoney(cents / 100, tenant.currency ?? "USD"),
+        )
+      : null;
+  const monthPoint = (month: string, value: number | null): Point => ({
+    key: `${month}-01`,
+    label: periodLabel(`${month}-01`, "month"),
+    longLabel: periodLabel(`${month}-01`, "month", true),
+    value,
+  });
 
   const pointsFor = (grouping: Grouping, valueOf: (key: string) => number | null): Point[] =>
     periodKeys({ ...range, grouping }, tenant.timezone).map((key) => ({
@@ -648,7 +821,7 @@ export async function loadDashboardData(
         break;
       }
       case "cash_on_hand": {
-        const sheet = latest("balance_sheet");
+        const sheet = latestSheet;
         out[widget.id] = sheet
           ? { type: "cash_on_hand", cash: num(sheet.data.cash), asOf: sheet.period_start }
           : { type: "empty", needs: "quickbooks" };
@@ -782,8 +955,136 @@ export async function loadDashboardData(
         };
         break;
       }
+      case "health_check": {
+        if (!health || !healthSettings) {
+          out[widget.id] = { type: "empty", needs: "quickbooks" };
+          break;
+        }
+        out[widget.id] = {
+          type: "health_check",
+          through: health.complete.at(-1)?.month ?? null,
+          partial: health.partial,
+          runway: health.runway && health.burn ? { ...health.runway, burn: health.burn } : null,
+          growth:
+            health.growth.growth !== null && health.growth.standing
+              ? {
+                  value: health.growth.growth,
+                  standing: health.growth.standing,
+                  window: healthSettings.compare_months,
+                }
+              : null,
+          margin:
+            health.margins.gross !== null && health.margins.standing
+              ? {
+                  gross: health.margins.gross,
+                  operating: health.margins.operating,
+                  standing: health.margins.standing,
+                }
+              : null,
+          concentration: health.concentration,
+          hasLines: hasLines(revenue),
+          notes: health.notes,
+        };
+        break;
+      }
+      case "runway": {
+        if (!latestSheet || cashCents === null) {
+          out[widget.id] = { type: "empty", needs: "quickbooks" };
+          break;
+        }
+        const accounts = Array.isArray(latestSheet.data.bank_accounts)
+          ? (latestSheet.data.bank_accounts as { name: unknown; cents: unknown }[])
+              .filter((a) => typeof a.name === "string")
+              .map((a) => ({ name: String(a.name), cents: Math.round(num(a.cents)) }))
+          : [];
+        out[widget.id] = {
+          type: "runway",
+          cash: cashCents,
+          asOf: latestSheet.period_start,
+          accounts,
+          burn: health?.burn ?? null,
+          months: health?.runway?.months ?? null,
+          standing: health?.runway?.standing ?? null,
+        };
+        break;
+      }
+      case "revenue_growth": {
+        if (!health || !healthSettings) {
+          out[widget.id] = { type: "empty", needs: "quickbooks" };
+          break;
+        }
+        const shown = health.complete.slice(-2 * healthSettings.compare_months);
+        out[widget.id] = {
+          type: "revenue_growth",
+          growth: health.growth.growth,
+          standing: health.growth.standing,
+          window: healthSettings.compare_months,
+          recentAverage: health.growth.recentAverage,
+          priorAverage: health.growth.priorAverage,
+          points: shown.map((m) => monthPoint(m.month, m.income / 100)),
+        };
+        break;
+      }
+      case "cash_flow": {
+        const months = cashMonths.filter((m) => inRange.has(m.month));
+        if (cashMonths.length === 0) {
+          out[widget.id] = { type: "empty", needs: "quickbooks" };
+          break;
+        }
+        const byMonth = new Map(months.map((m) => [m.month, m]));
+        const keys = [...inRange].sort();
+        out[widget.id] = {
+          type: "cash_flow",
+          points: keys.map((month) => {
+            const m = byMonth.get(month);
+            return monthPoint(month, m ? m.netChange / 100 : null);
+          }),
+          months: keys
+            .filter((month) => byMonth.has(month))
+            .map((month) => {
+              const m = byMonth.get(month)!;
+              return {
+                key: month,
+                label: periodLabel(`${month}-01`, "month", true),
+                operating: m.operating,
+                investing: m.investing,
+                financing: m.financing,
+                net: m.netChange,
+              };
+            }),
+        };
+        break;
+      }
+      case "operating_profit": {
+        if (bookMonths.length === 0) {
+          out[widget.id] = { type: "empty", needs: "quickbooks" };
+          break;
+        }
+        const months = bookMonths.filter((m) => inRange.has(m.month));
+        const byMonth = new Map(months.map((m) => [m.month, m]));
+        const revenueCents = months.reduce((sum, m) => sum + m.income, 0);
+        const profitCents = months.reduce((sum, m) => sum + (m.income - m.cogs - m.expenses), 0);
+        const known = (pick: (m: (typeof months)[number]) => number | null) =>
+          months.length > 0 && months.every((m) => pick(m) !== null)
+            ? months.reduce((sum, m) => sum + (pick(m) ?? 0), 0)
+            : null;
+        out[widget.id] = {
+          type: "operating_profit",
+          points: [...inRange].sort().map((month) => {
+            const m = byMonth.get(month);
+            return monthPoint(month, m ? (m.income - m.cogs - m.expenses) / 100 : null);
+          }),
+          revenue: revenueCents,
+          profit: profitCents,
+          margin: revenueCents > 0 ? profitCents / revenueCents : null,
+          otherIncome: known((m) => m.otherIncome),
+          otherExpenses: known((m) => m.otherExpenses),
+          partial: byMonth.has(thisMonth) ? thisMonth : null,
+        };
+        break;
+      }
       case "ar_aging": {
-        const aging = latest("ar_aging");
+        const aging = latestAging;
         const buckets =
           (aging?.data.buckets as { label: string; amount: number }[] | undefined) ?? [];
         out[widget.id] = aging
