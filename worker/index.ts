@@ -16,6 +16,7 @@
  *  - look at Michaels for workspaces that sell there (reads only: nothing is sent)
  *  - read supplier emails into supplier balances (Gmail looks, and bills forwarded in)
  *  - write up finished help desk conversations into the workspace's manual
+ *  - draft each brand's coming month of social posts for review (the monthly run)
  *  - run sync jobs for connected accounts (first sync, webhooks, scheduled pulls)
  *  - every few minutes, queue pulls for providers that don't push changes
  *  - once an hour, delete workspaces whose retention window has passed
@@ -91,6 +92,8 @@ import { runClaimedRead, type ClaimedRead } from "../src/lib/stock/mail/gmail-ru
 import { readMail } from "../src/lib/stock/mail/reader";
 import { readConversation } from "../src/lib/helpdesk/manual/reader";
 import { runClaimedManual, type ClaimedRun } from "../src/lib/helpdesk/manual/run";
+import { runClaimedMonth, type ClaimedMonthRun } from "../src/lib/social/month-run";
+import { writeMonthPost } from "../src/lib/social/month-writer";
 import { carrierResult } from "../src/lib/stock/tracking";
 import { getAdminClient, withTenant } from "../src/lib/supabase/admin";
 import { drainTextOptOuts } from "../src/lib/texts/opt-out";
@@ -1079,6 +1082,32 @@ async function drainManualRuns(): Promise<number> {
   return runs.length;
 }
 
+/**
+ * Drafts a brand's coming month for review: by itself on the lead time of a
+ * review day that was switched on, or when an owner or admin presses "Run it
+ * now". The database decides who is due and hands each run to one worker,
+ * once per workspace, brand and month; one that never finishes is marked
+ * failed, not run again. Every draft waits for a person: nothing here
+ * schedules or posts.
+ */
+async function drainSocialMonthRuns(): Promise<number> {
+  // Without a key there is nobody to ask; a claimed run would only fail.
+  if (!process.env.ANTHROPIC_API_KEY) return 0;
+  const admin = getAdminClient();
+  const { data, error } = await admin.rpc("claim_social_month_runs", { p_limit: 2 });
+  if (error) throw new Error(`Could not claim monthly runs: ${error.message}`);
+  const runs = (data ?? []) as ClaimedMonthRun[];
+  for (const run of runs) {
+    const outcome = await runClaimedMonth(run, {
+      admin,
+      write: (input) => writeMonthPost(input),
+      now: () => new Date(),
+    });
+    console.log(`social month run ${run.id} (${run.source}): ${outcome}`);
+  }
+  return runs.length;
+}
+
 /** One TikTok or LinkedIn login's access token, for the worker's senders. Never logged. */
 function loginAccess(provider: "tiktok" | "linkedin") {
   const admin = getAdminClient();
@@ -1221,6 +1250,7 @@ async function main() {
       (await attempt(drainMichaelsLooks, 0)) +
       (await attempt(drainEmailReads, 0)) +
       (await attempt(drainManualRuns, 0)) +
+      (await attempt(drainSocialMonthRuns, 0)) +
       (await attempt(takeTextOptOuts, 0)) +
       // Orders first, so the places pushed next already count them.
       (await attempt(bookEventbriteOrders, 0)) +

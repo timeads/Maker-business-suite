@@ -11,6 +11,7 @@ import { brandBrief } from "@/lib/brand/kit";
 import { BANNER_TAG, MAX_DESIGN_SLIDES, ownDesign } from "@/lib/brand/slides";
 import type { SlideDesign } from "@/lib/design/slide-design";
 import { draftCaption } from "@/lib/social/caption";
+import { loadLearning } from "@/lib/social/learning";
 import { productPhotoTags, productSourceRef, shopPhotoAddress } from "@/lib/social/product-photos";
 import { LOGO_LIGHT_TAG, LOGO_TAG, pickPhoto, type TaggedAsset } from "@/lib/social/photo-match";
 import {
@@ -677,6 +678,11 @@ export async function draftPostCaption(
       }
     : undefined;
 
+  const picked = await loadBrandKit(
+    ctx.supabase,
+    ctx.tenant.id,
+    UUID.test(String(formData.get("brand_id") ?? "")) ? String(formData.get("brand_id")) : null,
+  );
   try {
     const draft = await draftCaption({
       workspaceName: ctx.tenant.name,
@@ -686,10 +692,8 @@ export async function draftPostCaption(
       ),
       recent: (recent ?? []).map((row) => String(row.caption).slice(0, 600)).filter(Boolean),
       styleNotes: plan.style_notes,
-      brand: await loadBrandBrief(
-        ctx,
-        UUID.test(String(formData.get("brand_id") ?? "")) ? String(formData.get("brand_id")) : null,
-      ),
+      brand: brandBrief(picked.kit),
+      ...(await loadLearning(ctx.supabase, ctx.tenant.id, picked.brand)),
     });
     // Metered whether or not a draft came back: the tokens were spent.
     const { error: usageError } = await getAdminClient().rpc("record_usage", {
@@ -782,11 +786,6 @@ export async function saveProject(
   return { message: "Saved." };
 }
 
-/** The workspace's brand kit, in words, for a draft to follow. */
-async function loadBrandBrief(ctx: Ctx, brandId?: string | null): Promise<string> {
-  return brandBrief((await loadBrandKit(ctx.supabase, ctx.tenant.id, brandId)).kit);
-}
-
 async function saveSocialConfig(ctx: Ctx, key: string, body: object): Promise<boolean> {
   const { error } = await ctx.supabase.rpc("save_config", {
     p_tenant_id: ctx.tenant.id,
@@ -815,6 +814,16 @@ export async function savePlan(
 ): Promise<SocialState> {
   const ctx = await context(slug);
   if ("error" in ctx) return { error: ctx.error };
+  // The review days are saved on their own form; keep them as they are.
+  const { data: storedRow } = await ctx.supabase
+    .from("configs")
+    .select("body")
+    .eq("tenant_id", ctx.tenant.id)
+    .eq("module", SOCIAL_MODULE)
+    .eq("key", PLAN_KEY)
+    .maybeSingle();
+  const stored = parsePlan(storedRow?.body);
+  const fromProjects = new Set(formData.getAll("topic_projects").map(String));
   const topics = String(formData.get("topics") ?? "")
     .split("\n")
     .map((line) => line.trim())
@@ -822,13 +831,16 @@ export async function savePlan(
     .map((line, index) => {
       const cut = line.indexOf(":");
       const name = (cut === -1 ? line : line.slice(0, cut)).trim().slice(0, 40);
+      const id = slugify(name, index);
       return {
-        id: slugify(name, index),
+        id,
         name,
         about: cut === -1 ? "" : line.slice(cut + 1).trim(),
+        from: fromProjects.has(id) ? ("projects" as const) : ("claude" as const),
       };
     });
-  const slots: { weekday: number; time: string; topic: string | null }[] = [];
+  const slots: { weekday: number; time: string; topic: string | null; brand_id: string | null }[] =
+    [];
   for (let row = 0; row < 21; row++) {
     const time = String(formData.get(`slot_time_${row}`) ?? "");
     if (!time) continue;
@@ -837,6 +849,9 @@ export async function savePlan(
       weekday: Number.parseInt(String(formData.get(`slot_day_${row}`) ?? "1"), 10),
       time,
       topic: topics.some((t) => t.id === topic) ? topic : null,
+      brand_id: UUID.test(String(formData.get(`slot_brand_${row}`) ?? ""))
+        ? String(formData.get(`slot_brand_${row}`))
+        : null,
     });
   }
   const parsed = socialPlanSchema.safeParse({
@@ -844,6 +859,7 @@ export async function savePlan(
     topics,
     slots,
     style_notes: String(formData.get("style_notes") ?? ""),
+    review_days: stored.review_days,
   });
   if (!parsed.success) {
     return {
@@ -957,6 +973,7 @@ export async function draftTheMonth(
     UUID.test(brandField) ? brandField : null,
   );
   const brand = brandBrief(picked.kit);
+  const learning = await loadLearning(ctx.supabase, ctx.tenant.id, picked.brand);
   const photos = await taggedPhotos(ctx);
   // Each photo is offered to one draft only, so a month of posts doesn't show the same one.
   const taken = new Set<string>();
@@ -976,6 +993,7 @@ export async function draftTheMonth(
         recent: (recent ?? []).map((row) => String(row.caption).slice(0, 600)).filter(Boolean),
         styleNotes: plan.style_notes,
         brand,
+        ...learning,
       });
       used += draft.tokens;
       await admin.rpc("record_usage", {
