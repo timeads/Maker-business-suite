@@ -69,6 +69,8 @@ export type ProductRow = {
   product_type: string | null;
   status: string | null;
   source_updated_at: string | null;
+  /** The product's tags in the shop. Left out by a sender that didn't read them. */
+  tags?: string[];
 };
 
 export type OrderLineRow = {
@@ -80,6 +82,10 @@ export type OrderLineRow = {
   quantity: number;
   unit_price: number;
   unit_cost: number | null;
+  /** The Bookings date's id the product page put on the cart line, when it has one. */
+  session_ref?: string | null;
+  /** A date written on the cart line (YYYY-MM-DD), for a class booked another way. */
+  class_date?: string | null;
 };
 
 export type OrderRow = {
@@ -102,6 +108,8 @@ export type OrderRow = {
   cancelled_at: string | null;
   is_test: boolean;
   source_updated_at: string | null;
+  /** The order's tags in the shop. Left out by a sender that didn't read them. */
+  tags?: string[];
   lines: OrderLineRow[];
 };
 
@@ -254,6 +262,12 @@ export type SyncStore = {
    * with upsertCommerce. Safe to repeat.
    */
   noteShopOrderLines(orders: ShopOrderLines[]): Promise<void>;
+  /**
+   * Notes that a full read of the orders has finished with everything Money
+   * needs from them (tags, products' tags, class dates), so the one-off
+   * backfill of a shop's history isn't asked for again.
+   */
+  noteDetailsRead(): Promise<void>;
   /** For orders already stored with upsertCommerce. */
   upsertShipping(orders: ShippingOrderRow[]): Promise<void>;
   saveSnapshots(rows: SnapshotRow[]): Promise<void>;

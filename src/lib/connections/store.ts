@@ -27,6 +27,7 @@ export function rpcSyncStore(
         p_products: batch.products ?? [],
         p_orders: batch.orders ?? [],
       }),
+    noteDetailsRead: () => call("note_commerce_details_read", {}),
     upsertShipping: (orders) => call("upsert_shipping_orders", { p_orders: orders }),
     upsertStock: (items) => call("upsert_stock_items", { p_items: items }),
     setProductPhotos: (products) => call("set_product_photos", { p_products: products }),

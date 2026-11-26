@@ -51,6 +51,8 @@ export type ShopifyOrder = {
   currentTotalTaxSet: Money;
   totalShippingPriceSet: Money;
   currentTotalPriceSet: Money;
+  /** The order's tags, for Money's business lines. */
+  tags?: string[] | null;
   customer: {
     legacyResourceId: string;
     firstName: string | null;
@@ -74,6 +76,7 @@ export type ShopifyOrder = {
         productType: string | null;
         status: string | null;
         updatedAt: string;
+        tags?: string[] | null;
       } | null;
       variant: { inventoryItem: { unitCost: { amount: string } | null } | null } | null;
     }[];
@@ -89,13 +92,14 @@ const ORDER_FIELDS = `
   currentTotalTaxSet { shopMoney { amount } }
   totalShippingPriceSet { shopMoney { amount } }
   currentTotalPriceSet { shopMoney { amount } }
+  tags
   customer { legacyResourceId firstName lastName createdAt updatedAt }
   lineItems(first: 100) {
     nodes {
       id title variantTitle sku currentQuantity
       customAttributes { key value }
       discountedUnitPriceAfterAllDiscountsSet { shopMoney { amount } }
-      product { legacyResourceId title vendor productType status updatedAt }
+      product { legacyResourceId title vendor productType status updatedAt tags }
       variant { inventoryItem { unitCost { amount } } }
     }
   }`;
@@ -148,6 +152,38 @@ export function channelName(sourceName: string | null, appName: string | null): 
   return sourceName && !/^\d+$/.test(sourceName) ? sourceName : "Other";
 }
 
+/** Tags as the shop gave them, without blanks; an absent list reads as none. */
+const tagList = (tags: unknown): string[] =>
+  Array.isArray(tags)
+    ? tags.filter((tag): tag is string => typeof tag === "string" && tag.trim() !== "")
+    : [];
+
+/**
+ * The date an item is for, written on the cart line by a booking app: the
+ * earliest value of a property whose name mentions a date and whose value
+ * starts with one (YYYY-MM-DD). Only the date is kept, never the rest of
+ * the line's notes (which can hold a phone number).
+ */
+export function classDateOf(
+  attributes: { key: string; value: string | null }[] | null | undefined,
+): string | null {
+  let earliest: string | null = null;
+  for (const attribute of attributes ?? []) {
+    if (!/date/i.test(attribute.key ?? "")) continue;
+    const day = attribute.value?.trim().match(/^(\d{4}-\d{2}-\d{2})/)?.[1];
+    if (day && !Number.isNaN(Date.parse(`${day}T00:00:00Z`)) && (!earliest || day < earliest)) {
+      earliest = day;
+    }
+  }
+  return earliest;
+}
+
+/** The Bookings date's id on a cart line, when it has the shape of one. */
+function sessionRefOf(attributes: { key: string; value: string | null }[] | null | undefined) {
+  const id = attributes?.find((a) => a.key === SESSION_KEY)?.value?.trim() ?? "";
+  return UUID.test(id) ? id.toLowerCase() : null;
+}
+
 export function mapShopifyOrders(orders: ShopifyOrder[]): {
   customers: CustomerRow[];
   products: ProductRow[];
@@ -186,6 +222,7 @@ export function mapShopifyOrders(orders: ShopifyOrder[]): {
       cancelled_at: order.cancelledAt,
       is_test: order.test,
       source_updated_at: order.updatedAt,
+      tags: tagList(order.tags),
       lines: order.lineItems.nodes.map((line) => {
         if (line.product) {
           products.set(line.product.legacyResourceId, {
@@ -195,6 +232,7 @@ export function mapShopifyOrders(orders: ShopifyOrder[]): {
             product_type: line.product.productType,
             status: line.product.status,
             source_updated_at: line.product.updatedAt,
+            tags: tagList(line.product.tags),
           });
         }
         const cost = line.variant?.inventoryItem?.unitCost?.amount;
@@ -207,6 +245,8 @@ export function mapShopifyOrders(orders: ShopifyOrder[]): {
           quantity: line.currentQuantity,
           unit_price: money(line.discountedUnitPriceAfterAllDiscountsSet),
           unit_cost: cost == null ? null : Number(cost),
+          session_ref: sessionRefOf(line.customAttributes),
+          class_date: classDateOf(line.customAttributes),
         };
       }),
     });
@@ -851,6 +891,8 @@ async function pullOrders(
     }
     if (!data.orders.pageInfo.hasNextPage) {
       await ctx.store.recordUsage(calls);
+      // A full read brought every order's tags and dates: the history is in.
+      if (ctx.job.type === "full") await ctx.store.noteDetailsRead();
       // Orders are in; the stock count follows in the same run.
       return pullStock(ctx, graphql, startedAt, null);
     }

@@ -7,7 +7,13 @@ import {
   parseProfitAndLoss,
   type QuickBooksReport,
 } from "./quickbooks-reports";
-import { channelName, mapShopifyOrders, syncShopify, type ShopifyGraphql } from "./shopify-sync";
+import {
+  channelName,
+  classDateOf,
+  mapShopifyOrders,
+  syncShopify,
+  type ShopifyGraphql,
+} from "./shopify-sync";
 
 const money = (amount: string) => ({ shopMoney: { amount } });
 
@@ -126,6 +132,53 @@ describe("Shopify order mapping", () => {
       expect.objectContaining({ external_id: "77", email: "sam@example.com", first_name: "Sam" }),
     ]);
     expect(products).toEqual([expect.objectContaining({ external_id: "900", title: "Wool Rug" })]);
+  });
+
+  it("keeps the order's and products' tags and each item's date, for Money's business lines", () => {
+    const base = shopifyOrder("1003");
+    const [rug, custom] = base.lineItems.nodes;
+    const { orders, products } = mapShopifyOrders([
+      shopifyOrder("1003", {
+        tags: ["Workshop", " ", "gift"],
+        lineItems: {
+          nodes: [
+            {
+              ...rug,
+              product: { ...rug.product, tags: ["wool", ""] },
+              customAttributes: [
+                { key: "Session ID", value: "6F1C2B3A-1111-4222-8333-444455556666" },
+                { key: "_text_phone", value: "555 0100" },
+              ],
+            },
+            {
+              ...custom,
+              customAttributes: [
+                { key: "_date_iso8601", value: "2026-12-05T14:00:00-05:00" },
+                { key: "Date", value: "2026-12-04" },
+                { key: "Note", value: "2026-01-01 please" },
+              ],
+            },
+          ],
+        },
+      }) as never,
+    ]);
+    expect(orders[0].tags).toEqual(["Workshop", "gift"]);
+    expect(products[0].tags).toEqual(["wool"]);
+    expect(orders[0].lines[0]).toMatchObject({
+      session_ref: "6f1c2b3a-1111-4222-8333-444455556666",
+      class_date: null,
+    });
+    // The earliest date under a name that says it's a date; nothing else from the line.
+    expect(orders[0].lines[1]).toMatchObject({ session_ref: null, class_date: "2026-12-04" });
+    expect(JSON.stringify(orders[0])).not.toContain("555 0100");
+  });
+
+  it("reads no tags as none, never as a reason to fail", () => {
+    const { orders, products } = mapShopifyOrders([shopifyOrder("1004", { tags: null }) as never]);
+    expect(orders[0].tags).toEqual([]);
+    expect(products[0].tags).toEqual([]);
+    expect(classDateOf([{ key: "Class date", value: "not a date" }])).toBeNull();
+    expect(classDateOf(null)).toBeNull();
   });
 
   it("adds the shop's discounts back on for the products' total before them", () => {
@@ -603,16 +656,20 @@ describe("Shopify sync", () => {
     expect(net.calls[1].variables).toMatchObject({ after: "c1" });
     expect(result).toEqual({ cursor: { synced_through: NOW.toISOString() }, scopes: GRANTED });
     expect(state.usage).toBe(7);
+    // A whole read of the history: Money's one-off backfill is done for this shop.
+    expect(state.detailsRead).toBe(1);
   });
 
   it("a later sync only asks for what changed since the last one finished", async () => {
     const net = pagedGraphql([{ nodes: [], hasNextPage: false, endCursor: null }]);
-    const { ctx } = context({
+    const { ctx, state } = context({
       type: "incremental",
       cursor: { synced_through: "2026-11-20T00:00:00.000Z" },
     });
     await syncShopify(ctx, net.graphql, NOW);
     expect(net.calls[0].variables.query).toBe("updated_at:>=2026-11-20T00:00:00Z status:any");
+    // Only a full read counts towards the backfill.
+    expect(state.detailsRead).toBe(0);
   });
 
   it("notes each product's main photo, and falls back to the older spelling without failing the sync", async () => {

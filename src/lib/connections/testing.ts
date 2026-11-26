@@ -31,6 +31,8 @@ export function memoryStore() {
     bookPayments: [] as BookPaymentRow[],
     /** Set to true for a workspace that asked for payments from its books. */
     bookPaymentsWanted: false,
+    /** How many full reads of the orders finished with Money's details. */
+    detailsRead: 0,
     redacted: [] as { externalId: string; email: string | null }[],
     purged: 0,
     usage: 0,
@@ -41,6 +43,9 @@ export function memoryStore() {
       state.customers.push(...(batch.customers ?? []));
       state.products.push(...(batch.products ?? []));
       state.orders.push(...(batch.orders ?? []));
+    },
+    async noteDetailsRead() {
+      state.detailsRead += 1;
     },
     async upsertShipping(orders) {
       state.shipping.push(...orders);

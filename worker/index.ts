@@ -1204,6 +1204,20 @@ async function queueScheduledSyncs() {
   }
 }
 
+/**
+ * Money's one-off backfill: each shop connected before order tags and class
+ * dates were kept is read once more in full, so its history fills in by
+ * itself. The database decides who is due and never queues over a sync
+ * already waiting; only a full read by this code marks a shop done.
+ */
+async function queueCommerceDetailReads() {
+  const { data, error } = await getAdminClient().rpc("queue_commerce_detail_reads", {
+    p_limit: 20,
+  });
+  if (error) throw new Error(`Could not queue order detail reads: ${error.message}`);
+  if (data) console.log(`queued ${data} full shop read(s) for order tags and class dates`);
+}
+
 async function purgeExpiredTenants() {
   if (process.env.ENABLE_TENANT_PURGE !== "true") return;
   const { data, error } = await getAdminClient().rpc("purge_expired_tenants");
@@ -1267,6 +1281,7 @@ async function main() {
     if (Date.now() - lastSchedule > SCHEDULE_EVERY_MS) {
       lastSchedule = Date.now();
       await attempt(queueScheduledSyncs, undefined);
+      await attempt(queueCommerceDetailReads, undefined);
       await attempt(sendBookingReminders, 0);
       await attempt(sendDailyBookingEmails, 0);
     }
