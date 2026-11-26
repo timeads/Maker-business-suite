@@ -335,7 +335,7 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   bookings send nothing, carry what was already sent as `booking_emails`
   rows (no thank-you for a class already over), keep their shop order so
   `book_from_shop` finds them, and keep `customer_phone` / `text_opt_in`
-  (nothing sends texts). Keep `tests/db/booking-imports.test.ts` passing.
+  (texts follow them only once texts are switched on). Keep `tests/db/booking-imports.test.ts` passing.
   A workshop can instead be sold through the business's own shop
   (`services.shop_product_id`): the date picker on the product page
   (`public/booking-widget.js`, plain JS in a shadow root, reads
@@ -408,6 +408,47 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   snippet pasted before this and is left as the theme drew it. Times carry a
   plain label worked out on the server per date (`zoneLabel` in `slots.ts`:
   "ET", "PT", "BST"); keep its daylight-saving tests passing.
+  Text reminders (docs/text-reminders.md; `lib/texts`, Settings → Bookings
+  → Text reminders, config `bookings` / `texts`, all off by default, gated
+  by the `texts` entitlement) go through the business's own Twilio account:
+  provider `twilio`, a pasted Account SID, auth token and sender, the token
+  read only through `getTwilioAccess()`, and ALL Twilio HTTP through
+  `lib/texts/twilio-client.ts` (plain fetch, no SDK). Texts follow the
+  emails' once-only pattern in their own table (`booking_texts`,
+  `claim_booking_text_sends` / `finish_booking_text_send`, unique per
+  booking, message and date; never stamped before sending), only to a
+  booking with `text_opt_in` and a number `toE164` can read without
+  guessing a country beyond `default_country`. FIXED WORDS ONLY: no model on
+  the path (`lib/texts/guard.test.ts`), and the assistant may not propose
+  the words (`textWordsChanged`). `/api/webhooks/twilio` checks
+  `X-Twilio-Signature` with the workspace's own token (401 otherwise), keeps
+  only STOPs (`private.twilio_inbound`, once per message id) and the worker
+  takes the number off (`apply_text_opt_out`, `booking_text_opt_outs`);
+  START opts nobody back in. Consent rides on the cart line as
+  `_text_phone` / `_text_consent` (the earlier app's `_ttw_sms_*` are read
+  too) and on our booking page, into `set_booking_text_consent`. Bookings →
+  Messages sent lists `booking_emails` and `booking_texts`. Keep
+  `tests/db/booking-texts.test.ts` passing.
+  Order tags in the shop (`lib/bookings/shop-tags.ts`, config `bookings` /
+  `shop_tags`, standard words the earlier app's): oversold, needs a date and
+  a date we couldn't book, queued once per order and reason
+  (`queue_shop_order_tag`, `shop_order_tags`) and added by the worker with
+  `tagsAdd` (never removed), tried once. Nothing is queued without the
+  optional `write_orders` scope (`private.shop_can_tag_orders` /
+  `canTagInShopify`), asked for only from Settings → Bookings → Order tags.
+  Keep `tests/db/booking-shop-tags.test.ts` passing.
+  Classroom supplies, vendors and the budget (Bookings → Classroom;
+  `class_*` and `budget_*` tables, `session_costs`): owners and admins write
+  through functions, the team reads supplies, only managers the budget. On
+  hand, run-out, order-by, suggested orders and every budget figure are
+  worked out on read (`lib/bookings/supplies.ts`, `budget.ts`, whole cents);
+  only what a person said is stored (counts, deliveries, corrections,
+  orders, costs). Not linked to Stock yet. Keep
+  `tests/db/booking-supplies.test.ts` passing.
+  The imports' fourth file is the earlier app's message wording
+  (`lib/bookings/import/wording.ts`: its messages and fill-ins mapped to
+  ours, pure and tested), saved through `save_config` after a preview;
+  it fills words only and never becomes our defaults.
 - Social: members write posts through `save_social_post`; the worker claims
   due posts (`claim_due_social_posts`) and records each channel's answer with
   `finish_social_post`, which merges results so a channel that went out is
