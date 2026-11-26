@@ -140,7 +140,7 @@ describe("scheduling", () => {
       /instagram_needs_photo/,
     );
     await expect(save(alice, tenantA, { at: later(-60) })).rejects.toThrow(/past/);
-    await expect(save(alice, tenantA, { channels: ["tiktok"] })).rejects.toThrow(/check/);
+    await expect(save(alice, tenantA, { channels: ["pinterest"] })).rejects.toThrow(/check/);
   });
 });
 
