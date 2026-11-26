@@ -350,6 +350,15 @@ describe("booking texts", () => {
     );
   });
 
+  it("keeps a version of the text settings each time they are saved, as every config does", async () => {
+    const versions = await db.query<{ source: string }>(
+      "select source from public.config_versions where tenant_id = $1 and module = 'bookings' and key = 'texts'",
+      [tenantA],
+    );
+    expect(versions.rows.length).toBeGreaterThan(0);
+    expect(versions.rows.every((row) => row.source === "manual")).toBe(true);
+  });
+
   it("is only the server's to queue, claim and finish, and each workspace sees only its own", async () => {
     for (const sql of [
       "select * from public.claim_booking_text_sends(5)",

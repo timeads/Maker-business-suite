@@ -9,6 +9,7 @@ import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
 import { bookingsAccess } from "../../../bookings/gate";
 import { BookingImporter } from "./importer";
+import { WordingImporter } from "./wording-importer";
 
 export const metadata: Metadata = { title: "Bring your bookings across" };
 
@@ -60,6 +61,25 @@ export default async function BookingImportPage({ params }: { params: Promise<{ 
               This workspace is read-only because its plan has ended. Pick a plan to bring bookings
               in.
             </p>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>4. Message wording</CardTitle>
+          <CardDescription>
+            The earlier app&apos;s own words for each email and text: a spreadsheet with the columns
+            key, channel (email or text), subject and body. Its fill-ins are changed to ours,
+            anything without a match is taken out and said so, and you see every message before
+            it&apos;s saved. Words only: no text is switched on, and nothing is sent.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {entitlements.canWrite ? (
+            <WordingImporter slug={tenant.slug} />
+          ) : (
+            <p className="text-muted-foreground text-sm">This workspace is read-only.</p>
           )}
         </CardContent>
       </Card>

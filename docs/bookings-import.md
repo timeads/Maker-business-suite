@@ -164,9 +164,36 @@ from bookings b
 order by b.created_at;
 ```
 
+## 4. Message wording
+
+Optional. Your earlier app's own words for each email and text, so you don't have to type them again. It goes under Settings → Bookings → Bring your bookings across, in the "Message wording" box, and you see every message, translated, before anything is saved. It only fills in words: no text is switched on, and nothing is sent.
+
+| Column  | What goes in it                                                                                                          |
+| ------- | ------------------------------------------------------------------------------------------------------------------------ |
+| key     | The earlier app's message: confirmation, reminder_48h, reminder_2h, followup_24h, booking_cancelled, booking_rescheduled |
+| channel | email or text (sms reads as text)                                                                                        |
+| subject | The email's subject; left empty for a text                                                                               |
+| body    | The words, with the earlier app's fill-ins                                                                               |
+
+Where each goes: confirmation → "You're booked"; reminder_48h → the reminder; reminder_2h → the day-of reminder; followup_24h → the thank-you; booking_cancelled → both "Booking cancelled" and "Cancelled by a shop refund" (the earlier app had one notice for both); booking_rescheduled → "Moved to another date". The note to you about a new booking (owner_new_booking) stays behind: that one uses our words here.
+
+Fill-ins are changed to ours: `{{first_name}}` stays, `{{full_name}}` → `{{name}}`, `{{workshop_title}}` → `{{workshop}}`, `{{session_date}}` → `{{date}}`, `{{session_time}}` → `{{time}}`, `{{location}}` → `{{place}}`, `{{seats}} seat(s)` (or `{{seats}}`) → `{{places}}` ("2 places"). `{{manage_link}}` is kept only in the confirmation email, where it becomes the customer's own link to change or cancel; elsewhere it was a contact link, which has no match here, so it is taken out and the preview says so. An email written with markup is turned into plain text.
+
+The query (it only reads):
+
+```sql
+select t.key, c.channel, coalesce(t.subject, '') as subject,
+       case when c.channel = 'email' then t.body_email else t.body_sms end as body
+from notification_templates t
+cross join (values ('email'), ('text')) as c (channel)
+where (c.channel = 'email' and coalesce(t.body_email, '') <> '')
+   or (c.channel = 'text' and coalesce(t.body_sms, '') <> '')
+order by t.key, c.channel;
+```
+
 ## Running the queries
 
-The three queries only read. Run them against the earlier app's database, either way:
+The queries only read. Run them against the earlier app's database, either way:
 
 - **Supabase's SQL editor**: paste a query, run it, and use _Export → Download CSV_.
 - **psql**, with the database's direct address: `\copy ( <query without the final semicolon> ) to 'dates.csv' with (format csv, header)`
