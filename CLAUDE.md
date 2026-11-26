@@ -182,12 +182,30 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   and the assistant's view of the setting are simply absent; keep it that
   way for anything new. A debt's kind is a field (`plan`: pool, fixed,
   revenue_share; `revolving_bp`), never a name match; never a lender or
-  bank name in code. Balances are dated entries: typed by a person, or the
-  liability lines of the balance sheet the sync already reads, kept only
-  for a debt linked to an account of that name
-  (`note_debt_balances_from_books`); the current one is the latest
-  (`money_debt_current`). Payments
-  are moves into the debt's linked account (`money_debt_payments`). The
+  bank name in code. The debts COME FROM THE BOOKS: each QuickBooks sync
+  hands every liability line of the balance sheet it already reads (with
+  the books' account id and section) plus the chart of accounts' liability
+  types (one read-only `Account` query, same scope) to
+  `file_debts_from_books` (service role, through `fileBookDebts`), which
+  keeps them in `money_book_accounts` and makes, joins (a typed-in debt
+  linked to an account of that name) or updates the debts
+  (`private.book_debt_apply`), keyed by the books' id, else the exact name.
+  Which liabilities are debts by themselves is `lib/dashboard/debt/books.ts`
+  (`countsAsDebt`: the books' type or detail type, else the sheet's
+  section, against the debt setting's `books_debt_types`); never a name.
+  A person's "Count this as a debt" / "Not a debt" (`choose_book_liability`,
+  `money_debts.left_out_at`) sticks across syncs. A sync writes only the
+  books' facts (name, account, balance, closed when a COMPLETE read no
+  longer has the account, open again when it's back) and NEVER what a
+  person fills in (rate, minimum, payment, due day, plan, priority, note);
+  a rate not given is null ("Needs a rate"; the plan counts it at 0% and
+  says so). A books debt's balance can't be typed and it is never removed.
+  Balances are dated entries, one per day per source; the current one is
+  the latest, and for a books debt only the books' (`money_debt_current`).
+  A debt not in the books can still be typed in. Earlier workers'
+  `note_debt_balances_from_books` still works. Payments are moves into the
+  debt's account (`money_debt_payments`), by the books' account id
+  (`book_expenses.account_ref`) where both sides have one, else by name. The
   engine (`lib/dashboard/debt/engine.ts`, ported from the earlier
   dashboard with its quirks, tests in `engine.test.ts`) is pure on whole
   cents: interest = balance × rate bp ÷ 120,000 and every share rounded to
