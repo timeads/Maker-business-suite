@@ -21,6 +21,12 @@ export const socialPlanSchema = z.object({
         id,
         name: z.string().trim().min(1).max(40),
         about: z.string().trim().max(300).default(""),
+        /**
+         * Who fills this topic's times in the monthly run: "claude" writes a
+         * post from the topic, "projects" makes a carousel from a project's
+         * photos that haven't been posted yet.
+         */
+        from: z.enum(["claude", "projects"]).default("claude"),
       }),
     )
     .max(12)
@@ -32,14 +38,40 @@ export const socialPlanSchema = z.object({
         weekday: z.number().int().min(0).max(6),
         time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
         topic: id.nullable().default(null),
+        /** The brand this time is for. Null: the main brand. */
+        brand_id: z.string().uuid().nullable().default(null),
       }),
     )
     .max(21)
     .default([]),
   /** How the business sounds. Claude reads this before drafting anything. */
   style_notes: z.string().trim().max(3000).default(""),
+  /**
+   * Each brand's monthly review day: the nth (1 to 4) weekday (0 is Sunday)
+   * of the month. The month drafted runs from one review day to the day
+   * before the next; it is written `lead_days` before the review day (0: on
+   * the day). The run happens by itself only when `auto` is on, which only
+   * an owner or admin can switch (saving this config is theirs alone).
+   */
+  review_days: z
+    .array(
+      z.object({
+        brand_id: z.string().uuid().nullable().default(null),
+        week: z.number().int().min(1).max(4).default(1),
+        weekday: z.number().int().min(0).max(6).default(1),
+        lead_days: z.number().int().min(0).max(21).default(0),
+        auto: z.boolean().default(false),
+      }),
+    )
+    .max(20)
+    .default([])
+    .refine(
+      (days) => new Set(days.map((day) => day.brand_id ?? "main")).size === days.length,
+      "One review day per brand.",
+    ),
 });
 export type SocialPlan = z.infer<typeof socialPlanSchema>;
+export type ReviewDay = SocialPlan["review_days"][number];
 export const DEFAULT_PLAN: SocialPlan = socialPlanSchema.parse({ version: 1 });
 
 export function parsePlan(body: unknown): SocialPlan {
