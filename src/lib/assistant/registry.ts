@@ -80,6 +80,13 @@ import {
   linkPageSchema,
   socialPlanSchema,
 } from "../social/plan";
+import {
+  DEFAULT_REVIEW,
+  REVIEW_KEY,
+  approverWords,
+  parseReview,
+  reviewSettingsSchema,
+} from "../social/review";
 import { APPEARANCE_KEY, DEFAULT_APPEARANCE, appearanceSchema } from "../brand/appearance";
 import { BRAND_MODULE, KIT_KEY, brandKitSchema } from "../brand/kit";
 import {
@@ -463,6 +470,16 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
     defaultBody: () => DEFAULT_LINKS,
   },
   {
+    module: SOCIAL_MODULE,
+    key: REVIEW_KEY,
+    feature: "social",
+    name: "Post review",
+    description:
+      "How posts are reviewed before they go out: require_approval (on: only an approver can schedule a post and everyone else sends it for review; off: anyone who can write can schedule) and approvers (the roles that may approve or send back a post: owner, admin, member; owners always may). Approving is always a person's press; this only says who.",
+    schema: reviewSettingsSchema,
+    defaultBody: () => DEFAULT_REVIEW,
+  },
+  {
     module: BRAND_MODULE,
     key: KIT_KEY,
     feature: "social",
@@ -596,6 +613,15 @@ export function describeConfig(entry: ConfigEntry, body: unknown): string[] {
           `${WEEKDAY_NAMES[slot.weekday]} ${slot.time}: ${topics.find((t) => t.id === slot.topic)?.name ?? "anything"}`,
       ),
       `Voice notes: ${notes ? `"${notes.slice(0, 120)}${notes.length > 120 ? "…" : ""}"` : "none"}`,
+    ];
+  }
+  if (entry.module === SOCIAL_MODULE && entry.key === REVIEW_KEY) {
+    const review = parseReview(body);
+    return [
+      review.require_approval
+        ? "Posts are approved before they can be scheduled"
+        : "Anyone who can write can schedule; review is optional",
+      `Who approves: ${approverWords(review)}`,
     ];
   }
   if (entry.module === SOCIAL_MODULE && entry.key === LINKS_KEY) {
