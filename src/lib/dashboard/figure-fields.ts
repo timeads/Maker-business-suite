@@ -235,6 +235,19 @@ export const CUTTER_FIELDS: FigureGroup[] = [
 /** Settings → Money → Debt payoff and emergency fund (owners and admins only). */
 export const DEBT_FIELDS: FigureGroup[] = [
   {
+    title: "Debts from your books",
+    about:
+      "Each time QuickBooks syncs, the accounts on your balance sheet of these kinds become debts by themselves. Other things you owe (bills to suppliers, sales tax, payroll) are listed on Debts, where you can count any of them.",
+    fields: [
+      {
+        kind: "list",
+        key: "books_debt_types",
+        label: "Kinds of account that are debts",
+        help: "As QuickBooks names its account types and detail types, one per line: Credit Card, Long Term Liability, Line Of Credit, Loan Payable, Notes Payable. Changes show at the next sync.",
+      },
+    ],
+  },
+  {
     title: "Where extra money goes",
     about:
       "The plan pays every debt its minimum. What's freed as each one is paid off goes to the next, in this order.",

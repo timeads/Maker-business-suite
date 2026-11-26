@@ -1,3 +1,5 @@
+import type { BookLiability } from "../dashboard/debt/books";
+
 export type ProviderKey =
   | "shopify"
   | "quickbooks"
@@ -171,6 +173,8 @@ export type BookExpenseRow = {
   memo: string;
   /** Moves only: the account the money left. */
   from_account: string | null;
+  /** Moves only: the books' own id for the account paid into, when given. */
+  account_ref?: string | null;
   lines: { account: string | null; amount_cents: number; description: string }[];
 };
 
@@ -319,6 +323,14 @@ export type SyncStore = {
    * database keeps a balance only for a debt linked to one of them.
    */
   noteDebtBalances(asOf: string, accounts: { name: string; cents: number }[]): Promise<void>;
+  /**
+   * Every liability account on the balance sheet as of a day, for Money's
+   * debts: the store adds the workspace's rule (which are debts by
+   * themselves) and the database makes, joins and updates the debts.
+   * `complete`: every liability account the books have is here, so one
+   * missing is gone from them.
+   */
+  fileBookDebts(asOf: string, accounts: BookLiability[], complete: boolean): Promise<void>;
   /** Erases one shopper's personal details, keeping the sales figures. */
   redactCustomer(externalId: string, email: string | null): Promise<void>;
   /** Deletes everything synced from this provider for the workspace. */

@@ -156,11 +156,13 @@ describe("reading expenses from the books", () => {
         TxnDate: "2026-10-02",
         Amount: 500,
         FromAccountRef: { name: "Checking" },
-        ToAccountRef: { name: "Equipment loan" },
+        ToAccountRef: { name: "Equipment loan", value: "57" },
       }),
     ).toMatchObject({
       kind: "transfer",
       account: "Equipment loan",
+      // The books' id for the account paid into, so a renamed account keeps its payments.
+      account_ref: "57",
       from_account: "Checking",
       amount_cents: 50000,
       payee: null,
@@ -173,7 +175,12 @@ describe("reading expenses from the books", () => {
         BankAccountRef: { name: "Checking" },
         CreditCardAccountRef: { name: "Studio card" },
       }),
-    ).toMatchObject({ kind: "card_payment", account: "Studio card", amount_cents: 25075 });
+    ).toMatchObject({
+      kind: "card_payment",
+      account: "Studio card",
+      amount_cents: 25075,
+      account_ref: null,
+    });
     expect(parseExpense("Transfer", { Id: "9", TxnDate: "2026-10-02", Amount: 5 })).toBeNull();
   });
 
@@ -251,7 +258,12 @@ describe("the QuickBooks sync and expenses", () => {
 
   it("reads each kind, only ever with questions, and marks what's gone for kinds read in full", async () => {
     const { state, urls } = await run(true);
-    const queries = urls.filter((url) => url.includes("/query?"));
+    // The chart of accounts' liabilities, for Money's debts, is the one other question.
+    const all = urls.filter((url) => url.includes("/query?"));
+    expect(
+      all.filter((url) => url.includes("from Account where Classification = 'Liability'")),
+    ).toHaveLength(1);
+    const queries = all.filter((url) => !url.includes("from Account "));
     expect(queries).toHaveLength(5);
     expect(
       queries.every((url) =>
@@ -270,7 +282,7 @@ describe("the QuickBooks sync and expenses", () => {
       "CreditCardPayment",
     ]);
     expect(state.expenseCloses[0].run).toBe(state.bookExpenses[0].run);
-    expect(state.usage).toBe(5 + 5);
+    expect(state.usage).toBe(5 + 5 + 1);
   });
 
   it("reads the monthly reports from three Januaries back, cash flow on the cash basis", async () => {

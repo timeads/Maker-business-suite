@@ -8,6 +8,8 @@ import {
   parseExpenseSorting,
   type ExpenseSorting,
 } from "../dashboard/expenses";
+import { withDebtRule } from "../dashboard/debt/books";
+import { DEBT_KEY, DEBT_MODULE, parseDebtSettings } from "../dashboard/debt/settings";
 import { REVENUE_KEY, REVENUE_MODULE, parseRevenueSettings } from "../dashboard/lines";
 import { moduleOpen } from "../module-access";
 import { withTenant } from "../supabase/admin";
@@ -98,6 +100,29 @@ export function rpcSyncStore(
       call("close_book_expenses", { p_run: run, p_since: since, p_entities: entities }),
     noteDebtBalances: (asOf, accounts) =>
       call("note_debt_balances_from_books", { p_as_of: asOf, p_rows: accounts }),
+    async fileBookDebts(asOf, accounts, complete) {
+      // Which liabilities are debts by themselves: the debt plan's setting
+      // (owners and admins only, read here by the service role for this
+      // workspace alone), applied to the books' account types.
+      const settings = await withTenant(
+        scope.tenantId,
+        async (tenant) => {
+          const { data, error } = await tenant
+            .select("configs", "body")
+            .eq("module", DEBT_MODULE)
+            .eq("key", DEBT_KEY)
+            .maybeSingle();
+          if (error) throw new Error(`Could not read the debt setting: ${error.message}`);
+          return parseDebtSettings((data as { body?: unknown } | null)?.body);
+        },
+        admin,
+      );
+      await call("file_debts_from_books", {
+        p_as_of: asOf,
+        p_accounts: withDebtRule(accounts, settings.books_debt_types),
+        p_complete: complete,
+      });
+    },
     redactCustomer: (externalId, email) =>
       call("redact_customer", { p_customer_external_id: externalId, p_email: email }),
     purgeProviderData: () => call("purge_provider_data", {}),

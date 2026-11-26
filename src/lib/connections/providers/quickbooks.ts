@@ -1,3 +1,9 @@
+import {
+  MAX_LIABILITIES,
+  bookLiabilities,
+  parseChartAccounts,
+  type ChartAccount,
+} from "../../dashboard/debt/books";
 import { ProviderHttpError, requestJson, requiredEnv } from "../http";
 import {
   ConnectError,
@@ -134,6 +140,42 @@ export function createQuickBooksAdapter(fetchImpl: Fetch = fetch): ProviderAdapt
         throw new ReconnectRequiredError("QuickBooks no longer accepts this company's access");
       }
       throw err;
+    }
+  }
+
+  /**
+   * The chart of accounts' liability accounts, for which of the balance
+   * sheet's liabilities are debts: each account's id, name, type and detail
+   * type (the balance sheet report doesn't say). Only reads, with the
+   * accounting permission already granted. Null when it couldn't be read
+   * whole (the books said no, or there were more than one answer holds), so
+   * nothing is taken as gone from the books on a partial read.
+   */
+  async function liabilityChart(realmId: string, token: TokenSet): Promise<ChartAccount[] | null> {
+    const query = new URLSearchParams({
+      query: `select * from Account where Classification = 'Liability' startposition 1 maxresults ${MAX_LIABILITIES}`,
+      minorversion: "75",
+    });
+    try {
+      const answer = await requestJson<unknown>(
+        fetchImpl,
+        "QuickBooks",
+        `${apiBase()}/v3/company/${encodeURIComponent(realmId)}/query?${query}`,
+        { headers: { Authorization: `Bearer ${token.access_token}`, Accept: "application/json" } },
+      );
+      const listed = (answer as { QueryResponse?: { Account?: unknown[] } } | null)?.QueryResponse
+        ?.Account;
+      if (Array.isArray(listed) && listed.length >= MAX_LIABILITIES) return null;
+      return parseChartAccounts(answer);
+    } catch (err) {
+      if (err instanceof ProviderHttpError && err.status === 401) {
+        throw new ReconnectRequiredError("QuickBooks no longer accepts this company's access");
+      }
+      console.warn(
+        `QuickBooks chart of accounts not read for ${realmId}:`,
+        err instanceof Error ? err.message : err,
+      );
+      return null;
     }
   }
 
@@ -314,20 +356,40 @@ export function createQuickBooksAdapter(fetchImpl: Fetch = fetch): ProviderAdapt
         parseAgedReceivables(receivables, iso(today)),
       ].filter((row): row is SnapshotRow => row !== null);
       await store.saveSnapshots(snapshots);
-      // The same balance sheet's cards and loans, for Money's debts. Never
-      // stops the sync.
+      let calls = 4;
+      // The same balance sheet's liabilities become Money's debts, typed by
+      // the chart of accounts (one more read). Never stops the sync.
       try {
         if (await store.bookExpensesWanted()) {
-          const accounts = parseLiabilityAccounts(balanceSheet);
-          if (accounts.length > 0) await store.noteDebtBalances(iso(today), accounts);
+          calls += 1;
+          const chart = await liabilityChart(externalAccountId, token);
+          const sheet = parseLiabilityAccounts(balanceSheet);
+          const { accounts, complete } = bookLiabilities(sheet, chart);
+          if (accounts.length > 0 || complete) {
+            try {
+              await store.fileBookDebts(iso(today), accounts, complete);
+            } catch (err) {
+              // A database not yet on the newer function: balances by name, as before.
+              console.warn(
+                `QuickBooks debts not filed for ${externalAccountId}, noting balances instead:`,
+                err instanceof Error ? err.message : err,
+              );
+              if (sheet.length > 0) {
+                await store.noteDebtBalances(
+                  iso(today),
+                  sheet.map(({ name, cents }) => ({ name, cents })),
+                );
+              }
+            }
+          }
         }
       } catch (err) {
+        if (err instanceof ReconnectRequiredError) throw err;
         console.warn(
-          `QuickBooks debt balances not noted for ${externalAccountId}:`,
+          `QuickBooks debts not read for ${externalAccountId}:`,
           err instanceof Error ? err.message : err,
         );
       }
-      let calls = 4;
       // The cash flow statement by month, for burn and runway. Cash basis,
       // as the earlier dashboard asks for it (QuickBooks answers the cash
       // flow report on that basis). Trouble here never stops the sync: the

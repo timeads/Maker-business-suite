@@ -1,4 +1,5 @@
 import { toCents } from "../../dashboard/lines";
+import { SECTION_TYPES, type SheetLiability } from "../../dashboard/debt/books";
 import type { SnapshotRow } from "../types";
 
 /**
@@ -7,7 +8,7 @@ import type { SnapshotRow } from "../types";
  * needs. Anything they can't find is left out rather than guessed.
  */
 
-type ColData = { value?: string };
+type ColData = { value?: string; id?: string };
 type ReportRow = {
   group?: string;
   type?: string;
@@ -184,28 +185,37 @@ export function parseBalanceSheet(report: QuickBooksReport, asOf: string): Snaps
 }
 
 /**
- * Each liability account's own line from a BalanceSheet report (cards,
- * loans, lines of credit), for Money's debts. Never stored as it is: the
- * database keeps a balance only for a debt an owner or admin linked to an
- * account of that name, so nobody else can read what is owed.
+ * Each liability account's own line from a BalanceSheet report, for Money's
+ * debts: its name, the books' id for the account where the report gives one
+ * (on the line's first cell), its amount in whole cents and the report
+ * section it sits in (`CreditCards`, `OtherCurrentLiabilities`,
+ * `LongTermLiabilities` or `AP`: the innermost of those, so a sub-account
+ * keeps its parent's). Kept only in tables owners and admins alone can read.
  */
-export function parseLiabilityAccounts(
-  report: QuickBooksReport,
-): { name: string; cents: number }[] {
+export function parseLiabilityAccounts(report: QuickBooksReport): SheetLiability[] {
   const liabilities = findGroup(report.Rows?.Row, "Liabilities");
   if (!liabilities) return [];
-  const out: { name: string; cents: number }[] = [];
-  const collect = (list: ReportRow[] | undefined) => {
+  const out: SheetLiability[] = [];
+  const collect = (list: ReportRow[] | undefined, section: string | null) => {
     for (const row of list ?? []) {
       const cells = row.ColData ?? [];
-      const name = (cells[0]?.value ?? "").trim();
-      if (row.type === "Data" && name && cells.length > 1 && out.length < 500) {
-        out.push({ name: name.slice(0, 200), cents: cents(cells[cells.length - 1]?.value) });
+      const name = (cells[0]?.value ?? "").trim().replace(/\s+/g, " ");
+      if (row.type === "Data" && name && cells.length > 1 && out.length < 1000) {
+        const id = (cells[0]?.id ?? "").trim();
+        out.push({
+          id: /^[A-Za-z0-9_-]{1,60}$/.test(id) ? id : null,
+          name: name.slice(0, 200),
+          cents: cents(cells[cells.length - 1]?.value),
+          section,
+        });
       }
-      collect(row.Rows?.Row);
+      collect(
+        row.Rows?.Row,
+        row.group && Object.hasOwn(SECTION_TYPES, row.group) ? row.group : section,
+      );
     }
   };
-  collect(liabilities.Rows?.Row);
+  collect(liabilities.Rows?.Row, null);
   return out;
 }
 

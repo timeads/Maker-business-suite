@@ -86,6 +86,11 @@ export type ExpensesResponse = { QueryResponse?: Record<string, unknown> | null 
 const text = (value: unknown, max = 200) =>
   typeof value === "string" ? value.trim().replace(/\s+/g, " ").slice(0, max) : "";
 const name = (ref: Ref) => text(ref?.name) || null;
+/** The books' own id in a reference, when it looks like one. */
+const refId = (ref: Ref) => {
+  const value = typeof ref?.value === "string" ? ref.value.trim() : "";
+  return /^[A-Za-z0-9_-]{1,60}$/.test(value) ? value : null;
+};
 const amountCents = (value: unknown) =>
   typeof value === "number" || typeof value === "string" ? toCents(value) : 0;
 
@@ -177,13 +182,16 @@ export function parseExpense(entity: ExpenseEntity, record: QboRecord): BookExpe
     }
     case "Transfer":
     case "CreditCardPayment": {
-      const to = name(entity === "Transfer" ? record.ToAccountRef : record.CreditCardAccountRef);
+      const toRef = entity === "Transfer" ? record.ToAccountRef : record.CreditCardAccountRef;
+      const to = name(toRef);
       if (!to) return null;
       return {
         ...base,
         payment_type: null,
         amount_cents: amountCents(record.Amount),
         account: to,
+        // The books' id for the account paid into: a renamed account keeps its payments.
+        account_ref: refId(toRef),
         payee: null,
         from_account: name(entity === "Transfer" ? record.FromAccountRef : record.BankAccountRef),
         lines: [],

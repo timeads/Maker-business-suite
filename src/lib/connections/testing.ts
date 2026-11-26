@@ -1,3 +1,4 @@
+import type { BookLiability } from "../dashboard/debt/books";
 import type {
   BookExpenseRow,
   BookPaymentRow,
@@ -37,6 +38,9 @@ export function memoryStore() {
     bookExpensesWanted: false,
     expenseCloses: [] as { run: string; since: string; entities: string[] }[],
     debtBalances: [] as { asOf: string; accounts: { name: string; cents: number }[] }[],
+    bookDebts: [] as { asOf: string; accounts: BookLiability[]; complete: boolean }[],
+    /** Set to make filing debts fail, as a database without the newer function would. */
+    bookDebtsFail: false,
     /** How many full reads of the orders finished with Money's details. */
     detailsRead: 0,
     redacted: [] as { externalId: string; email: string | null }[],
@@ -94,6 +98,10 @@ export function memoryStore() {
     },
     async noteDebtBalances(asOf, accounts) {
       state.debtBalances.push({ asOf, accounts });
+    },
+    async fileBookDebts(asOf, accounts, complete) {
+      if (state.bookDebtsFail) throw new Error("file_debts_from_books failed: no such function");
+      state.bookDebts.push({ asOf, accounts, complete });
     },
     async redactCustomer(externalId, email) {
       state.redacted.push({ externalId, email });

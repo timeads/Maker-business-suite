@@ -2,6 +2,15 @@ import { z } from "zod";
 import { DASHBOARD_MODULE } from "../schema";
 import { STRATEGIES } from "./engine";
 
+/** Kept in step with `DEFAULT_BOOKS_DEBT_TYPES` in `books.ts` (a test holds them equal). */
+const BOOKS_DEBT_TYPES = [
+  "Credit Card",
+  "Long Term Liability",
+  "Line Of Credit",
+  "Loan Payable",
+  "Notes Payable",
+];
+
 /**
  * How the debt payoff plan and the emergency fund are worked out: a config
  * (`dashboard` / `debt`), set under Settings → Money → Debt payoff. It is
@@ -52,6 +61,17 @@ export const debtSettingsSchema = z
     /** Notes: with an operating margin above this and debt above the next, suggest sending extra. */
     extra_margin_pct: pct(10),
     extra_debt_pct: z.number().int().min(0).max(1000).default(40),
+
+    /**
+     * Which of the books' liability accounts become debts by themselves: the
+     * books' account types or detail types (spacing and capitals ignored).
+     * Never an account, bank or lender name. Others can still be counted on
+     * Money → Debts.
+     */
+    books_debt_types: z
+      .array(z.string().trim().min(1).max(60))
+      .max(30)
+      .default(() => [...BOOKS_DEBT_TYPES]),
   })
   .superRefine((value, ctx) => {
     if (value.debt_revenue_good_pct > value.debt_revenue_watch_pct) {
@@ -126,7 +146,7 @@ export const debtFieldsSchema = z.object({
   kind: z.enum(DEBT_KINDS),
   plan: z.enum(["pool", "fixed", "revenue_share"]),
   status: z.enum(DEBT_STATUSES),
-  rate_bp: z.number().int().min(0).max(100_000),
+  rate_bp: z.number().int().min(0).max(100_000).nullable(),
   minimum_cents: cents,
   payment_cents: cents.nullable(),
   revolving_bp: z.number().int().min(1).max(10_000).nullable(),
