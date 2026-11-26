@@ -450,3 +450,337 @@ describe("across workspaces", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Debts from the books' balance sheet
+// ---------------------------------------------------------------------------
+
+type Liability = {
+  id: string | null;
+  name: string;
+  cents: number;
+  type: string | null;
+  subtype: string | null;
+  section: string | null;
+  kind: string;
+  automatic: boolean;
+};
+
+/** Made-up accounts: nothing here is a real lender, bank or account. */
+const STUDIO_CARD: Liability = {
+  id: "41",
+  name: "Studio Card",
+  cents: 250000,
+  type: "Credit Card",
+  subtype: "CreditCard",
+  section: "CreditCards",
+  kind: "card",
+  automatic: true,
+};
+const VAN_LOAN: Liability = {
+  id: "57",
+  name: "Van Loan",
+  cents: 1800000,
+  type: "Long Term Liability",
+  subtype: "NotesPayable",
+  section: "LongTermLiabilities",
+  kind: "loan",
+  automatic: true,
+};
+const SALES_TAX: Liability = {
+  id: "60",
+  name: "Sales Tax Payable",
+  cents: 31000,
+  type: "Other Current Liability",
+  subtype: "SalesTaxPayable",
+  section: "OtherCurrentLiabilities",
+  kind: "other",
+  automatic: false,
+};
+const QUIET_CARD: Liability = { ...STUDIO_CARD, id: "61", name: "Quiet Card", cents: 0 };
+const EQUIPMENT: Liability = {
+  id: "62",
+  name: "Equipment Loan",
+  cents: 500000,
+  type: "Other Current Liability",
+  subtype: "OtherCurrentLiabilities",
+  section: "OtherCurrentLiabilities",
+  kind: "other",
+  automatic: false,
+};
+
+const fileDebts = (tenant: string, asOf: string, accounts: Liability[], complete = true) =>
+  asService(db, async (tx) => {
+    const { rows } = await tx.query<{ out: Record<string, number> }>(
+      "select public.file_debts_from_books($1, 'quickbooks', $2, $3::jsonb, $4) as out",
+      [tenant, asOf, JSON.stringify(accounts), complete],
+    );
+    return rows[0].out;
+  });
+
+type DebtRow = {
+  id: string;
+  name: string;
+  source: string;
+  status: string;
+  rate_bp: number | null;
+  minimum_cents: string;
+  note: string | null;
+  books_account: string | null;
+  left_out: boolean;
+};
+const debtsOf = (user: User, tenant: string) =>
+  as<DebtRow>(
+    user,
+    `select id, name, source, status, rate_bp, minimum_cents::text, note, books_account,
+            left_out_at is not null as left_out
+     from public.money_debts where tenant_id = $1 order by name`,
+    [tenant],
+  );
+const debtNamed = async (name: string) => {
+  const found = (await debtsOf(alice, tenantA)).find((d) => d.name === name);
+  if (!found) throw new Error(`no debt named ${name}`);
+  return found;
+};
+const accountId = async (booksId: string) =>
+  (
+    await as<{ id: string }>(
+      alice,
+      "select id from public.money_book_accounts where tenant_id = $1 and books_id = $2",
+      [tenantA, booksId],
+    )
+  )[0].id;
+const currentOf = async (debtId: string) =>
+  (
+    await as<{ balance_cents: string; as_of: string; source: string }>(
+      alice,
+      "select balance_cents::text, as_of::text, source from public.money_debt_current($1) where debt_id = $2",
+      [tenantA, debtId],
+    )
+  )[0];
+
+describe("debts from the books", () => {
+  const ALL = [STUDIO_CARD, VAN_LOAN, SALES_TAX, QUIET_CARD, EQUIPMENT];
+
+  it("makes a debt of each counted account, joining the ones typed in by name", async () => {
+    // A balance a person gave later than the books' day: the books win once joined.
+    await as(alice, "select public.note_money_debt_balance($1, $2, '2026-11-25', 1)", [
+      tenantA,
+      cardA,
+    ]);
+    expect(await fileDebts(tenantA, "2026-11-24", ALL)).toEqual({
+      accounts: 5,
+      made: 1,
+      joined: 2,
+      closed: 0,
+    });
+    const debts = await debtsOf(alice, tenantA);
+    expect(debts.map((d) => [d.name, d.source, d.left_out])).toEqual([
+      ["Equipment Loan", "books", false],
+      ["Studio Card", "books", false],
+      ["Van Loan", "books", false],
+    ]);
+    // Joined, not made twice: the typed-in debts keep their ids and what was typed.
+    expect(debts.find((d) => d.name === "Studio Card")).toMatchObject({
+      id: cardA,
+      rate_bp: 2299,
+      minimum_cents: "5000",
+    });
+    expect(debts.find((d) => d.name === "Equipment Loan")?.id).toBe(loanA);
+    // Made from the books: nothing a person fills in is guessed.
+    const van = debts.find((d) => d.name === "Van Loan")!;
+    expect(van).toMatchObject({ rate_bp: null, minimum_cents: "0", note: null });
+    expect(await currentOf(cardA)).toEqual({
+      balance_cents: "250000",
+      as_of: "2026-11-24",
+      source: "books",
+    });
+    expect(await currentOf(van.id)).toMatchObject({ balance_cents: "1800000", source: "books" });
+
+    // Every liability is kept, the ones that aren't debts too.
+    const accounts = await as<{ name: string; automatic: boolean; choice: string | null }>(
+      alice,
+      "select name, automatic, choice from public.money_book_accounts where tenant_id = $1 order by name",
+      [tenantA],
+    );
+    expect(accounts).toEqual([
+      // A person had linked a debt to it: their word that it is one.
+      { name: "Equipment Loan", automatic: false, choice: "debt" },
+      { name: "Quiet Card", automatic: true, choice: null },
+      { name: "Sales Tax Payable", automatic: false, choice: null },
+      { name: "Studio Card", automatic: true, choice: null },
+      { name: "Van Loan", automatic: true, choice: null },
+    ]);
+  });
+
+  it("is the same the second time, and follows a renamed account by its id", async () => {
+    expect(await fileDebts(tenantA, "2026-11-24", ALL)).toMatchObject({ made: 0, joined: 0 });
+    expect(
+      await fileDebts(tenantA, "2026-11-25", [
+        { ...VAN_LOAN, name: "Van Loan 2" },
+        ...ALL.filter((a) => a !== VAN_LOAN),
+      ]),
+    ).toMatchObject({ made: 0 });
+    const names = (await debtsOf(alice, tenantA)).map((d) => d.name);
+    expect(names).toEqual(["Equipment Loan", "Studio Card", "Van Loan 2"]);
+    const [{ n }] = await as<{ n: number }>(
+      alice,
+      "select count(*)::int as n from public.money_book_accounts where tenant_id = $1",
+      [tenantA],
+    );
+    expect(n).toBe(5);
+  });
+
+  it("never overwrites what a person fills in, nor lets them type over the books", async () => {
+    const van = await debtNamed("Van Loan 2");
+    await saveDebt(
+      alice,
+      tenantA,
+      {
+        ...CARD,
+        name: "My own name",
+        kind: "loan",
+        rate_bp: 650,
+        minimum_cents: 30000,
+        note: "Due mid-month",
+        books_account: "Elsewhere",
+      },
+      van.id,
+    );
+    await fileDebts(tenantA, "2026-11-26", [
+      { ...VAN_LOAN, name: "Van Loan 2", cents: 1750000 },
+      ...ALL.filter((a) => a !== VAN_LOAN),
+    ]);
+    expect(await debtNamed("Van Loan 2")).toMatchObject({
+      rate_bp: 650,
+      minimum_cents: "30000",
+      note: "Due mid-month",
+      // The books' name and account stay the books'.
+      books_account: "Van Loan 2",
+    });
+    expect(await currentOf(van.id)).toMatchObject({
+      balance_cents: "1750000",
+      as_of: "2026-11-26",
+    });
+    await expect(
+      as(alice, "select public.note_money_debt_balance($1, $2, '2026-11-26', 1)", [
+        tenantA,
+        van.id,
+      ]),
+    ).rejects.toThrow(/comes from your books/);
+    await expect(
+      as(alice, "select public.remove_money_debt($1, $2)", [tenantA, van.id]),
+    ).rejects.toThrow(/Not a debt/);
+  });
+
+  it("counts another liability when asked, and leaves one out for good when told", async () => {
+    const tax = await accountId("60");
+    await as(dan, "select public.choose_book_liability($1, $2, 'debt')", [tenantA, tax]);
+    expect((await debtNamed("Sales Tax Payable")).left_out).toBe(false);
+    await as(dan, "select public.choose_book_liability($1, $2, 'not_debt')", [tenantA, tax]);
+    const van = await accountId("57");
+    await as(alice, "select public.choose_book_liability($1, $2, 'not_debt')", [tenantA, van]);
+    await fileDebts(tenantA, "2026-11-26", ALL);
+    const left = (await debtsOf(alice, tenantA)).filter((d) => d.left_out).map((d) => d.name);
+    expect(left.sort()).toEqual(["Sales Tax Payable", "Van Loan"]);
+    // Left out: no payments either.
+    await as(alice, "select public.choose_book_liability($1, $2, 'rule')", [tenantA, van]);
+    expect((await debtNamed("Van Loan")).left_out).toBe(false);
+  });
+
+  it("keeps an account at zero as paid off, and closes one gone from a complete read only", async () => {
+    await fileDebts(
+      tenantA,
+      "2026-11-27",
+      [{ ...STUDIO_CARD, cents: 0 }, VAN_LOAN, SALES_TAX],
+      false,
+    );
+    expect(await debtNamed("Equipment Loan")).toMatchObject({ status: "active" });
+    expect(await debtNamed("Studio Card")).toMatchObject({ status: "active" });
+    expect(await currentOf(cardA)).toMatchObject({ balance_cents: "0", as_of: "2026-11-27" });
+
+    expect(
+      await fileDebts(tenantA, "2026-11-27", [
+        { ...STUDIO_CARD, cents: 0 },
+        VAN_LOAN,
+        SALES_TAX,
+        QUIET_CARD,
+      ]),
+    ).toMatchObject({ closed: 1 });
+    expect(await debtNamed("Equipment Loan")).toMatchObject({ status: "closed" });
+    const [{ n }] = await as<{ n: number }>(
+      alice,
+      "select count(*)::int as n from public.money_debt_balances where debt_id = $1",
+      [loanA],
+    );
+    expect(n).toBeGreaterThan(0);
+    // Back in the books: open again.
+    await fileDebts(tenantA, "2026-11-28", ALL);
+    expect(await debtNamed("Equipment Loan")).toMatchObject({ status: "active" });
+  });
+
+  it("matches a line read without the books' id to the account it already knows", async () => {
+    await fileDebts(
+      tenantA,
+      "2026-11-28",
+      [{ ...STUDIO_CARD, id: null, type: null, subtype: null, kind: "card", cents: 9900 }],
+      false,
+    );
+    const [{ n }] = await as<{ n: number }>(
+      alice,
+      "select count(*)::int as n from public.money_book_accounts where tenant_id = $1 and name = 'Studio Card'",
+      [tenantA],
+    );
+    expect(n).toBe(1);
+    expect(await currentOf(cardA)).toMatchObject({ balance_cents: "9900" });
+  });
+
+  it("finds payments by the account's id, so a renamed account keeps them", async () => {
+    await fileExpenses(tenantA, [
+      { ...move("cp9", "Card Renamed Since", "2026-11-10", 7000), account_ref: "41" },
+    ]);
+    const paid = await as<{ debt_id: string; cents: string }>(
+      alice,
+      "select debt_id, cents::text from public.money_debt_payments($1, '2026-11-01', '2026-12-01')",
+      [tenantA],
+    );
+    expect(paid).toContainEqual({ debt_id: cardA, cents: "7000" });
+  });
+
+  it("a plain member reads none of it and changes none of it", async () => {
+    expect(await as(carol, "select * from public.money_book_accounts")).toEqual([]);
+    expect(await as(carol, "select * from public.money_debts")).toEqual([]);
+    const tax = await accountId("60");
+    await expect(
+      as(carol, "select public.choose_book_liability($1, $2, 'debt')", [tenantA, tax]),
+    ).rejects.toThrow(/Only owners and admins/);
+    await expect(
+      as(
+        carol,
+        "select public.file_debts_from_books($1, 'quickbooks', '2026-11-28', '[]'::jsonb, false)",
+        [tenantA],
+      ),
+    ).rejects.toThrow(/permission denied/);
+    await expect(
+      asAnon(db, (tx) => tx.query("select * from public.money_book_accounts")),
+    ).rejects.toThrow(/permission denied/);
+  });
+
+  it("another workspace reads none of it, and its books land only on its own debts", async () => {
+    expect(
+      await as(bob, "select * from public.money_book_accounts where tenant_id = $1", [tenantA]),
+    ).toEqual([]);
+    const tax = await accountId("60");
+    await expect(
+      as(bob, "select public.choose_book_liability($1, $2, 'debt')", [tenantA, tax]),
+    ).rejects.toThrow(/Only owners and admins/);
+    await expect(
+      as(bob, "select public.choose_book_liability($1, $2, 'debt')", [tenantB, tax]),
+    ).rejects.toThrow(/isn't here/);
+    const before = (await debtsOf(alice, tenantA)).length;
+    // Its own typed-in debt, linked to an account of the same name, is joined.
+    expect(await fileDebts(tenantB, "2026-11-28", ALL)).toMatchObject({ made: 1, joined: 1 });
+    expect((await debtsOf(alice, tenantA)).length).toBe(before);
+    expect((await debtsOf(bob, tenantB)).map((d) => d.name)).toEqual(["Studio Card", "Van Loan"]);
+  });
+});
