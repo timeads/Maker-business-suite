@@ -56,6 +56,11 @@ export const REVIEW_ERRORS: Record<string, string> = {
   past: "Its time has passed. Pick a time in the future.",
   locked: "This post has already gone out, so it can't be changed.",
   too_many: "That's more than 200 posts at once. Approve a smaller batch.",
+  slides_not_drawn:
+    "Its slides haven't been made into pictures yet. Open it and approve it from there.",
+  slides_changed: "The slides changed while they were being drawn. Please try again.",
+  slides_count: "Every slide needs its picture. Please try again.",
+  too_many_photos: "A post can have up to 10 photos, slides included.",
 };
 
 /** The plain words for a database refusal, or null when it isn't one of ours. */
