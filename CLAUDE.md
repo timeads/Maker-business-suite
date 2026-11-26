@@ -110,6 +110,33 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   shop's history once (done only when the new code's full read says so).
   Keep `tests/db/money-lines.test.ts` and `money-order-details.test.ts`
   passing.
+  Expenses (Money → Expenses to sort; docs/money-side-by-side.md): for a
+  workspace with Money, the QuickBooks sync (read-only, the accounting
+  scope already granted) reads purchases, bills, journal entries' debit
+  side, transfers and card payments since the first of January last year
+  (`quickbooks-expenses.ts`) into `book_expenses` through
+  `file_book_expenses` (keyed by the books' kind and id; facts follow the
+  books, the sorting never does) and `close_book_expenses` (what a complete
+  read no longer saw is marked removed). Transfers and card payments are
+  `is_move`: never sorted, listed or counted. Sorting is a line, a split
+  (whole percents, `splitByPercent`: leftover cents to the largest share),
+  shared or set aside; a person's choice (`sort_book_expenses`, owners and
+  admins) always wins, and "Put back in the inbox" sets `rules_off`. Payee
+  defaults and rules are a config (`dashboard` / `expenses`,
+  `lib/dashboard/expenses.ts`, Settings → Money → Sorting expenses;
+  `decideExpense`: firm rules, payee default, other rules) applied in code
+  as expenses arrive and on "Apply my rules to what's waiting"
+  (`note_expense_decisions`), only ever to unsorted rows; never a payee,
+  bank or account name in code. "Suggest lines for these" is the ONE model
+  call in Money (`expense-suggest.ts`: a person's press, structured output,
+  no tools, `E1`/`L1` references, `tidySuggestions`); it only writes a
+  suggestion, applied by a person's "Use this". Profit by line
+  (`lib/dashboard/profit.ts`, config `dashboard` / `profit`, Settings →
+  Money → Profit by line) is revenue − cost of goods (only when counted from
+  the shop's item costs) − its expenses − its share of shared ones − its
+  share of monthly costs (prorated by the day); unsorted, set aside and
+  unsplit amounts are shown apart. Keep `tests/db/money-expenses.test.ts`
+  passing.
 - Help desk: inbound email is authenticated by a secret in the webhook URL,
   queued (`private.inbound_emails`) and filed by the worker through
   `file_inbound_email` (the older `ingest_inbound_email` hands over to it),
