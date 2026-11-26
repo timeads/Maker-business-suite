@@ -1,5 +1,5 @@
 import { csvCell } from "./emails";
-import { formatWhen, localDay } from "./slots";
+import { formatTime, formatWhen, localDay, zoneLabel } from "./slots";
 
 /**
  * The runsheet: everyone coming over a stretch of days, one block per class,
@@ -22,6 +22,8 @@ export type RunsheetPerson = {
   notes: string;
   answers: Record<string, string>;
   returning: boolean;
+  /** Ticked the box for text reminders. */
+  texts?: boolean;
 };
 
 export type RunsheetSession = {
@@ -38,6 +40,13 @@ export type RunsheetBlock = {
   id: string;
   title: string;
   when: string;
+  /** "Rug tufting — Saturday, March 6 · 10:00 AM ET", as the earlier app headed each class. */
+  heading: string;
+  /** Places taken and the date's limit, for the bar. */
+  taken: number;
+  capacity: number;
+  /** People checked in, of how many. */
+  here: number;
   /** "Studio 2 · 8 of 10 places booked · 3 checked in" */
   line: string;
   rows: {
@@ -46,6 +55,10 @@ export type RunsheetBlock = {
     name: string;
     returning: boolean;
     contact: string;
+    email: string;
+    phone: string;
+    /** Agreed to text reminders. */
+    texts: boolean;
     seats: string;
     here: boolean;
     /** Notes and the answers to the business's own questions, one line each. */
@@ -93,10 +106,21 @@ export function buildRunsheet(input: {
       const people = [...s.people].sort((a, b) => a.name.localeCompare(b.name));
       const taken = people.reduce((n, p) => n + p.seats, 0);
       const here = people.filter((p) => p.attendance === "attended").length;
+      const day = new Intl.DateTimeFormat("en-US", {
+        timeZone: input.timezone,
+        weekday: "long",
+        month: "long",
+        day: "numeric",
+      }).format(new Date(s.starts_at));
+      const zone = zoneLabel(input.timezone, s.starts_at);
       return {
         id: s.id,
         title: s.service,
         when: formatWhen(s.starts_at, s.ends_at, input.timezone),
+        heading: `${s.service} — ${day} · ${formatTime(s.starts_at, input.timezone)}${zone ? ` ${zone}` : ""}`,
+        taken,
+        capacity: s.capacity,
+        here,
         line: [
           s.location.trim(),
           `${taken} of ${plural(s.capacity, "place", "places")} booked`,
@@ -110,6 +134,9 @@ export function buildRunsheet(input: {
           name: p.name,
           returning: p.returning,
           contact: [p.email, p.phone.trim()].filter(Boolean).join(" · "),
+          email: p.email,
+          phone: p.phone.trim(),
+          texts: Boolean(p.texts) && p.phone.trim() !== "",
           seats: String(p.seats),
           here: p.attendance === "attended",
           extra: [

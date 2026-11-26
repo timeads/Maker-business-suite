@@ -70,6 +70,25 @@ describe("the runsheet", () => {
     expect(block.when).toBe("Sat, Mar 6, 10:00 AM – 1:00 PM EST");
     expect(block.line).toBe("Studio 2 · 3 of 10 places booked · 1 checked in");
     expect(block.rows.map((r) => r.name)).toEqual(["Ana López", "Sam Shopper"]);
+    // Headed as the earlier app did, with the clock's plain label.
+    expect(block.heading).toBe("Rug tufting — Saturday, March 6 · 10:00 AM ET");
+    expect(block).toMatchObject({ taken: 3, capacity: 10, here: 1 });
+  });
+
+  it("marks who agreed to texts, only when they gave a number", () => {
+    const texted = buildRunsheet({
+      business: "The Studio",
+      timezone: "America/New_York",
+      from: "2027-03-06",
+      to: "2027-03-19",
+      sessions: sessions.map((s) => ({
+        ...s,
+        people: s.people.map((p) => ({ ...p, texts: true })),
+      })),
+    });
+    const [ana, sam] = texted.blocks[0].rows;
+    expect(ana).toMatchObject({ texts: false, phone: "", email: "pat@example.com" });
+    expect(sam).toMatchObject({ texts: true, phone: "555 0100" });
   });
 
   it("carries contact, places, check-in, notes, answers and returning", () => {

@@ -52,7 +52,7 @@ export async function loadRunsheet(
   const { data: bookingRows, error: bookingError } = await supabase
     .from("bookings")
     .select(
-      "id, session_id, customer_name, customer_email, customer_phone, seats, attendance, notes, answers",
+      "id, session_id, customer_name, customer_email, customer_phone, text_opt_in, seats, attendance, notes, answers",
     )
     .eq("tenant_id", tenant.id)
     .eq("status", "confirmed")
@@ -69,6 +69,7 @@ export async function loadRunsheet(
     customer_name: string;
     customer_email: string;
     customer_phone: string | null;
+    text_opt_in: boolean | null;
     seats: number;
     attendance: "attended" | "no_show" | null;
     notes: string | null;
@@ -105,6 +106,7 @@ export async function loadRunsheet(
         notes: b.notes ?? "",
         answers: b.answers ?? {},
         returning: returning.has(b.id),
+        texts: b.text_opt_in === true,
       })),
   }));
 }
