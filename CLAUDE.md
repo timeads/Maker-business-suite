@@ -373,6 +373,29 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   booked and flagged oversold, never refused. From then on the sync keeps
   that booking in step with the order (fewer places, cancelled on a refund).
   Keep `tests/db/booking-undated.test.ts` passing.
+  Every booking email's subject and words are the business's own (config
+  `bookings` / `email_words`, `lib/bookings/words.ts`, Settings → Bookings →
+  Email words): plain text with fill-ins filled by code (`bookingEmail`,
+  `fillTemplate`), never markup and never a model; a message not changed uses
+  `DEFAULT_WORDS`, which `words.test.ts` holds line for line against the
+  older `emails.ts`. The reply-to rides on every customer email; the
+  assistant may propose it but never the words (`messageWordsChanged`).
+  "Send me a test" goes only to the signed-in person. Bookings → Emails sent
+  reads `booking_emails`. The runsheet and a date's roster PDF are words
+  first (`runsheet.ts`, pure) then drawn (`runsheet-pdf.tsx`, server only);
+  "Returning" is worked out on read by email (`loadReturning`), never
+  stored. All bookings keeps its filters in the address (`all-bookings.ts`).
+  The home card's Bookings line is `home-summary.ts` (good news only,
+  allowed to fail). "Upcoming classes" for a shop's workshops page
+  (`public/upcoming-classes.js`, config `bookings` / `upcoming`, off by
+  default) reads `/api/book/upcoming` through `shop_upcoming_classes`:
+  public, open, future dates with a place left, links only to the product
+  pages the shop sync stored (`safeProductUrl`). The owner's daily email
+  (`daily-email.ts`, config `bookings` / `daily_email`, off by default, to
+  members an owner or admin chose) is once per person per local day
+  (`booking_daily_emails`, `claim_booking_daily_emails` /
+  `finish_booking_daily_email`); keep `tests/db/booking-daily-email.test.ts`
+  and `booking-upcoming.test.ts` passing.
   What a business can vary about the product-page picker is a config
   (`bookings` / `shop_page`, `lib/bookings/shop-page.ts`), set under Settings
   → Bookings → Shop product page, where the two theme snippets are built
