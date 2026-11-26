@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { debtPlan } from "./engine";
 import { debtBudgetRows, debtHomeLine, debtTotals, toPlanDebt, type Debt } from "./figures";
-import { coverWords, foldDebts, foldPayments, shownAccountIds, type FoldAccount } from "./plans";
+import {
+  coverWords,
+  debtPlanFieldsSchema,
+  foldDebts,
+  foldPayments,
+  shownAccountIds,
+  type FoldAccount,
+} from "./plans";
 
 /** Made-up debts and accounts: nothing here is a real lender, bank or account. */
 const debt = (over: Partial<Debt> & Pick<Debt, "id">): Debt => ({
@@ -244,5 +251,33 @@ describe("a plan's row in words", () => {
     const mixed = foldDebts([plan(), cardA, { ...own, coveredBy: "plan", kind: "loan" }]).debts[0]
       .group!;
     expect(coverWords(mixed, money)).toMatch(/^Covers 2 debts/);
+  });
+});
+
+describe("a plan's details as saved", () => {
+  const fields = {
+    name: "Card plan",
+    status: "active",
+    rate_bp: 0,
+    payment_cents: 40000,
+    due_day: 3,
+    priority: null,
+    opening_cents: null,
+    note: null,
+    balance_from: "covered",
+    plan_account_id: null,
+    covers: ["0b6f1d1e-7f0e-4c9e-9a51-3c1c2f6a0001"],
+  };
+  it("takes a plan whose balance is its debts added up, with no account", () => {
+    expect(debtPlanFieldsSchema.safeParse(fields).success).toBe(true);
+  });
+  it("needs an account when the balance comes from one, and whole cents", () => {
+    const noAccount = debtPlanFieldsSchema.safeParse({ ...fields, balance_from: "account" });
+    expect(noAccount.success).toBe(false);
+    expect(noAccount.error?.issues[0].message).toMatch(/Pick the account/);
+    expect(debtPlanFieldsSchema.safeParse({ ...fields, payment_cents: 10.5 }).success).toBe(false);
+    expect(debtPlanFieldsSchema.safeParse({ ...fields, covers: ["not-an-id"] }).success).toBe(
+      false,
+    );
   });
 });

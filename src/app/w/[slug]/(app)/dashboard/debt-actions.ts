@@ -24,6 +24,7 @@ import {
   type WhatIfFigures,
 } from "@/lib/dashboard/debt/what-if";
 import { STRATEGIES } from "@/lib/dashboard/debt/engine";
+import { debtPlanFieldsSchema } from "@/lib/dashboard/debt/plans";
 import {
   DEBT_KEY,
   DEBT_MODULE,
@@ -135,6 +136,112 @@ export async function saveDebt(
   }
   refresh(slug);
   return { message: id ? "Saved." : `${parsed.data.name} is added.` };
+}
+
+/**
+ * Makes a plan that pays other debts (a consolidated debt), or changes one
+ * (`id` set): its own rate, one monthly payment, where its balance comes
+ * from, and every debt it pays (a debt left unticked is no longer covered,
+ * and comes back just as it was). A typed balance is noted for today.
+ */
+export async function saveDebtPlan(
+  slug: string,
+  _prev: DebtActionState,
+  formData: FormData,
+): Promise<DebtActionState> {
+  const ctx = await debtContext(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  for (const name of ["payment", "opening", "balance"] as const) {
+    if (!moneyOk(text(formData, name)))
+      return { error: `The ${name} doesn't look like an amount.` };
+  }
+  const rateText = text(formData, "rate");
+  const rate = rateText === "" ? null : percentToBp(rateText);
+  if (rate === null && rateText !== "")
+    return { error: "Give the rate as a percent, like 0 or 6.5." };
+  const payment = money(text(formData, "payment"));
+  if (payment === null) return { error: "Give the one payment you make to the plan each month." };
+  const parsed = debtPlanFieldsSchema.safeParse({
+    name: text(formData, "name"),
+    status: text(formData, "status") || "active",
+    rate_bp: rate,
+    payment_cents: payment,
+    due_day: whole(text(formData, "due_day")),
+    priority: whole(text(formData, "priority")),
+    opening_cents: money(text(formData, "opening")),
+    note: text(formData, "note") || null,
+    balance_from: text(formData, "balance_from") || "covered",
+    plan_account_id: text(formData, "plan_account_id") || null,
+    covers: formData.getAll("covers").map(String),
+  });
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? "Something in there doesn't look right." };
+  }
+  const id = text(formData, "id") || null;
+  if (id !== null && !z.string().uuid().safeParse(id).success)
+    return { error: "Which plan is this?" };
+  const { data, error } = await ctx.supabase.rpc("save_money_debt_plan", {
+    p_tenant_id: ctx.tenant.id,
+    p_debt_id: id,
+    p_fields: parsed.data,
+  });
+  if (error || typeof data !== "string") {
+    // The database's own words, where they're about what was asked.
+    if (error?.code === "22023" && /already paid through|can't pay another/i.test(error.message)) {
+      return { error: `${error.message}.` };
+    }
+    if (error?.message.includes("money_debts_plan_account_idx")) {
+      return { error: "Another plan already uses that account in your books." };
+    }
+    return { error: "We couldn't save that. Try again in a moment." };
+  }
+  const balance = money(text(formData, "balance"));
+  if (balance !== null && parsed.data.balance_from === "typed") {
+    if (balance < 0) return { error: "A balance can't be below zero." };
+    const { error: balanceError } = await ctx.supabase.rpc("note_money_debt_balance", {
+      p_tenant_id: ctx.tenant.id,
+      p_debt_id: data,
+      p_as_of: today(ctx.tenant.timezone),
+      p_balance_cents: balance,
+    });
+    if (balanceError) return { error: "The plan is saved, but we couldn't note its balance." };
+  }
+  refresh(slug);
+  const count = parsed.data.covers.length;
+  return {
+    message: id
+      ? "Saved."
+      : `${parsed.data.name} is added${count ? `, paying ${count} ${count === 1 ? "debt" : "debts"}` : ""}. They count as one debt now.`,
+  };
+}
+
+/** Puts one debt under a plan, or (`planId` null) back on its own, exactly as it was. */
+export async function coverDebt(
+  slug: string,
+  debtId: string,
+  planId: string | null,
+): Promise<DebtActionState> {
+  const ctx = await debtContext(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  if (!z.string().uuid().safeParse(debtId).success) return { error: "Which debt is this?" };
+  if (planId !== null && !z.string().uuid().safeParse(planId).success) {
+    return { error: "Which plan is this?" };
+  }
+  const { error } = await ctx.supabase.rpc("cover_money_debt", {
+    p_tenant_id: ctx.tenant.id,
+    p_debt_id: debtId,
+    p_plan_id: planId,
+  });
+  if (error) {
+    if (error.code === "22023") return { error: `${error.message}.` };
+    return { error: "We couldn't change that. Try again in a moment." };
+  }
+  refresh(slug);
+  return {
+    message: planId
+      ? "Done. It's paid through the plan now."
+      : "Done. It counts on its own again, just as you left it.",
+  };
 }
 
 /**

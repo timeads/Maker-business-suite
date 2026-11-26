@@ -1047,7 +1047,7 @@ describe("debts paid through a plan", () => {
     const plan = await idOf(tenantP, "Card plan");
     await expect(
       savePlan(alice, tenantP, { ...PLAN, name: "Second plan", covers: [cardTwo] }),
-    ).rejects.toThrow(/Card Two already paid through another plan/);
+    ).rejects.toThrow(/Already paid through another plan: Card Two/);
     const second = await savePlan(alice, tenantP, { ...PLAN, name: "Second plan", covers: [] });
     await expect(
       as(alice, "select public.cover_money_debt($1, $2, $3)", [tenantP, cardOne, second]),

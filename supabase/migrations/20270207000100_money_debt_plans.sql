@@ -182,7 +182,7 @@ begin
   where d.id = any (v_covers) and d.tenant_id = p_tenant_id
     and d.covered_by is not null and d.covered_by <> v_id;
   if v_bad is not null then
-    raise exception '% already paid through another plan', v_bad using errcode = '22023';
+    raise exception 'Already paid through another plan: %', v_bad using errcode = '22023';
   end if;
   if exists (select 1 from public.money_debts d
              where d.id = any (v_covers) and d.tenant_id = p_tenant_id and d.consolidated) then

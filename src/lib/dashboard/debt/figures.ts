@@ -66,6 +66,8 @@ export type DebtGroup = {
   accountDebt: Debt | null;
   /** Its balance (typed in, or its account's) isn't what the covered debts add up to. */
   differs: boolean;
+  /** What a person typed as its starting balance (else its debts' are added up). */
+  ownOpening: number | null;
 };
 
 /** The monthly payment the dashboard counts: the payment, else the minimum. */

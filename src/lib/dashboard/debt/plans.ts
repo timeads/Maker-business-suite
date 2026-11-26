@@ -1,4 +1,6 @@
+import { z } from "zod";
 import type { Debt, DebtGroup } from "./figures";
+import { DEBT_STATUSES } from "./settings";
 
 /**
  * Debts paid through a plan ("consolidated" debts). A business pays one
@@ -125,6 +127,7 @@ function foldPlan(
     gone,
     accountDebt,
     differs: from !== "covered" && known.length > 0 && balance !== null && balance !== coveredSum,
+    ownOpening: plan.opening,
   };
   return {
     ...plan,
@@ -194,3 +197,26 @@ export function coverWords(group: DebtGroup, money: (cents: number) => string): 
     ? "The debts it paid have all left your books"
     : `Covers ${open} ${noun} · ${sum}`;
 }
+
+const planCents = z.number().int().min(0).max(100_000_000_000);
+
+/** What `save_money_debt_plan` takes: the plan's own figures and every debt it pays. */
+export const debtPlanFieldsSchema = z
+  .object({
+    name: z.string().trim().min(1, "Give the plan a name").max(80),
+    status: z.enum(DEBT_STATUSES),
+    rate_bp: z.number().int().min(0).max(100_000).nullable(),
+    payment_cents: planCents,
+    due_day: z.number().int().min(1).max(31).nullable(),
+    priority: z.number().int().min(1).max(999).nullable(),
+    opening_cents: planCents.nullable(),
+    note: z.string().trim().max(500).nullable(),
+    balance_from: z.enum(PLAN_BALANCE_FROM),
+    plan_account_id: z.string().uuid().nullable(),
+    covers: z.array(z.string().uuid()).max(50),
+  })
+  .refine((f) => f.balance_from !== "account" || f.plan_account_id !== null, {
+    message: "Pick the account in your books its balance comes from.",
+    path: ["plan_account_id"],
+  });
+export type DebtPlanFields = z.infer<typeof debtPlanFieldsSchema>;

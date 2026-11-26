@@ -192,6 +192,8 @@ export type BooksState = {
   others: OtherLiability[];
   /** The ones a person hid, for "Hidden (n)". */
   hidden: OtherLiability[];
+  /** Every liability account the books have now, for a plan's own account. */
+  accounts: { id: string; name: string; balance: number }[];
 };
 
 /**
@@ -251,6 +253,13 @@ export async function loadBooksState(
       null,
     others: others.filter((o) => !o.hidden),
     hidden: others.filter((o) => o.hidden),
+    accounts: rows
+      .map((row) => ({
+        id: String(row.id),
+        name: String(row.name),
+        balance: num(row.balance_cents),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
   };
 }
 

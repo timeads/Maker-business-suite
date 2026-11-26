@@ -12,6 +12,7 @@ import {
   DEBT_STATUS_WORDS,
   PLAN_KIND_WORDS,
 } from "@/lib/dashboard/debt/settings";
+import { PLAN_BALANCE_FROM, PLAN_BALANCE_WORDS } from "@/lib/dashboard/debt/plans";
 import { syncNow, type ConnectionState } from "../connections/actions";
 import {
   chooseBookLiability,
@@ -25,7 +26,9 @@ import {
   previewDebtImport,
   removeDebt,
   removeWhatIf,
+  coverDebt,
   saveDebt,
+  saveDebtPlan,
   setPlanMonths,
   type DebtActionState,
   type DebtImportPreview,
@@ -205,6 +208,248 @@ export function DebtForm({
         {values.id ? "Save changes" : "Add this debt"}
       </SubmitButton>
     </form>
+  );
+}
+
+/** A plan as its form holds it: amounts as typed text, and the debts it pays. */
+export type DebtPlanFormValues = {
+  id: string | null;
+  name: string;
+  status: string;
+  rate: string;
+  payment: string;
+  due_day: string;
+  priority: string;
+  opening: string;
+  note: string;
+  balance_from: "covered" | "account" | "typed";
+  plan_account_id: string;
+  covers: string[];
+};
+
+/** A debt the plan could pay, with what the page knows about it. */
+export type PlanCandidate = {
+  id: string;
+  name: string;
+  /** "From your books: $1,200.00" or "No balance yet". */
+  detail: string;
+  /** Paid through another plan already: shown, not tickable. */
+  takenBy: string | null;
+};
+
+/**
+ * Make a plan that pays other debts, or change one: a business pays one
+ * amount a month to a company that pays several of its debts. It counts as
+ * ONE debt on a fixed payment; the debts it pays are kept, folded under it.
+ */
+export function DebtPlanForm({
+  slug,
+  values,
+  currency,
+  candidates,
+  accounts,
+}: {
+  slug: string;
+  values: DebtPlanFormValues;
+  currency: string;
+  candidates: PlanCandidate[];
+  /** The books' liability accounts, for "its own account in your books". */
+  accounts: { id: string; name: string; balance: string }[];
+}) {
+  const [state, action] = useActionState<DebtActionState, FormData>(
+    saveDebtPlan.bind(null, slug),
+    {},
+  );
+  const [from, setFrom] = useState(values.balance_from);
+  const id = (name: string) => `plan-${values.id ?? values.plan_account_id ?? "new"}-${name}`;
+  const field = (
+    name: "name" | "rate" | "payment" | "due_day" | "priority" | "opening" | "note",
+    label: string,
+    more: {
+      help?: string;
+      suffix?: string;
+      wide?: boolean;
+      inputMode?: "decimal" | "numeric";
+    } = {},
+  ) => (
+    <div className={`flex flex-col gap-1.5 ${more.wide ? "sm:col-span-2" : ""}`}>
+      <Label htmlFor={id(name)}>{label}</Label>
+      <div className="flex items-center gap-2">
+        <Input
+          id={id(name)}
+          name={name}
+          defaultValue={values[name]}
+          inputMode={more.inputMode}
+          aria-describedby={more.help ? id(`${name}-help`) : undefined}
+          className={more.wide ? undefined : "w-36"}
+        />
+        {more.suffix && <span className="text-muted-foreground text-sm">{more.suffix}</span>}
+      </div>
+      {more.help && (
+        <p id={id(`${name}-help`)} className="text-muted-foreground text-xs">
+          {more.help}
+        </p>
+      )}
+    </div>
+  );
+
+  return (
+    <form action={action} className="flex flex-col gap-4">
+      {values.id && <input type="hidden" name="id" value={values.id} />}
+      <div className="grid gap-4 sm:grid-cols-2">
+        {field("name", "Name", { wide: true })}
+        {field("payment", "The one payment a month", {
+          suffix: currency,
+          inputMode: "decimal",
+          help: "What you pay the plan each month. The plan counts it as a fixed payment.",
+        })}
+        {field("rate", "Its yearly rate", {
+          suffix: "%",
+          inputMode: "decimal",
+          help: "Often 0 for a plan like this. Take it from the plan's own paperwork.",
+        })}
+        {field("due_day", "Due on day", { inputMode: "numeric" })}
+        {field("priority", "Its place in your own order", { inputMode: "numeric" })}
+        <div className="flex flex-col gap-1.5 sm:col-span-2">
+          <Label htmlFor={id("balance_from")}>Where its balance comes from</Label>
+          <Select
+            id={id("balance_from")}
+            name="balance_from"
+            value={from}
+            onChange={(e) => setFrom(e.target.value as DebtPlanFormValues["balance_from"])}
+            className="w-fit"
+          >
+            {PLAN_BALANCE_FROM.map((key) => (
+              <option key={key} value={key}>
+                {PLAN_BALANCE_WORDS[key]}
+              </option>
+            ))}
+          </Select>
+          <p className="text-muted-foreground text-xs">
+            {from === "covered"
+              ? "Follows your books on every sync: as the plan pays the cards down, its balance falls with them."
+              : from === "account"
+                ? "For books that carry the plan as a loan of its own: its balance is that account's."
+                : "For when the plan's own statement says something different. Note each balance as it comes."}
+          </p>
+        </div>
+        <div className="flex flex-col gap-1.5 sm:col-span-2">
+          <Label htmlFor={id("plan_account_id")}>
+            {from === "account"
+              ? "Its account in your books"
+              : "Its own account in your books, if it has one"}
+          </Label>
+          <Select
+            id={id("plan_account_id")}
+            name="plan_account_id"
+            defaultValue={values.plan_account_id}
+            className="w-fit"
+          >
+            <option value="">{from === "account" ? "Pick one" : "None"}</option>
+            {accounts.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name} ({a.balance})
+              </option>
+            ))}
+          </Select>
+          <p className="text-muted-foreground text-xs">
+            Payments are the money moved into this account. Without one, they&apos;re the payments
+            into the debts it pays, added up. This account stops counting as a debt by itself.
+          </p>
+        </div>
+        {from === "typed" && values.id === null && (
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor={id("balance")}>Owed today</Label>
+            <div className="flex items-center gap-2">
+              <Input id={id("balance")} name="balance" inputMode="decimal" className="w-36" />
+              <span className="text-muted-foreground text-sm">{currency}</span>
+            </div>
+          </div>
+        )}
+        {field("opening", "What it started at", {
+          suffix: currency,
+          inputMode: "decimal",
+          help: "For “paid off so far”. Leave blank to add up what its debts started at.",
+        })}
+        {values.id !== null && (
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor={id("status")}>Status</Label>
+            <Select id={id("status")} name="status" defaultValue={values.status} className="w-fit">
+              {DEBT_STATUSES.map((st) => (
+                <option key={st} value={st}>
+                  {DEBT_STATUS_WORDS[st]}
+                </option>
+              ))}
+            </Select>
+          </div>
+        )}
+        {field("note", "A note", { wide: true })}
+      </div>
+      <fieldset className="flex flex-col gap-2">
+        <legend className="mb-1 text-sm font-medium">The debts it pays</legend>
+        {candidates.length === 0 && (
+          <p className="text-muted-foreground text-sm">No other debts yet.</p>
+        )}
+        {candidates.map((c) => (
+          <label key={c.id} className="flex items-center justify-between gap-3 text-sm">
+            <span className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                name="covers"
+                value={c.id}
+                className="size-4"
+                defaultChecked={values.covers.includes(c.id)}
+                disabled={c.takenBy !== null}
+              />
+              <span>
+                {c.name}
+                {c.takenBy && (
+                  <span className="text-muted-foreground"> · paid through {c.takenBy}</span>
+                )}
+              </span>
+            </span>
+            <span className="text-muted-foreground tabular-nums">{c.detail}</span>
+          </label>
+        ))}
+        <p className="text-muted-foreground text-xs">
+          Each one ticked stops counting on its own: what you filled in on it is kept, and comes
+          back just as it was if you untick it. A debt can be paid through one plan only.
+        </p>
+      </fieldset>
+      <FormMessage>{state.error}</FormMessage>
+      <FormMessage kind="success">{state.message}</FormMessage>
+      <SubmitButton variant="outline" pendingText="Saving…" className="sm:w-fit">
+        {values.id ? "Save changes" : "Add this plan"}
+      </SubmitButton>
+    </form>
+  );
+}
+
+/** "Count it on its own again": takes one debt out of its plan, exactly as it was. */
+export function UncoverButton({
+  slug,
+  debtId,
+  name,
+}: {
+  slug: string;
+  debtId: string;
+  name: string;
+}) {
+  const [said, setSaid] = useState<DebtActionState>({});
+  const [pending, start] = useTransition();
+  return (
+    <span className="inline-flex flex-wrap items-center gap-2">
+      <Button
+        size="sm"
+        variant="ghost"
+        disabled={pending}
+        aria-label={`Count ${name} on its own again`}
+        onClick={() => start(async () => setSaid(await coverDebt(slug, debtId, null)))}
+      >
+        {pending ? "…" : "Count it on its own again"}
+      </Button>
+      {say(said)}
+    </span>
   );
 }
 

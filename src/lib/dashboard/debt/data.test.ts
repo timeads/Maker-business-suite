@@ -66,7 +66,7 @@ describe("loading the debts", () => {
 });
 
 describe("debts paid through a plan", () => {
-  const rows = () => ({
+  const rows = (): Record<string, Record<string, unknown>[]> => ({
     money_debts: [
       debtRow({
         id: "plan",
@@ -119,6 +119,23 @@ describe("debts paid through a plan", () => {
       { debtId: "plan", month: "2026-10", cents: 25000 },
       { debtId: "c3", month: "2026-10", cents: 5000 },
     ]);
+  });
+
+  it("leaves the covered cards and a plan's own account out of “Also in your books”", async () => {
+    const tables = rows();
+    tables.money_book_accounts.push({
+      id: "a9",
+      name: "Plan Company",
+      balance_cents: 0,
+      as_of: "2026-11-24",
+      gone_at: null,
+    });
+    tables.money_debts[0] = { ...tables.money_debts[0], plan_account_id: "a9" };
+    const { client } = fake(tables, current);
+    const book = await loadDebtBook(client, "t1");
+    const state = await loadBooksState(client, "t1", book.debts);
+    expect(state.others).toEqual([]);
+    expect(state.accounts.map((a) => a.id)).toEqual(["a1", "a3", "a2", "a9"]);
   });
 
   it("says a card the books show in credit is in credit, owing nothing", async () => {
@@ -213,6 +230,7 @@ describe("the books' side of the debts", () => {
       lastRead: "2026-11-01T08:00:00Z",
       others: [],
       hidden: [],
+      accounts: [],
     });
   });
 });
