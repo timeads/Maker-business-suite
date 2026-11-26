@@ -98,6 +98,9 @@ describe("settingsNav", () => {
       "money.lines",
       "money.expenses",
       "money.profit",
+      "money.health",
+      "money.budget",
+      "money.cost-cutter",
     ]);
     expect(kids(nav, "stock")).toEqual([
       "stock.planning",

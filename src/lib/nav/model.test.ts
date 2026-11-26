@@ -235,7 +235,12 @@ describe("buildNav: each tool's menu", () => {
       "Plan",
       "Link page",
     ]);
-    expect(labels(tool(tools, "dashboard"))).toEqual(["Dashboard", "Expenses to sort"]);
+    expect(labels(tool(tools, "dashboard"))).toEqual([
+      "Dashboard",
+      "Expenses to sort",
+      "Budget",
+      "Cost cutter",
+    ]);
     expect(labels(tool(tools, "assistant"))).toEqual(["Chat"]);
   });
 

@@ -397,6 +397,12 @@ export function buildNav(viewer: NavViewer, attention: Attention = {}): NavTool[
               "dashboard/expenses",
               count(attention.expensesToSort),
             ),
+            place("dashboard.budget", "Budget", "dashboard/budget", {
+              keywords: ["budget", "break-even", "variance", "cost of goods", "plan spending"],
+            }),
+            place("dashboard.cost-cutter", "Cost cutter", "dashboard/cost-cutter", {
+              keywords: ["recurring", "subscriptions", "cancel", "price creep", "cut costs"],
+            }),
           ],
         },
       ],

@@ -1,15 +1,15 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { formatMoney, formatPercent } from "./format";
+import { BUDGET_KEY, parseBudgetSettings } from "./budget";
+import { CUTTER_KEY, parseCutterSettings } from "./recurring";
 import {
   HEALTH_KEY,
-  HEALTH_MODULE,
   bookMonthOf,
   cashMonthOf,
   healthCheck,
   parseHealthSettings,
   type Burn,
   type HealthNote,
-  type HealthSettings,
   type Standing,
 } from "./health";
 import {
@@ -214,21 +214,36 @@ export async function loadProfitSettings(
   return parseProfitSettings(data?.body);
 }
 
-/** The workspace's cash health thresholds (Settings → Money → Cash health), or the defaults. */
-export async function loadHealthSettings(
+/** One of Money's settings, parsed; its defaults when there is none or it doesn't parse. */
+async function loadMoneySetting<T>(
   supabase: SupabaseClient,
   tenantId: string,
-): Promise<HealthSettings> {
+  key: string,
+  parse: (body: unknown) => T,
+  what: string,
+): Promise<T> {
   const { data, error } = await supabase
     .from("configs")
     .select("body")
     .eq("tenant_id", tenantId)
-    .eq("module", HEALTH_MODULE)
-    .eq("key", HEALTH_KEY)
+    .eq("module", DASHBOARD_MODULE)
+    .eq("key", key)
     .maybeSingle();
-  if (error) throw new Error(`Could not load the cash health settings: ${error.message}`);
-  return parseHealthSettings(data?.body);
+  if (error) throw new Error(`Could not load the ${what} settings: ${error.message}`);
+  return parse(data?.body);
 }
+
+/** The workspace's cash health thresholds (Settings → Money → Cash health), or the defaults. */
+export const loadHealthSettings = (supabase: SupabaseClient, tenantId: string) =>
+  loadMoneySetting(supabase, tenantId, HEALTH_KEY, parseHealthSettings, "cash health");
+
+/** Settings → Money → Budget and break-even. */
+export const loadBudgetSettings = (supabase: SupabaseClient, tenantId: string) =>
+  loadMoneySetting(supabase, tenantId, BUDGET_KEY, parseBudgetSettings, "budget");
+
+/** Settings → Money → Cost cutter. */
+export const loadCutterSettings = (supabase: SupabaseClient, tenantId: string) =>
+  loadMoneySetting(supabase, tenantId, CUTTER_KEY, parseCutterSettings, "cost cutter");
 
 /** A plain day, YYYY-MM-DD, as the books write it. */
 const dayKey = (date: { year: number; month: number; day: number }) =>

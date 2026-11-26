@@ -55,6 +55,28 @@ describe("config registry", () => {
     if (!checked.ok) expect(checked.problems.join(" ")).toContain("questions.0");
   });
 
+  it("knows Money's cash health, budget and cost cutter settings, in words", () => {
+    const health = findConfig("dashboard", "health")!;
+    expect(describeConfig(health, { version: 1, runway_good_months: 9 })).toContain(
+      "Runway: healthy from 9 months, worth watching from 6",
+    );
+    const budget = findConfig("dashboard", "budget")!;
+    expect(
+      describeConfig(budget, { version: 1, cogs_pct: 40, variable_accounts: ["Supplies"] }),
+    ).toEqual(
+      expect.arrayContaining([
+        "Cost of goods is 40% of revenue",
+        "Rise and fall with sales: Supplies",
+      ]),
+    );
+    const cutter = findConfig("dashboard", "cost_cutter")!;
+    expect(describeConfig(cutter, { version: 1 })).toContain(
+      "Small but adds up: under not set a month, at least not set a year",
+    );
+    // Thresholds the wrong way round are refused, in words.
+    expect(validateConfig(health, { version: 1, growth_bad_pct: 50 }).ok).toBe(false);
+  });
+
   it("describes Money's expense rules and profit setting in words for the preview", () => {
     const sorting = findConfig("dashboard", "expenses")!;
     expect(

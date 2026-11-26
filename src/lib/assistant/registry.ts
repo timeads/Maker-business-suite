@@ -57,6 +57,27 @@ import {
   type ProfitSettings,
 } from "../dashboard/profit";
 import {
+  BUDGET_KEY as MONEY_BUDGET_KEY,
+  BUDGET_MODULE as MONEY_BUDGET_MODULE,
+  DEFAULT_BUDGET_SETTINGS,
+  budgetSettingsSchema as moneyBudgetSchema,
+  type BudgetSettings as MoneyBudgetSettings,
+} from "../dashboard/budget";
+import {
+  DEFAULT_HEALTH_SETTINGS,
+  HEALTH_KEY,
+  HEALTH_MODULE,
+  healthSettingsSchema,
+  type HealthSettings,
+} from "../dashboard/health";
+import {
+  CUTTER_KEY,
+  CUTTER_MODULE,
+  DEFAULT_CUTTER_SETTINGS,
+  cutterSettingsSchema,
+  type CutterSettings,
+} from "../dashboard/recurring";
+import {
   DEFAULT_RULES,
   DEFAULT_TEMPLATES,
   HELPDESK_MODULE,
@@ -219,6 +240,36 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
       "How Money works out each business line's profit: its revenue, less cost of goods, its own expenses, its share of shared expenses and its share of monthly costs (line ids are those of the 'Money: revenue and business lines' setting). cost_of_goods: in_expenses (the default: cost of goods is among the expenses sorted into lines) or shop_item_costs (taken from the item costs in the shop). shared_split: {<line id>: whole percent} adding up to 100, how expenses marked shared are shared out; empty leaves them unshared. monthly_costs: up to 30 costs the books don't hold, each an id, a name, how (amount: amount_cents a month; weekly_hours: rate_cents × hours_per_week × 4.333; sessions: rate_cents × hours_per_session × sessions_per_month) and a split {<line id>: whole percent} adding up to 100. Amounts are whole cents.",
     schema: profitSettingsSchema,
     defaultBody: () => DEFAULT_PROFIT_SETTINGS,
+  },
+  {
+    module: HEALTH_MODULE,
+    key: HEALTH_KEY,
+    feature: "dashboard",
+    name: "Money: cash health",
+    description:
+      "Where Money's cash health figures count as healthy, worth watching or needing attention, worked out from complete months in the books. compare_months: how many complete months make 'recent' (1–6; revenue growth compares them with as many before, and burn averages them). runway_good_months / runway_watch_months: runway at or above the first is healthy, at or above the second worth watching, below needs attention. growth_good_pct / growth_bad_pct: revenue growth above the first (whole percent) is healthy, above the second worth watching, else needs attention. gross_margin_good_pct / gross_margin_watch_pct: likewise for the gross margin over twelve months. concentration_watch_pct: the biggest business line's share of revenue at or above this is worth watching. The plain notes: thin_margin_pct (an operating margin under it is called thin), concentrated_pct (one line above it is a watch), grow_lines_pct (above it, suggest growing the smaller lines), check_cogs_pct (a gross margin under it suggests looking at cost of goods) and margin_lift_pct (the points of margin that note works out the gain from). Whole numbers.",
+    schema: healthSettingsSchema,
+    defaultBody: () => DEFAULT_HEALTH_SETTINGS,
+  },
+  {
+    module: MONEY_BUDGET_MODULE,
+    key: MONEY_BUDGET_KEY,
+    feature: "dashboard",
+    name: "Money: budget and break-even",
+    description:
+      "How Money's budget page works out break-even and flags spending (the budgets themselves are typed in on the page). cogs_pct: cost of goods as a whole percent of revenue, or null to take it from the books' last twelve complete months. variable_accounts: the books' account names (whole names, capitals and spacing ignored) whose spending rises and falls with sales, such as cost of goods; every other account is a fixed cost, and break-even = fixed costs budgeted ÷ (1 − cost of goods share). hidden_accounts: account names left off the budget. warn_pct: over or under budget by more than this whole percent is flagged. average_months: how many complete months the average beside each budget covers (1–12).",
+    schema: moneyBudgetSchema,
+    defaultBody: () => DEFAULT_BUDGET_SETTINGS,
+  },
+  {
+    module: CUTTER_MODULE,
+    key: CUTTER_KEY,
+    feature: "dashboard",
+    name: "Money: cost cutter",
+    description:
+      "How Money's cost cutter finds recurring charges in the books' expenses. months_back: how many months to look over, this one included (3–24). min_months: a payee charging in at least this many different months is recurring (2–12). leave_out_accounts: account names never counted (whole names). leave_out_payees: payees never counted when their name contains these words. growing_fast_pct / creeping_pct: the last six months' average against the six before, at or above which a charge is flagged as growing fast or creeping up (whole percents). new_months: first charged within this many months is new. stopped_days: no charge for this many days is stopped. small_cents and adds_up_cents: a charge under small_cents a month that comes to at least adds_up_cents a year is flagged as small but adding up; null for either switches that flag off.",
+    schema: cutterSettingsSchema,
+    defaultBody: () => DEFAULT_CUTTER_SETTINGS,
   },
   {
     module: HELPDESK_MODULE,
@@ -700,6 +751,50 @@ export function describeConfig(entry: ConfigEntry, body: unknown): string[] {
         (c) =>
           `${c.name}: ${(monthlyCostCents(c) / 100).toFixed(2)} a month (${COST_WORDS[c.how]?.toLowerCase() ?? c.how}), ${shares(c.split)}`,
       ),
+    ];
+  }
+  if (entry.module === HEALTH_MODULE && entry.key === HEALTH_KEY) {
+    const h = value as unknown as HealthSettings;
+    return [
+      `Recent means the last ${h.compare_months} complete months`,
+      `Runway: healthy from ${h.runway_good_months} months, worth watching from ${h.runway_watch_months}`,
+      `Revenue growth: healthy above ${h.growth_good_pct}%, worth watching above ${h.growth_bad_pct}%`,
+      `Gross margin: healthy above ${h.gross_margin_good_pct}%, worth watching above ${h.gross_margin_watch_pct}%`,
+      `One line's share worth watching from ${h.concentration_watch_pct}%`,
+      `Notes: thin margin under ${h.thin_margin_pct}%, one line above ${h.concentrated_pct}% is a watch, grow the others above ${h.grow_lines_pct}%, look at cost of goods under ${h.check_cogs_pct}% margin (a ${h.margin_lift_pct}-point lift)`,
+    ];
+  }
+  if (entry.module === MONEY_BUDGET_MODULE && entry.key === MONEY_BUDGET_KEY) {
+    const b = value as unknown as MoneyBudgetSettings;
+    return [
+      b.cogs_pct === null
+        ? "Cost of goods share taken from the books"
+        : `Cost of goods is ${b.cogs_pct}% of revenue`,
+      b.variable_accounts.length
+        ? `Rise and fall with sales: ${b.variable_accounts.join(", ")}`
+        : "No accounts marked as rising and falling with sales",
+      b.hidden_accounts.length
+        ? `Left off the budget: ${b.hidden_accounts.join(", ")}`
+        : "No accounts left off",
+      `Flag more than ${b.warn_pct}% over or under`,
+      `Average over the last ${b.average_months} complete months`,
+    ];
+  }
+  if (entry.module === CUTTER_MODULE && entry.key === CUTTER_KEY) {
+    const c = value as unknown as CutterSettings;
+    const amount = (cents: number | null) =>
+      cents === null ? "not set" : (cents / 100).toFixed(2);
+    return [
+      `Looks over ${c.months_back} months; recurring from ${c.min_months} months`,
+      c.leave_out_accounts.length
+        ? `Accounts left out: ${c.leave_out_accounts.join(", ")}`
+        : "No accounts left out",
+      c.leave_out_payees.length
+        ? `Payees left out: ${c.leave_out_payees.join(", ")}`
+        : "No payees left out",
+      `Growing fast from ${c.growing_fast_pct}%, creeping up from ${c.creeping_pct}%`,
+      `New within ${c.new_months} months; stopped after ${c.stopped_days} days`,
+      `Small but adds up: under ${amount(c.small_cents)} a month, at least ${amount(c.adds_up_cents)} a year`,
     ];
   }
   if (entry.module === DASHBOARD_MODULE && entry.key === DASHBOARD_KEY) {

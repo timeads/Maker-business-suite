@@ -31,6 +31,27 @@ export default async function MoneySettingsPage({ params }: { params: Promise<{ 
           href: "settings/money/profit",
         },
         {
+          name: "Cash health",
+          about:
+            "Where runway, growth, margin and one line's share count as healthy or worth watching.",
+          href: "settings/money/health",
+        },
+        {
+          name: "Budget and break-even",
+          about: "Your cost of goods share, costs that rise with sales, and accounts left off.",
+          href: "settings/money/budget",
+        },
+        {
+          name: "Cost cutter",
+          about: "How recurring charges are found, what's left out and when they're flagged.",
+          href: "settings/money/cost-cutter",
+        },
+        {
+          name: "Budget and cost cutter",
+          about: "The budget you type in and your decisions on each charge are on Money itself.",
+          href: "dashboard/budget",
+        },
+        {
           name: "Expenses to sort",
           about: "The inbox itself is on Money, with the expenses still waiting for a line.",
           href: "dashboard/expenses",

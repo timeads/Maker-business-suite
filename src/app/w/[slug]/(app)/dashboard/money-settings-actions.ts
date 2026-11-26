@@ -9,7 +9,10 @@ import {
   actionFits,
   expenseSortingSchema,
 } from "@/lib/dashboard/expenses";
+import { BUDGET_KEY, budgetSettingsSchema } from "@/lib/dashboard/budget";
+import { HEALTH_KEY, healthSettingsSchema } from "@/lib/dashboard/health";
 import { PROFIT_KEY, PROFIT_MODULE, profitSettingsSchema } from "@/lib/dashboard/profit";
+import { CUTTER_KEY, cutterSettingsSchema } from "@/lib/dashboard/recurring";
 import { getEntitlements } from "@/lib/entitlements";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
@@ -110,4 +113,66 @@ export async function saveProfitSettings(
     parsed.data,
     "Saved. Profit by line on Money uses these from now on, for every date range.",
   );
+}
+
+/** One of the settings held as plain figures and lists, handed over as one JSON field. */
+async function saveFigures(
+  slug: string,
+  formData: FormData,
+  how: {
+    path: string;
+    key: string;
+    schema: typeof healthSettingsSchema | typeof budgetSettingsSchema | typeof cutterSettingsSchema;
+    done: string;
+  },
+): Promise<MoneySettingsState> {
+  const ctx = await settingsContext(slug, how.path);
+  if ("error" in ctx) return { error: ctx.error };
+  const parsed = how.schema.safeParse({ version: 1, ...(readBody(formData) ?? {}) });
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? "Something in there doesn't look right." };
+  }
+  return save(ctx, slug, how.key, parsed.data, how.done);
+}
+
+/** Settings → Money → Cash health. */
+export async function saveHealthSettings(
+  slug: string,
+  _prev: MoneySettingsState,
+  formData: FormData,
+): Promise<MoneySettingsState> {
+  return saveFigures(slug, formData, {
+    path: "health",
+    key: HEALTH_KEY,
+    schema: healthSettingsSchema,
+    done: "Saved. Money's cash health figures use these from now on.",
+  });
+}
+
+/** Settings → Money → Budget and break-even. */
+export async function saveBudgetSettings(
+  slug: string,
+  _prev: MoneySettingsState,
+  formData: FormData,
+): Promise<MoneySettingsState> {
+  return saveFigures(slug, formData, {
+    path: "budget",
+    key: BUDGET_KEY,
+    schema: budgetSettingsSchema,
+    done: "Saved. The budget and break-even use these from now on.",
+  });
+}
+
+/** Settings → Money → Cost cutter. */
+export async function saveCutterSettings(
+  slug: string,
+  _prev: MoneySettingsState,
+  formData: FormData,
+): Promise<MoneySettingsState> {
+  return saveFigures(slug, formData, {
+    path: "cost-cutter",
+    key: CUTTER_KEY,
+    schema: cutterSettingsSchema,
+    done: "Saved. The cost cutter looks for recurring charges this way from now on.",
+  });
 }
