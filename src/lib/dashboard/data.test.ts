@@ -249,3 +249,75 @@ describe("the standard layout", () => {
     expect(withLineWidgets(once)).toEqual(once);
   });
 });
+
+describe("profit and expenses by line", () => {
+  const PROFIT = {
+    version: 1,
+    cost_of_goods: "in_expenses",
+    shared_split: { shop: 50, classes: 50 },
+    monthly_costs: [
+      { id: "rent", name: "Studio rent", how: "amount", amount_cents: 10000, split: { shop: 100 } },
+    ],
+  };
+
+  it("works each line's profit out from its revenue, its expenses and its shares", async () => {
+    const { supabase, calls } = fakeSupabase(
+      {
+        money_line_revenue: () => [
+          group({ revenue_cents: "50000" }),
+          group({ product_external_id: "9", workshop: true, revenue_cents: "30000" }),
+        ],
+        money_expense_totals: () => [
+          { period: "2026-10-01", sort: "line", line_id: "shop", split: null, cents: "12000" },
+          { period: "2026-10-01", sort: "shared", line_id: null, split: null, cents: "1001" },
+          { period: "2026-11-01", sort: null, line_id: null, split: null, cents: "700" },
+        ],
+      },
+      { config: PROFIT },
+    );
+    const data = await loadDashboardData(
+      supabase,
+      TENANT,
+      config([
+        { id: "p", type: "profit_by_line" },
+        { id: "e", type: "expenses_by_line" },
+      ]),
+      RANGE,
+      LINES,
+      NOW,
+    );
+    const totals = calls.find((call) => call.fn === "money_expense_totals")!;
+    // The books' plain days in the workspace's timezone, the end not included.
+    expect(totals.args).toMatchObject({ p_from: "2026-06-01", p_to: "2026-11-22" });
+    const profit = data.p;
+    if (profit.type !== "profit_by_line") throw new Error(profit.type);
+    const shop = profit.rows.find((row) => row.id === "shop")!;
+    // Six months of rent: five whole, and November to the 21st.
+    const rent = 5 * 10000 + Math.round((10000 * 21) / 30);
+    expect(shop).toMatchObject({ revenue: 50000, direct: 12000, shared: 501, monthly: rent });
+    expect(shop.profit).toBe(50000 - 12000 - 501 - rent);
+    expect(profit.rows.find((row) => row.id === "classes")).toMatchObject({
+      revenue: 30000,
+      shared: 500,
+    });
+    expect(profit.unsorted).toBe(700);
+    const expenses = data.e;
+    if (expenses.type !== "expenses_by_line") {
+      // No expenses stored in the fake: it asks for the books.
+      expect(expenses).toEqual({ type: "empty", needs: "quickbooks" });
+    }
+  });
+
+  it("asks for lines first", async () => {
+    const { supabase } = fakeSupabase({});
+    const data = await loadDashboardData(
+      supabase,
+      TENANT,
+      config([{ id: "p", type: "profit_by_line" }]),
+      RANGE,
+      undefined,
+      NOW,
+    );
+    expect(data.p).toEqual({ type: "empty", needs: "lines" });
+  });
+});

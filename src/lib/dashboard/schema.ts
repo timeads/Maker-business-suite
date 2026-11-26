@@ -59,6 +59,10 @@ export const widgetSchema = z.discriminatedUnion("type", [
   }),
   // What's already paid for classes still to come.
   z.object({ ...base, type: z.literal("deferred_revenue") }),
+  // Each line's revenue less its costs, step by step (Settings → Money → Profit by line).
+  z.object({ ...base, type: z.literal("profit_by_line") }),
+  // The books' expenses as sorted into lines.
+  z.object({ ...base, type: z.literal("expenses_by_line") }),
 ]);
 export type WidgetConfig = z.infer<typeof widgetSchema>;
 export type WidgetType = WidgetConfig["type"];

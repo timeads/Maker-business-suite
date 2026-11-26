@@ -235,7 +235,7 @@ describe("buildNav: each tool's menu", () => {
       "Plan",
       "Link page",
     ]);
-    expect(labels(tool(tools, "dashboard"))).toEqual(["Dashboard"]);
+    expect(labels(tool(tools, "dashboard"))).toEqual(["Dashboard", "Expenses to sort"]);
     expect(labels(tool(tools, "assistant"))).toEqual(["Chat"]);
   });
 
@@ -348,6 +348,15 @@ describe("activeIn", () => {
     const row = social.menu[0].items.find((item) => item.id === "social.review")!;
     expect(row).toMatchObject({ to: "social/review", count: 4 });
     expect(tool(buildNav(viewer()), "social").menu[0].items[1].count).toBeUndefined();
+  });
+
+  it("counts the expenses waiting to be sorted on Money's inbox row, and lights it", () => {
+    const money = tool(buildNav(viewer(), { expensesToSort: 12 }), "dashboard");
+    const row = money.menu[0].items.find((item) => item.id === "dashboard.expenses")!;
+    expect(row).toMatchObject({ to: "dashboard/expenses", count: 12 });
+    expect(money.count).toBeUndefined();
+    expect(lit("dashboard", "dashboard/expenses").item).toBe("dashboard.expenses");
+    expect(lit("dashboard", "dashboard").item).toBe("dashboard.home");
   });
 
   it("lets the longest address win, with the row it sits under", () => {

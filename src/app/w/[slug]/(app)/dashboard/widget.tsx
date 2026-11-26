@@ -12,6 +12,7 @@ import {
   prepareTimeChart,
 } from "@/lib/dashboard/format";
 import { FIGURE_WORDS, type RevenueFigure } from "@/lib/dashboard/lines";
+import { ProfitTable } from "./profit-table";
 import type { WidgetConfig, WidgetType } from "@/lib/dashboard/schema";
 
 const TITLES: Record<WidgetType, string> = {
@@ -25,6 +26,8 @@ const TITLES: Record<WidgetType, string> = {
   revenue_by_line: "Your business lines",
   revenue_by_line_over_time: "Your business lines over time",
   deferred_revenue: "Paid for classes still to come",
+  profit_by_line: "Profit by line",
+  expenses_by_line: "Expenses by line",
 };
 
 const PROVIDER_NAMES = { shopify: "Shopify", quickbooks: "QuickBooks" } as const;
@@ -68,6 +71,10 @@ function describe(data: WidgetData, rangeLabel: string, currency: string): strin
           ? " Each counts in its line once its month comes."
           : " These already count in the month they were bought."
       }`;
+    case "profit_by_line":
+      return `${formatMoney(data.profit / 100, currency)} across your lines over the last ${rangeLabel}: revenue in ${figureWords(data.figure)}, less what each line costs.${classWords(data.byClassDate)}`;
+    case "expenses_by_line":
+      return `From your books over the last ${rangeLabel}: what's sorted to each line and its share of the shared costs. Money moved between your own accounts never counts.`;
     case "cash_on_hand":
       return `Across your bank accounts in QuickBooks, as of ${asOf(data.asOf)}`;
     case "ar_aging":
@@ -84,6 +91,8 @@ export function Widget({
   rangeLabel,
   connectionsHref,
   linesHref,
+  inboxHref,
+  profitHref,
 }: {
   widget: WidgetConfig;
   data: WidgetData;
@@ -92,6 +101,10 @@ export function Widget({
   connectionsHref: string;
   /** Settings → Money, where business lines are set up. */
   linesHref: string;
+  /** Money's expense inbox. */
+  inboxHref: string;
+  /** Settings → Money → Profit by line. */
+  profitHref: string;
 }) {
   const title = widget.title ?? TITLES[widget.type];
   const description = describe(data, rangeLabel.toLowerCase(), currency);
@@ -224,6 +237,61 @@ export function Widget({
         </div>
       );
       break;
+    case "profit_by_line":
+      body = (
+        <div className="flex flex-col gap-4">
+          <BarList
+            rows={data.rows.map((row) => ({
+              name: row.name,
+              value: row.profit / 100,
+              detail:
+                row.profit < 0
+                  ? "a loss"
+                  : row.revenue > 0
+                    ? `${formatPercent(row.profit / row.revenue)} of its revenue`
+                    : undefined,
+            }))}
+            currency={currency}
+            emptyText="No lines yet."
+          />
+          <ProfitTable data={data} currency={currency} />
+          <SetApart
+            currency={currency}
+            unsorted={data.unsorted}
+            setAside={data.setAside}
+            sharedUnsplit={data.sharedUnsplit}
+            inboxHref={inboxHref}
+            profitHref={profitHref}
+          />
+        </div>
+      );
+      break;
+    case "expenses_by_line":
+      body = (
+        <div className="flex flex-col gap-4">
+          <BarList
+            rows={data.rows.map((row) => ({
+              name: row.name,
+              value: (row.direct + row.shared) / 100,
+              detail:
+                row.shared !== 0
+                  ? `${formatMoney(row.direct / 100, currency)} its own, ${formatMoney(row.shared / 100, currency)} shared`
+                  : undefined,
+            }))}
+            currency={currency}
+            emptyText="No lines yet."
+          />
+          <SetApart
+            currency={currency}
+            unsorted={data.unsorted}
+            setAside={data.setAside}
+            sharedUnsplit={data.sharedUnsplit}
+            inboxHref={inboxHref}
+            profitHref={profitHref}
+          />
+        </div>
+      );
+      break;
     case "ar_aging":
       body = (
         <BarList rows={data.rows} currency={currency} emptyText="Nobody owes you anything. Nice." />
@@ -248,4 +316,50 @@ export function Widget({
       <CardContent>{body}</CardContent>
     </Card>
   );
+}
+
+/** What isn't in a line's figures, in words, each with where to change it. */
+function SetApart({
+  currency,
+  unsorted,
+  setAside,
+  sharedUnsplit,
+  inboxHref,
+  profitHref,
+}: {
+  currency: string;
+  unsorted: number;
+  setAside: number;
+  sharedUnsplit: number;
+  inboxHref: string;
+  profitHref: string;
+}) {
+  const money = (cents: number) => formatMoney(cents / 100, currency);
+  const notes: React.ReactNode[] = [];
+  if (unsorted !== 0) {
+    notes.push(
+      <li key="unsorted">
+        {money(unsorted)} of expenses aren&apos;t sorted into a line yet, so they&apos;re not in
+        these figures.{" "}
+        <Link href={inboxHref} className="text-foreground underline underline-offset-4">
+          Sort them
+        </Link>
+      </li>,
+    );
+  }
+  if (sharedUnsplit !== 0) {
+    notes.push(
+      <li key="unsplit">
+        {money(sharedUnsplit)} of shared costs has no split to share it by yet.{" "}
+        <Link href={profitHref} className="text-foreground underline underline-offset-4">
+          Set the split
+        </Link>
+      </li>,
+    );
+  }
+  if (setAside !== 0) {
+    notes.push(<li key="aside">{money(setAside)} set aside as not business expenses.</li>);
+  }
+  if (notes.length === 0) return null;
+  return <ul className="text-muted-foreground flex flex-col gap-1 text-xs">{notes}</ul>;
 }

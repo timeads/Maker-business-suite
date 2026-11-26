@@ -1,6 +1,6 @@
 import { dashboardSchema, type DashboardConfig, type WidgetConfig } from "./schema";
 
-export type TemplateKey = "maker_basics" | "wholesale_retail";
+export type TemplateKey = "maker_basics" | "wholesale_retail" | "lines_and_profit";
 
 const raw: Record<TemplateKey, { blurb: string; config: unknown }> = {
   maker_basics: {
@@ -37,9 +37,33 @@ const raw: Record<TemplateKey, { blurb: string; config: unknown }> = {
       ],
     },
   },
+  lines_and_profit: {
+    blurb:
+      "Your business lines side by side: what each brings in, what it costs and what it makes.",
+    config: {
+      version: 1,
+      name: "Lines and profit",
+      range: "last_12_months",
+      widgets: [
+        { id: "figures", type: "key_figures", size: "full" },
+        { id: "profit", type: "profit_by_line", size: "full" },
+        { id: "lines-over-time", type: "revenue_by_line_over_time", size: "full" },
+        { id: "lines", type: "revenue_by_line" },
+        { id: "expenses", type: "expenses_by_line" },
+        { id: "classes-ahead", type: "deferred_revenue" },
+        { id: "cash", type: "cash_on_hand" },
+        { id: "margin", type: "gross_margin" },
+        { id: "owed", type: "ar_aging" },
+      ],
+    },
+  },
 };
 
-export const TEMPLATE_ORDER: readonly TemplateKey[] = ["maker_basics", "wholesale_retail"];
+export const TEMPLATE_ORDER: readonly TemplateKey[] = [
+  "maker_basics",
+  "wholesale_retail",
+  "lines_and_profit",
+];
 export const DEFAULT_TEMPLATE: TemplateKey = "maker_basics";
 
 export function isTemplateKey(value: unknown): value is TemplateKey {

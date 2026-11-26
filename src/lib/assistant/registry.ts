@@ -39,6 +39,24 @@ import {
 } from "../dashboard/lines";
 import { DEFAULT_TEMPLATE, templateConfig } from "../dashboard/templates";
 import {
+  DEFAULT_EXPENSE_SORTING,
+  EXPENSES_KEY,
+  EXPENSES_MODULE,
+  RULE_WORDS,
+  actionWords,
+  expenseSortingSchema,
+  type ExpenseSorting,
+} from "../dashboard/expenses";
+import {
+  COST_WORDS,
+  DEFAULT_PROFIT_SETTINGS,
+  PROFIT_KEY,
+  PROFIT_MODULE,
+  monthlyCostCents,
+  profitSettingsSchema,
+  type ProfitSettings,
+} from "../dashboard/profit";
+import {
   DEFAULT_RULES,
   DEFAULT_TEMPLATES,
   HELPDESK_MODULE,
@@ -181,6 +199,26 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
       "How Money counts revenue and splits it into the business's own lines. figure: net_sales (items after discounts and refunds, before tax and shipping; the default) or order_totals (what shoppers paid, with tax and shipping, refunds taken out). by_class_date: true counts a class sale in the month the class runs instead of the month it was bought. lines: up to 12, each an id (lowercase letters, numbers and hyphens) and a name. default_line: the id of the line that takes any sale no rule matches; required whenever there are lines. rules: checked from the top and the first match wins; each has an id, a line (one of the lines' ids), a match (order_tag, product_tag or product_type, with words: tags or types to look for, one per entry, no commas; or workshop, a product a Bookings workshop is sold through, with no words). Words ignore capitals and treat hyphens, underscores and spaces alike.",
     schema: revenueSettingsSchema,
     defaultBody: () => DEFAULT_REVENUE_SETTINGS,
+  },
+  {
+    module: EXPENSES_MODULE,
+    key: EXPENSES_KEY,
+    feature: "dashboard",
+    name: "Money: sorting expenses into lines",
+    description:
+      "How expenses read from the books are sorted into the business's own lines (the line ids are those of the 'Money: revenue and business lines' setting). vendors: payee defaults, each an id, a payee (the name as the books have it; capitals and spacing don't matter), an action and fill_in. rules: checked from the top, each an id, a field (payee: the payee's name contains the words; account: the account's whole name is the words; memo: the memo or a line's description contains the words), words, an action, fill_in, and firm (true: checked before the payee defaults; false: after). An action is {sort: line, line: <line id>}, {sort: split, split: {<line id>: whole percent, ...}} with at least two lines adding up to 100, {sort: shared} (overhead, shared out by the profit setting's split) or {sort: set_aside} (not a business expense). fill_in true sorts new expenses by itself; false only suggests. A rule never changes an expense a person sorted.",
+    schema: expenseSortingSchema,
+    defaultBody: () => DEFAULT_EXPENSE_SORTING,
+  },
+  {
+    module: PROFIT_MODULE,
+    key: PROFIT_KEY,
+    feature: "dashboard",
+    name: "Money: profit by line",
+    description:
+      "How Money works out each business line's profit: its revenue, less cost of goods, its own expenses, its share of shared expenses and its share of monthly costs (line ids are those of the 'Money: revenue and business lines' setting). cost_of_goods: in_expenses (the default: cost of goods is among the expenses sorted into lines) or shop_item_costs (taken from the item costs in the shop). shared_split: {<line id>: whole percent} adding up to 100, how expenses marked shared are shared out; empty leaves them unshared. monthly_costs: up to 30 costs the books don't hold, each an id, a name, how (amount: amount_cents a month; weekly_hours: rate_cents × hours_per_week × 4.333; sessions: rate_cents × hours_per_session × sessions_per_month) and a split {<line id>: whole percent} adding up to 100. Amounts are whole cents.",
+    schema: profitSettingsSchema,
+    defaultBody: () => DEFAULT_PROFIT_SETTINGS,
   },
   {
     module: HELPDESK_MODULE,
@@ -594,6 +632,8 @@ const WIDGET_NAMES: Record<string, string> = {
   revenue_by_line: "Revenue by line",
   revenue_by_line_over_time: "Revenue by line over time",
   deferred_revenue: "Paid for classes still to come",
+  profit_by_line: "Profit by line",
+  expenses_by_line: "Expenses by line",
 };
 
 /**
@@ -620,6 +660,40 @@ export function describeConfig(entry: ConfigEntry, body: unknown): string[] {
       ...settings.rules.map(
         (rule, i) =>
           `${i + 1}. ${MATCH_WORDS[rule.match]?.label ?? rule.match}${rule.words.length ? ` ${rule.words.map((w) => `"${w}"`).join(" or ")}` : ""} → ${lineName(rule.line)}`,
+      ),
+    ];
+  }
+  if (entry.module === EXPENSES_MODULE && entry.key === EXPENSES_KEY) {
+    const sorting = value as unknown as ExpenseSorting;
+    const name = (id: string) => id;
+    const fill = (on: boolean) => (on ? "" : " (only suggested)");
+    const lines = [
+      ...sorting.vendors.map(
+        (v) => `Everything from ${v.payee} → ${actionWords(v.action, name)}${fill(v.fill_in)}`,
+      ),
+      ...sorting.rules.map(
+        (r, i) =>
+          `${i + 1}. ${RULE_WORDS[r.field]?.label ?? r.field} "${r.words}" → ${actionWords(r.action, name)}${fill(r.fill_in)}${r.firm ? ", before payee defaults" : ""}`,
+      ),
+    ];
+    return lines.length ? lines : ["No payee defaults or rules yet"];
+  }
+  if (entry.module === PROFIT_MODULE && entry.key === PROFIT_KEY) {
+    const profit = value as unknown as ProfitSettings;
+    const shares = (split: Record<string, number>) =>
+      Object.entries(split)
+        .map(([line, pct]) => `${pct}% ${line}`)
+        .join(", ");
+    return [
+      profit.cost_of_goods === "shop_item_costs"
+        ? "Cost of goods from the shop's item costs"
+        : "Cost of goods counted in the sorted expenses",
+      Object.keys(profit.shared_split).length
+        ? `Shared costs: ${shares(profit.shared_split)}`
+        : "Shared costs aren't split yet",
+      ...profit.monthly_costs.map(
+        (c) =>
+          `${c.name}: ${(monthlyCostCents(c) / 100).toFixed(2)} a month (${COST_WORDS[c.how]?.toLowerCase() ?? c.how}), ${shares(c.split)}`,
       ),
     ];
   }

@@ -145,6 +145,8 @@ export default async function DashboardPage({
               rangeLabel={RANGE_LABELS[preset]}
               connectionsHref={`${base}/connections`}
               linesHref={`${base}/settings/money/lines`}
+              inboxHref={`${base}/dashboard/expenses`}
+              profitHref={`${base}/settings/money/profit`}
             />
           ))}
         </div>

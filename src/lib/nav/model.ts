@@ -386,7 +386,20 @@ export function buildNav(viewer: NavViewer, attention: Attention = {}): NavTool[
     messages: { panel: "page", menu: [] },
     dashboard: {
       panel: "menu",
-      menu: [{ id: "dashboard.main", items: [place("dashboard.home", "Dashboard", "dashboard")] }],
+      menu: [
+        {
+          id: "dashboard.main",
+          items: [
+            first("dashboard.home", "Dashboard", "dashboard"),
+            place(
+              "dashboard.expenses",
+              "Expenses to sort",
+              "dashboard/expenses",
+              count(attention.expensesToSort),
+            ),
+          ],
+        },
+      ],
     },
     helpdesk: { panel: "menu", menu: helpdeskMenu(viewer, attention) },
     bookings: { panel: "menu", menu: bookingsMenu(attention, viewer) },

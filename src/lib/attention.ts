@@ -12,6 +12,8 @@ export type Attention = Partial<Record<ModuleKey, number>> & {
    * still plain drafts, for the Review row in Social's menu.
    */
   socialReview?: number;
+  /** Expenses from the books not yet sorted into a line, for Money's inbox row. */
+  expensesToSort?: number;
 };
 
 export async function loadAttention(
@@ -23,7 +25,7 @@ export async function loadAttention(
   const count = (table: string) =>
     supabase.from(table).select("id", { count: "exact", head: true }).eq("tenant_id", tenantId);
   const none = Promise.resolve({ count: null as number | null, data: null });
-  const [tickets, parcels, failed, chat, undated, review] = await Promise.all([
+  const [tickets, parcels, failed, chat, undated, review, expenses] = await Promise.all([
     has("helpdesk")
       ? count("tickets")
           .eq("status", "open")
@@ -55,6 +57,10 @@ export async function loadAttention(
           .eq("status", "draft")
           .or("review.eq.waiting,and(review.is.null,month_run_id.not.is.null)")
       : none,
+    // Expenses from the books nobody has sorted into a line yet.
+    has("dashboard")
+      ? count("book_expenses").is("sort", null).is("removed_at", null).eq("is_move", false)
+      : none,
   ]);
   const unread = ((chat.data ?? []) as { unread?: number }[]).reduce(
     (n, row) => n + Number(row.unread ?? 0),
@@ -67,5 +73,6 @@ export async function loadAttention(
   if (unread) out.messages = unread;
   if (undated.count) out.bookings = undated.count;
   if (review.count) out.socialReview = review.count;
+  if (expenses.count) out.expensesToSort = expenses.count;
   return out;
 }

@@ -4,7 +4,9 @@ import {
   DEFAULT_REVENUE_SETTINGS,
   REVENUE_KEY,
   REVENUE_MODULE,
+  factsOf,
   hasLines,
+  lineFor,
   parseRevenueSettings,
   seriesByLine,
   totalsByLine,
@@ -12,6 +14,18 @@ import {
   type RevenueFigure,
   type RevenueSettings,
 } from "./lines";
+import {
+  PROFIT_KEY,
+  PROFIT_MODULE,
+  monthParts,
+  parseProfitSettings,
+  profitByLine,
+  type CogsSource,
+  type ExpenseGroup,
+  type LineProfit,
+  type ProfitSettings,
+  type ProfitSum,
+} from "./profit";
 import {
   localDate,
   periodKeys,
@@ -83,6 +97,27 @@ export type WidgetData =
       places: number;
       rows: RankedRow[];
     }
+  | {
+      type: "profit_by_line";
+      figure: RevenueFigure;
+      byClassDate: boolean;
+      cogs: CogsSource;
+      /** In whole cents, each step of the sum. */
+      rows: LineProfit[];
+      profit: number;
+      unsorted: number;
+      setAside: number;
+      sharedUnsplit: number;
+      monthlyCosts: number;
+    }
+  | {
+      type: "expenses_by_line";
+      /** In whole cents. */
+      rows: { id: string; name: string; direct: number; shared: number }[];
+      unsorted: number;
+      setAside: number;
+      sharedUnsplit: number;
+    }
   /** Nothing to show yet, and what would fill it: a connection, or lines set up in Settings. */
   | { type: "empty"; needs: "shopify" | "quickbooks" | "lines" };
 
@@ -91,6 +126,26 @@ export type LoadedDashboard = {
   /** saved: from the workspace's config. default: no config yet. invalid: the saved one didn't parse. */
   source: "saved" | "default" | "invalid";
 };
+
+/** The workspace's profit setting (Settings → Money → Profit by line), or nothing shared out yet. */
+export async function loadProfitSettings(
+  supabase: SupabaseClient,
+  tenantId: string,
+): Promise<ProfitSettings> {
+  const { data, error } = await supabase
+    .from("configs")
+    .select("body")
+    .eq("tenant_id", tenantId)
+    .eq("module", PROFIT_MODULE)
+    .eq("key", PROFIT_KEY)
+    .maybeSingle();
+  if (error) throw new Error(`Could not load the profit settings: ${error.message}`);
+  return parseProfitSettings(data?.body);
+}
+
+/** A plain day, YYYY-MM-DD, as the books write it. */
+const dayKey = (date: { year: number; month: number; day: number }) =>
+  `${date.year}-${String(date.month).padStart(2, "0")}-${String(date.day).padStart(2, "0")}`;
 
 /** The workspace's revenue settings (Settings → Money), or today's behaviour when there are none. */
 export async function loadRevenueSettings(
@@ -274,9 +329,12 @@ export async function loadDashboardData(
   if (needs("key_figures", "gross_margin")) groupings.add("month");
 
   const lineGroupings = new Set<Grouping>();
+  const wantsProfit = hasLines(revenue) && needs("profit_by_line", "expenses_by_line");
   if (hasLines(revenue)) {
     for (const widget of config.widgets) {
-      if (widget.type === "revenue_by_line") lineGroupings.add(range.grouping);
+      if (widget.type === "revenue_by_line" || widget.type === "profit_by_line") {
+        lineGroupings.add(range.grouping);
+      }
       if (widget.type === "revenue_by_line_over_time") {
         lineGroupings.add(widget.grouping === "auto" ? range.grouping : widget.grouping);
       }
@@ -285,6 +343,68 @@ export async function loadDashboardData(
   const today = startOfLocalDay(localDate(now, tenant.timezone), tenant.timezone);
   const farAhead = new Date(today);
   farAhead.setUTCFullYear(farAhead.getUTCFullYear() + DEFERRED_YEARS);
+
+  // Expenses and profit by line: the books' days in the workspace's timezone.
+  const fromDay = dayKey(localDate(range.from, tenant.timezone));
+  const toDay = dayKey(localDate(range.to, tenant.timezone));
+  const profitSettings = wantsProfit ? await loadProfitSettings(supabase, tenant.id) : null;
+
+  /** Sorted expenses added up per way of sorting, paged past Supabase's 1,000 rows. */
+  const expenseGroups = async (): Promise<ExpenseGroup[]> => {
+    const rows: ExpenseGroup[] = [];
+    for (let page = 0; page < GROUP_PAGES; page++) {
+      const { data, error } = await supabase
+        .rpc("money_expense_totals", {
+          p_tenant_id: tenant.id,
+          p_from: fromDay,
+          p_to: toDay,
+          p_grouping: "month",
+        })
+        .range(page * GROUP_PAGE, page * GROUP_PAGE + GROUP_PAGE - 1);
+      if (error) throw new Error(`Could not load expenses: ${error.message}`);
+      const batch = (data as Record<string, unknown>[] | null) ?? [];
+      for (const row of batch) {
+        rows.push({
+          sort: (row.sort as ExpenseGroup["sort"]) ?? null,
+          line: (row.line_id as string | null) ?? null,
+          split: (row.split as Record<string, number> | null) ?? null,
+          cents: Math.round(num(row.cents)),
+        });
+      }
+      if (batch.length < GROUP_PAGE) break;
+    }
+    return rows;
+  };
+
+  /** The shop's item costs per line, when the workspace counts cost of goods that way. */
+  const itemCosts = async (): Promise<Map<string, number>> => {
+    const out = new Map<string, number>();
+    for (let page = 0; page < GROUP_PAGES; page++) {
+      const { data, error } = await supabase
+        .rpc("money_line_item_costs", {
+          p_tenant_id: tenant.id,
+          p_from: range.from.toISOString(),
+          p_to: range.to.toISOString(),
+        })
+        .range(page * GROUP_PAGE, page * GROUP_PAGE + GROUP_PAGE - 1);
+      if (error) throw new Error(`Could not load item costs: ${error.message}`);
+      const batch = (data as Record<string, unknown>[] | null) ?? [];
+      for (const row of batch) {
+        const line = lineFor(
+          revenue,
+          factsOf({
+            order_tags: (row.order_tags as string[] | null) ?? null,
+            product_tags: (row.product_tags as string[] | null) ?? null,
+            product_type: (row.product_type as string | null) ?? null,
+            workshop: row.workshop === true,
+          }),
+        );
+        if (line) out.set(line, (out.get(line) ?? 0) + Math.round(num(row.cost_cents)));
+      }
+      if (batch.length < GROUP_PAGE) break;
+    }
+    return out;
+  };
 
   const [
     salesEntries,
@@ -295,6 +415,9 @@ export async function loadDashboardData(
     channels,
     snapshots,
     anyOrder,
+    expenseRows,
+    costsByLine,
+    anyExpense,
   ] = await Promise.all([
     Promise.all([...groupings].map(async (g) => [g, await salesFor(g)] as const)),
     figure === "net_sales"
@@ -334,6 +457,14 @@ export async function loadDashboardData(
           .order("period_start", { ascending: true })
       : null,
     supabase.from("orders").select("id", { count: "exact", head: true }).eq("tenant_id", tenant.id),
+    wantsProfit ? expenseGroups() : Promise.resolve([] as ExpenseGroup[]),
+    profitSettings?.cost_of_goods === "shop_item_costs" ? itemCosts() : Promise.resolve(null),
+    wantsProfit
+      ? supabase
+          .from("book_expenses")
+          .select("id", { count: "exact", head: true })
+          .eq("tenant_id", tenant.id)
+      : Promise.resolve({ count: 0 }),
   ]);
   for (const result of [products, channels, snapshots]) {
     if (result?.error) throw new Error(`Could not load the dashboard: ${result.error.message}`);
@@ -389,6 +520,21 @@ export async function loadDashboardData(
     const gross = profitMonths.reduce((sum, s) => sum + num(s.data.gross_profit), 0);
     return income > 0 ? gross / income : null;
   };
+
+  let profit: ProfitSum | null = null;
+  if (wantsProfit && profitSettings) {
+    profit = profitByLine({
+      lines: revenue.lines,
+      revenue: new Map(
+        totalsByLine(revenue, lines.get(range.grouping) ?? []).map((line) => [line.id, line.cents]),
+      ),
+      cogs: costsByLine,
+      expenses: expenseRows,
+      settings: profitSettings,
+      parts: monthParts(fromDay, toDay),
+    });
+  }
+  const hasExpenses = (anyExpense.count ?? 0) > 0;
 
   const out: Record<string, WidgetData> = {};
   for (const widget of config.widgets) {
@@ -586,6 +732,53 @@ export async function loadDashboardData(
                   detail: `${line.units} ${line.units === 1 ? "place" : "places"}`,
                 }))
             : [],
+        };
+        break;
+      }
+      case "profit_by_line": {
+        if (!hasLines(revenue) || !profit || !profitSettings) {
+          out[widget.id] = { type: "empty", needs: "lines" };
+          break;
+        }
+        if (!hasExpenses && !hasOrders) {
+          out[widget.id] = { type: "empty", needs: "quickbooks" };
+          break;
+        }
+        out[widget.id] = {
+          type: "profit_by_line",
+          figure,
+          byClassDate: revenue.by_class_date,
+          cogs: profitSettings.cost_of_goods,
+          rows: profit.rows,
+          profit: profit.profit,
+          unsorted: profit.unsorted,
+          setAside: profit.setAside,
+          sharedUnsplit: profit.sharedUnsplit,
+          monthlyCosts: profitSettings.monthly_costs.length,
+        };
+        break;
+      }
+      case "expenses_by_line": {
+        if (!hasLines(revenue) || !profit) {
+          out[widget.id] = { type: "empty", needs: "lines" };
+          break;
+        }
+        if (!hasExpenses) {
+          out[widget.id] = { type: "empty", needs: "quickbooks" };
+          break;
+        }
+        out[widget.id] = {
+          type: "expenses_by_line",
+          rows: profit.rows.map((row) => ({
+            id: row.id,
+            name: row.name,
+            direct: row.direct,
+            shared: row.shared,
+          })),
+          unsorted: profit.unsorted,
+          setAside: profit.setAside,
+          // Only the shared expenses here: monthly costs aren't in the books.
+          sharedUnsplit: profit.sharedExpensesUnsplit,
         };
         break;
       }
