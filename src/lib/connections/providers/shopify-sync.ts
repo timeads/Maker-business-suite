@@ -659,6 +659,27 @@ const monthsAgo = (months: number, from: Date) => {
 };
 
 const SESSION_KEY = "Session ID";
+/**
+ * The number and tick for text reminders, on the same cart line. Names that
+ * start with "_" are carried to the order but hidden at checkout. The second
+ * pair is what the business's earlier booking app wrote, so carts started
+ * before the switch keep their consent.
+ */
+const TEXT_PHONE_KEYS = ["_text_phone", "_ttw_sms_phone"];
+const TEXT_CONSENT_KEYS = ["_text_consent", "_ttw_sms_consent"];
+
+/** The text consent a cart line carries: a ticked box and a number, or nothing. */
+export function textConsentOf(
+  attributes: { key: string; value: string | null }[] | null | undefined,
+): { phone: string; agreed: boolean } | null {
+  const value = (keys: string[]) =>
+    keys.map((key) => attributes?.find((a) => a.key === key)?.value?.trim() ?? "").find(Boolean) ??
+    "";
+  const phone = value(TEXT_PHONE_KEYS).slice(0, 40);
+  if (!phone) return null;
+  return { phone, agreed: value(TEXT_CONSENT_KEYS).toLowerCase() === "yes" };
+}
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
@@ -670,18 +691,25 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function shopBookingsFrom(orders: ShopifyOrder[]): ShopBookingOrder[] {
   const out: ShopBookingOrder[] = [];
   for (const order of orders) {
-    const byDate = new Map<string, { seats: number; amount_cents: number }>();
+    const byDate = new Map<
+      string,
+      { seats: number; amount_cents: number; text?: { phone: string; agreed: boolean } }
+    >();
     for (const line of order.lineItems.nodes) {
       const id = line.customAttributes?.find((a) => a.key === SESSION_KEY)?.value?.trim() ?? "";
       if (!UUID.test(id)) continue;
       const key = id.toLowerCase();
       const seats = Math.max(0, Math.trunc(line.currentQuantity));
       const soFar = byDate.get(key) ?? { seats: 0, amount_cents: 0 };
+      // Lines for one date are one booking: a ticked box on any of them counts.
+      const consent = textConsentOf(line.customAttributes);
+      const text = soFar.text?.agreed ? soFar.text : (consent ?? soFar.text);
       byDate.set(key, {
         seats: soFar.seats + seats,
         amount_cents:
           soFar.amount_cents +
           Math.round(money(line.discountedUnitPriceAfterAllDiscountsSet) * 100) * seats,
+        ...(text ? { text } : {}),
       });
     }
     if (byDate.size === 0) continue;

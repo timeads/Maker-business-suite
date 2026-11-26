@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { logHref, logState, parseLogFilters, statusesFor } from "./email-log";
+import { channelsFor, logHref, logState, parseLogFilters, statusesFor } from "./email-log";
 
 describe("the message log", () => {
   it("says how each email went in a person's words", () => {
@@ -15,13 +15,16 @@ describe("the message log", () => {
     expect(parseLogFilters({ kind: "reminder", state: "failed", q: "  Pat " })).toEqual({
       kind: "reminder",
       state: "failed",
+      channel: null,
       q: "pat",
     });
-    expect(parseLogFilters({ kind: "spam", state: ["x"], q: undefined })).toEqual({
+    expect(parseLogFilters({ kind: "spam", state: ["x"], channel: "fax", q: undefined })).toEqual({
       kind: null,
       state: null,
+      channel: null,
       q: "",
     });
+    expect(parseLogFilters({ channel: "text" }).channel).toBe("text");
   });
 
   it("asks the table for the right rows", () => {
@@ -31,12 +34,25 @@ describe("the message log", () => {
   });
 
   it("changes one filter and keeps the rest", () => {
-    const filters = { kind: "reminder" as const, state: null, q: "pat" };
+    const filters = { kind: "reminder" as const, state: null, channel: null, q: "pat" };
     expect(logHref("/w/a/bookings/emails", filters, { state: "sent" })).toBe(
       "/w/a/bookings/emails?kind=reminder&state=sent&q=pat",
     );
-    expect(logHref("/w/a/bookings/emails", { kind: null, state: null, q: "" }, {})).toBe(
-      "/w/a/bookings/emails",
+    expect(logHref("/w/a/bookings/emails", filters, { channel: "text" })).toBe(
+      "/w/a/bookings/emails?channel=text&kind=reminder&q=pat",
     );
+    expect(
+      logHref("/w/a/bookings/emails", { kind: null, state: null, channel: null, q: "" }, {}),
+    ).toBe("/w/a/bookings/emails");
+  });
+
+  it("reads only the records a filter needs", () => {
+    const none = { kind: null, state: null, channel: null, q: "" };
+    expect(channelsFor(none)).toEqual(["email", "text"]);
+    expect(channelsFor({ ...none, channel: "email" })).toEqual(["email"]);
+    // Only texts carry "You're booked" and "moved" here: those emails go at once.
+    expect(channelsFor({ ...none, kind: "confirmation" })).toEqual(["text"]);
+    expect(channelsFor({ ...none, kind: "moved", channel: "email" })).toEqual([]);
+    expect(channelsFor({ ...none, kind: "reminder" })).toEqual(["email", "text"]);
   });
 });

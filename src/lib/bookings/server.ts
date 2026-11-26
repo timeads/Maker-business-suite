@@ -5,6 +5,8 @@ import { getStripe } from "../billing/stripe";
 import { sendEmail } from "../email";
 import { postAlert } from "../messages/alerts";
 import { moduleOpen } from "../module-access";
+import { queueBookingText, saveTextConsent } from "../texts/queue";
+import { textOffer, type TextOffer } from "../texts/read";
 import { getAdminClient, withTenant } from "../supabase/admin";
 import {
   BOOKINGS_MODULE,
@@ -317,6 +319,8 @@ export async function announceBooking(
       }),
     );
   }
+  // The text, for someone who asked for texts, where the workspace sends one.
+  await queueBookingText(admin, details.tenant_id, details.booking_id, "confirmation");
   const { data: owners } = await admin.rpc("tenant_owner_emails", {
     p_tenant_id: details.tenant_id,
   });
@@ -342,6 +346,8 @@ export type ReserveInput = {
   email: string;
   seats: number;
   answers: Record<string, string>;
+  /** A mobile number and the text tick, where the workspace offers texts. */
+  text?: { phone: string; agreed: boolean };
 };
 
 export type ShopBookingDates = {
@@ -357,7 +363,14 @@ export type ShopBookingDates = {
   sessions: { id: string; starts_at: string; seats_left: number; zone: string }[];
   /** The business's own settings for the picker, and where a shopper can turn. */
   page: ShopPageFacts;
+  /** Whether to offer text reminders, and the words beside the tick box. */
+  texts: TextOffer;
 };
+
+/** Whether our booking pages offer text reminders, and the words beside the tick. */
+export function getTextOffer(tenantId: string): Promise<TextOffer> {
+  return textOffer(tenantId);
+}
 
 export async function getShopPage(tenantId: string): Promise<ShopPage> {
   return withTenant(tenantId, async (scope) => {
@@ -422,7 +435,10 @@ export async function getShopBookingDates(
   slug: string,
   productId: string,
   admin: SupabaseClient = getAdminClient(),
-  deps: { page?: (tenantId: string) => Promise<ShopPage> } = {},
+  deps: {
+    page?: (tenantId: string) => Promise<ShopPage>;
+    texts?: (tenantId: string) => Promise<TextOffer>;
+  } = {},
 ): Promise<ShopBookingDates | null> {
   if (!/^[0-9]{1,20}$/.test(productId)) return null;
   const tenant = await getPublicWorkspace(slug, admin);
@@ -437,12 +453,16 @@ export async function getShopBookingDates(
     sessions: { id: string; starts_at: string; seats_left: number }[];
   } | null;
   if (!found?.service) return null;
-  const page = await (deps.page ?? getShopPage)(tenant.id);
+  const [page, texts] = await Promise.all([
+    (deps.page ?? getShopPage)(tenant.id),
+    (deps.texts ?? ((id: string) => textOffer(id, admin)))(tenant.id),
+  ]);
   return {
     workspace: { name: tenant.name, timezone: tenant.timezone },
     service: found.service,
     sessions: found.sessions.map((s) => ({ ...s, zone: zoneLabel(tenant.timezone, s.starts_at) })),
     page: shopPageFacts(page),
+    texts,
   };
 }
 
@@ -500,6 +520,8 @@ export async function reserve(input: ReserveInput): Promise<ReserveResult> {
     currency: string;
   };
   const site = siteUrl();
+  // The number and tick go on the booking before anything is sent about it.
+  if (input.text) await saveTextConsent(admin, tenant.id, booking.id, input.text);
 
   if (!paid || !payout) {
     const details = await getBookingDetails({ tenantId: tenant.id, bookingId: booking.id }, admin);

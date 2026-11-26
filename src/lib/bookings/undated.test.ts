@@ -135,6 +135,7 @@ describe("telling the team about an order with no date", () => {
     expect(calls.map((c) => c.fn)).toEqual([
       "note_shop_undated_lines",
       "queue_booking_cancel_email",
+      "queue_booking_text",
     ]);
     expect(calls[1].args).toEqual({ p_tenant_id: "t1", p_booking_id: "b9" });
   });

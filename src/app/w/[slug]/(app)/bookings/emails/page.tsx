@@ -5,15 +5,20 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
 import {
+  CHANNEL_NAMES,
   KIND_NAMES,
+  LOG_CHANNELS,
   LOG_KINDS,
   LOG_STATES,
   STATE_NAMES,
   STATE_TONES,
+  channelsFor,
   logHref,
   logState,
   parseLogFilters,
   statusesFor,
+  type LogChannel,
+  type LogFilters,
   type LogKind,
   type LogRow,
 } from "@/lib/bookings/email-log";
@@ -24,10 +29,11 @@ import { cn } from "@/lib/utils";
 import { bookingsAccess } from "../gate";
 import { ResendButton } from "../resend-button";
 
-export const metadata: Metadata = { title: "Emails sent" };
+export const metadata: Metadata = { title: "Messages sent" };
 
 type Row = LogRow & {
   id: string;
+  channel: LogChannel;
   kind: LogKind;
   tries: number;
   detail: string;
@@ -35,7 +41,12 @@ type Row = LogRow & {
   finished_at: string | null;
   booking_id: string;
   session_id: string;
-  bookings: { customer_name: string; customer_email: string; status: string } | null;
+  bookings: {
+    customer_name: string;
+    customer_email: string;
+    customer_phone?: string;
+    status: string;
+  } | null;
   sessions: {
     starts_at: string;
     ends_at: string;
@@ -44,10 +55,44 @@ type Row = LogRow & {
   } | null;
 };
 
+const TABLES: Record<LogChannel, { table: string; to: string }> = {
+  email: { table: "booking_emails", to: "customer_email" },
+  text: { table: "booking_texts", to: "customer_phone" },
+};
+
+/** One record's rows under the filters, newest first. */
+async function readLog(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  tenantId: string,
+  channel: LogChannel,
+  filters: LogFilters,
+) {
+  let query = supabase
+    .from(TABLES[channel].table)
+    .select(
+      `id, kind, status, tries, detail, next_try_at, created_at, finished_at, booking_id, session_id, bookings(customer_name, customer_email, ${channel === "text" ? "customer_phone, " : ""}status), sessions(starts_at, ends_at, cancelled_at, services(name))`,
+    )
+    .eq("tenant_id", tenantId)
+    .order("created_at", { ascending: false })
+    .limit(filters.q ? 1000 : 200);
+  if (filters.kind) query = query.eq("kind", filters.kind);
+  if (filters.state) {
+    query = query.in("status", statusesFor(filters.state));
+    if (filters.state === "trying") query = query.not("next_try_at", "is", null);
+    if (filters.state === "failed") query = query.is("next_try_at", null);
+  }
+  const { data, error } = await query;
+  return {
+    error,
+    rows: ((data ?? []) as unknown as Omit<Row, "channel">[]).map((row) => ({ ...row, channel })),
+  };
+}
+
 /**
- * Every email that went out by itself (reminders, day-of reminders,
- * thank-yous, shop-refund notices), read from the once-only record: when,
- * to whom, about which date, and how it went, with the mail service's words
+ * Every email and text that went out by itself (reminders, day-of
+ * reminders, thank-yous, shop-refund notices, and the texts for a booking
+ * made or moved), read from the once-only records: when, to whom, about
+ * which date, and how it went, with the mail service's or Twilio's words
  * beside any that didn't go. Filters live in the address.
  */
 export default async function BookingEmailLogPage({
@@ -66,27 +111,21 @@ export default async function BookingEmailLogPage({
   const manager = canManage(role) && entitlements.canWrite;
 
   const supabase = await createClient();
-  let query = supabase
-    .from("booking_emails")
-    .select(
-      "id, kind, status, tries, detail, next_try_at, created_at, finished_at, booking_id, session_id, bookings(customer_name, customer_email, status), sessions(starts_at, ends_at, cancelled_at, services(name))",
-    )
-    .eq("tenant_id", tenant.id)
-    .order("created_at", { ascending: false })
-    .limit(filters.q ? 1000 : 200);
-  if (filters.kind) query = query.eq("kind", filters.kind);
-  if (filters.state) {
-    query = query.in("status", statusesFor(filters.state));
-    if (filters.state === "trying") query = query.not("next_try_at", "is", null);
-    if (filters.state === "failed") query = query.is("next_try_at", null);
-  }
-  const { data, error } = await query;
-  const rows = ((data ?? []) as unknown as Row[]).filter(
-    (row) =>
-      !filters.q ||
-      row.bookings?.customer_name.toLowerCase().includes(filters.q) ||
-      row.bookings?.customer_email.toLowerCase().includes(filters.q),
+  const read = await Promise.all(
+    channelsFor(filters).map((channel) => readLog(supabase, tenant.id, channel, filters)),
   );
+  const error = read.find((each) => each.error)?.error ?? null;
+  const rows = read
+    .flatMap((each) => each.rows)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    .slice(0, filters.q ? 2000 : 200)
+    .filter(
+      (row) =>
+        !filters.q ||
+        row.bookings?.customer_name.toLowerCase().includes(filters.q) ||
+        row.bookings?.customer_email.toLowerCase().includes(filters.q) ||
+        (row.bookings?.customer_phone ?? "").includes(filters.q),
+    );
   const at = (instant: string) =>
     new Intl.DateTimeFormat("en-US", {
       timeZone: tenant.timezone,
@@ -114,22 +153,33 @@ export default async function BookingEmailLogPage({
   return (
     <>
       <PageHeader
-        title="Emails sent"
-        description="Reminders, thank-yous and the other emails that go out by themselves, and how each one went."
+        title="Messages sent"
+        description="Reminders, thank-yous and the other emails and texts that go out by themselves, and how each one went."
       />
       <div className="flex flex-col gap-3">
         <form className="flex max-w-sm gap-2" role="search">
+          {filters.channel && <input type="hidden" name="channel" value={filters.channel} />}
           {filters.kind && <input type="hidden" name="kind" value={filters.kind} />}
           {filters.state && <input type="hidden" name="state" value={filters.state} />}
           <Input
             name="q"
             type="search"
             defaultValue={filters.q}
-            placeholder="Search by name or email"
-            aria-label="Search emails"
+            placeholder="Search by name, email or number"
+            aria-label="Search messages"
           />
         </form>
-        <nav aria-label="Which emails" className="flex flex-wrap gap-1.5">
+        <nav aria-label="Emails or texts" className="flex flex-wrap gap-1.5">
+          {chip(logHref(base, filters, { channel: null }), !filters.channel, "Emails and texts")}
+          {LOG_CHANNELS.map((channel) =>
+            chip(
+              logHref(base, filters, { channel }),
+              filters.channel === channel,
+              CHANNEL_NAMES[channel],
+            ),
+          )}
+        </nav>
+        <nav aria-label="Which messages" className="flex flex-wrap gap-1.5">
           {chip(logHref(base, filters, { kind: null }), !filters.kind, "Every kind")}
           {LOG_KINDS.map((kind) =>
             chip(logHref(base, filters, { kind }), filters.kind === kind, KIND_NAMES[kind]),
@@ -151,7 +201,7 @@ export default async function BookingEmailLogPage({
           ) : rows.length === 0 ? (
             <p className="text-muted-foreground text-sm">
               {filters.kind || filters.state || filters.q
-                ? "No emails match those filters."
+                ? "Nothing matches those filters."
                 : "Nothing has gone out by itself yet. Reminders appear here as they're sent."}
             </p>
           ) : (
@@ -160,7 +210,7 @@ export default async function BookingEmailLogPage({
                 <thead className="text-muted-foreground text-xs">
                   <tr>
                     <th className="py-2 pr-4 font-semibold">When</th>
-                    <th className="py-2 pr-4 font-semibold">Email</th>
+                    <th className="py-2 pr-4 font-semibold">Message</th>
                     <th className="py-2 pr-4 font-semibold">To</th>
                     <th className="py-2 pr-4 font-semibold">About</th>
                     <th className="py-2 font-semibold">How it went</th>
@@ -174,21 +224,29 @@ export default async function BookingEmailLogPage({
                       session && !session.cancelled_at && isUpcoming(session.starts_at);
                     const canResend =
                       manager &&
+                      row.channel === "email" &&
                       (state === "failed" || state === "unsure") &&
                       upcoming &&
                       row.bookings?.status === "confirmed";
                     return (
-                      <tr key={row.id} className="align-top">
+                      <tr key={`${row.channel}-${row.id}`} className="align-top">
                         <td className="py-2.5 pr-4 whitespace-nowrap">
                           {at(row.finished_at ?? row.created_at)}
                         </td>
-                        <td className="py-2.5 pr-4">{KIND_NAMES[row.kind]}</td>
+                        <td className="py-2.5 pr-4">
+                          {KIND_NAMES[row.kind]}
+                          <span className="text-muted-foreground block text-xs">
+                            {row.channel === "text" ? "Text" : "Email"}
+                          </span>
+                        </td>
                         <td className="py-2.5 pr-4">
                           <p className="font-read font-semibold">
                             {row.bookings?.customer_name ?? "—"}
                           </p>
                           <p className="text-muted-foreground font-read">
-                            {row.bookings?.customer_email}
+                            {row.channel === "text"
+                              ? row.bookings?.customer_phone
+                              : row.bookings?.customer_email}
                           </p>
                         </td>
                         <td className="py-2.5 pr-4">
@@ -230,9 +288,10 @@ export default async function BookingEmailLogPage({
             </div>
           )}
           <p className="text-muted-foreground mt-4 text-xs">
-            Confirmations and the emails you send by hand (moving, cancelling, a note to everyone)
-            go straight away and aren&apos;t listed here; a person&apos;s own page has &ldquo;Send
-            the confirmation again&rdquo;.
+            Confirmation emails and the emails you send by hand (moving, cancelling, a note to
+            everyone) go straight away and aren&apos;t listed here; a person&apos;s own page has
+            &ldquo;Send the confirmation again&rdquo;. Texts are all listed, with Twilio&apos;s
+            words beside any that didn&apos;t go.
           </p>
         </CardContent>
       </Card>

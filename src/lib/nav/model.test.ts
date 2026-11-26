@@ -27,6 +27,7 @@ const EVERYTHING: Feature[] = [
   "module.stock",
   "module.shipping",
   "michaels",
+  "texts",
 ];
 
 function viewer(over: Partial<NavViewer> & { features?: Feature[] } = {}): NavViewer {
@@ -202,7 +203,7 @@ describe("buildNav: each tool's menu", () => {
       "All bookings",
       "Runsheet",
       "Customers",
-      "Emails sent",
+      "Messages sent",
     ]);
     // "Needs a date" is a place only while a shop order is waiting for one.
     const waiting = tool(buildNav(viewer(), { bookings: 2 }), "bookings");
@@ -213,7 +214,7 @@ describe("buildNav: each tool's menu", () => {
       "All bookings",
       "Runsheet",
       "Customers",
-      "Emails sent",
+      "Messages sent",
     ]);
     expect(waiting.count).toBe(2);
     expect(waiting.menu[0].items[1]).toMatchObject({ to: "bookings/needs-date", count: 2 });
@@ -462,6 +463,7 @@ describe("filterMenu", () => {
       "Bookings",
       "› Emails & questions",
       "› Email words",
+      "› Text reminders",
       "› Shop product page",
       "› Order tags",
       "› Daily email",

@@ -113,6 +113,31 @@ describe("tools", () => {
     }
   });
 
+  it("never lets the assistant write the words of a booking text", async () => {
+    const saved = { version: 1, on: true, messages: { reminder: { on: true, body: "See you!" } } };
+    const propose = (body: unknown) => {
+      const db = fakeSupabase({ configs: { body: saved }, rpc: { propose_config_change: "p-10" } });
+      return runTool(
+        "propose_config_change",
+        { module: "bookings", key: "texts", body, summary: "s" },
+        ctxWith(db.supabase),
+      ).then((outcome) => ({ outcome, rpcs: db.calls.filter((c) => c.kind === "rpc") }));
+    };
+    // The switches and timing are fine to propose.
+    const fine = await propose({ ...saved, reminder_hours: 24 });
+    expect(fine.outcome.isError).toBeFalsy();
+    for (const body of [
+      { ...saved, messages: { reminder: { on: true, body: "Come along!" } } },
+      { ...saved, consent_words: "Text me about everything you sell" },
+      { ...saved, opt_out_line: "Reply STOP if you must" },
+    ]) {
+      const refused = await propose(body);
+      expect(refused.outcome.isError).toBe(true);
+      expect(refused.outcome.content).toContain("only be written by a person");
+      expect(refused.rpcs).toEqual([]);
+    }
+  });
+
   it("never lets the assistant write the words of an automatic reply", async () => {
     const saved = {
       version: 1,

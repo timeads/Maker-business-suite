@@ -12,6 +12,7 @@ import {
   getPublicService,
   getPublicWorkspace,
   getSessionAvailability,
+  getTextOffer,
 } from "@/lib/bookings/server";
 import { formatDay, formatTime, formatWhen } from "@/lib/bookings/slots";
 import { BookingShell, NOTICES, durationLabel, priceLabel } from "../../shell";
@@ -49,9 +50,10 @@ export default async function ServicePage({
     return q ? `${base}?${q}` : base;
   };
 
-  const [form, payout] = await Promise.all([
+  const [form, payout, texts] = await Promise.all([
     getBookingForm(tenant.id),
     service.price_cents > 0 ? getLivePayoutAccount(tenant.id) : null,
+    getTextOffer(tenant.id),
   ]);
   const canPay = service.price_cents === 0 || Boolean(payout?.ready);
   const message = NOTICES[query.error ?? ""] ?? NOTICES[query.notice ?? ""];
@@ -245,6 +247,25 @@ export default async function ServicePage({
                 />
               </div>
             ))}
+            {texts.asked && (
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="phone">
+                  Mobile number <span className="text-muted-foreground">(optional)</span>
+                </Label>
+                <Input
+                  id="phone"
+                  name="phone"
+                  type="tel"
+                  autoComplete="tel"
+                  maxLength={40}
+                  className="sm:w-64"
+                />
+                <label className="flex items-start gap-2 text-sm">
+                  <input type="checkbox" name="text_consent" value="yes" className="mt-1" />
+                  <span className="font-read">{texts.consent}</span>
+                </label>
+              </div>
+            )}
           </div>
 
           <Button type="submit" className="sm:w-fit">

@@ -6,6 +6,7 @@ import { createQuickBooksAdapter } from "./providers/quickbooks";
 import { createRedoAdapter } from "./providers/redo";
 import { createShopifyAdapter } from "./providers/shopify";
 import { createStripeAdapter } from "./providers/stripe";
+import { createTwilioAdapter } from "./providers/twilio";
 import { createUpsAdapter } from "./providers/ups";
 import type { ProviderAdapter, ProviderKey } from "./types";
 
@@ -19,6 +20,7 @@ const adapters: Record<ProviderKey, ProviderAdapter> = {
   redo: createRedoAdapter(),
   google_mail: createGoogleMailAdapter(),
   michaels: createMichaelsAdapter(),
+  twilio: createTwilioAdapter(),
 };
 
 export const PROVIDER_ORDER: readonly ProviderKey[] = [
@@ -31,6 +33,7 @@ export const PROVIDER_ORDER: readonly ProviderKey[] = [
   "redo",
   "google_mail",
   "michaels",
+  "twilio",
 ];
 
 export function isProviderKey(value: unknown): value is ProviderKey {

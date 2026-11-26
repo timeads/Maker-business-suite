@@ -49,6 +49,7 @@ export const NOTICES: Record<string, string> = {
   payments_off: "Online payment isn't set up for this yet. Please get in touch to book.",
   failed: "Something went wrong on our side and you haven't been charged. Please try again.",
   details: "Please fill in your name and a valid email address.",
+  phone: "To get texts, add your mobile number, or untick the box.",
   cancelled:
     "No payment was taken. Your places are held for a little while if you'd like to try again.",
   waitlisted: "You're on the waitlist. We'll email you if a place opens up.",

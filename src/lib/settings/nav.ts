@@ -248,6 +248,23 @@ const TOOLS: Def[] = [
         ],
       },
       {
+        id: "bookings.texts",
+        name: "Text reminders",
+        path: "bookings/texts",
+        show: (viewer) => viewer.can("texts"),
+        keywords: [
+          "sms",
+          "texts",
+          "twilio",
+          "phone",
+          "mobile",
+          "stop",
+          "opt out",
+          "consent",
+          "send me a test text",
+        ],
+      },
+      {
         id: "bookings.shop-page",
         name: "Shop product page",
         path: "bookings/shop-page",

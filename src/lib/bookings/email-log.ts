@@ -1,19 +1,34 @@
 /**
- * The message log (Bookings → Emails sent): what the once-only record in
- * `booking_emails` says about each email that goes out by itself, in words.
- * Pure, so the filters in the address and the words for each state are
- * tested without a page.
+ * The message log (Bookings → Messages sent): what the once-only records in
+ * `booking_emails` and `booking_texts` say about each email and text that
+ * goes out by itself, in words. Pure, so the filters in the address and the
+ * words for each state are tested without a page.
  */
 
-export const LOG_KINDS = ["reminder", "day_of", "followup", "cancelled"] as const;
+export const LOG_KINDS = [
+  "confirmation",
+  "reminder",
+  "day_of",
+  "followup",
+  "cancelled",
+  "moved",
+] as const;
 export type LogKind = (typeof LOG_KINDS)[number];
 
 export const KIND_NAMES: Record<LogKind, string> = {
+  confirmation: "You're booked",
   reminder: "Reminder",
   day_of: "Day-of reminder",
   followup: "Thank-you",
   cancelled: "Cancelled by a shop refund",
+  moved: "Moved to another date",
 };
+
+/** Which way a message went. Emails don't use the first and last kinds. */
+export const LOG_CHANNELS = ["email", "text"] as const;
+export type LogChannel = (typeof LOG_CHANNELS)[number];
+export const CHANNEL_NAMES: Record<LogChannel, string> = { email: "Emails", text: "Texts" };
+export const EMAIL_KINDS: readonly LogKind[] = ["reminder", "day_of", "followup", "cancelled"];
 
 /** What a person can filter by: how it went, in their words rather than the table's. */
 export const LOG_STATES = ["sent", "trying", "failed", "unsure", "waiting"] as const;
@@ -48,7 +63,12 @@ export const STATE_TONES: Record<LogState, "good" | "waiting" | "bad" | "open"> 
   waiting: "open",
 };
 
-export type LogFilters = { kind: LogKind | null; state: LogState | null; q: string };
+export type LogFilters = {
+  kind: LogKind | null;
+  state: LogState | null;
+  channel: LogChannel | null;
+  q: string;
+};
 
 const pick = <T extends string>(list: readonly T[], value: unknown): T | null =>
   typeof value === "string" && (list as readonly string[]).includes(value) ? (value as T) : null;
@@ -62,6 +82,7 @@ export function parseLogFilters(params: Record<string, string | string[] | undef
   return {
     kind: pick(LOG_KINDS, one("kind")),
     state: pick(LOG_STATES, one("state")),
+    channel: pick(LOG_CHANNELS, one("channel")),
     q: (one("q") ?? "").trim().toLowerCase().slice(0, 80),
   };
 }
@@ -81,9 +102,19 @@ export function logHref(
 ): string {
   const next = { ...filters, ...change };
   const params = new URLSearchParams();
+  if (next.channel) params.set("channel", next.channel);
   if (next.kind) params.set("kind", next.kind);
   if (next.state) params.set("state", next.state);
   if (next.q) params.set("q", next.q);
   const query = params.toString();
   return query ? `${base}?${query}` : base;
+}
+
+/** Which records a filter needs to read: an email-only kind never asks the texts, and so on. */
+export function channelsFor(filters: LogFilters): LogChannel[] {
+  return LOG_CHANNELS.filter(
+    (channel) =>
+      (!filters.channel || filters.channel === channel) &&
+      (!filters.kind || channel === "text" || EMAIL_KINDS.includes(filters.kind)),
+  );
 }

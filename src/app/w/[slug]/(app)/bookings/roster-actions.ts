@@ -20,6 +20,8 @@ import { bookingEmail } from "@/lib/bookings/words";
 import { emailConfigured, sendEmail } from "@/lib/email";
 import { getEntitlements } from "@/lib/entitlements";
 import { getSiteUrl } from "@/lib/site-url";
+import { getAdminClient } from "@/lib/supabase/admin";
+import { queueBookingText } from "@/lib/texts/queue";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
 import type { BookingsState } from "./actions";
@@ -244,6 +246,8 @@ export async function moveBooking(
   const after = await detailsFor(ctx, bookingId);
   const { words } = await readEmailSettings(ctx.supabase, ctx.tenant.id);
   const emailed = after ? await sendEmail(bookingEmail("moved", after, words)) : false;
+  // A text too, for someone who asked for texts, where the workspace sends this one.
+  await queueBookingText(getAdminClient(), ctx.tenant.id, bookingId, "moved");
   await tellWaitlist(data, before, slug);
   done(slug);
   return {

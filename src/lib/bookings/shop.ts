@@ -5,6 +5,7 @@ import { postAlert } from "../messages/alerts";
 import { moduleOpen } from "../module-access";
 import { announceBooking, getBookingDetails } from "./server";
 import { queueOrderTag } from "./shop-tags";
+import { queueBookingText, saveTextConsent } from "../texts/queue";
 
 /**
  * Bookings that come in as shop orders. The shop owns the price and the
@@ -38,6 +39,7 @@ export async function queueCancelEmails(
         p_booking_id: id,
       });
       if (error) console.error(`Could not queue cancellation email: ${error.message}`);
+      await queueBookingText(admin, tenantId, id, "cancelled");
     } catch (err) {
       console.error(
         `Could not queue cancellation email: ${err instanceof Error ? err.message : "unknown"}`,
@@ -98,6 +100,9 @@ export async function applyShopOrders(
         await queueCancelEmails(admin, tenantId, [outcome.booking_id]);
       }
       if (outcome.result !== "booked" || !outcome.booking_id) continue;
+      // The number and tick from the picker travel with the booking, before
+      // the confirmation (and its text) goes.
+      if (line.text) await saveTextConsent(admin, tenantId, outcome.booking_id, line.text);
       // The shop's order carries a tag for a person to sort it out, like the
       // earlier app did. Queued once; added only where the shop allows it.
       if (outcome.oversold && !outcome.date_cancelled) {

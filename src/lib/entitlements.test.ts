@@ -69,6 +69,16 @@ describe("resolveEntitlements", () => {
     expect(resolveEntitlements(sub({ plan: "studio" })).can("michaels")).toBe(true);
   });
 
+  it("opens text reminders wherever Bookings is open, and nowhere else", () => {
+    expect(resolveEntitlements(null).can("texts")).toBe(false);
+    expect(
+      resolveEntitlements(sub({ plan: "starter", selected_modules: ["stock"] })).can("texts"),
+    ).toBe(false);
+    expect(
+      resolveEntitlements(sub({ plan: "starter", selected_modules: ["bookings"] })).can("texts"),
+    ).toBe(true);
+  });
+
   it("keeps access during a trial and while a payment is being fixed", () => {
     const trial = resolveEntitlements(
       sub({ status: "trialing", trial_end: "2026-12-05T00:00:00Z" }),

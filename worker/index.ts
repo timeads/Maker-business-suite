@@ -9,6 +9,7 @@
  *  - send help desk email whose "undo" wait has run out
  *  - confirm booking payments and send booking reminders
  *  - add Bookings' "needs a person" tags to shop orders
+ *  - send booking texts through each workspace's own Twilio, and take STOPs off
  *  - publish scheduled social posts
  *  - ask UPS where incoming stock orders are, a few parcels at a time
  *  - look at Michaels for workspaces that sell there (reads only: nothing is sent)
@@ -85,10 +86,14 @@ import { readConversation } from "../src/lib/helpdesk/manual/reader";
 import { runClaimedManual, type ClaimedRun } from "../src/lib/helpdesk/manual/run";
 import { carrierResult } from "../src/lib/stock/tracking";
 import { getAdminClient, withTenant } from "../src/lib/supabase/admin";
+import { drainTextOptOuts } from "../src/lib/texts/opt-out";
+import { drainBookingTexts } from "../src/lib/texts/sends";
 
 const POLL_MS = 5_000;
 const SCHEDULE_EVERY_MS = 5 * 60 * 1000;
 const PURGE_EVERY_MS = 60 * 60 * 1000;
+// Booking texts are looked for once a minute, so "you're booked" follows soon after.
+const TEXTS_EVERY_MS = 60 * 1000;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 let stopping = false;
@@ -513,6 +518,16 @@ const sendBookingReminders = () => drainBookingEmails(getAdminClient());
  * hands each person's email for a day out once (`lib/bookings/daily-email.ts`).
  */
 const sendDailyBookingEmails = () => drainDailyEmails(getAdminClient());
+
+/**
+ * Booking texts through each workspace's own Twilio account, for people who
+ * asked for them: handed out once by the database, tried once, written down
+ * (`lib/texts/sends.ts`). Fixed words only; no model is asked anything.
+ */
+const sendBookingTexts = () => drainBookingTexts(getAdminClient());
+
+/** Replies of STOP, queued by Twilio's webhook: those numbers get no more booking texts. */
+const takeTextOptOuts = () => drainTextOptOuts(getAdminClient());
 
 /**
  * Adds deliveries that were checked in to the shop's own count, for
@@ -1109,6 +1124,7 @@ async function main() {
   }
   let lastSchedule = 0;
   let lastPurge = 0;
+  let lastTexts = 0;
   while (!stopping) {
     const handled =
       (await attempt(drainStripeEvents, 0)) +
@@ -1127,7 +1143,14 @@ async function main() {
       (await attempt(drainShipmentChecks, 0)) +
       (await attempt(drainMichaelsLooks, 0)) +
       (await attempt(drainEmailReads, 0)) +
-      (await attempt(drainManualRuns, 0));
+      (await attempt(drainManualRuns, 0)) +
+      (await attempt(takeTextOptOuts, 0));
+
+    // Opt-outs above go first, so a STOP is always taken off before a text is sent.
+    if (Date.now() - lastTexts > TEXTS_EVERY_MS) {
+      lastTexts = Date.now();
+      await attempt(sendBookingTexts, 0);
+    }
 
     if (Date.now() - lastSchedule > SCHEDULE_EVERY_MS) {
       lastSchedule = Date.now();

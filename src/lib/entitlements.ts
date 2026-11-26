@@ -13,8 +13,13 @@ import type { ModuleKey } from "@/lib/modules";
  * open to any workspace whose plan has Stock (it works on Stock's items and
  * lives under Stock). It has its own key so its place can move without
  * touching the pages that ask.
+ *
+ * `texts` is booking text reminders through the business's own Twilio
+ * account: an optional connection, open to any workspace whose plan has
+ * Bookings. Its own key, so it can become a paid extra without touching the
+ * pages and the worker that ask.
  */
-export type Feature = `module.${ModuleKey}` | "mcp" | "michaels";
+export type Feature = `module.${ModuleKey}` | "mcp" | "michaels" | "texts";
 export type Limit = "seats" | "ai_credits";
 
 /**
@@ -108,6 +113,7 @@ export function resolveEntitlements(
       const has = (moduleKey: ModuleKey) =>
         plan.includedModules.includes(moduleKey) || chosen.has(moduleKey);
       if (feature === "michaels") return has("stock");
+      if (feature === "texts") return has("bookings");
       return has(feature.slice("module.".length) as ModuleKey);
     },
     limit(name) {

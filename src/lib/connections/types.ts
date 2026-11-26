@@ -7,7 +7,8 @@ export type ProviderKey =
   | "ups"
   | "redo"
   | "google_mail"
-  | "michaels";
+  | "michaels"
+  | "twilio";
 
 export type ConnectionStatus = "active" | "needs_reconnect" | "disconnected";
 
@@ -199,7 +200,13 @@ export type ShopBookingOrder = {
   cancelled: boolean;
   customer_name: string;
   email: string | null;
-  lines: { session_id: string; seats: number; amount_cents: number }[];
+  lines: {
+    session_id: string;
+    seats: number;
+    amount_cents: number;
+    /** A number for text reminders from the cart line, and whether the box was ticked. */
+    text?: { phone: string; agreed: boolean };
+  }[];
 };
 
 /**

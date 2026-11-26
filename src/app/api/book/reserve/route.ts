@@ -5,6 +5,7 @@ import {
   getBookingForm,
   getPublicService,
   getPublicWorkspace,
+  getTextOffer,
   reserve,
 } from "@/lib/bookings/server";
 import { getSiteUrl } from "@/lib/site-url";
@@ -44,6 +45,11 @@ export async function POST(request: Request) {
 
   const answers = readAnswers(await getBookingForm(tenant.id), field);
   if ("error" in answers) return back("details");
+  // Texts only where the workspace offers them, and the tick is the consent.
+  const phone = field("phone").trim().slice(0, 40);
+  const agreed = field("text_consent") === "yes";
+  if (agreed && !phone) return back("phone");
+  const text = phone && (await getTextOffer(tenant.id)).asked ? { phone, agreed } : undefined;
 
   const result = await reserve({
     tenant,
@@ -54,6 +60,7 @@ export async function POST(request: Request) {
     email,
     seats,
     answers: answers.answers,
+    text,
   });
   return result.ok ? go(result.redirectTo) : back(result.reason);
 }

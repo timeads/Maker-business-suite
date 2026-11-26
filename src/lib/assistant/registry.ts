@@ -11,6 +11,13 @@ import {
 import { DEFAULT_SHOP_PAGE, SHOP_PAGE_KEY, shopPageSchema } from "../bookings/shop-page";
 import { DAILY_KEY, DEFAULT_DAILY_EMAIL, dailyEmailSchema } from "../bookings/daily-config";
 import { DEFAULT_SHOP_TAGS, SHOP_TAGS_KEY, shopTagsSchema } from "../bookings/shop-tags";
+import {
+  DEFAULT_TEXT_SETTINGS,
+  TEXTS_KEY,
+  parseTextSettings,
+  textSettingsSchema,
+  textWordsChanged,
+} from "../texts/config";
 import { DEFAULT_UPCOMING, UPCOMING_KEY, upcomingSchema } from "../bookings/upcoming";
 import {
   DEFAULT_EMAIL_WORDS,
@@ -278,6 +285,21 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
       "A short email once a day to chosen people in the workspace: today's and tomorrow's classes and how full they are, bookings made in the last day, and anything over its limit or waiting for a date. on (off by default), hour (0 to 23 on the workspace's own clock, 7 by default) and recipients (the user ids of workspace members, up to 20; anyone not a member is never sent it).",
     schema: dailyEmailSchema,
     defaultBody: () => DEFAULT_DAILY_EMAIL,
+  },
+  {
+    module: BOOKINGS_MODULE,
+    key: TEXTS_KEY,
+    feature: "bookings",
+    name: "Booking text reminders",
+    description:
+      "Texts about a booking through the business's own Twilio account, only to people who ticked the box and gave a mobile number: whether texts are on (on, off by default), the country numbers without a country code belong to (default_country: US, CA, GB, IE, AU or NZ), the hours before the date the reminder goes (reminder_hours, 1 to 336, 48 by default), the day-of reminder (day_of_hours, 1 to 24) and the hours after for the thank-you (followup_hours, 1 to 168), and for each message (confirmation, reminder, day_of, followup, cancelled, moved) whether it goes (on). The words of each text, the line beside the tick box (consent_words) and the opt-out line (opt_out_line) go to customers by themselves or are what they agree to, so only a person may write them, under Settings → Bookings → Text reminders: a proposal must leave every body, consent_words and opt_out_line exactly as they are now, and one that changes any is refused.",
+    schema: textSettingsSchema,
+    defaultBody: () => DEFAULT_TEXT_SETTINGS,
+    // No model writes what goes to customers by itself (CLAUDE.md rule 6).
+    refuse: (next, current) =>
+      textWordsChanged(parseTextSettings(next), parseTextSettings(current))
+        ? "The words of a text, the line beside the tick box and the opt-out line can only be written by a person: Settings → Bookings → Text reminders. Propose the change again with them exactly as they are now, and tell the person where to write the words."
+        : null,
   },
   {
     module: BOOKINGS_MODULE,

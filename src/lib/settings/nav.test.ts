@@ -21,6 +21,7 @@ const EVERYTHING: Feature[] = [
   "module.stock",
   "module.shipping",
   "michaels",
+  "texts",
 ];
 
 function viewer(over: Partial<SettingsViewer> & { features?: Feature[] } = {}): SettingsViewer {
@@ -72,6 +73,7 @@ describe("settingsNav", () => {
     expect(kids(nav, "bookings")).toEqual([
       "bookings.emails",
       "bookings.words",
+      "bookings.texts",
       "bookings.shop-page",
       "bookings.shop-tags",
       "bookings.daily-email",
@@ -118,6 +120,7 @@ describe("settingsNav", () => {
     expect(kids(nav, "bookings")).toEqual([
       "bookings.emails",
       "bookings.words",
+      "bookings.texts",
       "bookings.shop-page",
       "bookings.shop-tags",
     ]);

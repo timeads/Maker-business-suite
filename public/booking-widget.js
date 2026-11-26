@@ -65,6 +65,11 @@
     ".step{width:36px;height:36px;border:1px solid var(--line);background:#fff;border-radius:3px;font-size:18px;cursor:pointer;color:var(--ink)}" +
     ".step[disabled]{opacity:.35;cursor:default}" +
     ".count{min-width:20px;text-align:center}" +
+    ".sms{display:flex;flex-direction:column;gap:8px}" +
+    ".phone{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:3px;background:#fff;font-size:15px;color:var(--ink)}" +
+    ".phone:focus-visible,.tick input:focus-visible{outline:2px solid var(--action);outline-offset:2px}" +
+    ".tick{display:flex;gap:8px;align-items:flex-start;font-size:13px;line-height:1.4;color:var(--muted)}" +
+    ".tick input{margin-top:2px}" +
     ".go{padding:14px 18px;border:0;border-radius:3px;background:var(--accent);color:var(--ink);font-size:16px;font-weight:700;cursor:pointer}" +
     ".go[disabled]{opacity:.6;cursor:default}" +
     "@media (max-width:640px){.veil{align-items:flex-end;padding:8px 8px 5.5rem}}" +
@@ -210,7 +215,11 @@
       seats: 1,
       busy: false,
       error: "",
+      // Text reminders, only where the business offers them.
+      phone: "",
+      agree: false,
     };
+    var texts = data.texts && data.texts.asked ? data.texts : null;
     var first =
       sessions.filter(function (s) {
         return s.open;
@@ -274,6 +283,21 @@
           "We couldn't add this to your cart. Please get in touch and we'll book you in.";
         return draw();
       }
+      var phone = texts ? state.phone.trim().slice(0, 40) : "";
+      if (texts && state.agree && !phone) {
+        state.error = "To get texts, add your mobile number, or untick the box.";
+        return draw();
+      }
+      var properties = {
+        "Session ID": state.pick.id,
+        "Workshop Date": longDay(state.pick.at),
+        "Workshop Time": timeOf(state.pick.at, state.pick.zone),
+      };
+      // Names starting with "_" go with the order but are hidden at checkout.
+      if (phone) {
+        properties._text_phone = phone;
+        if (state.agree) properties._text_consent = "yes";
+      }
       state.busy = true;
       state.error = "";
       draw();
@@ -283,11 +307,7 @@
         body: JSON.stringify({
           id: Number(variant),
           quantity: state.seats,
-          properties: {
-            "Session ID": state.pick.id,
-            "Workshop Date": longDay(state.pick.at),
-            "Workshop Time": timeOf(state.pick.at, state.pick.zone),
-          },
+          properties: properties,
         }),
       })
         .then(function (res) {
@@ -426,6 +446,38 @@
                 }),
               ]),
             ]),
+            texts
+              ? el("div", { class: "sms" }, [
+                  el("input", {
+                    type: "tel",
+                    class: "phone",
+                    "data-k": "phone",
+                    placeholder: "Mobile number (optional)",
+                    autocomplete: "tel",
+                    maxlength: "40",
+                    "aria-label": "Mobile number (optional)",
+                    value: state.phone,
+                    on: {
+                      input: function (e) {
+                        state.phone = e.target.value;
+                      },
+                    },
+                  }),
+                  el("label", { class: "tick" }, [
+                    el("input", {
+                      type: "checkbox",
+                      "data-k": "agree",
+                      checked: state.agree ? "" : null,
+                      on: {
+                        change: function (e) {
+                          state.agree = e.target.checked;
+                        },
+                      },
+                    }),
+                    el("span", { text: texts.consent }),
+                  ]),
+                ])
+              : null,
             el("button", {
               type: "button",
               class: "go",

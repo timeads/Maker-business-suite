@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { shopBookingsFrom, type ShopifyOrder } from "../connections/providers/shopify-sync";
+import {
+  shopBookingsFrom,
+  textConsentOf,
+  type ShopifyOrder,
+} from "../connections/providers/shopify-sync";
 import type { ShopBookingOrder } from "../connections/types";
 import { applyShopOrders } from "./shop";
 
@@ -59,6 +63,90 @@ describe("finding workshop dates on shop orders", () => {
       shopBookingsFrom([order([line(DATE_A, 1)], { cancelledAt: "2026-11-01T00:00:00Z" })])[0]
         .cancelled,
     ).toBe(true);
+  });
+});
+
+describe("text consent on the cart line", () => {
+  const withText = (sessionId: string, qty: number, extra: { key: string; value: string }[]) => ({
+    ...line(sessionId, qty),
+    customAttributes: [{ key: "Session ID", value: sessionId }, ...extra],
+  });
+
+  it("reads the picker's number and tick, and the earlier app's, and only a ticked box agrees", () => {
+    expect(textConsentOf([{ key: "_text_phone", value: " 215 555 0134 " }])).toEqual({
+      phone: "215 555 0134",
+      agreed: false,
+    });
+    expect(
+      textConsentOf([
+        { key: "_ttw_sms_phone", value: "2155550134" },
+        { key: "_ttw_sms_consent", value: "yes" },
+      ]),
+    ).toEqual({ phone: "2155550134", agreed: true });
+    expect(textConsentOf([{ key: "_text_consent", value: "yes" }])).toBeNull();
+    expect(textConsentOf(null)).toBeNull();
+  });
+
+  it("travels with the booking, and a tick on any line for the date counts", () => {
+    const [found] = shopBookingsFrom([
+      order([
+        withText(DATE_A, 1, [{ key: "_text_phone", value: "2155550134" }]),
+        withText(DATE_A, 1, [
+          { key: "_text_phone", value: "2155550199" },
+          { key: "_text_consent", value: "yes" },
+        ]),
+        line(DATE_B, 1),
+      ]),
+    ]);
+    expect(found.lines).toEqual([
+      {
+        session_id: DATE_A,
+        seats: 2,
+        amount_cents: 18000,
+        text: { phone: "2155550199", agreed: true },
+      },
+      { session_id: DATE_B, seats: 1, amount_cents: 9000 },
+    ]);
+  });
+
+  it("puts the consent on the booking before the confirmation goes", async () => {
+    const calls: string[] = [];
+    const admin = {
+      rpc: async (fn: string) => {
+        calls.push(fn);
+        return {
+          data: fn === "book_from_shop" ? { result: "booked", booking_id: "b1" } : null,
+          error: null,
+        };
+      },
+    } as never;
+    await applyShopOrders(
+      admin,
+      "t1",
+      [
+        {
+          external_id: "5001",
+          name: "#1042",
+          cancelled: false,
+          customer_name: "Sam",
+          email: "sam@example.com",
+          lines: [
+            {
+              session_id: DATE_A,
+              seats: 1,
+              amount_cents: 0,
+              text: { phone: "2155550134", agreed: true },
+            },
+          ],
+        },
+      ],
+      {
+        open: async () => true,
+        details: async () => ({ tenant_id: "t1" }) as never,
+        announce: async () => void calls.push("announce"),
+      },
+    );
+    expect(calls).toEqual(["book_from_shop", "set_booking_text_consent", "announce"]);
   });
 });
 
@@ -142,19 +230,27 @@ describe("turning shop orders into bookings", () => {
   it("cancels the bookings of a cancelled order without booking anything, and queues the email for each", async () => {
     const { admin, calls } = fakeAdmin({ cancel_shop_order_bookings: ["b1", "b2"] });
     await applyShopOrders(admin, "t1", [{ ...dated, cancelled: true }], { open: async () => true });
+    // The email, and the text where the workspace sends one, for each.
     expect(calls.map((c) => c.fn)).toEqual([
       "cancel_shop_order_bookings",
       "queue_booking_cancel_email",
+      "queue_booking_text",
       "queue_booking_cancel_email",
+      "queue_booking_text",
     ]);
-    expect(calls[2].args).toEqual({ p_tenant_id: "t1", p_booking_id: "b2" });
+    expect(calls[3].args).toEqual({ p_tenant_id: "t1", p_booking_id: "b2" });
+    expect(calls[4].args).toEqual({ p_tenant_id: "t1", p_booking_id: "b2", p_kind: "cancelled" });
   });
 
   it("queues the email when a refund takes a booking's last place, but not off the plan", async () => {
     const refunded = { book_from_shop: { result: "cancelled", booking_id: "b1" } };
     const on = fakeAdmin(refunded);
     await applyShopOrders(on.admin, "t1", [dated], { open: async () => true });
-    expect(on.calls.map((c) => c.fn)).toEqual(["book_from_shop", "queue_booking_cancel_email"]);
+    expect(on.calls.map((c) => c.fn)).toEqual([
+      "book_from_shop",
+      "queue_booking_cancel_email",
+      "queue_booking_text",
+    ]);
     const off = fakeAdmin(refunded);
     await applyShopOrders(off.admin, "t1", [dated], { open: async () => false });
     expect(off.calls.map((c) => c.fn)).toEqual(["book_from_shop"]);
