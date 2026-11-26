@@ -243,6 +243,18 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   sum or change a covered debt elsewhere, and a sync never writes any of it.
   The projection is small multiples (`debt/projection.ts`). Keep
   `tests/db/money-debts.test.ts` passing.
+  Finish setting up (docs/setup-pattern.md): `moneySetupItems`
+  (`lib/dashboard/setup.ts`, pure) works the open items out from what
+  `loadMoneySetupFacts` reads (debts only for owners and admins; `deep`
+  only on Money → Set up), shown as a folded card on Money and as the steps
+  of `dashboard/setup`, whose forms write through the existing actions and
+  checked functions. Only "Not now" is stored (`setup_not_now`, owners and
+  admins, a fingerprint of ids and counts). "How this is worked out" words
+  are `lib/dashboard/explain.ts` (pure, no model). The assistant reads
+  `money_setup_status` / `list_expense_accounts`, and owners and admins also
+  `list_debts` (references `D1`/`L1`, never ids) and the three debt
+  proposal tools: `action_proposals` rows applied by a person through
+  `claim_action_proposal` then the checked function (`applyAction`).
 - Help desk: inbound email is authenticated by a secret in the webhook URL,
   queued (`private.inbound_emails`) and filed by the worker through
   `file_inbound_email` (the older `ingest_inbound_email` hands over to it),
@@ -1110,6 +1122,9 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   `merged_with`, carry no cost, and are undone only by voiding that parcel).
   `shipping_groups` holds only what people decided before buying (saved,
   "not now", approved as one place).
+- Setup: a tool's "finish setting up" checklist, card and guided page follow
+  docs/setup-pattern.md (`lib/setup/`, `components/setup/`): items worked
+  out on read, only "Not now" stored, steps write through existing paths.
 - Code with no signed-in member (public pages, the worker) asks
   `moduleOpen()` in `lib/module-access.ts`, which uses the same resolver as
   `getEntitlements()`.
