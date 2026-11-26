@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { HowWorkedOut } from "@/components/setup/how-worked-out";
+import { liabilityExplained } from "@/lib/dashboard/explain";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -431,7 +433,7 @@ export default async function DebtsPage({ params }: { params: Promise<{ slug: st
       )}
 
       {(books.others.length > 0 || books.hidden.length > 0) && (
-        <Card>
+        <Card id="also-in-books" className="scroll-mt-4">
           <CardHeader>
             <CardTitle className="text-base">Also in your books</CardTitle>
             <CardDescription>
@@ -487,6 +489,24 @@ export default async function DebtsPage({ params }: { params: Promise<{ slug: st
                       )}
                     </span>
                   </div>
+                  <HowWorkedOut
+                    label="Why isn't this a debt?"
+                    lines={[
+                      liabilityExplained({
+                        typeWords: o.typeWords,
+                        choice: o.markedNotDebt ? "not_debt" : null,
+                        byRule: false,
+                      }),
+                    ]}
+                    change={
+                      o.markedNotDebt
+                        ? null
+                        : {
+                            href: `${base}/settings/money/debts`,
+                            label: "Change which kinds of account count by themselves",
+                          }
+                    }
+                  />
                   {canEdit && (
                     <details>
                       <summary className="text-muted-foreground cursor-pointer text-xs">

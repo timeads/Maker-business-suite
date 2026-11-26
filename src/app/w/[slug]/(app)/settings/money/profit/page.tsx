@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { HowWorkedOut } from "@/components/setup/how-worked-out";
+import { profitExplained } from "@/lib/dashboard/explain";
 import { SectionHeading } from "@/components/settings/section-heading";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { requireUser } from "@/lib/auth";
@@ -53,7 +55,7 @@ export default async function ProfitSettingsPage({
         title="Profit by line"
         description="What each line costs to run, so Money can show what each one really makes: its revenue, less its cost of goods, its own expenses, its share of what's shared and its share of your monthly costs."
       />
-      <Card>
+      <Card id="split" className="scroll-mt-4">
         <CardHeader>
           <CardTitle>How each line&apos;s costs are counted</CardTitle>
           <CardDescription>
@@ -96,6 +98,11 @@ export default async function ProfitSettingsPage({
               ))}
               <li className="text-muted-foreground">An owner or admin can change these.</li>
             </ul>
+          )}
+          {revenue.lines.length > 0 && (
+            <div className="mt-4">
+              <HowWorkedOut lines={profitExplained(settings, lineName)} />
+            </div>
           )}
         </CardContent>
       </Card>

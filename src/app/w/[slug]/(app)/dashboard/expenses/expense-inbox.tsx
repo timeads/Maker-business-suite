@@ -1,5 +1,6 @@
 "use client";
 
+import { expenseSortExplained } from "@/lib/dashboard/explain";
 import Link from "next/link";
 import { useState, useTransition } from "react";
 import { Badge } from "@/components/ui/badge";
@@ -309,6 +310,16 @@ export function ExpenseInbox({
                     <span className="text-muted-foreground text-xs">
                       by {SOURCE_WORDS[row.sorted_by]}
                     </span>
+                  )}
+                  {current && (
+                    <details className="text-xs">
+                      <summary className="text-muted-foreground cursor-pointer hover:underline">
+                        Why?
+                      </summary>
+                      <p className="font-read text-text-2 mt-1 max-w-prose">
+                        {expenseSortExplained(row.sorted_by, current, lineName)}
+                      </p>
+                    </details>
                   )}
                   {!current && suggestion && row.suggested && (
                     <span className="flex flex-wrap items-center gap-2 text-xs">
