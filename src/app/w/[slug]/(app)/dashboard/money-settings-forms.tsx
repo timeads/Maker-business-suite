@@ -9,11 +9,15 @@ import { SubmitButton } from "@/components/ui/submit-button";
 import {
   RULE_FIELDS,
   RULE_WORDS,
+  accountChoiceFor,
   newRuleId,
+  type AccountAction,
   type ExpenseSorting,
   type RuleField,
   type Sort,
 } from "@/lib/dashboard/expenses";
+import { accountKey, nextAccountChoices, type BookAccount } from "@/lib/dashboard/expense-accounts";
+import { formatMoney } from "@/lib/dashboard/format";
 import { toCents } from "@/lib/dashboard/lines";
 import {
   COGS_SOURCES,
@@ -24,6 +28,7 @@ import {
   type ProfitSettings,
 } from "@/lib/dashboard/profit";
 import {
+  saveAccountSorting,
   saveExpenseSorting,
   saveProfitSettings,
   type MoneySettingsState,
@@ -156,6 +161,144 @@ function ActionInput({
         />
       )}
     </div>
+  );
+}
+
+/** An account's choice as the sorter holds it: "auto" is no choice (shared until one is made). */
+type AccountDraft = { mode: "auto" | "each" | Sort; line: string; split: Record<string, string> };
+
+const accountDraftOf = (action: AccountAction | null, lines: Line[]): AccountDraft => {
+  if (!action) return { mode: "auto", line: lines[0]?.id ?? "", split: {} };
+  if (action.sort === "each") return { mode: "each", line: lines[0]?.id ?? "", split: {} };
+  const draft = toDraft(action, lines);
+  return { mode: draft.sort, line: draft.line, split: draft.split };
+};
+
+const accountActionOf = (draft: AccountDraft): AccountAction | null => {
+  if (draft.mode === "auto") return null;
+  if (draft.mode === "each") return { sort: "each" };
+  return fromDraft({ sort: draft.mode, line: draft.line, split: draft.split }) as AccountAction;
+};
+
+/**
+ * One choice per account in the books: the main way expenses are sorted.
+ * The whole list goes to the server as one JSON field, is checked against
+ * the same schema the database reads, and is applied to every expense in
+ * those accounts at once.
+ */
+export function AccountSortingForm({
+  slug,
+  settings,
+  lines,
+  accounts,
+  currency,
+}: {
+  slug: string;
+  settings: ExpenseSorting;
+  lines: Line[];
+  accounts: BookAccount[];
+  currency: string;
+}) {
+  const [state, action] = useActionState<MoneySettingsState, FormData>(
+    saveAccountSorting.bind(null, slug),
+    {},
+  );
+  const named = accounts.filter((a) => a.name !== null);
+  const [drafts, setDrafts] = useState<Record<string, AccountDraft>>(() =>
+    Object.fromEntries(
+      named.map((a) => [
+        accountKey(a),
+        accountDraftOf(accountChoiceFor(settings, a)?.action ?? null, lines),
+      ]),
+    ),
+  );
+  const [dirty, setDirty] = useState(false);
+  const picked = new Map(
+    named.map((a) => [accountKey(a), accountActionOf(drafts[accountKey(a)])] as const),
+  );
+  const body = JSON.stringify({ accounts: nextAccountChoices(settings.accounts, named, picked) });
+  const change = (key: string, next: Partial<AccountDraft>) => {
+    setDrafts({ ...drafts, [key]: { ...drafts[key], ...next } });
+    setDirty(true);
+  };
+  const money = (cents: number) => formatMoney(cents / 100, currency);
+
+  return (
+    <form action={action} className="flex flex-col gap-4">
+      <input type="hidden" name="body" value={body} />
+      <ul className="flex flex-col">
+        {named.map((account) => {
+          const key = accountKey(account);
+          const draft = drafts[key];
+          const pick = draft.mode === "line" ? `line:${draft.line}` : draft.mode;
+          const id = `account-${key.replace(/[^A-Za-z0-9_-]/g, "-")}`;
+          return (
+            <li
+              key={key}
+              className="border-border flex flex-col gap-2 border-b py-3 last:border-0 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between"
+            >
+              <div className="flex min-w-0 flex-col gap-0.5 sm:max-w-md">
+                <Label htmlFor={id} className="font-medium">
+                  {account.name}
+                </Label>
+                <span className="text-muted-foreground text-xs">
+                  {account.recent === 0
+                    ? "Nothing in the last 12 months"
+                    : `${account.recent.toLocaleString("en-US")} ${account.recent === 1 ? "expense" : "expenses"}, ${money(account.recentCents)} in the last 12 months`}
+                  {account.toSort > 0
+                    ? ` · ${account.toSort.toLocaleString("en-US")} waiting in the inbox`
+                    : ""}
+                  {account.exceptions > 0
+                    ? ` · ${account.exceptions.toLocaleString("en-US")} sorted another way by you or a rule`
+                    : ""}
+                </span>
+              </div>
+              <div className="flex flex-col gap-2">
+                <Select
+                  id={id}
+                  value={pick}
+                  className="sm:w-72"
+                  onChange={(event) => {
+                    const choice = event.target.value;
+                    if (choice.startsWith("line:"))
+                      change(key, { mode: "line", line: choice.slice(5) });
+                    else change(key, { mode: choice as AccountDraft["mode"] });
+                  }}
+                >
+                  <option value="auto">Shared (automatic, until you choose)</option>
+                  {lines.map((line) => (
+                    <option key={line.id} value={`line:${line.id}`}>
+                      On {line.name}
+                    </option>
+                  ))}
+                  {lines.length >= 2 && <option value="split">Split across lines</option>}
+                  <option value="shared">Shared across lines</option>
+                  <option value="set_aside">Not a business expense</option>
+                  <option value="each">Decide each one in the inbox</option>
+                </Select>
+                {draft.mode === "split" && (
+                  <SharesInput
+                    lines={lines}
+                    value={draft.split}
+                    idPrefix={`${id}-split`}
+                    onChange={(split) => change(key, { split })}
+                  />
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      <FormMessage>{state.error}</FormMessage>
+      <FormMessage kind="success">{state.message}</FormMessage>
+      <SubmitButton
+        variant={dirty ? "default" : "outline"}
+        pendingText="Sorting…"
+        className="sm:w-fit"
+      >
+        Save and sort by account
+      </SubmitButton>
+    </form>
   );
 }
 

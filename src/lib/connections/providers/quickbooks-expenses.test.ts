@@ -59,12 +59,70 @@ describe("reading expenses from the books", () => {
       payment_type: "CreditCard",
       amount_cents: 12010,
       account: "Supplies",
+      account_ref: null,
       payee: "Yarn Barn",
       from_account: null,
+      location: null,
       lines: [
-        { account: "Supplies", amount_cents: 10005, description: "Cones" },
-        { account: "Inventory", amount_cents: 2005, description: "" },
+        { account: "Supplies", amount_cents: 10005, description: "Cones", class: null },
+        { account: "Inventory", amount_cents: 2005, description: "", class: null },
       ],
+    });
+  });
+
+  it("keeps the account's id and the books' own class and location, with no extra question", () => {
+    const row = parseExpense("Purchase", {
+      Id: "73",
+      TxnDate: "2026-10-06",
+      TotalAmt: 30,
+      DepartmentRef: { value: "2", name: "Market Stall" },
+      ClassRef: { value: "9", name: "Whole Record" },
+      Line: [
+        {
+          DetailType: "AccountBasedExpenseLineDetail",
+          Amount: 20,
+          AccountBasedExpenseLineDetail: {
+            AccountRef: { value: "61", name: "Supplies" },
+            ClassRef: { value: "5", name: "Workshops" },
+          },
+        },
+        {
+          DetailType: "AccountBasedExpenseLineDetail",
+          Amount: 10,
+          AccountBasedExpenseLineDetail: { AccountRef: { value: "bad id!", name: "Postage" } },
+        },
+      ],
+    });
+    expect(row).toMatchObject({
+      account: "Supplies",
+      account_ref: "61",
+      location: "Market Stall",
+      lines: [
+        { account: "Supplies", class: "Workshops" },
+        // No class on the line: the record's own.
+        { account: "Postage", class: "Whole Record" },
+      ],
+    });
+    const journal = parseExpense("JournalEntry", {
+      Id: "74",
+      TxnDate: "2026-10-06",
+      Line: [
+        {
+          DetailType: "JournalEntryLineDetail",
+          Amount: 5,
+          JournalEntryLineDetail: {
+            PostingType: "Debit",
+            AccountRef: { value: "62", name: "Fees" },
+            ClassRef: { name: "Shop" },
+            DepartmentRef: { name: "Studio" },
+          },
+        },
+      ],
+    });
+    expect(journal).toMatchObject({
+      account_ref: "62",
+      location: "Studio",
+      lines: [{ account: "Fees", class: "Shop" }],
     });
   });
 

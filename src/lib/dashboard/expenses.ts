@@ -6,9 +6,12 @@ import { DASHBOARD_MODULE } from "./schema";
  *
  * An expense can be put on one line, split across lines by percent, marked
  * shared (overhead, shared out by the profit setting's split), or set aside
- * (not a business expense, or personal). A person does that in the expense
- * inbox; payee defaults and rules (this config, `dashboard` / `expenses`) do
- * it for new expenses nobody has sorted yet, or only suggest it.
+ * (not a business expense, or personal). Mostly that follows the books' own
+ * ACCOUNT: one choice per account sorts every expense in it, past and
+ * future, and an account with no choice yet counts as shared. Payee defaults
+ * and rules (this config, `dashboard` / `expenses`) make exceptions, and a
+ * person's own choice in the expense inbox beats everything. Only an account
+ * set to "decide each one" fills the inbox.
  *
  * Nothing about any one business lives here: payees, accounts and words are
  * all the workspace's own setting. Pure: no network, no database.
@@ -40,7 +43,7 @@ export const actionSchema = z.discriminatedUnion("sort", [
 ]);
 export type SortAction = z.infer<typeof actionSchema>;
 
-export const RULE_FIELDS = ["payee", "account", "memo"] as const;
+export const RULE_FIELDS = ["payee", "account", "memo", "class", "location"] as const;
 export type RuleField = (typeof RULE_FIELDS)[number];
 
 /** What each kind of rule looks at, in a maker's words. */
@@ -50,6 +53,11 @@ export const RULE_WORDS: Record<RuleField, { label: string; hint: string }> = {
   memo: {
     label: "The memo or a line's description contains",
     hint: "A word that turns up in the memo",
+  },
+  class: { label: "The QuickBooks class is", hint: "The class's name, as QuickBooks has it" },
+  location: {
+    label: "The QuickBooks location is",
+    hint: "The location's name, as QuickBooks has it",
   },
 };
 
@@ -79,14 +87,45 @@ export const expenseRuleSchema = z.object({
 });
 export type ExpenseRule = z.infer<typeof expenseRuleSchema>;
 
+/** What an account's expenses do: one way of sorting, or "decide each one" (the inbox). */
+export const accountActionSchema = z.union([actionSchema, z.object({ sort: z.literal("each") })]);
+export type AccountAction = z.infer<typeof accountActionSchema>;
+
+/** The books' own id for an account, as the sync keeps it. */
+export const ACCOUNT_REF = /^[A-Za-z0-9_-]{1,60}$/;
+
+export const accountChoiceSchema = z.object({
+  /** The books' own id for the account, where the books gave one: the key. */
+  ref: z.string().regex(ACCOUNT_REF).nullable().default(null),
+  /** The account's name as the books have it: shown to people, and the key without an id. */
+  name: z.string().trim().min(1).max(200),
+  action: accountActionSchema,
+});
+export type AccountChoice = z.infer<typeof accountChoiceSchema>;
+
 export const expenseSortingSchema = z
   .object({
     version: z.literal(1),
     vendors: z.array(vendorDefaultSchema).max(300).default([]),
     /** Checked from the top; the first that matches decides. */
     rules: z.array(expenseRuleSchema).max(100).default([]),
+    /**
+     * One choice per account in the books. An account not listed counts as
+     * shared. Applied in the database (`private.money_follow_accounts`), the
+     * twin of `decideExpense`'s last step.
+     */
+    accounts: z.array(accountChoiceSchema).max(1000).default([]),
   })
   .superRefine((value, ctx) => {
+    const refs = value.accounts.flatMap((a) => (a.ref ? [a.ref] : []));
+    const names = value.accounts.flatMap((a) => (a.ref ? [] : [a.name]));
+    if (new Set(refs).size !== refs.length || new Set(names).size !== names.length) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["accounts"],
+        message: "Each account can have only one choice",
+      });
+    }
     const ids = [...value.vendors.map((v) => v.id), ...value.rules.map((r) => r.id)];
     if (new Set(ids).size !== ids.length) {
       ctx.addIssue({ code: "custom", path: ["rules"], message: "Each rule needs its own id" });
@@ -102,7 +141,12 @@ export const expenseSortingSchema = z
   });
 export type ExpenseSorting = z.infer<typeof expenseSortingSchema>;
 
-export const DEFAULT_EXPENSE_SORTING: ExpenseSorting = { version: 1, vendors: [], rules: [] };
+export const DEFAULT_EXPENSE_SORTING: ExpenseSorting = {
+  version: 1,
+  vendors: [],
+  rules: [],
+  accounts: [],
+};
 
 export function parseExpenseSorting(body: unknown): ExpenseSorting {
   const parsed = expenseSortingSchema.safeParse(body);
@@ -125,6 +169,12 @@ export type ExpenseFacts = {
   accounts: readonly (string | null)[];
   memo: string | null;
   descriptions: readonly string[];
+  /** The books' id for the main account (the first line's), when known. */
+  accountRef?: string | null;
+  /** The books' class on each line (QuickBooks' own tracking), where there is one. */
+  classes?: readonly (string | null)[];
+  /** The books' location for the whole record, where there is one. */
+  location?: string | null;
 };
 
 /** Does every line an action names still exist? An action on a removed line is skipped. */
@@ -146,12 +196,41 @@ function ruleMatches(rule: ExpenseRule, facts: ExpenseFacts): boolean {
       return [facts.memo ?? "", ...facts.descriptions].some((text) =>
         sameName(text).includes(wanted),
       );
+    case "class":
+      return (facts.classes ?? []).some((name) => name !== null && sameName(name) === wanted);
+    case "location":
+      return facts.location != null && sameName(facts.location) === wanted;
   }
 }
 
+/**
+ * The choice stored for an account: by the books' id where both sides have
+ * one, else by the exact name (where either side has no id). Null when the
+ * account has no choice yet.
+ */
+export function accountChoiceFor(
+  settings: Pick<ExpenseSorting, "accounts">,
+  account: { ref: string | null; name: string | null },
+): AccountChoice | null {
+  const name = account.name?.trim() ?? "";
+  const byRef = account.ref
+    ? settings.accounts.find((choice) => choice.ref === account.ref)
+    : undefined;
+  if (byRef) return byRef;
+  if (!name) return null;
+  return (
+    settings.accounts.find(
+      (choice) => (choice.ref === null || account.ref === null) && choice.name === name,
+    ) ?? null
+  );
+}
+
+/** An account with no choice yet counts as shared. */
+export const ACCOUNT_DEFAULT: SortAction = { sort: "shared" };
+
 export type Decision = {
   action: SortAction;
-  source: "rule" | "vendor";
+  source: "rule" | "vendor" | "account";
   /** The rule or default that decided. */
   ruleId: string;
   /** Sort it now, or only suggest. */
@@ -160,13 +239,15 @@ export type Decision = {
 };
 
 /**
- * Which way an expense goes, if a rule or a payee default says so: firm rules
- * first, then the payee's default, then the other rules, each list from the
- * top. A rule pointing at a line that no longer exists is passed over. Null
- * when nothing matches.
+ * Which way an expense goes: firm rules first, then the payee's default,
+ * then the other rules, each list from the top, then the account's choice
+ * (an account with no choice yet: shared). A rule pointing at a line that no
+ * longer exists is passed over, and so is an account's choice (it falls back
+ * to shared). Null when the account is set to "decide each one" and nothing
+ * else matches: the expense waits in the inbox.
  *
- * Only ever used for expenses nobody has sorted: a person's own choice always
- * beats a rule, and the database re-checks that under the row.
+ * Only ever used for expenses no person has sorted: a person's own choice
+ * always beats all of this, and the database re-checks that under the row.
  */
 export function decideExpense(
   settings: ExpenseSorting,
@@ -199,7 +280,36 @@ export function decideExpense(
     }
   }
   const soft = usable.find((rule) => !rule.firm && ruleMatches(rule, facts));
-  return soft ? byRule(soft) : null;
+  if (soft) return byRule(soft);
+  return decideByAccount(settings, lineIds, facts);
+}
+
+/** The last step on its own: what the account's choice says. */
+export function decideByAccount(
+  settings: Pick<ExpenseSorting, "accounts">,
+  lineIds: ReadonlySet<string>,
+  facts: Pick<ExpenseFacts, "accounts" | "accountRef">,
+): Decision | null {
+  const name = facts.accounts[0] ?? null;
+  const choice = accountChoiceFor(settings, { ref: facts.accountRef ?? null, name });
+  const words = name ? `the account ${name}` : "an expense with no account";
+  if (choice?.action.sort === "each") return null;
+  if (choice && actionFits(choice.action, lineIds)) {
+    return {
+      action: choice.action,
+      source: "account",
+      ruleId: choice.ref ?? choice.name.slice(0, 40),
+      fillIn: true,
+      reason: `Your choice for ${words}`,
+    };
+  }
+  return {
+    action: ACCOUNT_DEFAULT,
+    source: "account",
+    ruleId: "",
+    fillIn: true,
+    reason: `Shared, until you choose for ${words}`,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -277,20 +387,28 @@ export function factsOfRow(row: {
   payee: string | null;
   account: string | null;
   memo: string | null;
-  lines: readonly { account: string | null; description: string }[];
+  account_ref?: string | null;
+  location?: string | null;
+  lines: readonly { account: string | null; description: string; class?: string | null }[];
 }): ExpenseFacts {
+  const lines = Array.isArray(row.lines) ? row.lines : [];
   return {
     payee: row.payee,
-    accounts: [row.account, ...row.lines.map((line) => line.account)],
+    accounts: [row.account, ...lines.map((line) => line.account)],
     memo: row.memo,
-    descriptions: row.lines.map((line) => line.description),
+    descriptions: lines.map((line) => line.description ?? ""),
+    accountRef: row.account_ref ?? null,
+    classes: lines.map((line) => line.class ?? null),
+    location: row.location ?? null,
   };
 }
 
 /**
- * What to hand the database with one expense: `auto` to sort it (only ever
- * applied to an expense nobody has sorted), or `suggest` to note a
- * suggestion. Nothing when no rule or default matches.
+ * What to hand the database with one expense: `auto` to sort it by a rule or
+ * a payee default (only ever applied to an expense no person sorted), or
+ * `suggest` to note a suggestion. Nothing when only the account decides: the
+ * database applies the account's choice itself, so a worker on earlier code
+ * gets it too.
  */
 export function decisionPayload(
   settings: ExpenseSorting,
@@ -298,7 +416,7 @@ export function decisionPayload(
   facts: ExpenseFacts,
 ): { auto?: Record<string, unknown>; suggest?: Record<string, unknown> } {
   const decision = decideExpense(settings, lineIds, facts);
-  if (!decision) return {};
+  if (!decision || decision.source === "account") return {};
   const body = {
     ...actionColumns(decision.action),
     source: decision.source,

@@ -98,7 +98,8 @@ const RULE_PAGES = 10;
 
 /**
  * "Apply my rules to what's waiting": the workspace's payee defaults and
- * rules, run over every expense nobody has sorted (and nobody put back).
+ * rules, run over every expense no person has sorted (and nobody put back),
+ * those sorted by their account included: a rule speaks before the account.
  */
 export async function applyRulesToWaiting(slug: string): Promise<ExpenseActionState> {
   const ctx = await sortContext(slug);
@@ -116,16 +117,19 @@ export async function applyRulesToWaiting(slug: string): Promise<ExpenseActionSt
   if (config.error) return { error: "We couldn't read your rules. Try again in a moment." };
   const settings = parseExpenseSorting(config.data?.body);
   if (settings.vendors.length === 0 && settings.rules.length === 0) {
-    return { error: "You haven't set any payee defaults or rules yet." };
+    return {
+      error:
+        "You haven't set any payee defaults or rules yet. Expenses follow their account's choice by themselves.",
+    };
   }
   const lineIds = new Set(revenue.lines.map((line) => line.id));
   const decisions: Record<string, unknown>[] = [];
   for (let page = 0; page < RULE_PAGES; page++) {
     const { data, error } = await ctx.supabase
       .from("book_expenses")
-      .select("id, payee, account, memo, lines")
+      .select("id, payee, account, account_ref, location, memo, lines")
       .eq("tenant_id", ctx.tenant.id)
-      .is("sort", null)
+      .or("sort.is.null,sorted_by.eq.account")
       .is("removed_at", null)
       .eq("is_move", false)
       .eq("rules_off", false)
@@ -137,8 +141,10 @@ export async function applyRulesToWaiting(slug: string): Promise<ExpenseActionSt
       id: string;
       payee: string | null;
       account: string | null;
+      account_ref: string | null;
+      location: string | null;
       memo: string;
-      lines: { account: string | null; description: string }[];
+      lines: { account: string | null; description: string; class?: string | null }[];
     }[];
     for (const row of rows) {
       const payload = decisionPayload(settings, lineIds, factsOfRow(row));

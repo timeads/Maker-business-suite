@@ -28,7 +28,7 @@ export type InboxRow = {
   sort: SortAction["sort"] | null;
   line_id: string | null;
   split: Record<string, number> | null;
-  sorted_by: "person" | "rule" | "vendor" | null;
+  sorted_by: "person" | "rule" | "vendor" | "account" | null;
   suggested: {
     sort: SortAction["sort"];
     line?: string;
@@ -84,7 +84,12 @@ function suggestionAction(s: NonNullable<InboxRow["suggested"]>): SortAction | n
   return null;
 }
 
-const SOURCE_WORDS = { rule: "your rule", vendor: "your payee default", ai: "Claude" } as const;
+const SOURCE_WORDS = {
+  rule: "your rule",
+  vendor: "your payee default",
+  account: "its account in your books",
+  ai: "Claude",
+} as const;
 
 /**
  * The inbox's rows, with ticking, a choice per row or for the ticked ones,

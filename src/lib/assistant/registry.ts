@@ -241,7 +241,7 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
     feature: "dashboard",
     name: "Money: sorting expenses into lines",
     description:
-      "How expenses read from the books are sorted into the business's own lines (the line ids are those of the 'Money: revenue and business lines' setting). vendors: payee defaults, each an id, a payee (the name as the books have it; capitals and spacing don't matter), an action and fill_in. rules: checked from the top, each an id, a field (payee: the payee's name contains the words; account: the account's whole name is the words; memo: the memo or a line's description contains the words), words, an action, fill_in, and firm (true: checked before the payee defaults; false: after). An action is {sort: line, line: <line id>}, {sort: split, split: {<line id>: whole percent, ...}} with at least two lines adding up to 100, {sort: shared} (overhead, shared out by the profit setting's split) or {sort: set_aside} (not a business expense). fill_in true sorts new expenses by itself; false only suggests. A rule never changes an expense a person sorted.",
+      "How expenses read from the books are sorted into the business's own lines (the line ids are those of the 'Money: revenue and business lines' setting). accounts: the main way, one choice per account in the books, each a ref (the books' own id for the account, or null where the books gave none), the account's name as the books have it, and an action, or {sort: each} to decide each of its expenses by hand in the inbox; an account not listed counts as shared. vendors: payee defaults, each an id, a payee (the name as the books have it; capitals and spacing don't matter), an action and fill_in. rules: checked from the top, each an id, a field (payee: the payee's name contains the words; account: the account's whole name is the words; memo: the memo or a line's description contains the words; class: a line's QuickBooks class is the words; location: the QuickBooks location is the words), words, an action, fill_in, and firm (true: checked before the payee defaults; false: after). Order of decision: a person's own choice, firm rules, payee defaults, other rules, then the account's choice. An action is {sort: line, line: <line id>}, {sort: split, split: {<line id>: whole percent, ...}} with at least two lines adding up to 100, {sort: shared} (overhead, shared out by the profit setting's split) or {sort: set_aside} (not a business expense). fill_in true sorts new expenses by itself; false only suggests. A rule never changes an expense a person sorted.",
     schema: expenseSortingSchema,
     defaultBody: () => DEFAULT_EXPENSE_SORTING,
   },
@@ -749,6 +749,10 @@ export function describeConfig(entry: ConfigEntry, body: unknown): string[] {
     const name = (id: string) => id;
     const fill = (on: boolean) => (on ? "" : " (only suggested)");
     const lines = [
+      ...(sorting.accounts ?? []).map(
+        (a) =>
+          `The account ${a.name} → ${a.action.sort === "each" ? "decided one by one in the inbox" : actionWords(a.action, name)}`,
+      ),
       ...sorting.vendors.map(
         (v) => `Everything from ${v.payee} → ${actionWords(v.action, name)}${fill(v.fill_in)}`,
       ),
@@ -757,7 +761,9 @@ export function describeConfig(entry: ConfigEntry, body: unknown): string[] {
           `${i + 1}. ${RULE_WORDS[r.field]?.label ?? r.field} "${r.words}" → ${actionWords(r.action, name)}${fill(r.fill_in)}${r.firm ? ", before payee defaults" : ""}`,
       ),
     ];
-    return lines.length ? lines : ["No payee defaults or rules yet"];
+    return lines.length
+      ? lines
+      : ["No account choices, payee defaults or rules yet: every account counts as shared"];
   }
   if (entry.module === PROFIT_MODULE && entry.key === PROFIT_KEY) {
     const profit = value as unknown as ProfitSettings;

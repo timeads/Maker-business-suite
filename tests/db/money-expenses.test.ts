@@ -105,6 +105,18 @@ beforeAll(async () => {
     tenantA,
     JSON.stringify(lines),
   ]);
+  // These tests are about the inbox: "Supplies" is an account set to "decide
+  // each one", so its expenses wait there as before. Sorting by account has
+  // its own tests (money-expense-accounts.test.ts).
+  await as(alice, "select public.save_config($1, 'dashboard', 'expenses', $2::jsonb)", [
+    tenantA,
+    JSON.stringify({
+      version: 1,
+      vendors: [],
+      rules: [],
+      accounts: [{ ref: null, name: "Supplies", action: { sort: "each" } }],
+    }),
+  ]);
 });
 
 describe("filing from the books", () => {

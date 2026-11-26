@@ -6,7 +6,15 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { PageHeader } from "@/components/ui/page-header";
 import { requireUser } from "@/lib/auth";
 import { loadRevenueSettings } from "@/lib/dashboard/data";
+import {
+  accountsSummary,
+  mergeAccounts,
+  readAccountRows,
+  yearBefore,
+} from "@/lib/dashboard/expense-accounts";
+import { EXPENSES_KEY, EXPENSES_MODULE, parseExpenseSorting } from "@/lib/dashboard/expenses";
 import { formatMoney } from "@/lib/dashboard/format";
+import { localDate } from "@/lib/dashboard/range";
 import {
   INBOX_PAGE,
   INBOX_VIEWS,
@@ -72,9 +80,19 @@ export default async function ExpensesPage({
   if (query.q) list = list.ilike("search_text", likePattern(query.q));
   const start = (query.page - 1) * INBOX_PAGE;
 
-  const [revenue, months, rows] = await Promise.all([
+  const today = localDate(new Date(), tenant.timezone);
+  const day = `${today.year}-${String(today.month).padStart(2, "0")}-${String(today.day).padStart(2, "0")}`;
+  const [revenue, months, sortingConfig, accountRows, rows] = await Promise.all([
     loadRevenueSettings(supabase, tenant.id),
     supabase.rpc("money_expense_months", { p_tenant_id: tenant.id }),
+    supabase
+      .from("configs")
+      .select("body")
+      .eq("tenant_id", tenant.id)
+      .eq("module", EXPENSES_MODULE)
+      .eq("key", EXPENSES_KEY)
+      .maybeSingle(),
+    supabase.rpc("money_expense_accounts", { p_tenant_id: tenant.id, p_since: yearBefore(day) }),
     list
       .order("txn_date", { ascending: false })
       .order("id")
@@ -93,6 +111,15 @@ export default async function ExpensesPage({
   const pages = Math.max(1, Math.ceil(total / INBOX_PAGE));
   const waiting = monthRows.reduce((sum, m) => sum + m.to_sort, 0);
   const inbox = (rows.data ?? []) as unknown as InboxRow[];
+  // Allowed to fail: the inbox works without the account summary.
+  const byAccount = accountRows.error
+    ? null
+    : accountsSummary(
+        parseExpenseSorting(sortingConfig.data?.body),
+        mergeAccounts(
+          readAccountRows((accountRows.data as Record<string, unknown>[] | null) ?? []),
+        ).filter((a) => a.name !== null),
+      );
 
   return (
     <>
@@ -119,6 +146,22 @@ export default async function ExpensesPage({
         </Card>
       ) : (
         <>
+          {byAccount && byAccount.accounts > 0 && (
+            <p className="bg-muted rounded-md px-3 py-2 text-sm" role="status">
+              Expenses sort themselves by their account in your books. Only accounts you set to
+              &ldquo;decide each one&rdquo; come here, with anything you put back.{" "}
+              {byAccount.automatic > 0
+                ? `${byAccount.automatic} of your ${byAccount.accounts} ${byAccount.accounts === 1 ? "account is" : "accounts are"} still on the automatic default (shared). `
+                : ""}
+              <Link
+                href={`${base}/settings/money/expenses#by-account`}
+                className="underline underline-offset-4"
+              >
+                Choose for each account
+              </Link>
+            </p>
+          )}
+
           {revenue.lines.length === 0 && (
             <p className="bg-muted rounded-md px-3 py-2 text-sm" role="status">
               Set up your business lines first, then come back to sort expenses into them.{" "}
@@ -261,7 +304,7 @@ export default async function ExpensesPage({
               <p className="text-muted-foreground text-xs">
                 Read from QuickBooks every few hours, from the start of last year. Money moved
                 between your own accounts (paying down a card or a loan) isn&apos;t an expense, so
-                it never shows here. Payee defaults and rules live in{" "}
+                it never shows here. Account choices, payee defaults and rules live in{" "}
                 <Link
                   href={`${base}/settings/money/expenses`}
                   className="underline underline-offset-4"

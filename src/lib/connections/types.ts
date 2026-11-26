@@ -173,9 +173,20 @@ export type BookExpenseRow = {
   memo: string;
   /** Moves only: the account the money left. */
   from_account: string | null;
-  /** Moves only: the books' own id for the account paid into, when given. */
+  /**
+   * The books' own id for `account` (the first line's, or for a move the
+   * account paid into), when given.
+   */
   account_ref?: string | null;
-  lines: { account: string | null; amount_cents: number; description: string }[];
+  /** The books' location for the record, where it has one. */
+  location?: string | null;
+  lines: {
+    account: string | null;
+    amount_cents: number;
+    description: string;
+    /** The books' class on the line, where it has one. */
+    class?: string | null;
+  }[];
 };
 
 /** A product's tags in the shop, noted on each of its stock items. */

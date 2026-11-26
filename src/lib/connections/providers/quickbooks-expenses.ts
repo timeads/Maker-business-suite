@@ -16,6 +16,12 @@ import type { BookExpenseRow } from "../types";
  *   accounts (paying down a card or a loan, say). They are NOT expenses: kept
  *   marked as moves, never in the inbox and never counted, for the later debt
  *   work.
+ *
+ * Each expense keeps the books' id for its account (the first line's), so a
+ * choice made for an account follows it through a rename, and the books' own
+ * tracking where there is one: a class on each line (or one for the whole
+ * record) and the record's location. Both come in the answers already asked
+ * for (`select *`), so reading them costs no extra question.
  */
 
 export const EXPENSE_ENTITIES = [
@@ -56,11 +62,13 @@ type QboLine = {
   Amount?: unknown;
   Description?: unknown;
   DetailType?: unknown;
-  AccountBasedExpenseLineDetail?: { AccountRef?: Ref } | null;
-  ItemBasedExpenseLineDetail?: { ItemAccountRef?: Ref } | null;
+  AccountBasedExpenseLineDetail?: { AccountRef?: Ref; ClassRef?: Ref } | null;
+  ItemBasedExpenseLineDetail?: { ItemAccountRef?: Ref; ClassRef?: Ref } | null;
   JournalEntryLineDetail?: {
     PostingType?: unknown;
     AccountRef?: Ref;
+    ClassRef?: Ref;
+    DepartmentRef?: Ref;
     Entity?: { EntityRef?: Ref } | null;
   } | null;
 };
@@ -79,6 +87,10 @@ type QboRecord = {
   ToAccountRef?: Ref;
   BankAccountRef?: Ref;
   CreditCardAccountRef?: Ref;
+  /** One class for the whole record, where the books track classes that way. */
+  ClassRef?: Ref;
+  /** QuickBooks calls a location a department. */
+  DepartmentRef?: Ref;
   Line?: unknown;
 };
 export type ExpensesResponse = { QueryResponse?: Record<string, unknown> | null };
@@ -103,13 +115,21 @@ function expenseLines(record: QboRecord) {
         (line.DetailType === "AccountBasedExpenseLineDetail" ||
           line.DetailType === "ItemBasedExpenseLineDetail"),
     )
-    .map((line) => ({
-      account:
-        name(line.AccountBasedExpenseLineDetail?.AccountRef) ??
-        name(line.ItemBasedExpenseLineDetail?.ItemAccountRef),
-      amount_cents: amountCents(line.Amount),
-      description: text(line.Description, MAX_TEXT),
-    }));
+    .map((line) => {
+      const accountRef =
+        line.AccountBasedExpenseLineDetail?.AccountRef ??
+        line.ItemBasedExpenseLineDetail?.ItemAccountRef;
+      return {
+        account: name(accountRef),
+        account_ref: refId(accountRef),
+        amount_cents: amountCents(line.Amount),
+        description: text(line.Description, MAX_TEXT),
+        class:
+          name(line.AccountBasedExpenseLineDetail?.ClassRef) ??
+          name(line.ItemBasedExpenseLineDetail?.ClassRef) ??
+          name(record.ClassRef),
+      };
+    });
 }
 
 function debitLines(record: QboRecord) {
@@ -123,11 +143,27 @@ function debitLines(record: QboRecord) {
     )
     .map((line) => ({
       account: name(line.JournalEntryLineDetail?.AccountRef),
+      account_ref: refId(line.JournalEntryLineDetail?.AccountRef),
       payee: name(line.JournalEntryLineDetail?.Entity?.EntityRef),
       amount_cents: amountCents(line.Amount),
       description: text(line.Description, MAX_TEXT),
+      class: name(line.JournalEntryLineDetail?.ClassRef),
+      location: name(line.JournalEntryLineDetail?.DepartmentRef),
     }));
 }
+
+/** What a row keeps of a line: its account, amount, description and class. */
+const keptLine = (line: {
+  account: string | null;
+  amount_cents: number;
+  description: string;
+  class: string | null;
+}) => ({
+  account: line.account,
+  amount_cents: line.amount_cents,
+  description: line.description,
+  class: line.class,
+});
 
 const KINDS: Record<ExpenseEntity, BookExpenseRow["kind"]> = {
   Purchase: "purchase",
@@ -153,31 +189,33 @@ export function parseExpense(entity: ExpenseEntity, record: QboRecord): BookExpe
       const total = amountCents(record.TotalAmt);
       // A card refund is money coming back.
       const refund = entity === "Purchase" && record.Credit === true;
+      const first = lines.find((line) => line.account);
       return {
         ...base,
         payment_type: entity === "Purchase" ? text(record.PaymentType, 40) || null : null,
         amount_cents: refund ? -Math.abs(total) : total,
-        account: lines.find((line) => line.account)?.account ?? null,
+        account: first?.account ?? null,
+        account_ref: first?.account_ref ?? null,
         payee: name(entity === "Bill" ? record.VendorRef : record.EntityRef),
         from_account: null,
-        lines,
+        location: name(record.DepartmentRef),
+        lines: lines.map(keptLine),
       };
     }
     case "JournalEntry": {
       const debits = debitLines(record);
       if (debits.length === 0) return null;
+      const first = debits.find((line) => line.account);
       return {
         ...base,
         payment_type: null,
         amount_cents: debits.reduce((sum, line) => sum + line.amount_cents, 0),
-        account: debits.find((line) => line.account)?.account ?? null,
+        account: first?.account ?? null,
+        account_ref: first?.account_ref ?? null,
         payee: debits.find((line) => line.payee)?.payee ?? null,
         from_account: null,
-        lines: debits.slice(0, MAX_LINES).map(({ account, amount_cents, description }) => ({
-          account,
-          amount_cents,
-          description,
-        })),
+        location: debits.find((line) => line.location)?.location ?? null,
+        lines: debits.slice(0, MAX_LINES).map(keptLine),
       };
     }
     case "Transfer":

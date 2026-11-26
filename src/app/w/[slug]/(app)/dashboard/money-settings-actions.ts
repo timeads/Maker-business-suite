@@ -6,9 +6,12 @@ import { loadRevenueSettings } from "@/lib/dashboard/data";
 import {
   EXPENSES_KEY,
   EXPENSES_MODULE,
+  accountChoiceSchema,
   actionFits,
   expenseSortingSchema,
+  parseExpenseSorting,
 } from "@/lib/dashboard/expenses";
+import { z } from "zod";
 import { BUDGET_KEY, budgetSettingsSchema } from "@/lib/dashboard/budget";
 import { HEALTH_KEY, healthSettingsSchema } from "@/lib/dashboard/health";
 import { PROFIT_KEY, PROFIT_MODULE, profitSettingsSchema } from "@/lib/dashboard/profit";
@@ -62,7 +65,22 @@ async function save(
   return { message: done };
 }
 
-/** Payee defaults and rules, handed over as one JSON field by the editor. */
+/** The expense sorting setting as stored, so one part can change without the other. */
+async function storedSorting(
+  ctx: Exclude<Awaited<ReturnType<typeof settingsContext>>, { error: string }>,
+) {
+  const { data, error } = await ctx.supabase
+    .from("configs")
+    .select("body")
+    .eq("tenant_id", ctx.tenant.id)
+    .eq("module", EXPENSES_MODULE)
+    .eq("key", EXPENSES_KEY)
+    .maybeSingle();
+  if (error) return null;
+  return parseExpenseSorting(data?.body);
+}
+
+/** Payee defaults and rules, handed over as one JSON field by the editor. The account choices stay. */
 export async function saveExpenseSorting(
   slug: string,
   _prev: MoneySettingsState,
@@ -70,7 +88,15 @@ export async function saveExpenseSorting(
 ): Promise<MoneySettingsState> {
   const ctx = await settingsContext(slug, "expenses");
   if ("error" in ctx) return { error: ctx.error };
-  const parsed = expenseSortingSchema.safeParse({ version: 1, ...(readBody(formData) ?? {}) });
+  const stored = await storedSorting(ctx);
+  if (!stored) return { error: "We couldn't read your setting. Try again in a moment." };
+  const sent = (readBody(formData) ?? {}) as Record<string, unknown>;
+  const parsed = expenseSortingSchema.safeParse({
+    version: 1,
+    vendors: sent.vendors,
+    rules: sent.rules,
+    accounts: stored.accounts,
+  });
   if (!parsed.success) {
     return { error: parsed.error.issues[0]?.message ?? "Something in there doesn't look right." };
   }
@@ -87,6 +113,70 @@ export async function saveExpenseSorting(
     parsed.data,
     "Saved. New expenses from your books are sorted this way; press “Apply my rules to what's waiting” in the inbox for the ones already there.",
   );
+}
+
+const accountListSchema = z.array(accountChoiceSchema).max(1000);
+
+/**
+ * One choice per account in the books, handed over as one JSON list by the
+ * account sorter. Saved beside the payee defaults and rules, then applied to
+ * every expense in those accounts at once, in the database.
+ */
+export async function saveAccountSorting(
+  slug: string,
+  _prev: MoneySettingsState,
+  formData: FormData,
+): Promise<MoneySettingsState> {
+  const ctx = await settingsContext(slug, "expenses");
+  if ("error" in ctx) return { error: ctx.error };
+  const stored = await storedSorting(ctx);
+  if (!stored) return { error: "We couldn't read your setting. Try again in a moment." };
+  const list = accountListSchema.safeParse(
+    (readBody(formData) as { accounts?: unknown })?.accounts,
+  );
+  if (!list.success) {
+    return { error: list.error.issues[0]?.message ?? "Something in there doesn't look right." };
+  }
+  const parsed = expenseSortingSchema.safeParse({ ...stored, accounts: list.data });
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? "Something in there doesn't look right." };
+  }
+  const revenue = await loadRevenueSettings(ctx.supabase, ctx.tenant.id);
+  const lineIds = new Set(revenue.lines.map((line) => line.id));
+  if (
+    !parsed.data.accounts.every(
+      (choice) => choice.action.sort === "each" || actionFits(choice.action, lineIds),
+    )
+  ) {
+    return { error: "Each account has to go to one of your lines." };
+  }
+  const saved = await save(ctx, slug, EXPENSES_KEY, parsed.data, "");
+  if (saved.error) return saved;
+  const { data, error } = await ctx.supabase.rpc("apply_expense_accounts", {
+    p_tenant_id: ctx.tenant.id,
+  });
+  if (error) {
+    return {
+      message:
+        "Saved. Your expenses will follow these choices at the next sync with your books (we couldn't apply them just now).",
+    };
+  }
+  const counts = (data ?? {}) as { sorted?: number; inbox?: number };
+  const sorted = Number(counts.sorted ?? 0);
+  const inbox = Number(counts.inbox ?? 0);
+  const n = (count: number, one: string, many: string) =>
+    `${count.toLocaleString("en-US")} ${count === 1 ? one : many}`;
+  return {
+    message:
+      sorted === 0 && inbox === 0
+        ? "Saved. Every expense already matched these choices."
+        : `Saved. ${[
+            sorted ? `${n(sorted, "expense", "expenses")} sorted by their account` : "",
+            inbox ? `${n(inbox, "expense is", "expenses are")} waiting in the inbox for you` : "",
+          ]
+            .filter(Boolean)
+            .join(", and ")}.`,
+  };
 }
 
 /** Cost of goods, the shared split and the monthly costs, handed over as one JSON field. */

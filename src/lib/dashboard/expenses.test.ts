@@ -114,9 +114,10 @@ describe("which way an expense goes", () => {
   });
 
   it("matches an account by its whole name, payees and memos by a part", () => {
-    expect(decideExpense(rules, LINES, facts({ payee: null, accounts: ["Rent deposit"] }))).toBe(
-      null,
-    );
+    // No rule matches "Rent deposit": the account decides, and it has no choice yet.
+    expect(
+      decideExpense(rules, LINES, facts({ payee: null, accounts: ["Rent deposit"] })),
+    ).toMatchObject({ source: "account", action: { sort: "shared" } });
     expect(decideExpense(rules, LINES, facts({ payee: "The Studio Shop" }))?.ruleId).toBe(
       "r-payee",
     );
@@ -152,7 +153,25 @@ describe("which way an expense goes", () => {
         memo: "x",
         lines: [{ account: "Rent", description: "October" }],
       }),
-    ).toEqual({ payee: null, accounts: ["Fees", "Rent"], memo: "x", descriptions: ["October"] });
+    ).toEqual({
+      payee: null,
+      accounts: ["Fees", "Rent"],
+      memo: "x",
+      descriptions: ["October"],
+      accountRef: null,
+      classes: [null],
+      location: null,
+    });
+    expect(
+      factsOfRow({
+        payee: "A",
+        account: "Fees",
+        account_ref: "71",
+        location: "Studio",
+        memo: "",
+        lines: [{ account: "Fees", description: "", class: "Workshops" }],
+      }),
+    ).toMatchObject({ accountRef: "71", classes: ["Workshops"], location: "Studio" });
   });
 
   it("says each way of sorting in words", () => {
@@ -161,6 +180,144 @@ describe("which way an expense goes", () => {
       "70% Shop, 30% Classes",
     );
     expect(actionWords({ sort: "set_aside" }, name)).toBe("Not a business expense");
+  });
+});
+
+describe("sorting by the books' accounts", () => {
+  const byAccount = settings({
+    vendors: [
+      { id: "v-1", payee: "Yarn Barn", action: { sort: "line", line: "shop" }, fill_in: true },
+      { id: "v-2", payee: "Maybe Co", action: { sort: "shared" }, fill_in: false },
+    ],
+    rules: [
+      {
+        id: "r-class",
+        field: "class",
+        words: "workshops",
+        action: { sort: "line", line: "classes" },
+        fill_in: true,
+        firm: false,
+      },
+      {
+        id: "r-loc",
+        field: "location",
+        words: "Market Stall",
+        action: { sort: "line", line: "commissions" },
+        fill_in: true,
+        firm: false,
+      },
+    ],
+    accounts: [
+      { ref: "61", name: "Supplies", action: { sort: "line", line: "shop" } },
+      { ref: null, name: "Rent", action: { sort: "split", split: { shop: 50, classes: 50 } } },
+      { ref: "63", name: "Owner Draws", action: { sort: "set_aside" } },
+      { ref: "64", name: "Odds and Ends", action: { sort: "each" } },
+      { ref: "65", name: "Old Line", action: { sort: "line", line: "removed-line" } },
+    ],
+  });
+  const at = (
+    account: string | null,
+    accountRef: string | null,
+    over: Partial<ExpenseFacts> = {},
+  ) => facts({ payee: "Someone New", accounts: [account], accountRef, ...over });
+
+  it("follows the account's choice when no rule or default speaks first", () => {
+    expect(decideExpense(byAccount, LINES, at("Supplies", "61"))).toMatchObject({
+      source: "account",
+      action: { sort: "line", line: "shop" },
+      fillIn: true,
+    });
+    expect(decideExpense(byAccount, LINES, at("Owner Draws", "63"))?.action).toEqual({
+      sort: "set_aside",
+    });
+  });
+
+  it("finds an account by the books' id, so a renamed account keeps its choice", () => {
+    expect(decideExpense(byAccount, LINES, at("Supplies and Yarn", "61"))?.action).toEqual({
+      sort: "line",
+      line: "shop",
+    });
+    // Same name, but the books say it's a different account: no choice for it yet.
+    expect(decideExpense(byAccount, LINES, at("Supplies", "99"))?.action).toEqual({
+      sort: "shared",
+    });
+  });
+
+  it("falls back to the exact name where either side has no id", () => {
+    expect(decideExpense(byAccount, LINES, at("Supplies", null))?.action).toMatchObject({
+      sort: "line",
+    });
+    expect(decideExpense(byAccount, LINES, at("Rent", "70"))?.action).toMatchObject({
+      sort: "split",
+    });
+    expect(decideExpense(byAccount, LINES, at("rent", null))?.action).toEqual({ sort: "shared" });
+  });
+
+  it("counts an account with no choice yet as shared, and says so", () => {
+    expect(decideExpense(byAccount, LINES, at("Bank Fees", "80"))).toMatchObject({
+      source: "account",
+      action: { sort: "shared" },
+      reason: "Shared, until you choose for the account Bank Fees",
+    });
+    expect(decideExpense(DEFAULT_EXPENSE_SORTING, LINES, at(null, null))?.action).toEqual({
+      sort: "shared",
+    });
+  });
+
+  it("leaves an account set to decide each one in the inbox", () => {
+    expect(decideExpense(byAccount, LINES, at("Odds and Ends", "64"))).toBeNull();
+  });
+
+  it("treats a choice pointing at a removed line as no choice", () => {
+    expect(decideExpense(byAccount, LINES, at("Old Line", "65"))?.action).toEqual({
+      sort: "shared",
+    });
+  });
+
+  it("lets a payee default, a class or a location rule make an exception", () => {
+    expect(
+      decideExpense(byAccount, LINES, at("Owner Draws", "63", { payee: "Yarn Barn" })),
+    ).toMatchObject({ source: "vendor", action: { sort: "line", line: "shop" } });
+    expect(
+      decideExpense(byAccount, LINES, at("Supplies", "61", { classes: [null, "Workshops"] })),
+    ).toMatchObject({ ruleId: "r-class" });
+    expect(
+      decideExpense(byAccount, LINES, at("Supplies", "61", { location: "market  stall" })),
+    ).toMatchObject({ ruleId: "r-loc" });
+    // A suggestion-only default keeps it in the inbox with the suggestion beside it.
+    expect(
+      decisionPayload(byAccount, LINES, at("Supplies", "61", { payee: "Maybe Co" })),
+    ).toMatchObject({ suggest: { source: "vendor" } });
+  });
+
+  it("hands the database nothing when only the account decides: it applies that itself", () => {
+    expect(decisionPayload(byAccount, LINES, at("Supplies", "61"))).toEqual({});
+    expect(decisionPayload(byAccount, LINES, at("Odds and Ends", "64"))).toEqual({});
+  });
+
+  it("keeps one choice per account", () => {
+    const twice = (accounts: unknown[]) =>
+      expenseSortingSchema.safeParse({ version: 1, accounts }).success;
+    expect(
+      twice([
+        { ref: "1", name: "A", action: { sort: "shared" } },
+        { ref: "1", name: "B", action: { sort: "each" } },
+      ]),
+    ).toBe(false);
+    expect(
+      twice([
+        { ref: null, name: "A", action: { sort: "shared" } },
+        { ref: null, name: "A", action: { sort: "each" } },
+      ]),
+    ).toBe(false);
+    expect(
+      twice([
+        { ref: "1", name: "A", action: { sort: "shared" } },
+        { ref: null, name: "A", action: { sort: "each" } },
+      ]),
+    ).toBe(true);
+    // An earlier setting with no accounts still reads.
+    expect(parseExpenseSorting({ version: 1, vendors: [], rules: [] }).accounts).toEqual([]);
   });
 });
 
