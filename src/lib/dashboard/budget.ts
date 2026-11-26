@@ -144,6 +144,12 @@ export type BudgetRow = {
   /** Over budget here is usually good news: it rises with sales. */
   variable: boolean;
   hidden: boolean;
+  /**
+   * A debt's payments (owners and admins only): its budget follows the
+   * debt's usual payment and can't be typed; `estimatedMonths` had nothing
+   * booked yet and use that payment.
+   */
+  debt?: { estimatedMonths: number };
 };
 
 /** QuickBooks writes sub-accounts as "Parent:Child". */
@@ -327,7 +333,7 @@ export function breakEven(rows: readonly BudgetRow[], share: number | null): Bre
  */
 export function blanksFromAverage(rows: readonly BudgetRow[]): { key: string; cents: number }[] {
   return rows
-    .filter((row) => !row.hidden && row.budgeted === 0 && row.average > 0)
+    .filter((row) => !row.hidden && !row.debt && row.budgeted === 0 && row.average > 0)
     .map((row) => ({ key: row.key, cents: Math.round(row.average / 100) * 100 }))
     .filter((row) => row.cents > 0);
 }
