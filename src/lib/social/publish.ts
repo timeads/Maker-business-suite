@@ -2,7 +2,8 @@ import { requestJson } from "../connections/http";
 import { graphUrl, isMetaAuthError, metaErrorMessage } from "../connections/providers/meta";
 import type { Fetch } from "../connections/types";
 
-export type Channel = "facebook" | "instagram";
+/** Where a post goes. "instagram" is the feed (or a Reel, for a video); a Story is its own place. */
+export type Channel = "facebook" | "instagram" | "instagram_story";
 export type ChannelResult = { id: string } | { error: string };
 
 export type PublishInput = {
@@ -11,6 +12,8 @@ export type PublishInput = {
   captions?: Partial<Record<Channel, string>>;
   /** Public addresses the photos can be fetched from, in order. Empty for words alone. */
   imageUrls: string[];
+  /** A place's own copies of the photos (sized to fit it), in the same order, where it has them. */
+  imagesFor?: Partial<Record<Channel, string[]>>;
   /** A video to post instead of photos. It goes out as a Reel on Instagram. */
   videoUrl?: string | null;
   channels: Channel[];
@@ -49,6 +52,10 @@ export async function publishPost(
     });
 
   const words = (channel: Channel) => input.captions?.[channel]?.trim() || input.caption;
+  const photosFor = (channel: Channel) => {
+    const own = input.imagesFor?.[channel];
+    return (own?.length === input.imageUrls.length ? own : input.imageUrls).slice(0, 10);
+  };
   const photos = input.imageUrls.slice(0, 10);
 
   /** Waits for Instagram to finish fetching whatever a container points at. */
@@ -115,6 +122,7 @@ export async function publishPost(
       if (!input.instagramId) {
         throw new PermanentError("No Instagram account is linked to this Facebook Page");
       }
+      const photos = photosFor("instagram");
       if (input.videoUrl) {
         const reel = await post<{ id: string }>(`/${input.instagramId}/media`, {
           media_type: "REELS",
@@ -160,6 +168,30 @@ export async function publishPost(
         creation_id: container.id,
       });
       return published.id;
+    },
+    // A Story is one photo or one video, with no caption. It is published through the same
+    // content publishing calls (and the same permission) as the feed, as media_type STORIES.
+    async instagram_story() {
+      if (!input.instagramId) {
+        throw new PermanentError("No Instagram account is linked to this Facebook Page");
+      }
+      const photo = photosFor("instagram_story")[0];
+      if (!input.videoUrl && !photo) {
+        throw new PermanentError("An Instagram Story needs a photo or a video");
+      }
+      const story = await post<{ id: string }>(`/${input.instagramId}/media`, {
+        media_type: "STORIES",
+        ...(input.videoUrl ? { video_url: input.videoUrl } : { image_url: photo }),
+      });
+      const done = input.videoUrl ? await ready(story.id, 48, 5_000) : await ready(story.id);
+      if (!done && input.videoUrl) {
+        throw new Error("Instagram is still preparing the video. We'll try again shortly");
+      }
+      return (
+        await post<{ id: string }>(`/${input.instagramId}/media_publish`, {
+          creation_id: story.id,
+        })
+      ).id;
     },
   };
 

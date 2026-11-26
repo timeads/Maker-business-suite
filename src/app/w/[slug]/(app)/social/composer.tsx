@@ -193,7 +193,13 @@ export function Composer({
   const submit = (event: React.FormEvent<HTMLFormElement>) => {
     const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
     const intent = submitter?.value ?? "draft";
-    if (!slides || (intent !== "schedule" && intent !== "now")) return;
+    if (intent !== "schedule" && intent !== "now") return;
+    // Slides are drawn and Instagram's photos sized in this browser first.
+    const data = new FormData(event.currentTarget);
+    const toInstagram =
+      data.get("channel_instagram") === "on" || data.get("channel_instagram_story") === "on";
+    const newFiles = data.getAll("photos").some((file) => file instanceof File && file.size > 0);
+    if (!slides && !(toInstagram && (picked.length > 0 || newFiles))) return;
     event.preventDefault();
     const form = event.currentTarget;
     void (async () => {
@@ -207,7 +213,7 @@ export function Composer({
           setPrepError(saved.error ?? "That didn't save. Please try again.");
           return;
         }
-        setPreparing("Making the slides into pictures…");
+        setPreparing(slides ? "Making the slides into pictures…" : "Getting the photos ready…");
         const ready = await getReadyToSend(slug, saved.postId, kit);
         if (ready.error) {
           setPrepError(
@@ -634,6 +640,23 @@ export function Composer({
             />
             Instagram{instagram ? ` · @${instagram}` : ""}
           </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              name="channel_instagram_story"
+              defaultChecked={post?.channels.includes("instagram_story") ?? false}
+              disabled={instagram === null}
+            />
+            Instagram Story
+          </label>
+          {instagram !== null && (
+            <p className="text-muted-foreground text-xs">
+              A Story is one photo or one video, with no caption, and stays up for a day. Photos
+              that Instagram wouldn&apos;t take as they are (taller than 4:5 or wider than 1.91:1 on
+              the feed, anything but 9:16 in a Story) are sent as a copy cropped from the middle
+              when you schedule; your photo stays as it is.
+            </p>
+          )}
           {!connected ? (
             <p className="text-muted-foreground text-xs">
               Connect Facebook &amp; Instagram on the Connections page to schedule posts. You can

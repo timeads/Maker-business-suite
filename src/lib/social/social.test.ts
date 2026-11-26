@@ -237,6 +237,69 @@ describe("publishPost", () => {
     expect(outcome.results.instagram).toMatchObject({ error: expect.stringMatching(/video/) });
   });
 
+  it("sends Instagram its own sized copies, and Facebook the photos as they are", async () => {
+    const { impl, calls } = fakeFetch([
+      ["/p2/photos", 200, { id: "ph1", post_id: "p2_80" }],
+      ["/ig9/media_publish", 200, { id: "ig_post_3" }],
+      ["/ig9/media", 200, { id: "container3" }],
+      ["/container3", 200, { status_code: "FINISHED" }],
+    ]);
+    await publishPost(
+      { ...base, imagesFor: { instagram: ["https://files.test/rug-4x5.jpg"] } },
+      impl,
+      noWait,
+    );
+    const body = (match: string) => calls.find((c) => c.url.includes(match))!.body;
+    expect(body("/p2/photos")).toContain("rug.jpg");
+    expect(body("/ig9/media")).toContain("rug-4x5.jpg");
+  });
+
+  it("posts a Story: one photo, its own copy, no caption, as media_type STORIES", async () => {
+    const { impl, calls } = fakeFetch([
+      ["/ig9/media_publish", 200, { id: "story_1" }],
+      ["/ig9/media", 200, { id: "st" }],
+      ["/st", 200, { status_code: "FINISHED" }],
+    ]);
+    const outcome = await publishPost(
+      {
+        ...base,
+        channels: ["instagram_story"],
+        imagesFor: { instagram_story: ["https://files.test/rug-9x16.jpg"] },
+      },
+      impl,
+      noWait,
+    );
+    expect(outcome.results).toEqual({ instagram_story: { id: "story_1" } });
+    const media = new URLSearchParams(calls.find((c) => c.method === "POST")!.body);
+    expect(media.get("media_type")).toBe("STORIES");
+    expect(media.get("image_url")).toBe("https://files.test/rug-9x16.jpg");
+    expect(media.get("caption")).toBeNull();
+  });
+
+  it("posts a video as a Story, and never sends the feed again when the Story is what's left", async () => {
+    const { impl, calls } = fakeFetch([
+      ["/ig9/media_publish", 200, { id: "story_2" }],
+      ["/ig9/media", 200, { id: "sv" }],
+      ["/sv", 200, { status_code: "FINISHED" }],
+    ]);
+    const outcome = await publishPost(
+      {
+        ...base,
+        imageUrls: [],
+        videoUrl: "https://files.test/clip.mp4",
+        channels: ["instagram", "instagram_story"],
+        alreadySent: ["instagram"],
+      },
+      impl,
+      noWait,
+    );
+    expect(outcome.results).toEqual({ instagram_story: { id: "story_2" } });
+    const posts = calls.filter((c) => c.method === "POST");
+    expect(posts).toHaveLength(2);
+    expect(posts[0].body).toContain("media_type=STORIES");
+    expect(posts[0].body).toContain("video_url=");
+  });
+
   it("posts words alone to the Page feed", async () => {
     const { impl, calls } = fakeFetch([["/p2/feed", 200, { id: "p2_78" }]]);
     const outcome = await publishPost(

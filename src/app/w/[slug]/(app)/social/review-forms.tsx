@@ -76,11 +76,13 @@ export function ReviewQueue({
   }>({
     problems: [],
   });
-  const slidesOf = new Set(months.flatMap((m) => m.posts.filter((p) => p.slides).map((p) => p.id)));
-  /** Draws the slides of the posts that have them, one post at a time; says which couldn't be. */
+  /**
+   * Gets each post ready in this browser first, one at a time: slides drawn into pictures and
+   * photos sized for Instagram. Says which couldn't be got ready, and why.
+   */
   const prepare = async (ids: string[]) => {
     const problems: { id: string; reason: string }[] = [];
-    for (const id of ids.filter((one) => slidesOf.has(one))) {
+    for (const id of ids) {
       const ready = await getReadyToSend(slug, id, kit);
       if (ready.error) problems.push({ id, reason: ready.error });
     }

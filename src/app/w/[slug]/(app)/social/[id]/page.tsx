@@ -25,7 +25,11 @@ import {
 
 export const metadata: Metadata = { title: "Post" };
 
-const CHANNEL_NAMES: Record<string, string> = { facebook: "Facebook", instagram: "Instagram" };
+const CHANNEL_NAMES: Record<string, string> = {
+  facebook: "Facebook",
+  instagram: "Instagram",
+  instagram_story: "Instagram Story",
+};
 
 export default async function PostPage({
   params,

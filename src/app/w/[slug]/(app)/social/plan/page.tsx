@@ -94,7 +94,7 @@ export default async function SocialPlanPage({ params }: { params: Promise<{ slu
                 {review.posted} posted
                 {review.failed > 0 && `, ${review.failed} didn't go out`}
                 {review.channels.length > 0 &&
-                  ` · ${review.channels.map(([channel, n]) => `${n} on ${channel === "facebook" ? "Facebook" : "Instagram"}`).join(", ")}`}
+                  ` · ${review.channels.map(([channel, n]) => `${n} on ${channel === "facebook" ? "Facebook" : channel === "instagram_story" ? "Instagram Stories" : "Instagram"}`).join(", ")}`}
               </CardDescription>
             </CardHeader>
             <CardContent>

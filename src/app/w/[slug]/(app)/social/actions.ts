@@ -22,6 +22,8 @@ import {
   parsePlan,
   socialPlanSchema,
 } from "@/lib/social/plan";
+import { FIT_PLACES, needsCopy, type FitPlace } from "@/lib/social/fit";
+import { imageSize, type ImageSize } from "@/lib/social/image-size";
 import { REVIEW_KEY, reviewError, reviewSettingsSchema } from "@/lib/social/review";
 import { publicAssetUrl } from "@/lib/social/worker";
 import { getAdminClient } from "@/lib/supabase/admin";
@@ -44,7 +46,9 @@ const NO_ACCESS = "Social isn't part of this workspace's plan right now.";
 const READ_ONLY =
   "This workspace is read-only because its plan has ended. Pick a plan to make changes.";
 const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
-const CHANNELS = ["facebook", "instagram"] as const;
+const CHANNELS = ["facebook", "instagram", "instagram_story"] as const;
+/** The places a post can have words of its own for. A Story has no caption. */
+const CAPTION_CHANNELS = ["facebook", "instagram"] as const;
 
 const SAVE_ERRORS: Record<string, string> = {
   no_channel: "Pick where this should be posted.",
@@ -97,9 +101,29 @@ async function storePhotos(
       p_created_by: ctx.user.id,
     });
     if (error) return { error: "A photo didn't upload. Please try again." };
+    const size = imageSize(new Uint8Array(await photo.arrayBuffer()));
+    if (size) await keepSize(ctx.tenant.id, data as string, size);
     ids.push(data as string);
   }
   return { ids };
+}
+
+/** Keeps the size the server read from a picture's own bytes. Never throws. */
+async function keepSize(tenantId: string, assetId: string, size: ImageSize): Promise<void> {
+  const { error } = await getAdminClient().rpc("set_social_asset_size", {
+    p_tenant_id: tenantId,
+    p_asset_id: assetId,
+    p_width: size.width,
+    p_height: size.height,
+  });
+  if (error) console.error(`Photo size not kept: ${error.message}`);
+}
+
+/** Reads a stored picture back and measures it from its own bytes. */
+async function measureStored(path: string): Promise<ImageSize | null> {
+  const { data } = await getAdminClient().storage.from("social").download(path);
+  if (!data) return null;
+  return imageSize(new Uint8Array(await data.arrayBuffer()));
 }
 
 const UUID = /^[0-9a-f-]{36}$/i;
@@ -215,16 +239,8 @@ export async function savePost(
     }
     if (!slides) assetIds = assetIds.filter((id) => !drawnSlides.includes(id));
   }
-  if (scheduledFor && assetIds.length > 0 && channels.includes("instagram")) {
-    const { data: kinds } = await ctx.supabase
-      .from("social_assets")
-      .select("mime_type")
-      .eq("tenant_id", ctx.tenant.id)
-      .in("id", assetIds);
-    if ((kinds ?? []).some((asset) => asset.mime_type === "image/png")) {
-      return { error: "Instagram only takes JPEG photos. Swap the PNG or untick Instagram." };
-    }
-  }
+  // Instagram's sizes and JPEG rule are checked by the database when the post is scheduled;
+  // the composer makes copies that fit before it asks (see `sendingPlan`).
 
   // A draft keeps the date it's meant for, so it shows in the plan. One sent for review always
   // does: that is the time it is approved for.
@@ -249,7 +265,7 @@ export async function savePost(
     p_channels: channels,
     p_scheduled_for: scheduledFor,
     p_captions: Object.fromEntries(
-      CHANNELS.map((channel) => [
+      CAPTION_CHANNELS.map((channel) => [
         channel,
         formData.get(`own_${channel}`) === "on"
           ? String(formData.get(`caption_${channel}`) ?? "").trim()
@@ -493,7 +509,7 @@ export async function draftPostCaption(
     const draft = await draftCaption({
       workspaceName: ctx.tenant.name,
       brief,
-      channels: CHANNELS.filter((c) => formData.get(`channel_${c}`) === "on").map((c) =>
+      channels: CAPTION_CHANNELS.filter((c) => formData.get(`channel_${c}`) === "on").map((c) =>
         c === "facebook" ? "Facebook" : "Instagram",
       ),
       recent: (recent ?? []).map((row) => String(row.caption).slice(0, 600)).filter(Boolean),
@@ -896,11 +912,11 @@ async function registerUploads(
   items: { path: string; title: string }[],
   folderId: string | null,
   only: "any" | "pictures" = "any",
-): Promise<{ id: string; path: string }[]> {
+): Promise<{ id: string; path: string; width?: number; height?: number }[]> {
   const admin = getAdminClient();
   const bucket = admin.storage.from("social");
   const mine = new RegExp(`^${ctx.tenant.id}/[0-9a-f-]{36}\\.(jpg|png|mp4|mov)$`);
-  const filed: { id: string; path: string }[] = [];
+  const filed: { id: string; path: string; width?: number; height?: number }[] = [];
   for (const item of items.slice(0, 30)) {
     if (typeof item?.path !== "string" || !mine.test(item.path)) continue;
     const { data: info } = await bucket.info(item.path);
@@ -917,6 +933,12 @@ async function registerUploads(
       if (info) await bucket.remove([item.path]);
       continue;
     }
+    // A picture must say it is one in its own first bytes, and is measured while we look.
+    const measured = type.startsWith("image/") ? await measureStored(item.path) : null;
+    if (type.startsWith("image/") && measured?.type !== type) {
+      await bucket.remove([item.path]);
+      continue;
+    }
     const { data, error } = await admin.rpc("register_social_asset", {
       p_tenant_id: ctx.tenant.id,
       p_storage_path: item.path,
@@ -926,7 +948,15 @@ async function registerUploads(
       p_folder_id: folderId && UUID.test(folderId) ? folderId : null,
       p_title: String(item.title ?? "").slice(0, 120),
     });
-    if (!error && data) filed.push({ id: data as string, path: item.path });
+    if (!error && data) {
+      if (measured) await keepSize(ctx.tenant.id, data as string, measured);
+      filed.push({
+        id: data as string,
+        path: item.path,
+        width: measured?.width,
+        height: measured?.height,
+      });
+    }
   }
   return filed;
 }
@@ -1127,13 +1157,38 @@ export async function saveDesignedPictures(
 // Slides on a post: drawn into pictures by the person approving or scheduling it
 // ---------------------------------------------------------------------------
 
+/** A photo that needs a copy sized for a place, drawn in the browser. */
+export type FitNeed = { index: number; id: string; url: string };
+export type FitPlan = {
+  place: FitPlace;
+  /** For each photo in order: what the place gets (the photo or its copy), or null for a need. */
+  entries: (string | null)[];
+  needs: FitNeed[];
+};
+
 export type SendingPlan = {
   /** The post's slides, when it has them and they haven't been drawn as they are now. */
   slides: SlideDesign | null;
   key: string | null;
+  /** For each Instagram place the post goes to, what its photos need. Empty for none. */
+  fits: FitPlan[];
 };
 
-/** What has to be done in the browser before this post can be scheduled. */
+type PlanAsset = {
+  id: string;
+  storage_path: string;
+  mime_type: string;
+  width: number | null;
+  height: number | null;
+  fitted_from: string | null;
+  fitted_for: string | null;
+};
+
+/**
+ * What has to be done in the browser before this post can be scheduled: slides to draw, then
+ * photos to size for Instagram. Sizes come from what the server read from each file's own
+ * bytes (photos from before that are measured now); nothing the browser says is used.
+ */
 export async function sendingPlan(
   slug: string,
   postId: string,
@@ -1143,18 +1198,149 @@ export async function sendingPlan(
   if (!UUID.test(postId)) return { error: "That post couldn't be found." };
   const { data } = await ctx.supabase
     .from("social_posts")
-    .select("slides, slides_key, slides_drawn")
+    .select("channels, asset_id, asset_ids, channel_media, slides, slides_key, slides_drawn")
     .eq("tenant_id", ctx.tenant.id)
     .eq("id", postId)
     .maybeSingle();
   if (!data) return { error: "That post couldn't be found." };
-  if (data.slides == null || data.slides_drawn === data.slides_key) {
-    return { slides: null, key: null };
+  if (data.slides != null && data.slides_drawn !== data.slides_key) {
+    const slides = ownDesign(data.slides, publicAssetUrl(`${ctx.tenant.id}/`));
+    if (!slides) {
+      return { error: "This post's slides couldn't be read. Open the slides and save them again." };
+    }
+    // The photos are sized once the slides are pictures; ask again after drawing them.
+    return { slides, key: data.slides_key as string, fits: [] };
   }
-  const slides = ownDesign(data.slides, publicAssetUrl(`${ctx.tenant.id}/`));
-  if (!slides)
-    return { error: "This post's slides couldn't be read. Open the slides and save them again." };
-  return { slides, key: data.slides_key as string };
+
+  const channels = (data.channels as string[] | null) ?? [];
+  const places = FIT_PLACES.filter((place) => channels.includes(place));
+  const photos = (
+    (data.asset_ids as string[] | null)?.length
+      ? (data.asset_ids as string[])
+      : data.asset_id
+        ? [data.asset_id as string]
+        : []
+  ) as string[];
+  if (places.length === 0 || photos.length === 0) return { slides: null, key: null, fits: [] };
+  const media = (data.channel_media ?? {}) as Partial<Record<FitPlace, string[]>>;
+  const wanted = [...new Set([...photos, ...places.flatMap((place) => media[place] ?? [])])];
+  const { data: rows } = await ctx.supabase
+    .from("social_assets")
+    .select("id, storage_path, mime_type, width, height, fitted_from, fitted_for")
+    .eq("tenant_id", ctx.tenant.id)
+    .in("id", wanted);
+  const byId = new Map(((rows ?? []) as PlanAsset[]).map((row) => [row.id, row]));
+  // A video goes out as it is.
+  if (photos.some((id) => byId.get(id)?.mime_type.startsWith("video/"))) {
+    return { slides: null, key: null, fits: [] };
+  }
+  // Photos from before sizes were kept are measured now, from their own bytes.
+  for (const id of photos) {
+    const row = byId.get(id);
+    if (row && row.width == null && process.env.SUPABASE_SECRET_KEY) {
+      const measured = await measureStored(row.storage_path);
+      if (measured) {
+        await keepSize(ctx.tenant.id, id, measured);
+        row.width = measured.width;
+        row.height = measured.height;
+      }
+    }
+  }
+  const fits: FitPlan[] = places.map((place) => {
+    const current = media[place]?.length === photos.length ? media[place] : undefined;
+    const entries: (string | null)[] = [];
+    const needs: FitNeed[] = [];
+    photos.forEach((id, index) => {
+      const photo = byId.get(id);
+      const copy = current ? byId.get(current[index]) : undefined;
+      if (copy && copy.fitted_from === id && copy.fitted_for === place) {
+        entries.push(copy.id);
+      } else if (
+        photo &&
+        !needsCopy({ width: photo.width, height: photo.height, mimeType: photo.mime_type }, place)
+      ) {
+        entries.push(id);
+      } else if (photo?.width && photo.height) {
+        entries.push(null);
+        needs.push({ index, id, url: publicAssetUrl(photo.storage_path) });
+      } else {
+        // Not measurable: the database will refuse it, with its own words.
+        entries.push(id);
+      }
+    });
+    return { place, entries, needs };
+  });
+  return { slides: null, key: null, fits };
+}
+
+/**
+ * Keeps the copies the browser drew for each place: each is checked like any upload and
+ * measured again from its own bytes, marked as that photo's copy (which the database only
+ * allows when it fits), and the post told which copy each place gets. The originals are left
+ * exactly as they were. Nothing is changed if a copy doesn't arrive or doesn't fit.
+ */
+export async function saveFits(
+  slug: string,
+  postId: string,
+  made: { place: string; index: number; path: string }[],
+): Promise<{ ok: true } | { error: string }> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: String(ctx.error) };
+  if (!process.env.SUPABASE_SECRET_KEY) {
+    return { error: "Uploads aren't switched on for this environment yet." };
+  }
+  const plan = await sendingPlan(slug, postId);
+  if ("error" in plan) return plan;
+  if (plan.slides) return { error: "The slides need drawing first. Please try again." };
+  const copies = (Array.isArray(made) ? made : []).slice(0, 20);
+  const filed = await registerUploads(
+    ctx,
+    copies.map((copy) => ({ path: copy.path, title: "Sized copy" })),
+    null,
+    "pictures",
+  );
+  const admin = getAdminClient();
+  const sized = "We couldn't make a copy of a photo that Instagram takes. Please try again.";
+  // Copies that end up unused are put away, out of the library.
+  const failed = async (message: string) => {
+    if (filed.length) {
+      await ctx.supabase.rpc("sort_social_assets", {
+        p_tenant_id: ctx.tenant.id,
+        p_asset_ids: filed.map((file) => file.id),
+        p_move: false,
+        p_folder_id: null,
+        p_add_tags: ["sized"],
+        p_hidden: true,
+      });
+    }
+    return { error: message };
+  };
+  const fitsBody: Record<string, string[]> = {};
+  for (const fit of plan.fits) {
+    const entries = [...fit.entries];
+    for (const need of fit.needs) {
+      const copy = copies.find((c) => c.place === fit.place && c.index === need.index);
+      const file = copy && filed.find((f) => f.path === copy.path);
+      if (!file) return failed(sized);
+      const { error } = await admin.rpc("mark_social_fitted_copy", {
+        p_tenant_id: ctx.tenant.id,
+        p_copy_id: file.id,
+        p_original_id: need.id,
+        p_place: fit.place,
+      });
+      if (error) return failed(sized);
+      entries[need.index] = file.id;
+    }
+    if (entries.some((entry) => !entry)) return failed(sized);
+    fitsBody[fit.place] = entries as string[];
+  }
+  const { error } = await ctx.supabase.rpc("set_social_post_fits", {
+    p_tenant_id: ctx.tenant.id,
+    p_post_id: postId,
+    p_fits: fitsBody,
+  });
+  if (error) return failed(reviewError(error.message) ?? OOPS);
+  return { ok: true };
 }
 
 /**
@@ -1366,7 +1552,11 @@ export async function importProductPhotos(
       });
       // Already there (someone pressed at the same moment), or it failed: don't keep the copy.
       if (registerError || !id) await admin.storage.from("social").remove([path]);
-      else added += 1;
+      else {
+        added += 1;
+        const measured = imageSize(new Uint8Array(bytes));
+        if (measured) await keepSize(ctx.tenant.id, id as string, measured);
+      }
     } catch (err) {
       console.error(`Product photo skipped: ${err instanceof Error ? err.message : "unknown"}`);
     }
