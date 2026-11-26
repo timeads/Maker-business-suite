@@ -61,6 +61,13 @@ export const REVIEW_ERRORS: Record<string, string> = {
   slides_changed: "The slides changed while they were being drawn. Please try again.",
   slides_count: "Every slide needs its picture. Please try again.",
   too_many_photos: "A post can have up to 10 photos, slides included.",
+  photo_size:
+    "Instagram needs each photo between 4:5 (tall) and 1.91:1 (wide), as a JPEG. Open the post and schedule it from there, and a copy that fits is made for you.",
+  story_size:
+    "An Instagram Story is 9:16. Open the post and schedule it from there, and a copy that fits is made for you.",
+  story_one: "An Instagram Story is one photo or one video.",
+  story_needs_media: "An Instagram Story needs a photo or a video.",
+  fits_not_valid: "The sized copies didn't match the post's photos. Please try again.",
 };
 
 /** The plain words for a database refusal, or null when it isn't one of ours. */

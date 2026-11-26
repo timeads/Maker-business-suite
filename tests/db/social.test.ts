@@ -74,6 +74,8 @@ beforeAll(async () => {
     [tenantA, `${tenantA}/photo-1.jpg`, alice.id],
   );
   assetA = rows[0].id;
+  // Instagram only takes photos of a size the server measured that fits (sizes migration).
+  await service("select public.set_social_asset_size($1, $2, 1080, 1350)", [tenantA, assetA]);
 });
 
 describe("workspace isolation", () => {
