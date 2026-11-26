@@ -6,7 +6,8 @@ import { FormMessage } from "@/components/ui/form-message";
 import { Input, Label } from "@/components/ui/input";
 import { SubmitButton } from "@/components/ui/submit-button";
 import type { ShopPage } from "@/lib/bookings/shop-page";
-import { saveShopPage } from "./actions";
+import type { Upcoming } from "@/lib/bookings/upcoming";
+import { saveShopPage, saveUpcoming } from "./actions";
 
 /** What a business can change about the date picker on its shop's product pages. */
 export function ShopPageForm({ slug, settings }: { slug: string; settings: ShopPage }) {
@@ -118,6 +119,72 @@ export function ShopPageForm({ slug, settings }: { slug: string; settings: ShopP
       <FormMessage kind="success">{state.message}</FormMessage>
       <SubmitButton pendingText="Saving…" className="sm:w-fit">
         Save
+      </SubmitButton>
+    </form>
+  );
+}
+
+/** What a business can change about the "Upcoming classes" list on its workshops page. */
+export function UpcomingForm({ slug, settings }: { slug: string; settings: Upcoming }) {
+  const [state, action] = useActionState(saveUpcoming.bind(null, slug), {});
+  return (
+    <form action={action} className="flex flex-col gap-4">
+      <label className="flex items-center gap-2 text-sm font-semibold">
+        <input type="checkbox" name="on" defaultChecked={settings.on} />
+        Show the list on my shop
+      </label>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="upcoming-title">Heading</Label>
+          <Input
+            id="upcoming-title"
+            name="title"
+            maxLength={80}
+            defaultValue={settings.title}
+            placeholder="Upcoming classes"
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="upcoming-button">Button words</Label>
+          <Input
+            id="upcoming-button"
+            name="button_words"
+            maxLength={40}
+            defaultValue={settings.button_words}
+            placeholder="Book a place"
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="upcoming-max">How many dates to show at most</Label>
+          <Input
+            id="upcoming-max"
+            name="max_dates"
+            type="number"
+            min={1}
+            max={50}
+            defaultValue={settings.max_dates}
+            className="w-28"
+            required
+          />
+        </div>
+        <label className="flex items-center gap-2 self-end text-sm">
+          <input type="checkbox" name="show_seats_left" defaultChecked={settings.show_seats_left} />
+          Say how many places are left
+        </label>
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="upcoming-empty">When nothing is open</Label>
+        <Input
+          id="upcoming-empty"
+          name="empty_message"
+          maxLength={200}
+          defaultValue={settings.empty_message}
+        />
+      </div>
+      <FormMessage>{state.error}</FormMessage>
+      <FormMessage kind="success">{state.message}</FormMessage>
+      <SubmitButton variant="dark" pendingText="Saving…" className="sm:w-fit">
+        Save the list
       </SubmitButton>
     </form>
   );

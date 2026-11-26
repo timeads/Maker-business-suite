@@ -13,6 +13,7 @@ import type { BookingDetails } from "@/lib/bookings/emails";
 import { readEmailSettings } from "@/lib/bookings/email-settings";
 import { bookingEmail } from "@/lib/bookings/words";
 import { SHOP_PAGE_KEY, shopPageSchema } from "@/lib/bookings/shop-page";
+import { DEFAULT_UPCOMING, UPCOMING_KEY, upcomingSchema } from "@/lib/bookings/upcoming";
 import { parseClock, zonedTimeToUtc } from "@/lib/bookings/slots";
 import { sendEmail } from "@/lib/email";
 import { getEntitlements } from "@/lib/entitlements";
@@ -304,6 +305,45 @@ export async function saveShopPage(
   revalidatePath(`/w/${slug}/bookings`, "layout");
   revalidatePath(`/w/${slug}/settings`, "layout");
   return { message: "Saved." };
+}
+
+/** Saves the "Upcoming classes" list for the shop's workshops page. */
+export async function saveUpcoming(
+  slug: string,
+  _prev: BookingsState,
+  formData: FormData,
+): Promise<BookingsState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const parsed = upcomingSchema.safeParse({
+    version: 1,
+    on: formData.get("on") === "on",
+    title: text(formData, "title") || "Upcoming classes",
+    max_dates: Number.parseInt(text(formData, "max_dates") || "12", 10),
+    show_seats_left: formData.get("show_seats_left") === "on",
+    button_words: text(formData, "button_words") || "Book a place",
+    empty_message: text(formData, "empty_message") || DEFAULT_UPCOMING.empty_message,
+  });
+  if (!parsed.success) {
+    return {
+      error:
+        "Keep the heading under 80 characters, the button under 40, the message under 200, and show 1 to 50 dates.",
+    };
+  }
+  const { error } = await ctx.supabase.rpc("save_config", {
+    p_tenant_id: ctx.tenant.id,
+    p_module: BOOKINGS_MODULE,
+    p_key: UPCOMING_KEY,
+    p_body: parsed.data,
+  });
+  if (error) return { error: OOPS };
+  revalidatePath(`/w/${slug}/bookings`, "layout");
+  revalidatePath(`/w/${slug}/settings`, "layout");
+  return {
+    message: parsed.data.on
+      ? "Saved. Your shop shows the new list within a minute or two."
+      : "Saved. The list is switched off; the snippet shows its plain message.",
+  };
 }
 
 /** Ties a workshop to the shop product that sells it, or unties it. */

@@ -261,6 +261,9 @@ const TOOLS: Def[] = [
           "workshop tag",
           "cut-off",
           "contact",
+          "upcoming classes",
+          "workshops page",
+          "class list",
         ],
       },
       {

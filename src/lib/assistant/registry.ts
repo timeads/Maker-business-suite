@@ -9,6 +9,7 @@ import {
   bookingFormSchema,
 } from "../bookings/config";
 import { DEFAULT_SHOP_PAGE, SHOP_PAGE_KEY, shopPageSchema } from "../bookings/shop-page";
+import { DEFAULT_UPCOMING, UPCOMING_KEY, upcomingSchema } from "../bookings/upcoming";
 import {
   DEFAULT_EMAIL_WORDS,
   WORDS_KEY,
@@ -265,6 +266,16 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
       messageWordsChanged(next as EmailWords, current as EmailWords)
         ? "The words of a booking email go to customers by themselves, so only a person can write them: Settings → Bookings → Email words. Propose the change again with messages exactly as they are now, and tell the person where to write the words."
         : null,
+  },
+  {
+    module: BOOKINGS_MODULE,
+    key: UPCOMING_KEY,
+    feature: "bookings",
+    name: "Upcoming classes list",
+    description:
+      "The list of open workshop dates a business can put on its shop's own workshops page: whether it shows at all (on, off by default; while off the list shows its plain message), its heading (title), how many dates at most (max_dates, 1 to 50), whether it says how many places are left (show_seats_left), the button words (button_words) and what it says when nothing is open (empty_message). Only workshops sold through the shop are listed, and only public, open, future dates with a place left. Changes show within a minute or two; the snippet itself never needs pasting again.",
+    schema: upcomingSchema,
+    defaultBody: () => DEFAULT_UPCOMING,
   },
   {
     module: BOOKINGS_MODULE,

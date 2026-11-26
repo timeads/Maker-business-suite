@@ -8,11 +8,12 @@ import {
   pageSnippet,
   parseShopPage,
 } from "@/lib/bookings/shop-page";
+import { UPCOMING_KEY, parseUpcoming, upcomingSnippet } from "@/lib/bookings/upcoming";
 import { getSiteUrl } from "@/lib/site-url";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
 import { bookingsAccess } from "../../../bookings/gate";
-import { ShopPageForm, Snippet } from "../../../bookings/shop-page-form";
+import { ShopPageForm, Snippet, UpcomingForm } from "../../../bookings/shop-page-form";
 
 export const metadata: Metadata = { title: "Shop product page" };
 
@@ -30,14 +31,16 @@ export default async function ShopPageSettings({ params }: { params: Promise<{ s
   const [{ data }, site] = await Promise.all([
     supabase
       .from("configs")
-      .select("body")
+      .select("key, body")
       .eq("tenant_id", tenant.id)
       .eq("module", BOOKINGS_MODULE)
-      .eq("key", SHOP_PAGE_KEY)
-      .maybeSingle(),
+      .in("key", [SHOP_PAGE_KEY, UPCOMING_KEY]),
     getSiteUrl(),
   ]);
-  const settings = parseShopPage(data?.body);
+  const body = (key: string) =>
+    ((data ?? []) as { key: string; body: unknown }[]).find((row) => row.key === key)?.body;
+  const settings = parseShopPage(body(SHOP_PAGE_KEY));
+  const upcoming = parseUpcoming(body(UPCOMING_KEY));
   const canEdit = canManage(role) && entitlements.canWrite;
   const tag = settings.product_tag;
 
@@ -121,6 +124,47 @@ export default async function ShopPageSettings({ params }: { params: Promise<{ s
           <p className="text-muted-foreground text-xs">
             If one slips through anyway, the order isn&apos;t lost: it shows up under Bookings →
             Needs a date and you&apos;re told in Messages.
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card id="upcoming">
+        <CardHeader>
+          <CardTitle>3. Upcoming classes, on your workshops page (optional)</CardTitle>
+          <CardDescription>
+            A list of every open date of the workshops you sell in your shop, soonest first, each
+            with a button to its product page. Full, closed, private and too-soon dates are left
+            out. It uses the colour and the contact details above.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          {canEdit ? (
+            <UpcomingForm slug={tenant.slug} settings={upcoming} />
+          ) : (
+            <p className="text-muted-foreground text-sm">
+              {upcoming.on ? "The list is switched on." : "The list is switched off."} An owner or
+              admin can change it.
+            </p>
+          )}
+          <ol className="text-muted-foreground list-decimal pl-5 text-sm">
+            <li>Switch the list on above and save.</li>
+            <li>
+              In Shopify, open Online Store → Themes → Customize, and go to the page where your
+              workshops are listed.
+            </li>
+            <li>Add a “Custom liquid” section where the list should go, and paste this in.</li>
+            <li>
+              The list keeps its space while it loads, so the page doesn&apos;t jump. If it
+              can&apos;t load, a short message with your contact link shows instead.
+            </li>
+          </ol>
+          <Snippet
+            code={upcomingSnippet(settings, { slug: tenant.slug, site })}
+            label="the upcoming classes list"
+          />
+          <p className="text-muted-foreground text-xs">
+            Each button goes to the product&apos;s own page in your shop, as your shop told us.
+            Until the shop has been synced with Stock, a workshop shows without a button.
           </p>
         </CardContent>
       </Card>

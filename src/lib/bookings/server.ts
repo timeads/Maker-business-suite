@@ -32,6 +32,13 @@ import {
   type AvailabilityRule,
   type Busy,
 } from "./slots";
+import {
+  UPCOMING_KEY,
+  parseUpcoming,
+  upcomingAnswer,
+  type UpcomingAnswer,
+  type UpcomingRow,
+} from "./upcoming";
 import { WORDS_KEY, bookingEmail, parseEmailWords, type EmailWords } from "./words";
 
 /**
@@ -361,6 +368,49 @@ export async function getShopPage(tenantId: string): Promise<ShopPage> {
       .maybeSingle();
     return parseShopPage((data as { body?: unknown } | null)?.body);
   });
+}
+
+const upcomingMemo = new Map<string, { at: number; answer: UpcomingAnswer | null }>();
+const UPCOMING_MEMO_MS = 30_000;
+
+/**
+ * The "Upcoming classes" list for a shop's workshops page, or null when the
+ * workspace hasn't switched it on (or has no bookings). Kept for half a
+ * minute per server, on top of the browser's and the edge's own caching, so a
+ * busy shop page never turns into a busy database.
+ */
+export async function getUpcomingClasses(
+  slug: string,
+  admin: SupabaseClient = getAdminClient(),
+  now: number = Date.now(),
+): Promise<UpcomingAnswer | null> {
+  const memo = upcomingMemo.get(slug);
+  if (memo && now - memo.at < UPCOMING_MEMO_MS) return memo.answer;
+  const tenant = await getPublicWorkspace(slug, admin);
+  let answer: UpcomingAnswer | null = null;
+  if (tenant) {
+    const settings = await withTenant(tenant.id, async (scope) => {
+      const { data } = await scope
+        .select("configs", "body")
+        .eq("module", BOOKINGS_MODULE)
+        .eq("key", UPCOMING_KEY)
+        .maybeSingle();
+      return parseUpcoming((data as { body?: unknown } | null)?.body);
+    });
+    if (settings.on) {
+      const page = await getShopPage(tenant.id);
+      const { data, error } = await admin.rpc("shop_upcoming_classes", {
+        p_tenant_id: tenant.id,
+        p_cutoff_hours: page.cutoff_hours,
+        p_limit: settings.max_dates,
+      });
+      if (error) throw new Error(`Could not load upcoming classes: ${error.message}`);
+      answer = upcomingAnswer(settings, page, (data ?? []) as UpcomingRow[], tenant.timezone);
+    }
+  }
+  if (upcomingMemo.size > 500) upcomingMemo.clear();
+  upcomingMemo.set(slug, { at: now, answer });
+  return answer;
 }
 
 /**
