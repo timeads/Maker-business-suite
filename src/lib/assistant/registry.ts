@@ -28,6 +28,15 @@ import {
   type EmailWords,
 } from "../bookings/words";
 import { DASHBOARD_KEY, DASHBOARD_MODULE, dashboardSchema } from "../dashboard/schema";
+import {
+  DEFAULT_REVENUE_SETTINGS,
+  FIGURE_WORDS,
+  MATCH_WORDS,
+  REVENUE_KEY,
+  REVENUE_MODULE,
+  revenueSettingsSchema,
+  type RevenueSettings,
+} from "../dashboard/lines";
 import { DEFAULT_TEMPLATE, templateConfig } from "../dashboard/templates";
 import {
   DEFAULT_RULES,
@@ -162,6 +171,16 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
       "Which charts and figures appear on the Money page, in what order and size, and the default date range.",
     schema: dashboardSchema,
     defaultBody: () => templateConfig(DEFAULT_TEMPLATE),
+  },
+  {
+    module: REVENUE_MODULE,
+    key: REVENUE_KEY,
+    feature: "dashboard",
+    name: "Money: revenue and business lines",
+    description:
+      "How Money counts revenue and splits it into the business's own lines. figure: net_sales (items after discounts and refunds, before tax and shipping; the default) or order_totals (what shoppers paid, with tax and shipping, refunds taken out). by_class_date: true counts a class sale in the month the class runs instead of the month it was bought. lines: up to 12, each an id (lowercase letters, numbers and hyphens) and a name. default_line: the id of the line that takes any sale no rule matches; required whenever there are lines. rules: checked from the top and the first match wins; each has an id, a line (one of the lines' ids), a match (order_tag, product_tag or product_type, with words: tags or types to look for, one per entry, no commas; or workshop, a product a Bookings workshop is sold through, with no words). Words ignore capitals and treat hyphens, underscores and spaces alike.",
+    schema: revenueSettingsSchema,
+    defaultBody: () => DEFAULT_REVENUE_SETTINGS,
   },
   {
     module: HELPDESK_MODULE,
@@ -572,6 +591,9 @@ const WIDGET_NAMES: Record<string, string> = {
   sales_by_channel: "Sales by channel",
   cash_on_hand: "Cash on hand",
   ar_aging: "Money you're owed",
+  revenue_by_line: "Revenue by line",
+  revenue_by_line_over_time: "Revenue by line over time",
+  deferred_revenue: "Paid for classes still to come",
 };
 
 /**
@@ -583,7 +605,25 @@ export function describeConfig(entry: ConfigEntry, body: unknown): string[] {
   const value = (parsed.success ? parsed.data : entry.defaultBody()) as Record<string, unknown>;
   const list = (name: string) => (Array.isArray(value[name]) ? (value[name] as never[]) : []);
 
-  if (entry.module === DASHBOARD_MODULE) {
+  if (entry.module === REVENUE_MODULE && entry.key === REVENUE_KEY) {
+    const settings = value as unknown as RevenueSettings;
+    const lineName = (id: string | null) =>
+      settings.lines.find((line) => line.id === id)?.name ?? id ?? "nothing";
+    return [
+      `Revenue is ${FIGURE_WORDS[settings.figure]?.lower ?? settings.figure}`,
+      settings.by_class_date
+        ? "Classes count in the month they run"
+        : "Classes count in the month they were bought",
+      settings.lines.length
+        ? `Lines: ${settings.lines.map((line) => line.name).join(", ")}; anything else goes to ${lineName(settings.default_line)}`
+        : "No business lines yet",
+      ...settings.rules.map(
+        (rule, i) =>
+          `${i + 1}. ${MATCH_WORDS[rule.match]?.label ?? rule.match}${rule.words.length ? ` ${rule.words.map((w) => `"${w}"`).join(" or ")}` : ""} → ${lineName(rule.line)}`,
+      ),
+    ];
+  }
+  if (entry.module === DASHBOARD_MODULE && entry.key === DASHBOARD_KEY) {
     const widgets = list("widgets") as {
       type: string;
       title?: string;
