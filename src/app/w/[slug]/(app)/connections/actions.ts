@@ -110,6 +110,11 @@ export async function startConnection(
     for (const [name, value] of Object.entries(kept)) if (!input[name]) input[name] = value;
   }
 
+  // A one-time proof for providers that want PKCE; it rides in the httpOnly
+  // state cookie and goes to the provider only as its hash, then once more
+  // with the code.
+  if (ctx.adapter.pkce) input.pkce_verifier = randomBytes(48).toString("base64url");
+
   const state = randomBytes(24).toString("base64url");
   const site = await getSiteUrl();
   let url: string;

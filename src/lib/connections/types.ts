@@ -9,7 +9,9 @@ export type ProviderKey =
   | "google_mail"
   | "michaels"
   | "twilio"
-  | "eventbrite";
+  | "eventbrite"
+  | "tiktok"
+  | "linkedin";
 
 export type ConnectionStatus = "active" | "needs_reconnect" | "disconnected";
 
@@ -347,6 +349,20 @@ export interface ProviderAdapter {
   /** Nothing is ever pulled from it: no "last synced", no "Sync now". */
   nothingToSync?: boolean;
   /**
+   * One connection holding several logins (TikTok, LinkedIn): connecting
+   * again ADDS a login (or renews that one) instead of replacing the
+   * connection, and each login's tokens sit under "login:<id>"
+   * (`lib/connections/logins.ts`). `refresh` is then called with one
+   * login's token set and that login's id.
+   */
+  multiLogin?: boolean;
+  /**
+   * The provider wants PKCE: the connect flow makes a one-time verifier and
+   * hands it to `beginConnect` and `completeConnect` as `input.pkce_verifier`
+   * (kept meanwhile in the httpOnly, path-scoped state cookie).
+   */
+  pkce?: boolean;
+  /**
    * For a connection made with a pasted key: what disconnecting means, for
    * the "are you sure?" question. Without it the page uses its usual words.
    */
@@ -403,6 +419,8 @@ export interface ProviderAdapter {
   grantedScopes?(token: TokenSet, externalAccountId: string): Promise<string[]>;
   /** Best-effort revoke on the provider's side. */
   disconnect(token: TokenSet, externalAccountId: string): Promise<void>;
+  /** For a `multiLogin` provider: best-effort revoke of one login's own tokens. */
+  disconnectLogin?(login: TokenSet, loginId: string): Promise<void>;
   sync(ctx: SyncContext): Promise<SyncResult>;
   /** Webhook topics that are handled without a token (it may already be dead). */
   tokenlessTopics?: readonly string[];

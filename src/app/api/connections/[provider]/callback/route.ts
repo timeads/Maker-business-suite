@@ -4,6 +4,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getUser } from "@/lib/auth";
 import { OAUTH_COOKIE, OAUTH_COOKIE_PATH, decodeOAuthState } from "@/lib/connections/oauth-state";
 import { getAdapter, isProviderKey } from "@/lib/connections/registry";
+import { saveLogin } from "@/lib/connections/save-login";
 import { ConnectError } from "@/lib/connections/types";
 import { getEntitlements } from "@/lib/entitlements";
 import { getSiteUrl } from "@/lib/site-url";
@@ -64,16 +65,18 @@ export async function GET(request: NextRequest, ctx: { params: Promise<{ provide
       input: saved.input,
     });
 
-    const { error } = await getAdminClient().rpc("save_connection", {
-      p_tenant_id: tenantCtx.tenant.id,
-      p_provider: provider,
-      p_external_account_id: account.externalAccountId,
-      p_display_name: account.displayName,
-      p_scopes: account.scopes,
-      p_token: account.token,
-      p_connected_by: user.id,
-      p_metadata: account.metadata ?? {},
-    });
+    const { error } = adapter.multiLogin
+      ? await saveLogin(tenantCtx.tenant.id, provider, account, user.id)
+      : await getAdminClient().rpc("save_connection", {
+          p_tenant_id: tenantCtx.tenant.id,
+          p_provider: provider,
+          p_external_account_id: account.externalAccountId,
+          p_display_name: account.displayName,
+          p_scopes: account.scopes,
+          p_token: account.token,
+          p_connected_by: user.id,
+          p_metadata: account.metadata ?? {},
+        });
     if (error) {
       if (error.code === "23505") return back(saved.slug, { error: "in_use", provider });
       throw new Error(error.message);

@@ -1,12 +1,14 @@
 import { createEasyPostAdapter } from "./providers/easypost";
 import { createEventbriteAdapter } from "./providers/eventbrite";
 import { createGoogleMailAdapter } from "./providers/google-mail";
+import { createLinkedInAdapter } from "./providers/linkedin";
 import { createMetaAdapter } from "./providers/meta";
 import { createMichaelsAdapter } from "./providers/michaels";
 import { createQuickBooksAdapter } from "./providers/quickbooks";
 import { createRedoAdapter } from "./providers/redo";
 import { createShopifyAdapter } from "./providers/shopify";
 import { createStripeAdapter } from "./providers/stripe";
+import { createTikTokAdapter } from "./providers/tiktok";
 import { createTwilioAdapter } from "./providers/twilio";
 import { createUpsAdapter } from "./providers/ups";
 import type { ProviderAdapter, ProviderKey } from "./types";
@@ -23,6 +25,8 @@ const adapters: Record<ProviderKey, ProviderAdapter> = {
   michaels: createMichaelsAdapter(),
   twilio: createTwilioAdapter(),
   eventbrite: createEventbriteAdapter(),
+  tiktok: createTikTokAdapter(),
+  linkedin: createLinkedInAdapter(),
 };
 
 export const PROVIDER_ORDER: readonly ProviderKey[] = [
@@ -30,6 +34,8 @@ export const PROVIDER_ORDER: readonly ProviderKey[] = [
   "quickbooks",
   "stripe",
   "meta",
+  "tiktok",
+  "linkedin",
   "easypost",
   "ups",
   "redo",
