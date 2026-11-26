@@ -137,6 +137,36 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   share of monthly costs (prorated by the day); unsorted, set aside and
   unsplit amounts are shown apart. Keep `tests/db/money-expenses.test.ts`
   passing.
+  Cash health (`lib/dashboard/health.ts`, pure, whole cents; config
+  `dashboard` / `health`, Settings → Money → Cash health, defaults the
+  earlier dashboard's thresholds): the QuickBooks sync also reads the
+  CashFlow report (cash basis) by month into `cash_flow` snapshots, other
+  income / other expenses into each P&L month (`*_cents`), and both from
+  three Januaries back (`reportsSince`); cash flow trouble never stops the
+  sync. Only complete months (in the workspace's timezone) count; operating
+  profit leaves other income and expenses out; burn is minus the average
+  operating cash flow, else expenses less revenue; runway has no limit
+  while cash grows; growth needs two full windows. A P&L month stored
+  before other income was read is "not known", never 0. The money view
+  reads the monthly kinds and only the latest balance sheet / aged
+  receivables (`latestOf`), so a long history never crowds them out. Ranges
+  include this / last month, this / last quarter, year to date and last
+  year; a range picks the books' months with `rangeMonths`.
+  Budget (Money → Budget, `lib/dashboard/budget.ts` + `budget-data.ts`;
+  config `dashboard` / `budget`): `money_budgets` per account or line per
+  month, written only by `set_money_budgets` / `copy_money_budget_month` /
+  `fill_money_budget_year` (owners and admins); actuals from
+  `money_account_totals` (moves and set-aside never count) or the sorted
+  expenses shared out as profit by line does; variance, averages, expected
+  cost of goods and break-even worked out on read. Which accounts rise with
+  sales, which are hidden and the cost of goods share are the config (blank
+  share = the books' own); never an account name in code. Cost cutter
+  (Money → Cost cutter, `lib/dashboard/recurring.ts`; config `dashboard` /
+  `cost_cutter`): a payee (spellings folded by `foldPayee`) charging in
+  `min_months` different months is recurring; decisions are
+  `money_charge_decisions` through `decide_money_charge`, a note for the
+  team that cancels nothing. No model call in either. Keep
+  `tests/db/money-budget.test.ts` and `money-cash-flow.test.ts` passing.
 - Help desk: inbound email is authenticated by a secret in the webhook URL,
   queued (`private.inbound_emails`) and filed by the worker through
   `file_inbound_email` (the older `ingest_inbound_email` hands over to it),
