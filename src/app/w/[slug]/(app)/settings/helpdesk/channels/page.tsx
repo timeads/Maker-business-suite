@@ -127,7 +127,12 @@ export default async function ChannelsPage({
             Messages people send your Instagram account or Facebook Page arrive as conversations,
             with the person&apos;s name or @handle. They use the same Facebook &amp; Instagram
             connection as Social, with extra permission to read and answer messages. A workspace
-            that only posts is never asked for it.
+            that only posts is never asked for it. Each conversation is answered as the account the
+            person wrote to; which Pages and Instagram accounts are used is under{" "}
+            <Link href={`/w/${tenant.slug}/settings/social/accounts`} className="underline">
+              Social accounts
+            </Link>
+            .
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-5">

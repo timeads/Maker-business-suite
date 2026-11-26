@@ -2,6 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/auth";
+import { accountAllows } from "@/lib/connections/meta-access";
+import { getMetaPageToken } from "@/lib/connections/meta-token";
 import { getProviderToken } from "@/lib/connections/tokens";
 import { getEntitlements } from "@/lib/entitlements";
 import { HELPDESK_MODULE, templateActionsSchema } from "@/lib/helpdesk/config";
@@ -17,11 +19,9 @@ import {
   channelSettingsSchema,
   channelState,
   commentAbilities,
-  commentScopesAllow,
   commentState,
   isSocialChannel,
   parseChannelSettings,
-  scopesAllow,
   socialFilesProblem,
   textFits,
   TEXT_LIMITS,
@@ -36,17 +36,16 @@ import {
   refusalWithDetails,
   refusalWords,
   setCommentHidden,
-  subscribePage,
-  subscribedFieldsFor,
-  unsubscribePage,
 } from "@/lib/helpdesk/social/graph";
 import {
   SocialNotSent,
   loadChannelFacts,
   loadCommentContext,
+  loadTicketAccount,
   sendCommentReply,
   sendSocialReply,
 } from "@/lib/helpdesk/social/server";
+import { syncPageSubscriptions } from "@/lib/helpdesk/social/subscriptions";
 import { replyWindow, windowWords } from "@/lib/helpdesk/social/window";
 import { getAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -514,11 +513,12 @@ async function ownComment(ctx: Ctx, messageId: string) {
     channel: ticket.channel as SocialChannel,
     commentId: String(message.provider_message_id),
     inbound: message.direction === "inbound",
+    ticketId: String(message.ticket_id),
   };
 }
 
 /** Meta's token and whether this workspace may moderate comments on a channel, or the reason it can't. */
-async function moderation(ctx: Ctx, channel: SocialChannel) {
+async function moderation(ctx: Ctx, channel: SocialChannel, ticketId: string) {
   if (!process.env.META_APP_SECRET || !process.env.SUPABASE_SECRET_KEY) {
     return {
       error: `${CHANNEL_LABELS[channel]} comments aren't switched on for this environment yet.`,
@@ -533,6 +533,15 @@ async function moderation(ctx: Ctx, channel: SocialChannel) {
   }
   if (!commentAbilities(channel, facts.connection?.scopes ?? null).moderate) {
     return { error: refusalWords("not_allowed") };
+  }
+  // Done as the account the comment was left on, with its own Page's token.
+  const admin = getAdminClient();
+  const account = await loadTicketAccount(admin, { tenantId: ctx.tenant.id, ticketId });
+  if (account && (!account.active || !accountAllows("comments", account.tasks))) {
+    return { error: refusalWords("not_allowed") };
+  }
+  if (account) {
+    return { token: (await getMetaPageToken(ctx.tenant.id, account.pageId)).token };
   }
   const stored = await getProviderToken(ctx.tenant.id, "meta");
   return { token: stored.token.access_token };
@@ -556,7 +565,7 @@ export async function hideComment(
   if ("error" in ctx) return { error: ctx.error };
   const comment = await ownComment(ctx, messageId);
   if (!comment || !comment.inbound) return { error: "That comment couldn't be found." };
-  const access = await moderation(ctx, comment.channel);
+  const access = await moderation(ctx, comment.channel, comment.ticketId);
   if ("error" in access) return { error: access.error };
   try {
     await setCommentHidden(comment.channel, access.token, comment.commentId, hidden);
@@ -587,7 +596,7 @@ export async function removeComment(slug: string, messageId: string): Promise<He
   if (!canManage(ctx.role)) return { error: "Only owners and admins can delete a comment." };
   const comment = await ownComment(ctx, messageId);
   if (!comment) return { error: "That comment couldn't be found." };
-  const access = await moderation(ctx, comment.channel);
+  const access = await moderation(ctx, comment.channel, comment.ticketId);
   if ("error" in access) return { error: access.error };
   try {
     await deleteComment(access.token, comment.commentId);
@@ -675,25 +684,11 @@ export async function saveChannelSwitches(
   let note = "";
   if (process.env.META_APP_SECRET && process.env.SUPABASE_SECRET_KEY) {
     try {
-      const facts = await loadChannelFacts(getAdminClient(), ctx.tenant.id);
-      const scopes = facts.connection?.scopes ?? [];
-      // What the Page should send: messages and comments each only where they are
-      // both switched on and granted. With nothing left, it is asked to stop.
-      const fields = subscribedFieldsFor({
-        messages:
-          (next.data.facebook && scopesAllow("facebook", scopes)) ||
-          (next.data.instagram && scopesAllow("instagram", scopes)),
-        comments:
-          (next.data.facebook_comments && commentScopesAllow("facebook", scopes)) ||
-          (next.data.instagram_comments && commentScopesAllow("instagram", scopes)),
-      });
-      const able =
-        facts.connection?.status === "active" && scopes.includes("pages_manage_metadata");
-      if (able) {
-        const stored = await getProviderToken(ctx.tenant.id, "meta");
-        if (fields.length > 0) {
-          await subscribePage(stored.externalAccountId, stored.token.access_token, fetch, fields);
-        } else await unsubscribePage(stored.externalAccountId, stored.token.access_token);
+      const admin = getAdminClient();
+      const facts = await loadChannelFacts(admin, ctx.tenant.id);
+      // Every Page with an account in use, each asked with its own token.
+      if (facts.connection?.status === "active") {
+        await syncPageSubscriptions(admin, ctx.tenant.id, next.data, facts.connection.scopes ?? []);
       }
     } catch (err) {
       console.error(

@@ -26,6 +26,7 @@ export const META_WITH_POSTING = "posting";
 const RETURN_PATHS: Record<string, string> = {
   helpdesk_channels: "settings/helpdesk/channels",
   social: "social",
+  social_accounts: "settings/social/accounts",
 };
 
 export const metaApiVersion = () => process.env.META_API_VERSION || "v23.0";

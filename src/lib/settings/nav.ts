@@ -457,6 +457,19 @@ const TOOLS: Def[] = [
         path: "social/review",
         keywords: ["approve", "approval", "review", "send back", "who can schedule", "sign off"],
       },
+      {
+        id: "social.accounts",
+        name: "Social accounts",
+        path: "social/accounts",
+        keywords: [
+          "facebook pages",
+          "instagram accounts",
+          "several accounts",
+          "which page",
+          "brands",
+          "connect another page",
+        ],
+      },
     ],
   },
   {

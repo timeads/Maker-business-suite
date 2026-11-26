@@ -70,7 +70,7 @@ describe("settingsNav", () => {
       "shipping.slip",
       "shipping.printing",
     ]);
-    expect(kids(nav, "social")).toEqual(["social.where", "social.review"]);
+    expect(kids(nav, "social")).toEqual(["social.where", "social.review", "social.accounts"]);
     expect(kids(nav, "bookings")).toEqual([
       "bookings.emails",
       "bookings.words",

@@ -417,6 +417,7 @@ export function ListTools({
   extra,
   channels = false,
   comments = false,
+  accounts,
 }: {
   /** One more button for the row (the export, for owners and admins). */
   extra?: React.ReactNode;
@@ -424,6 +425,8 @@ export function ListTools({
   channels?: boolean;
   /** Comments on posts are on, so the list can be narrowed to messages or comments. */
   comments?: boolean;
+  /** The workspace's Instagram and Facebook accounts, when it uses more than one. */
+  accounts?: Option[];
   slug: string;
   base: string;
   /** The address's own words, so a filter changes only itself. */
@@ -437,7 +440,7 @@ export function ListTools({
   manageHref: string;
 }) {
   const router = useRouter();
-  const filters = ["tag", "assignee", "priority", "unread", "channel", "kind"].filter(
+  const filters = ["tag", "assignee", "priority", "unread", "channel", "kind", "account"].filter(
     (key) => params[key],
   );
   const [open, setOpen] = useState(filters.length > 0 || Boolean(params.sort));
@@ -547,6 +550,8 @@ export function ListTools({
               { value: "instagram", label: "Instagram" },
               { value: "facebook", label: "Facebook" },
             ])}
+          {((accounts && accounts.length > 1) || params.account) &&
+            select("account", "Any account", accounts ?? [])}
           {(comments || params.kind) &&
             select("kind", "Messages and comments", [
               { value: "message", label: "Messages only" },
@@ -573,6 +578,7 @@ export function ListTools({
                       unread: null,
                       channel: null,
                       kind: null,
+                      account: null,
                     })
                   }
                   className="text-ochre-text ml-auto font-semibold hover:underline"

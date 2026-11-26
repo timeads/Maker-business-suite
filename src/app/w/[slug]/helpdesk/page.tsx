@@ -172,6 +172,8 @@ type Row = {
   /** "message", or "comment" for a conversation about a comment on a post. */
   kind: string;
   comment_post_id: string | null;
+  /** The Instagram account or Facebook Page the customer wrote to. */
+  social_account_id: string | null;
   last_message_at: string;
   created_at: string;
   contact_id: string;
@@ -224,7 +226,7 @@ const tagsOf = (row: Row) =>
     .filter((name): name is string => Boolean(name));
 
 const FIELDS =
-  "id, number, subject, status, priority, assignee_id, snoozed_until, merged_into, folder_id, shelf, channel, kind, comment_post_id, last_message_at, created_at, contact_id, contacts(id, email, name, handle, known_email), ticket_tags(tags(name))";
+  "id, number, subject, status, priority, assignee_id, snoozed_until, merged_into, folder_id, shelf, channel, kind, comment_post_id, social_account_id, last_message_at, created_at, contact_id, contacts(id, email, name, handle, known_email), ticket_tags(tags(name))";
 const UUID = /^[0-9a-f-]{36}$/;
 const heading = "text-[13px] font-bold tracking-[-0.005em]";
 const card = "border-border border-b px-4 py-4";
@@ -313,6 +315,7 @@ export default async function HelpdeskPage({
     (c) => c === query.channel,
   );
   const kindFilter = (["message", "comment"] as const).find((k) => k === query.kind);
+  const accountFilter = UUID.test(query.account ?? "") ? (query.account as string) : null;
   // "Show more": each step reads further back, up to a thousand conversations.
   const pages = /^[2-5]$/.test(query.n ?? "") ? Number(query.n) : 1;
   const side = query.side === "activity" || query.side === "details" ? query.side : null;
@@ -416,6 +419,28 @@ export default async function HelpdeskPage({
       .eq("provider", "meta")
       .maybeSingle(),
   ]);
+  // The workspace's Instagram accounts and Facebook Pages, to name and filter by.
+  const { data: accountRows } = await supabase
+    .from("social_accounts")
+    .select("id, network, name, handle, active")
+    .eq("tenant_id", tenant.id);
+  const socialAccounts = (accountRows ?? []) as {
+    id: string;
+    network: string;
+    name: string | null;
+    handle: string | null;
+    active: boolean;
+  }[];
+  const accountName = (id: string | null) => {
+    const account = socialAccounts.find((a) => a.id === id);
+    if (!account) return null;
+    return account.handle ? `@${account.handle}` : (account.name ?? null);
+  };
+  /** Name the account only where there is more than one of its network to tell apart. */
+  const accountNote = (row: Pick<Row, "channel" | "social_account_id">) =>
+    socialAccounts.filter((a) => a.network === row.channel).length > 1
+      ? accountName(row.social_account_id)
+      : null;
   const people = (team ?? []) as Person[];
   const person = (id: string | null) => people.find((p) => p.user_id === id);
   const folders = (folderRows ?? []) as { id: string; name: string }[];
@@ -498,12 +523,14 @@ export default async function HelpdeskPage({
     };
   });
   const wantUnread = unreadOnly || Boolean(savedView?.conditions.unread);
-  const filtered = listRows.filter((row) =>
-    passesFilters(
-      row,
-      { tag, assignee, priority, unread: wantUnread, channel: channelFilter, kind: kindFilter },
-      user.id,
-    ),
+  const filtered = listRows.filter(
+    (row) =>
+      passesFilters(
+        row,
+        { tag, assignee, priority, unread: wantUnread, channel: channelFilter, kind: kindFilter },
+        user.id,
+      ) &&
+      (!accountFilter || row.social_account_id === accountFilter),
   );
   const mixed =
     Boolean(q) ||
@@ -560,6 +587,7 @@ export default async function HelpdeskPage({
     unread: unreadOnly ? "1" : "",
     channel: channelFilter ?? "",
     kind: kindFilter ?? "",
+    account: accountFilter ?? "",
     n: pages > 1 ? String(pages) : "",
   };
   const href = (changes: Record<string, string | number | null>) => {
@@ -1228,6 +1256,14 @@ export default async function HelpdeskPage({
               canSend={canSend}
               channels={socialOn}
               comments={commentsOn}
+              accounts={socialAccounts
+                .filter((a) => a.active || a.id === accountFilter)
+                .map((a) => ({
+                  value: a.id,
+                  label: `${a.network === "instagram" ? "Instagram" : "Facebook"} · ${
+                    a.handle ? `@${a.handle}` : (a.name ?? "account")
+                  }`,
+                }))}
               manageHref={`/w/${tenant.slug}/settings/helpdesk#folders`}
               extra={
                 canManage(role) && canWrite ? (
@@ -1294,7 +1330,13 @@ export default async function HelpdeskPage({
                   )
                 ) : q ? (
                   `Nothing matches “${q}” in names, emails, subjects, what was said or ticket numbers.`
-                ) : tag || assignee || priority || unreadOnly || channelFilter || kindFilter ? (
+                ) : tag ||
+                  assignee ||
+                  priority ||
+                  unreadOnly ||
+                  channelFilter ||
+                  kindFilter ||
+                  accountFilter ? (
                   "No conversations match these filters."
                 ) : choice.kind === "built" && choice.key === "social" ? (
                   "No Instagram or Facebook messages are waiting."
@@ -1521,7 +1563,12 @@ export default async function HelpdeskPage({
                     />
                     <p className="text-muted-foreground truncate text-[13px]">
                       #{ticket.number} · <span className="font-read">{customerLabel}</span> ·{" "}
-                      {channel && <>{CHANNEL_LABELS[channel]} · </>}
+                      {channel && (
+                        <>
+                          {CHANNEL_LABELS[channel]}
+                          {accountNote(ticket) && <> to {accountNote(ticket)}</>} ·{" "}
+                        </>
+                      )}
                       <span title={when.format(new Date(ticket.created_at))}>
                         {openedAgo(ticket.created_at, nowMs)}
                       </span>

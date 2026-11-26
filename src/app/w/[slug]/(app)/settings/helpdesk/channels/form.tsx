@@ -25,7 +25,7 @@ export function AllowMetaAccess({
   label: string;
   /** A comma list of uses: "messages", "posting", "facebook_comments", "instagram_comments". */
   access: string;
-  returnTo: "helpdesk_channels" | "social";
+  returnTo: "helpdesk_channels" | "social" | "social_accounts";
   variant?: "default" | "outline";
 }) {
   const [state, action] = useActionState<ConnectionState, FormData>(
