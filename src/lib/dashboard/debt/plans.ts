@@ -49,11 +49,15 @@ const later = (a: string | null, b: string | null) => (a && (!b || a > b) ? a : 
  * Folds covered debts (and a plan's own account, if the books counted it as
  * a debt by itself) into their plans. A plan's balance is its covered open
  * debts added up, its account's balance, or what was typed in; a covered
- * debt gone from the books (closed) drops out of the sum. Debts not covered
+ * debt gone from the books (closed) drops out of the sum. A closed plan
+ * folds nothing in, so what it paid is never hidden. Debts not covered
  * pass through untouched, in the same order.
  */
 export function foldDebts(all: readonly Debt[], accounts: readonly FoldAccount[] = []): DebtFold {
-  const plans = new Map(all.filter((d) => d.consolidated).map((d) => [d.id, d]));
+  // A closed plan pays nothing any more: what it paid counts on its own again.
+  const plans = new Map(
+    all.filter((d) => d.consolidated && d.status !== "closed").map((d) => [d.id, d]),
+  );
   const byAccount = new Map(accounts.map((a) => [a.id, a]));
   const planOfAccount = new Map(
     [...plans.values()].filter((p) => p.planAccountId).map((p) => [p.planAccountId!, p.id]),

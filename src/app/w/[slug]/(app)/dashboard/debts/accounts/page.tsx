@@ -175,7 +175,10 @@ export default async function DebtsPage({ params }: { params: Promise<{ slug: st
       id: d.id,
       name: d.name,
       detail: d.source === "books" ? `From your books: ${owedWords(d)}` : owedWords(d),
-      takenBy: d.coveredBy && d.coveredBy !== planId ? (planOf.get(d.id)?.name ?? "a plan") : null,
+      takenBy:
+        d.coveredBy && d.coveredBy !== planId
+          ? (plans.find((p) => p.id === d.coveredBy)?.name ?? "another plan")
+          : null,
     }));
   const accountsFor = (planId: string | null) =>
     books.accounts

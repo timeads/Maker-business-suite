@@ -198,6 +198,13 @@ describe("folding covered debts into their plan", () => {
     expect(shownAccountIds(fold.debts)).toEqual(new Set(["acc-plan", "acc-a"]));
   });
 
+  it("never hides what a closed plan paid: those debts count on their own again", () => {
+    const fold = foldDebts([plan({ status: "closed" }), cardA, cardB]);
+    expect(fold.debts.map((d) => d.id)).toEqual(["plan", "a", "b"]);
+    expect(fold.into.size).toBe(0);
+    expect(debtTotals(fold.debts).owed).toBe(200001);
+  });
+
   it("leaves debts pointing at no plan here as they are", () => {
     const fold = foldDebts([{ ...cardA, coveredBy: "elsewhere" }]);
     expect(fold.debts.map((d) => d.id)).toEqual(["a"]);
