@@ -357,3 +357,28 @@ export function scheduleLength(plan: readonly { total: number }[], all: boolean)
   const lastOwing = plan.map((m) => m.total > 0).lastIndexOf(true);
   return Math.min(plan.length, Math.max(12, lastOwing + 2));
 }
+
+/**
+ * The home card's debt line (the dashboard's "Debt Snowball Progress" on its
+ * home page): what's owed, what's been paid off, and the next debt in line,
+ * which is the first active one by its place, as the dashboard names it.
+ * Null with nothing owed. Only ever worked out for owners and admins.
+ */
+export function debtHomeLine(
+  debts: readonly Debt[],
+  money: (cents: number) => string,
+): string | null {
+  const totals = debtTotals(debts);
+  if (totals.owed <= 0) return null;
+  const next = debts
+    .filter((d) => d.status === "active" && (d.balance ?? 0) > 0)
+    .map((d, at) => ({ d, at }))
+    .sort((a, b) => (a.d.priority ?? 99) - (b.d.priority ?? 99) || a.at - b.at)[0]?.d;
+  return [
+    `${money(totals.owed)} of debt to go`,
+    totals.paidOff > 0 ? `${money(totals.paidOff)} paid off so far` : "",
+    next ? `next to clear: ${next.name}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}

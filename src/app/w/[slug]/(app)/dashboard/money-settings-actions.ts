@@ -13,6 +13,7 @@ import { BUDGET_KEY, budgetSettingsSchema } from "@/lib/dashboard/budget";
 import { HEALTH_KEY, healthSettingsSchema } from "@/lib/dashboard/health";
 import { PROFIT_KEY, PROFIT_MODULE, profitSettingsSchema } from "@/lib/dashboard/profit";
 import { CUTTER_KEY, cutterSettingsSchema } from "@/lib/dashboard/recurring";
+import { DEBT_KEY, debtSettingsSchema } from "@/lib/dashboard/debt/settings";
 import { getEntitlements } from "@/lib/entitlements";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
@@ -122,7 +123,11 @@ async function saveFigures(
   how: {
     path: string;
     key: string;
-    schema: typeof healthSettingsSchema | typeof budgetSettingsSchema | typeof cutterSettingsSchema;
+    schema:
+      | typeof healthSettingsSchema
+      | typeof budgetSettingsSchema
+      | typeof cutterSettingsSchema
+      | typeof debtSettingsSchema;
     done: string;
   },
 ): Promise<MoneySettingsState> {
@@ -174,5 +179,19 @@ export async function saveCutterSettings(
     key: CUTTER_KEY,
     schema: cutterSettingsSchema,
     done: "Saved. The cost cutter looks for recurring charges this way from now on.",
+  });
+}
+
+/** Settings → Money → Debt payoff and emergency fund (owners and admins only). */
+export async function saveDebtSettings(
+  slug: string,
+  _prev: MoneySettingsState,
+  formData: FormData,
+): Promise<MoneySettingsState> {
+  return saveFigures(slug, formData, {
+    path: "debts",
+    key: DEBT_KEY,
+    schema: debtSettingsSchema,
+    done: "Saved. Your payoff plan and emergency fund are worked out this way from now on.",
   });
 }

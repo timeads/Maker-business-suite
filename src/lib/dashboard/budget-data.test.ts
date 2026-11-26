@@ -18,6 +18,8 @@ function fake(options: {
     return {
       range: (from: number) =>
         Promise.resolve({ data: from === 0 ? (options.rpcs?.[fn] ?? []) : [], error: null }),
+      then: (resolve: (v: unknown) => unknown) =>
+        Promise.resolve({ data: options.rpcs?.[fn] ?? [], error: null }).then(resolve),
     };
   };
   const from = (table: string) => {
@@ -165,5 +167,49 @@ describe("the budget page's figures", () => {
     );
     expect(view.subject).toBe("account");
     expect(view.months).toEqual(["2026-10", "2026-11", "2026-12"]);
+  });
+
+  it("adds a row per debt, for owners and admins only, as fixed costs", async () => {
+    const debt = {
+      id: "d1",
+      name: "Card",
+      kind: "card",
+      plan: "pool",
+      status: "active",
+      rate_bp: 0,
+      minimum_cents: 2500,
+      payment_cents: 4000,
+      revolving_bp: null,
+      due_day: null,
+      priority: null,
+      opening_cents: null,
+      books_account: "Card account",
+      note: null,
+    };
+    // What row-level security hands an owner or admin.
+    const owner = fake({
+      tables: { money_debts: [debt] },
+      rpcs: {
+        money_debt_current: [
+          { debt_id: "d1", balance_cents: 50000, as_of: "2026-11-01", source: "person" },
+        ],
+        money_debt_payments: [{ debt_id: "d1", month: "2026-10-01", cents: 4500, payments: 1 }],
+      },
+    });
+    const ask = { month: "2026-10", period: "quarter", subject: "account" } as const;
+    const view = await loadBudgetView(owner.supabase, TENANT, ask, NOW);
+    expect(view.rows.find((row) => row.key === "debt:d1")).toMatchObject({
+      group: "Debt payments",
+      budget: 12000,
+      // October booked, November begun with nothing booked (est.), December not yet.
+      actual: 4500 + 4000,
+      debt: { estimatedMonths: 1 },
+    });
+    expect(view.breakEven?.fixed).toBe(12000);
+    // Everyone else: no debts handed over, so no rows and the same break-even as before.
+    const member = fake({});
+    const theirs = await loadBudgetView(member.supabase, TENANT, ask, NOW);
+    expect(theirs.rows.some((row) => row.debt)).toBe(false);
+    expect(theirs.breakEven?.fixed).toBe(0);
   });
 });

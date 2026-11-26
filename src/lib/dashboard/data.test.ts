@@ -21,6 +21,8 @@ function fakeSupabase(
     /** Config bodies by key, for loaders that read more than one. */
     configs?: Record<string, unknown>;
     snapshots?: { kind: string; period_start: string; data: Record<string, unknown> }[];
+    /** Rows other tables hand back (what row-level security would let through). */
+    tables?: Record<string, unknown[]>;
   } = {},
 ) {
   const calls: Call[] = [];
@@ -81,7 +83,7 @@ function fakeSupabase(
                   data: snapshots().sort((a, b) => a.period_start.localeCompare(b.period_start)),
                   error: null,
                 }
-              : { data: [], error: null },
+              : { data: options.tables?.[table] ?? [], error: null },
         ).then(resolve),
     };
     return chain;
@@ -486,6 +488,72 @@ describe("cash health from the books", () => {
     );
     const data = await loadDashboardData(supabase, TENANT, config(widgets), RANGE, undefined, NOW);
     expect(data.r).toMatchObject({ months: 6, standing: "good" });
+  });
+
+  it("adds the two debt tiles and their notes only where the database hands over debts", async () => {
+    // What an owner or admin is handed.
+    const owner = fakeSupabase(
+      {
+        money_debt_current: () => [
+          { debt_id: "d1", balance_cents: 330000, as_of: "2026-11-20", source: "books" },
+        ],
+      },
+      {
+        snapshots,
+        tables: {
+          money_debts: [
+            {
+              id: "d1",
+              name: "Card",
+              kind: "card",
+              plan: "pool",
+              status: "active",
+              rate_bp: 1999,
+              minimum_cents: 5000,
+              payment_cents: 10000,
+              revolving_bp: null,
+              due_day: null,
+              priority: 1,
+              opening_cents: null,
+              books_account: null,
+              note: null,
+            },
+          ],
+        },
+      },
+    );
+    const data = await loadDashboardData(
+      owner.supabase,
+      TENANT,
+      config(widgets),
+      RANGE,
+      undefined,
+      NOW,
+    );
+    const health = data.h;
+    if (health.type !== "health_check") throw new Error(health.type);
+    // 3,300.00 owed on 6,300.00 of revenue over the complete months.
+    expect(health.debt?.owed).toBe(330000);
+    expect(health.debt?.toRevenue?.share).toBeCloseTo(330000 / 630000);
+    expect(health.debt?.monthly).toBe(10000);
+    expect(health.notes.some((n) => n.key.startsWith("debt-"))).toBe(true);
+
+    // Everyone else: the database hands over no debts, so nothing about debt appears.
+    const member = fakeSupabase({}, { snapshots });
+    const theirs = await loadDashboardData(
+      member.supabase,
+      TENANT,
+      config(widgets),
+      RANGE,
+      undefined,
+      NOW,
+    );
+    const memberHealth = theirs.h;
+    if (memberHealth.type !== "health_check") throw new Error(memberHealth.type);
+    expect(memberHealth.debt).toBeNull();
+    expect(memberHealth.notes.some((n) => n.key.startsWith("debt-"))).toBe(false);
+    const withoutDebt = { ...memberHealth, debt: undefined };
+    expect({ ...health, debt: undefined, notes: memberHealth.notes }).toEqual(withoutDebt);
   });
 
   it("asks for the books when there are none", async () => {

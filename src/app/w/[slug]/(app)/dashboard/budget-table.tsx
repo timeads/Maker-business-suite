@@ -126,10 +126,17 @@ export function BudgetTable({
                             Rises and falls with sales
                           </span>
                         )}
+                        {row.debt && (
+                          <span className="text-muted-foreground block text-xs">
+                            {row.debt.estimatedMonths > 0
+                              ? `Its usual payment for ${row.debt.estimatedMonths} ${row.debt.estimatedMonths === 1 ? "month" : "months"} with nothing booked yet (est.)`
+                              : "What your books show paid into it"}
+                          </span>
+                        )}
                       </th>
                       <td className="px-2 py-2">{row.average ? money(row.average) : "–"}</td>
                       <td className="px-2 py-2">
-                        {canType && !row.hidden ? (
+                        {canType && !row.hidden && !row.debt ? (
                           <Input
                             aria-label={`Budget for ${row.name}`}
                             inputMode="decimal"

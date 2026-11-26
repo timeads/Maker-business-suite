@@ -597,6 +597,14 @@ const TOOLS: Def[] = [
           "monthly charges",
         ],
       },
+      {
+        id: "money.debts",
+        name: "Debt payoff and emergency fund",
+        path: "money/debts",
+        // Owners and admins only, like the debts themselves.
+        show: managers,
+        keywords: ["debt", "snowball", "avalanche", "payoff", "emergency fund", "savings", "loans"],
+      },
     ],
   },
   {

@@ -72,6 +72,7 @@ export async function askAssistant(
         supabase: ctx.supabase,
         tenant: ctx.tenant,
         can: (module: ModuleKey) => ctx.entitlements.can(`module.${module}`),
+        manager: canManage(ctx.role),
       },
     );
     // Metered whatever came back: the tokens were spent.

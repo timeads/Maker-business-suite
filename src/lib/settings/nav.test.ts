@@ -101,6 +101,7 @@ describe("settingsNav", () => {
       "money.health",
       "money.budget",
       "money.cost-cutter",
+      "money.debts",
     ]);
     expect(kids(nav, "stock")).toEqual([
       "stock.planning",
@@ -140,6 +141,12 @@ describe("settingsNav", () => {
       "bookings.shop-page",
       "bookings.shop-tags",
     ]);
+  });
+
+  it("keeps debt payoff out of the rest of the team's Money settings", () => {
+    const nav = settingsNav(viewer({ manager: false }));
+    expect(kids(nav, "money")).not.toContain("money.debts");
+    expect(JSON.stringify(nav)).not.toContain("debt");
   });
 
   it("treats a manager of a read-only workspace as before: no Shipping forms, no order emails", () => {

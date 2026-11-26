@@ -405,6 +405,26 @@ export function buildNav(viewer: NavViewer, attention: Attention = {}): NavTool[
             }),
           ],
         },
+        // Owners and admins only: nobody else sees the debts at all.
+        ...(viewer.manager
+          ? [
+              {
+                id: "dashboard.debts",
+                name: "Debt payoff",
+                items: [
+                  place("dashboard.debts.plan", "Payoff plan", "dashboard/debts", {
+                    keywords: ["debt", "snowball", "avalanche", "payoff", "emergency fund"],
+                  }),
+                  place("dashboard.debts.accounts", "Debts", "dashboard/debts/accounts", {
+                    keywords: ["loans", "cards", "balances", "interest rate", "minimum payment"],
+                  }),
+                  place("dashboard.debts.what-if", "What if…", "dashboard/debts/what-if", {
+                    keywords: ["what if", "scenario", "extra payment", "pay off faster"],
+                  }),
+                ],
+              },
+            ]
+          : []),
       ],
     },
     helpdesk: { panel: "menu", menu: helpdeskMenu(viewer, attention) },

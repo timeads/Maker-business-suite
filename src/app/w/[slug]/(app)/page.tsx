@@ -14,6 +14,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { formatMoney } from "@/lib/dashboard/format";
+import { loadDebts } from "@/lib/dashboard/debt/data";
+import { debtHomeLine } from "@/lib/dashboard/debt/figures";
 import { requireUser } from "@/lib/auth";
 import { bookingsHomeLines, loadBookingsHomeFacts } from "@/lib/bookings/home-summary";
 import { daysFromNow, formatTime, localDay } from "@/lib/bookings/slots";
@@ -267,6 +269,18 @@ export default async function WorkspaceHomePage({ params }: { params: Promise<{ 
     });
   }
   if (has("dashboard")) {
+    // Owners and admins only (the database hands nobody else a debt), and
+    // never allowed to cost the page.
+    let debtLine: string | null = null;
+    if (canManage(role)) {
+      try {
+        debtLine = debtHomeLine(await loadDebts(supabase, tenant.id), (cents) =>
+          formatMoney(cents / 100, tenant.currency),
+        );
+      } catch {
+        debtLine = null;
+      }
+    }
     rows.push({
       key: "dashboard",
       icon: LineChart,
@@ -277,9 +291,15 @@ export default async function WorkspaceHomePage({ params }: { params: Promise<{ 
             tenant.currency,
           )} in sales this week`
         : "No sales in the last 7 days",
-      detail: weekOrders.length
-        ? `${plural(weekOrders.length, "order", "orders")} in the last 7 days`
-        : "Sales, margins and cash",
+      detail:
+        [
+          weekOrders.length
+            ? `${plural(weekOrders.length, "order", "orders")} in the last 7 days`
+            : "Sales, margins and cash",
+          debtLine ? sentence(debtLine) : "",
+        ]
+          .filter(Boolean)
+          .join(" · ") || undefined,
       waiting: false,
       href: `${base}/dashboard`,
     });

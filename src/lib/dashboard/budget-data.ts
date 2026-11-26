@@ -18,6 +18,8 @@ import { loadBudgetSettings, loadProfitSettings, loadRevenueSettings } from "./d
 import { averageCents, bookMonthOf, completeMonths, type BookMonth } from "./health";
 import { profitByLine, type ExpenseGroup } from "./profit";
 import { currentMonth } from "./range";
+import { loadDebtPayments, loadDebts } from "./debt/data";
+import { debtBudgetRows } from "./debt/figures";
 
 /** Supabase hands back 1,000 rows at most; these are paged. */
 const PAGE = 1000;
@@ -197,6 +199,23 @@ export async function loadBudgetView(
         ? new Map(revenueSettings.lines.map((line) => [line.id, line.name]))
         : undefined,
   });
+  // Debt payments as rows (owners and admins only: row-level security hands
+  // nobody else a debt, so for them there are none and nothing else changes).
+  // Allowed to fail: the budget stands without them.
+  if (subject === "account") {
+    try {
+      const debts = await loadDebts(supabase, tenant.id);
+      if (debts.length > 0) {
+        const paid = await loadDebtPayments(supabase, tenant.id, `${months[0]}-01`, to);
+        rows = [
+          ...rows,
+          ...debtBudgetRows({ debts, paid, months, current, warnPct: settings.warn_pct }),
+        ];
+      }
+    } catch (err) {
+      console.warn(`Debt rows left out: ${err instanceof Error ? err.message : err}`);
+    }
+  }
   const lastMonth = income(addMonths(months[0], -1));
   if (subject === "account" && months.length === 1) {
     rows = withExpectedVariable(rows, lastMonth, cogs?.share ?? null);

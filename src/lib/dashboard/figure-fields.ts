@@ -25,6 +25,15 @@ export type FigureField =
       suffix?: string;
     }
   | { kind: "money"; key: string; label: string; help?: string }
+  /** A money amount that may be left blank (null). */
+  | { kind: "optional_money"; key: string; label: string; help?: string }
+  | {
+      kind: "choice";
+      key: string;
+      label: string;
+      help?: string;
+      options: { value: string; label: string }[];
+    }
   | { kind: "list"; key: string; label: string; help?: string };
 
 export type FigureGroup = { title: string; about?: string; fields: FigureField[] };
@@ -219,6 +228,123 @@ export const CUTTER_FIELDS: FigureGroup[] = [
         help: "Set both of these to flag small charges that add up over a year.",
       },
       { kind: "money", key: "adds_up_cents", label: "…that comes to at least this a year" },
+    ],
+  },
+];
+
+/** Settings → Money → Debt payoff and emergency fund (owners and admins only). */
+export const DEBT_FIELDS: FigureGroup[] = [
+  {
+    title: "Where extra money goes",
+    about:
+      "The plan pays every debt its minimum. What's freed as each one is paid off goes to the next, in this order.",
+    fields: [
+      {
+        kind: "choice",
+        key: "strategy",
+        label: "Order",
+        options: [
+          { value: "avalanche", label: "Avalanche: highest rate first" },
+          { value: "snowball", label: "Snowball: smallest balance first" },
+          { value: "hybrid", label: "Hybrid: small balances, then highest rate" },
+          { value: "custom", label: "Your own order (each debt's place)" },
+        ],
+      },
+      {
+        kind: "money",
+        key: "hybrid_threshold_cents",
+        label: "Hybrid: clear balances up to this first",
+      },
+      pct(
+        "revenue_share_pct",
+        "A share-of-sales debt with no payment set pays",
+        "Of your average monthly revenue.",
+        0,
+      ),
+    ],
+  },
+  {
+    title: "Emergency fund",
+    about:
+      "Until the fund reaches its target, part of the freed payments goes into it first. Once every debt the plan pays down is gone, all of it does.",
+    fields: [
+      {
+        kind: "choice",
+        key: "emergency_target",
+        label: "Aim for",
+        options: [
+          { value: "months", label: "Months of my usual expenses" },
+          { value: "amount", label: "An amount I choose" },
+        ],
+      },
+      {
+        kind: "number",
+        key: "emergency_months",
+        label: "Months of expenses",
+        help: "Your usual month is worked out from the last twelve complete months in your books.",
+        min: 1,
+        max: 24,
+        suffix: "months",
+      },
+      { kind: "money", key: "emergency_target_cents", label: "Or this amount" },
+      {
+        kind: "list",
+        key: "emergency_accounts",
+        label: "Bank accounts the fund is kept in",
+        help: "Their names as your books' balance sheet has them, one per line. The fund's balance is read from them each time your books sync.",
+      },
+      {
+        kind: "optional_money",
+        key: "emergency_current_cents",
+        label: "With no account: what's in the fund now",
+      },
+      pct("emergency_split_pct", "Share of freed payments into the fund", undefined, 0),
+      {
+        kind: "money",
+        key: "emergency_monthly_cents",
+        label: "Or a set amount a month",
+        help: "Leave at 0 to use the share above.",
+      },
+    ],
+  },
+  {
+    title: "Cash health",
+    about:
+      "Where the two debt tiles count as healthy or worth watching; beyond the second, needs attention.",
+    fields: [
+      pct(
+        "debt_revenue_good_pct",
+        "Debt is healthy under this share of a year's revenue",
+        undefined,
+        0,
+        1000,
+      ),
+      pct("debt_revenue_watch_pct", "…and worth watching under", undefined, 0, 1000),
+      {
+        kind: "number",
+        key: "coverage_good_x100",
+        label: "Profit covers the payments healthily above",
+        help: "In hundredths: 150 means one and a half times.",
+        min: 0,
+        max: 10_000,
+        suffix: "hundredths",
+      },
+      {
+        kind: "number",
+        key: "coverage_watch_x100",
+        label: "…and is worth watching above",
+        min: 0,
+        max: 10_000,
+        suffix: "hundredths",
+      },
+    ],
+  },
+  {
+    title: "The plain notes",
+    fields: [
+      pct("high_debt_pct", "Mention debt above this share of a year's revenue", undefined, 0, 1000),
+      pct("extra_margin_pct", "Suggest sending extra with an operating margin above", undefined, 0),
+      pct("extra_debt_pct", "…and debt above this share of a year's revenue", undefined, 0, 1000),
     ],
   },
 ];

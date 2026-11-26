@@ -16,6 +16,8 @@ export type ToolContext = {
   supabase: SupabaseClient;
   tenant: { id: string; timezone: string; currency: string };
   can(module: ModuleKey): boolean;
+  /** Owner or admin: only they may see a setting marked `ownersOnly`. */
+  manager: boolean;
 };
 
 export type Proposal = { id: string; module: string; key: string; name: string; summary: string };
@@ -107,6 +109,10 @@ function nextDay(day: string): string {
   return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
 }
 
+/** A setting only owners and admins may see doesn't exist for anyone else. */
+const visible = (entry: ReturnType<typeof findConfig>, ctx: ToolContext) =>
+  entry && (!entry.ownersOnly || ctx.manager) ? entry : undefined;
+
 export async function runTool(
   name: string,
   input: unknown,
@@ -124,7 +130,7 @@ export async function runTool(
       const saved = new Map((data ?? []).map((row) => [`${row.module}/${row.key}`, row]));
       return {
         content: json(
-          CONFIG_REGISTRY.map((entry) => ({
+          CONFIG_REGISTRY.filter((entry) => !entry.ownersOnly || ctx.manager).map((entry) => ({
             module: entry.module,
             key: entry.key,
             name: entry.name,
@@ -137,7 +143,7 @@ export async function runTool(
     }
 
     case "get_config": {
-      const entry = findConfig(args.module, args.key);
+      const entry = visible(findConfig(args.module, args.key), ctx);
       if (!entry) return fail("There is no such setting. Call list_configs to see what exists.");
       const { data, error } = await ctx.supabase
         .from("configs")
@@ -159,7 +165,7 @@ export async function runTool(
     }
 
     case "propose_config_change": {
-      const entry = findConfig(args.module, args.key);
+      const entry = visible(findConfig(args.module, args.key), ctx);
       if (!entry) return fail("There is no such setting. Call list_configs to see what exists.");
       if (!ctx.can(entry.feature)) {
         return fail(`${entry.name} isn't part of this workspace's plan, so it can't be changed.`);

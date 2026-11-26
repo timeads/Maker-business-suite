@@ -34,10 +34,15 @@ function fakeSupabase(script: { configs?: unknown; rpc?: Record<string, unknown>
   return { supabase: supabase as never, calls };
 }
 
-const ctxWith = (supabase: ToolContext["supabase"], allowed = true): ToolContext => ({
+const ctxWith = (
+  supabase: ToolContext["supabase"],
+  allowed = true,
+  manager = true,
+): ToolContext => ({
   supabase,
   tenant: { id: "t1", timezone: "America/New_York", currency: "USD" },
   can: () => allowed,
+  manager,
 });
 
 describe("config registry", () => {
@@ -154,6 +159,55 @@ describe("tools", () => {
     expect(bad.every((outcome) => outcome.isError)).toBe(true);
     expect(bad[1].content).toContain("version");
     expect(calls.filter((c) => c.kind === "rpc")).toHaveLength(0);
+  });
+
+  it("never shows the debt plan's setting to anyone but owners and admins", async () => {
+    const member = fakeSupabase({ rpc: { propose_config_change: "p-1" } });
+    const listed = JSON.parse(
+      (await runTool("list_configs", {}, ctxWith(member.supabase, true, false))).content,
+    ) as { key: string }[];
+    expect(listed.some((entry) => entry.key === "debt")).toBe(false);
+    expect(listed.some((entry) => entry.key === "health")).toBe(true);
+    const read = await runTool(
+      "get_config",
+      { module: "dashboard", key: "debt" },
+      ctxWith(member.supabase, true, false),
+    );
+    const propose = await runTool(
+      "propose_config_change",
+      { module: "dashboard", key: "debt", body: { version: 1 }, summary: "s" },
+      ctxWith(member.supabase, true, false),
+    );
+    expect(read).toMatchObject({ isError: true });
+    expect(read.content).toContain("no such setting");
+    expect(propose).toMatchObject({ isError: true });
+    expect(member.calls.filter((c) => c.name === "configs" || c.kind === "rpc")).toHaveLength(1);
+
+    const owner = fakeSupabase({ rpc: { propose_config_change: "p-2" } });
+    const ownerList = JSON.parse(
+      (await runTool("list_configs", {}, ctxWith(owner.supabase))).content,
+    ) as { key: string }[];
+    expect(ownerList.some((entry) => entry.key === "debt")).toBe(true);
+    const filed = await runTool(
+      "propose_config_change",
+      {
+        module: "dashboard",
+        key: "debt",
+        body: { version: 1, strategy: "snowball" },
+        summary: "s",
+      },
+      ctxWith(owner.supabase),
+    );
+    expect(filed.isError).toBeFalsy();
+  });
+
+  it("marks the same settings owners-only as the database does", () => {
+    expect(
+      CONFIG_REGISTRY.filter((entry) => entry.ownersOnly).map((e) => `${e.module}/${e.key}`),
+    ).toEqual(["dashboard/debt"]);
+    expect(describeConfig(findConfig("dashboard", "debt")!, { version: 1 })).toContain(
+      "Emergency fund target: 6 months of usual expenses",
+    );
   });
 
   it("never lets the assistant write the words of a booking email", async () => {

@@ -240,6 +240,9 @@ describe("buildNav: each tool's menu", () => {
       "Expenses to sort",
       "Budget",
       "Cost cutter",
+      "Payoff plan",
+      "Debts",
+      "What if…",
     ]);
     expect(labels(tool(tools, "assistant"))).toEqual(["Chat"]);
   });
@@ -362,6 +365,21 @@ describe("activeIn", () => {
     expect(money.count).toBeUndefined();
     expect(lit("dashboard", "dashboard/expenses").item).toBe("dashboard.expenses");
     expect(lit("dashboard", "dashboard").item).toBe("dashboard.home");
+  });
+
+  it("shows Money's debt rows to owners and admins only", () => {
+    const owner = tool(buildNav(viewer()), "dashboard");
+    expect(owner.menu.map((group) => group.name)).toEqual([undefined, "Debt payoff"]);
+    expect(labels({ ...owner, menu: [owner.menu[1]] })).toEqual([
+      "Payoff plan",
+      "Debts",
+      "What if…",
+    ]);
+    const member = tool(buildNav(viewer({ manager: false })), "dashboard");
+    expect(member.menu).toHaveLength(1);
+    expect(JSON.stringify(member)).not.toContain("debts");
+    expect(lit("dashboard", "dashboard/debts/accounts").item).toBe("dashboard.debts.accounts");
+    expect(lit("dashboard", "dashboard/debts").item).toBe("dashboard.debts.plan");
   });
 
   it("lets the longest address win, with the row it sits under", () => {

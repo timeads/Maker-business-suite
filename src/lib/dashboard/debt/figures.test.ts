@@ -5,6 +5,7 @@ import {
   afterDebt,
   debtBudgetRows,
   debtHealth,
+  debtHomeLine,
   debtTotals,
   emergencyFund,
   matchPayments,
@@ -307,5 +308,25 @@ describe("the schedule's length", () => {
     expect(scheduleLength(plan, true)).toBe(12);
     const long = Array.from({ length: 60 }, (_, i) => ({ total: i < 40 ? 1 : 0 }));
     expect(scheduleLength(long, true)).toBe(41);
+  });
+});
+
+describe("the home card's debt line", () => {
+  const money = (cents: number) => `$${(cents / 100).toFixed(0)}`;
+  it("says what's owed, what's paid off and the next in line", () => {
+    expect(
+      debtHomeLine(
+        [
+          debt({ id: "a", name: "Loan", balance: 50_000, opening: 80_000, priority: 2 }),
+          debt({ id: "b", name: "Card", balance: 10_000, priority: 1 }),
+          debt({ id: "c", name: "Held", status: "paused", balance: 5_000, priority: 0 }),
+        ],
+        money,
+      ),
+    ).toBe("$650 of debt to go · $300 paid off so far · next to clear: Card");
+  });
+  it("says nothing with nothing owed", () => {
+    expect(debtHomeLine([], money)).toBeNull();
+    expect(debtHomeLine([debt({ id: "a", balance: 0 })], money)).toBeNull();
   });
 });

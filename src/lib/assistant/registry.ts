@@ -71,6 +71,14 @@ import {
   type HealthSettings,
 } from "../dashboard/health";
 import {
+  DEBT_KEY,
+  DEBT_MODULE,
+  DEFAULT_DEBT_SETTINGS,
+  debtSettingsSchema,
+  type DebtSettings,
+} from "../dashboard/debt/settings";
+import { STRATEGY_META } from "../dashboard/debt/engine";
+import {
   CUTTER_KEY,
   CUTTER_MODULE,
   DEFAULT_CUTTER_SETTINGS,
@@ -198,6 +206,12 @@ export type ConfigEntry = {
    * with a part only a person may write.
    */
   refuse?: (next: unknown, current: unknown) => string | null;
+  /**
+   * Only owners and admins may read or propose it: for anyone else it
+   * doesn't exist, and the database hides it from them as well
+   * (`private.config_owners_only`). Keep the two lists the same.
+   */
+  ownersOnly?: true;
 };
 
 export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
@@ -270,6 +284,17 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
       "How Money's cost cutter finds recurring charges in the books' expenses. months_back: how many months to look over, this one included (3–24). min_months: a payee charging in at least this many different months is recurring (2–12). leave_out_accounts: account names never counted (whole names). leave_out_payees: payees never counted when their name contains these words. growing_fast_pct / creeping_pct: the last six months' average against the six before, at or above which a charge is flagged as growing fast or creeping up (whole percents). new_months: first charged within this many months is new. stopped_days: no charge for this many days is stopped. small_cents and adds_up_cents: a charge under small_cents a month that comes to at least adds_up_cents a year is flagged as small but adding up; null for either switches that flag off.",
     schema: cutterSettingsSchema,
     defaultBody: () => DEFAULT_CUTTER_SETTINGS,
+  },
+  {
+    module: DEBT_MODULE,
+    key: DEBT_KEY,
+    feature: "dashboard",
+    ownersOnly: true,
+    name: "Money: debt payoff and emergency fund",
+    description:
+      "How Money's debt payoff plan and emergency fund are worked out (the debts themselves are typed in on Money → Debts). strategy: the order extra money goes to the debts the plan pays down: avalanche (highest rate first), snowball (smallest balance first), hybrid (balances at or under hybrid_threshold_cents first, smallest first, then highest rate) or custom (the debts' own priority). revenue_share_pct: the whole percent of average monthly revenue a share-of-sales debt pays when it has no payment of its own. emergency_target: amount (emergency_target_cents) or months (emergency_months × the usual month of expenses over the last twelve complete months). emergency_accounts: the books' bank account names the fund is kept in (whole names, capitals and spacing ignored); with none, emergency_current_cents is what's in it, typed in. Until the target is reached the fund takes emergency_monthly_cents a month from the freed payments, or emergency_split_pct of them when that is 0. The cash health tiles: debt to a year's revenue is healthy under debt_revenue_good_pct and worth watching under debt_revenue_watch_pct; profit covering the payments (in hundredths: 150 = 1.5 times) is healthy above coverage_good_x100 and worth watching above coverage_watch_x100. The notes: high_debt_pct (debt above it is a watch), extra_margin_pct and extra_debt_pct (above both, suggest sending extra to the highest-rate debt). Amounts are whole cents. Only owners and admins can see this setting.",
+    schema: debtSettingsSchema,
+    defaultBody: () => DEFAULT_DEBT_SETTINGS,
   },
   {
     module: HELPDESK_MODULE,
@@ -795,6 +820,27 @@ export function describeConfig(entry: ConfigEntry, body: unknown): string[] {
       `Growing fast from ${c.growing_fast_pct}%, creeping up from ${c.creeping_pct}%`,
       `New within ${c.new_months} months; stopped after ${c.stopped_days} days`,
       `Small but adds up: under ${amount(c.small_cents)} a month, at least ${amount(c.adds_up_cents)} a year`,
+    ];
+  }
+  if (entry.module === DEBT_MODULE && entry.key === DEBT_KEY) {
+    const d = value as unknown as DebtSettings;
+    const amount = (cents: number) => (cents / 100).toFixed(2);
+    return [
+      `Extra goes ${STRATEGY_META[d.strategy].tagline.toLowerCase()} (${STRATEGY_META[d.strategy].label.toLowerCase()})${d.strategy === "hybrid" ? `, balances up to ${amount(d.hybrid_threshold_cents)} first` : ""}`,
+      `A share-of-sales debt with no payment pays ${d.revenue_share_pct}% of average revenue`,
+      d.emergency_target === "months"
+        ? `Emergency fund target: ${d.emergency_months} months of usual expenses`
+        : `Emergency fund target: ${amount(d.emergency_target_cents)}`,
+      d.emergency_accounts.length
+        ? `Kept in: ${d.emergency_accounts.join(", ")}`
+        : d.emergency_current_cents === null
+          ? "No account chosen for the fund"
+          : `In the fund now: ${amount(d.emergency_current_cents)} (typed in)`,
+      d.emergency_monthly_cents > 0
+        ? `${amount(d.emergency_monthly_cents)} a month into the fund until it's reached`
+        : `${d.emergency_split_pct}% of freed payments into the fund until it's reached`,
+      `Debt to a year's revenue: healthy under ${d.debt_revenue_good_pct}%, worth watching under ${d.debt_revenue_watch_pct}%`,
+      `Profit covering the payments: healthy above ${(d.coverage_good_x100 / 100).toFixed(2)} times, worth watching above ${(d.coverage_watch_x100 / 100).toFixed(2)}`,
     ];
   }
   if (entry.module === DASHBOARD_MODULE && entry.key === DASHBOARD_KEY) {

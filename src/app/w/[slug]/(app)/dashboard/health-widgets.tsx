@@ -99,6 +99,31 @@ export function HealthCheck({
           }
         />
       </div>
+      {data.debt && (
+        // Owners and admins only: nobody else is handed a debt to show.
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Tile
+            label="What you owe, against a year's revenue"
+            value={data.debt.toRevenue ? formatPercent(data.debt.toRevenue.share) : "—"}
+            standing={data.debt.toRevenue?.standing ?? null}
+            note={
+              data.debt.toRevenue
+                ? `${money(data.debt.owed)} owed on ${money(data.debt.toRevenue.revenue)} of revenue`
+                : "Needs complete months of revenue in the books"
+            }
+          />
+          <Tile
+            label="Profit covering the debt payments"
+            value={
+              data.debt.coverage.times === null
+                ? "Nothing due"
+                : `${data.debt.coverage.times.toFixed(2)} times`
+            }
+            standing={data.debt.coverage.standing}
+            note={`${money(data.debt.monthly)} a month in payments`}
+          />
+        </div>
+      )}
       {!data.hasLines && (
         <p className="text-muted-foreground text-xs">
           Set up your business lines to see how much rests on one of them.{" "}

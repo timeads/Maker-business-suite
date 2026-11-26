@@ -56,6 +56,8 @@ import {
   type WidgetConfig,
 } from "./schema";
 import { DEFAULT_TEMPLATE, templateConfig, withLineWidgets } from "./templates";
+import { loadDebtSettings, loadDebts } from "./debt/data";
+import { debtHealth, type DebtHealth } from "./debt/figures";
 
 export type Point = { key: string; label: string; longLabel: string; value: number | null };
 export type RankedRow = { name: string; value: number; detail?: string };
@@ -144,6 +146,12 @@ export type WidgetData =
       /** Lines are set up: a missing concentration means no revenue yet, not no lines. */
       hasLines: boolean;
       notes: HealthNote[];
+      /**
+       * The two debt tiles. Only ever set for owners and admins: the
+       * database hands nobody else a debt, so for them there is nothing to
+       * work these out from and the tiles are simply absent.
+       */
+      debt: Pick<DebtHealth, "owed" | "monthly" | "toRevenue" | "coverage"> | null;
     }
   | {
       type: "runway";
@@ -554,6 +562,18 @@ export async function loadDashboardData(
       .limit(1)
       .maybeSingle();
 
+  // Debts for the two debt tiles and their notes: row-level security hands
+  // them to owners and admins only. Allowed to fail: cash health stands
+  // without them.
+  const debtsFor = needs("health_check")
+    ? Promise.all([loadDebts(supabase, tenant.id), loadDebtSettings(supabase, tenant.id)]).catch(
+        (err) => {
+          console.warn(`Debt tiles left out: ${err instanceof Error ? err.message : err}`);
+          return null;
+        },
+      )
+    : Promise.resolve(null);
+
   const [
     salesEntries,
     revenueEntries,
@@ -671,6 +691,18 @@ export async function loadDashboardData(
           },
           (cents) => formatMoney(cents / 100, tenant.currency ?? "USD"),
         )
+      : null;
+  const debtBits = await debtsFor;
+  const debt =
+    health && healthSettings && debtBits && debtBits[0].length > 0
+      ? debtHealth({
+          debts: debtBits[0],
+          complete: health.complete,
+          compareMonths: healthSettings.compare_months,
+          operatingMargin: health.margins.operating,
+          settings: debtBits[1],
+          money: (cents) => formatMoney(cents / 100, tenant.currency ?? "USD"),
+        })
       : null;
   const monthPoint = (month: string, value: number | null): Point => ({
     key: `${month}-01`,
@@ -998,7 +1030,15 @@ export async function loadDashboardData(
               : null,
           concentration: health.concentration,
           hasLines: hasLines(revenue),
-          notes: health.notes,
+          notes: [...health.notes, ...(debt?.notes ?? [])],
+          debt: debt
+            ? {
+                owed: debt.owed,
+                monthly: debt.monthly,
+                toRevenue: debt.toRevenue,
+                coverage: debt.coverage,
+              }
+            : null,
         };
         break;
       }

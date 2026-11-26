@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_BUDGET_SETTINGS } from "./budget";
-import { BUDGET_FIELDS, CUTTER_FIELDS, HEALTH_FIELDS, type FigureGroup } from "./figure-fields";
+import { DEFAULT_DEBT_SETTINGS } from "./debt/settings";
+import {
+  BUDGET_FIELDS,
+  CUTTER_FIELDS,
+  DEBT_FIELDS,
+  HEALTH_FIELDS,
+  type FigureGroup,
+} from "./figure-fields";
 import { DEFAULT_HEALTH_SETTINGS } from "./health";
 import { DEFAULT_CUTTER_SETTINGS } from "./recurring";
 
@@ -15,5 +22,6 @@ describe("the settings screens' boxes", () => {
     expect(keys(HEALTH_FIELDS)).toEqual(settable(DEFAULT_HEALTH_SETTINGS));
     expect(keys(BUDGET_FIELDS)).toEqual(settable(DEFAULT_BUDGET_SETTINGS));
     expect(keys(CUTTER_FIELDS)).toEqual(settable(DEFAULT_CUTTER_SETTINGS));
+    expect(keys(DEBT_FIELDS)).toEqual(settable(DEFAULT_DEBT_SETTINGS));
   });
 });
