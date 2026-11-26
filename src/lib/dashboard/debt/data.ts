@@ -118,6 +118,8 @@ export type OtherLiability = {
   asOf: string | null;
   /** A person said "Not a debt" (else the rule leaves it out). */
   markedNotDebt: boolean;
+  /** A person hid it from the list (only the list: it changes nothing else). */
+  hidden: boolean;
 };
 
 export type BooksState = {
@@ -125,8 +127,10 @@ export type BooksState = {
   connected: boolean;
   /** When the books' liabilities were last read for the debts (else the last sync). */
   lastRead: string | null;
-  /** Liabilities in the books that aren't debts here, biggest first. */
+  /** Liabilities in the books that aren't debts here, biggest first, not hidden. */
   others: OtherLiability[];
+  /** The ones a person hid, for "Hidden (n)". */
+  hidden: OtherLiability[];
 };
 
 /**
@@ -143,7 +147,7 @@ export async function loadBooksState(
     supabase
       .from("money_book_accounts")
       .select(
-        "id, name, account_type, account_subtype, section, balance_cents, as_of, choice, seen_at",
+        "id, name, account_type, account_subtype, section, balance_cents, as_of, choice, seen_at, hidden_at",
       )
       .eq("tenant_id", tenantId)
       .is("gone_at", null)
@@ -173,6 +177,7 @@ export async function loadBooksState(
       balance: num(row.balance_cents),
       asOf: (row.as_of as string | null) ?? null,
       markedNotDebt: row.choice === "not_debt",
+      hidden: row.hidden_at !== null && row.hidden_at !== undefined,
     }))
     .sort((a, b) => b.balance - a.balance || a.name.localeCompare(b.name));
   const conn = connection.error ? null : (connection.data as Record<string, unknown> | null);
@@ -182,7 +187,8 @@ export async function loadBooksState(
       (rows[0]?.seen_at as string | undefined) ??
       (conn?.last_synced_at as string | null | undefined) ??
       null,
-    others,
+    others: others.filter((o) => !o.hidden),
+    hidden: others.filter((o) => o.hidden),
   };
 }
 

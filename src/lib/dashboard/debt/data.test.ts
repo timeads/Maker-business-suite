@@ -102,6 +102,18 @@ describe("the books' side of the debts", () => {
           choice: "not_debt",
           seen_at: "2026-11-24T10:00:00Z",
         },
+        {
+          id: "a4",
+          name: "Gift Cards Owed",
+          account_type: "Other Current Liability",
+          account_subtype: null,
+          section: null,
+          balance_cents: 1200,
+          as_of: "2026-11-24",
+          choice: null,
+          seen_at: "2026-11-24T10:00:00Z",
+          hidden_at: "2026-11-25T09:00:00Z",
+        },
       ],
       connections: [{ status: "active", last_synced_at: "2026-11-24T10:01:00Z" }],
     });
@@ -113,6 +125,8 @@ describe("the books' side of the debts", () => {
       ["Deposits Held", "Other Current Liability", 7000, true],
       ["Sales Tax Payable", "Sales Tax Payable", 3100, false],
     ]);
+    // Hidden: only out of the list, kept for "Hidden (n)".
+    expect(state.hidden.map((o) => [o.name, o.hidden])).toEqual([["Gift Cards Owed", true]]);
   });
 
   it("falls back to the last sync before the books were ever read for debts", async () => {
@@ -120,6 +134,11 @@ describe("the books' side of the debts", () => {
       connections: [{ status: "needs_reconnect", last_synced_at: "2026-11-01T08:00:00Z" }],
     });
     const state = await loadBooksState(client, "t1", []);
-    expect(state).toEqual({ connected: false, lastRead: "2026-11-01T08:00:00Z", others: [] });
+    expect(state).toEqual({
+      connected: false,
+      lastRead: "2026-11-01T08:00:00Z",
+      others: [],
+      hidden: [],
+    });
   });
 });

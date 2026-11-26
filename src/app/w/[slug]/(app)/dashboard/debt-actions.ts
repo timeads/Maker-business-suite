@@ -159,6 +159,30 @@ export async function chooseBookLiability(
   };
 }
 
+/**
+ * "Hide" / "Show again" for one of the books' other liabilities on Money →
+ * Debts. Only the list changes: whether it counts as a debt never does.
+ */
+export async function hideBookLiability(
+  slug: string,
+  accountId: string,
+  hidden: boolean,
+): Promise<DebtActionState> {
+  const ctx = await debtContext(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  if (!z.string().uuid().safeParse(accountId).success) return { error: "Which account is this?" };
+  const { error } = await ctx.supabase.rpc("hide_book_liability", {
+    p_tenant_id: ctx.tenant.id,
+    p_account_id: accountId,
+    p_hidden: hidden === true,
+  });
+  if (error) return { error: "We couldn't change that. Try again in a moment." };
+  refresh(slug);
+  return {
+    message: hidden ? "Hidden. It stays out of this list after each sync." : "Back on the list.",
+  };
+}
+
 export async function removeDebt(slug: string, debtId: string): Promise<DebtActionState> {
   const ctx = await debtContext(slug);
   if ("error" in ctx) return { error: ctx.error };

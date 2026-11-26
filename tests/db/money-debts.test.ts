@@ -747,6 +747,34 @@ describe("debts from the books", () => {
     expect(paid).toContainEqual({ debt_id: cardA, cents: "7000" });
   });
 
+  it("hides an item from the list for good, without changing whether it is a debt", async () => {
+    const tax = await accountId("60");
+    const hiddenOf = async () =>
+      (
+        await as<{ hidden: boolean; choice: string | null }>(
+          alice,
+          "select hidden_at is not null as hidden, choice from public.money_book_accounts where id = $1",
+          [tax],
+        )
+      )[0];
+    const before = (await debtsOf(alice, tenantA)).map((d) => [d.name, d.left_out]);
+    await as(dan, "select public.hide_book_liability($1, $2, true)", [tenantA, tax]);
+    expect(await hiddenOf()).toEqual({ hidden: true, choice: "not_debt" });
+    // A sync keeps it hidden and changes nothing else.
+    await fileDebts(tenantA, "2026-11-28", ALL);
+    expect((await hiddenOf()).hidden).toBe(true);
+    expect((await debtsOf(alice, tenantA)).map((d) => [d.name, d.left_out])).toEqual(before);
+    await as(alice, "select public.hide_book_liability($1, $2, false)", [tenantA, tax]);
+    expect((await hiddenOf()).hidden).toBe(false);
+    await expect(
+      as(carol, "select public.hide_book_liability($1, $2, true)", [tenantA, tax]),
+    ).rejects.toThrow(/Only owners and admins/);
+    await expect(
+      as(bob, "select public.hide_book_liability($1, $2, true)", [tenantB, tax]),
+    ).rejects.toThrow(/isn't here/);
+    expect((await hiddenOf()).hidden).toBe(false);
+  });
+
   it("a plain member reads none of it and changes none of it", async () => {
     expect(await as(carol, "select * from public.money_book_accounts")).toEqual([]);
     expect(await as(carol, "select * from public.money_debts")).toEqual([]);

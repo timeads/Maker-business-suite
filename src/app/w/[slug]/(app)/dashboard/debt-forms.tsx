@@ -15,6 +15,7 @@ import {
 import { syncNow, type ConnectionState } from "../connections/actions";
 import {
   chooseBookLiability,
+  hideBookLiability,
   noteBalance,
   removeBalance,
   chooseStrategy,
@@ -481,6 +482,38 @@ export function BookChoiceButton({
         }
       >
         {pending ? "…" : label}
+      </Button>
+      {say(said)}
+    </span>
+  );
+}
+
+/** "Hide" or "Show again", for one of the books' other liabilities: only the list changes. */
+export function HideLiabilityButton({
+  slug,
+  accountId,
+  hidden,
+  name,
+}: {
+  slug: string;
+  accountId: string;
+  hidden: boolean;
+  name: string;
+}) {
+  const [said, setSaid] = useState<DebtActionState>({});
+  const [pending, start] = useTransition();
+  return (
+    <span className="inline-flex flex-wrap items-center gap-2">
+      <Button
+        size="sm"
+        variant="ghost"
+        disabled={pending}
+        aria-label={hidden ? `Show ${name} again` : `Hide ${name}`}
+        onClick={() =>
+          start(async () => setSaid(await hideBookLiability(slug, accountId, !hidden)))
+        }
+      >
+        {pending ? "…" : hidden ? "Show again" : "Hide"}
       </Button>
       {say(said)}
     </span>

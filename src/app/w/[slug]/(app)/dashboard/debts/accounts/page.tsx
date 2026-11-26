@@ -23,6 +23,7 @@ import { canManage, getTenantContext } from "@/lib/tenants";
 import {
   BalanceForm,
   BookChoiceButton,
+  HideLiabilityButton,
   DebtForm,
   ReadBooksButton,
   RowButton,
@@ -241,7 +242,7 @@ export default async function DebtsPage({ params }: { params: Promise<{ slug: st
         </Card>
       )}
 
-      {books.others.length > 0 && (
+      {(books.others.length > 0 || books.hidden.length > 0) && (
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Also in your books</CardTitle>
@@ -284,10 +285,55 @@ export default async function DebtsPage({ params }: { params: Promise<{ slug: st
                         variant="ghost"
                       />
                     )}
+                    {canEdit && (
+                      <HideLiabilityButton
+                        slug={tenant.slug}
+                        accountId={o.id}
+                        hidden={false}
+                        name={o.name}
+                      />
+                    )}
                   </span>
                 </li>
               ))}
             </ul>
+            {books.others.length === 0 && (
+              <p className="text-muted-foreground text-sm">You&apos;ve hidden all of them.</p>
+            )}
+            {books.hidden.length > 0 && (
+              <details className="mt-3">
+                <summary className="text-muted-foreground cursor-pointer text-sm">
+                  Hidden ({books.hidden.length})
+                </summary>
+                <ul className="mt-2 flex flex-col gap-2 text-sm">
+                  {books.hidden.map((o) => (
+                    <li
+                      key={o.id}
+                      className="border-border flex flex-wrap items-center justify-between gap-2 border-b pb-2 last:border-0"
+                    >
+                      <span>
+                        <span className="font-medium">{o.name}</span>
+                        <span className="text-muted-foreground block text-xs">{o.typeWords}</span>
+                      </span>
+                      <span className="flex flex-wrap items-center gap-2">
+                        <span className="tabular-nums">{money(o.balance)}</span>
+                        {canEdit && (
+                          <HideLiabilityButton
+                            slug={tenant.slug}
+                            accountId={o.id}
+                            hidden
+                            name={o.name}
+                          />
+                        )}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-muted-foreground mt-2 text-xs">
+                  Hiding only tidies this list. It never changes whether something counts as a debt.
+                </p>
+              </details>
+            )}
           </CardContent>
         </Card>
       )}
