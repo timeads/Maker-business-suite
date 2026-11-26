@@ -4,6 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { PageHeader } from "@/components/ui/page-header";
 import { daysFromNow, formatDay, formatMinutes, parseClock } from "@/lib/bookings/slots";
 import { monthReview, openSlots } from "@/lib/social/plan";
+import { loadBrands } from "@/lib/brand/brands";
 import { createClient } from "@/lib/supabase/server";
 import { DraftMonthForm, PlanForm } from "../forms";
 import { socialAccess } from "../gate";
@@ -18,7 +19,7 @@ export default async function SocialPlanPage({ params }: { params: Promise<{ slu
   const { tenant, entitlements } = access;
   const base = `/w/${tenant.slug}/social`;
   const supabase = await createClient();
-  const [{ plan }, { data: ahead }, { data: lately }] = await Promise.all([
+  const [{ plan }, { data: ahead }, { data: lately }, brands] = await Promise.all([
     composerChoices(supabase, tenant.id, []),
     supabase
       .from("social_posts")
@@ -33,6 +34,7 @@ export default async function SocialPlanPage({ params }: { params: Promise<{ slu
       .gte("scheduled_for", daysFromNow(-30))
       .lt("scheduled_for", daysFromNow(0))
       .limit(1000),
+    loadBrands(supabase, tenant.id),
   ]);
   const open = openSlots(plan, ahead ?? [], new Date(daysFromNow(0)), 28, tenant.timezone);
   const review = monthReview(plan, (lately ?? []) as never);
@@ -82,7 +84,13 @@ export default async function SocialPlanPage({ params }: { params: Promise<{ slu
                 </ul>
               )}
               {open.length > 0 && entitlements.canWrite && canDraft && (
-                <DraftMonthForm slug={tenant.slug} open={open.length} />
+                <DraftMonthForm
+                  slug={tenant.slug}
+                  open={open.length}
+                  brands={brands
+                    .filter((brand) => !brand.archived_at)
+                    .map((brand) => ({ id: brand.id, name: brand.name, main: brand.is_default }))}
+                />
               )}
             </CardContent>
           </Card>

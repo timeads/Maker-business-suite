@@ -295,11 +295,37 @@ export function PlanForm({
   );
 }
 
-export function DraftMonthForm({ slug, open }: { slug: string; open: number }) {
+export function DraftMonthForm({
+  slug,
+  open,
+  brands = [],
+}: {
+  slug: string;
+  open: number;
+  /** With more than one brand, the month is drafted for the one picked. */
+  brands?: { id: string; name: string; main: boolean }[];
+}) {
   const [state, action] = useActionState(draftTheMonth.bind(null, slug), {});
   return (
     <form action={action} className="flex flex-col gap-2">
       <Result state={state} />
+      {brands.length > 1 && (
+        <label className="flex flex-wrap items-center gap-2 text-sm">
+          For
+          <select
+            name="brand_id"
+            defaultValue={brands.find((brand) => brand.main)?.id}
+            className="border-input bg-card h-8 rounded-sm border px-2 text-sm"
+          >
+            {brands.map((brand) => (
+              <option key={brand.id} value={brand.id}>
+                {brand.name}
+              </option>
+            ))}
+          </select>
+          <span className="text-muted-foreground text-xs">in its voice, filed under it</span>
+        </label>
+      )}
       <SubmitButton variant="outline" pendingText="Writing drafts… this takes a minute">
         Draft {Math.min(open, 10)} of them with Claude
       </SubmitButton>

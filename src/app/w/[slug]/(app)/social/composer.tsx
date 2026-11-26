@@ -17,11 +17,13 @@ import {
   draftPostCaption,
   listDesignPhotos,
   loadAssetDesign,
+  retryPost,
   savePost,
   type SocialState,
 } from "./actions";
 import { designTitle, saveDesignAsPictures } from "./designed";
 import { getReadyToSend } from "./send-prep";
+import type { ComposerAccount } from "./shared";
 
 const textarea =
   "border-input bg-card placeholder:text-muted-foreground focus-visible:border-ochre focus-visible:ring-ochre/25 font-read w-full rounded-sm border px-[11px] py-2 text-sm outline-none focus-visible:ring-2";
@@ -49,8 +51,11 @@ export type ComposerReview = {
 export type ComposerPost = {
   id: string;
   caption: string;
-  captions: Partial<Record<"facebook" | "instagram", string>>;
+  /** A caption of its own, by account id (or, from before accounts, by place). */
+  captions: Record<string, string>;
   channels: string[];
+  /** The accounts it goes to. */
+  accountIds: string[];
   photoIds: string[];
   projectId: string | null;
   topic: string | null;
@@ -69,8 +74,9 @@ export function Composer({
   post,
   defaults,
   timezone,
-  facebook,
-  instagram,
+  brands,
+  brand,
+  accounts,
   library,
   projects,
   topics,
@@ -82,10 +88,12 @@ export function Composer({
   post?: ComposerPost;
   defaults: { day: string; time: string; topic?: string | null; projectId?: string | null };
   timezone: string;
-  /** The connected Page's name, or null when nothing is connected. */
-  facebook: string | null;
-  /** The linked Instagram handle, or null. */
-  instagram: string | null;
+  /** The brands a post can be drawn in (more than one: the composer asks which). */
+  brands: { id: string; name: string }[];
+  /** The brand picked: its kit draws the slides and its voice drafts the caption. */
+  brand: { id: string; name: string } | null;
+  /** That brand's accounts in use. */
+  accounts: ComposerAccount[];
   /** Recent photos to pick from, plus any already on the post. */
   library: LibraryPhoto[];
   projects: { id: string; name: string }[];
@@ -100,10 +108,20 @@ export function Composer({
   const [caption, setCaption] = useState(post?.caption ?? "");
   const [aiDraft, setAiDraft] = useState(post?.aiDraft ?? "");
   const [picked, setPicked] = useState<string[]>(post?.photoIds ?? []);
-  const [own, setOwn] = useState({
-    facebook: Boolean(post?.captions.facebook),
-    instagram: Boolean(post?.captions.instagram),
-  });
+  // A caption of its own per account; one from before accounts was by place.
+  const ownWords = (account: ComposerAccount) =>
+    post?.captions[account.id] ?? post?.captions[account.network];
+  const [own, setOwn] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(accounts.map((account) => [account.id, Boolean(ownWords(account))])),
+  );
+  const startTicked = (account: ComposerAccount) =>
+    post?.accountIds.length
+      ? post.accountIds.includes(account.id)
+      : post?.channels.length
+        ? post.channels.some(
+            (c) => (c === "facebook" ? "facebook" : "instagram") === account.network,
+          )
+        : account.canPost;
   // Photos that arrived after the page was drawn: ones just designed, or matched to a draft.
   const [extra, setExtra] = useState<LibraryPhoto[]>([]);
   // Why a photo was put on the post without being asked for, by photo.
@@ -149,7 +167,8 @@ export function Composer({
     },
     {},
   );
-  const connected = facebook !== null;
+  const connected = accounts.some((account) => account.canPost);
+  const instagramAccounts = accounts.filter((account) => account.network === "instagram");
   const byId = new Map([...library, ...extra].map((photo) => [photo.id, photo]));
   // A video goes out on its own, so picking one replaces what was picked,
   // and picking a photo afterwards replaces the video.
@@ -311,6 +330,35 @@ export function Composer({
       )}
       <form ref={formRef} action={save} onSubmit={submit} className="flex flex-col gap-6">
         <input type="hidden" name="ai_draft" value={aiDraft} />
+        {brand && <input type="hidden" name="brand_id" value={brand.id} />}
+        {brands.length > 1 && (
+          <div className="flex flex-col gap-2">
+            <span className="text-sm font-semibold">Brand</span>
+            <div className="flex flex-wrap gap-2" role="list">
+              {brands.map((each) => (
+                <Link
+                  key={each.id}
+                  role="listitem"
+                  href={`?brand=${each.id}`}
+                  aria-current={each.id === brand?.id ? "true" : undefined}
+                  className={cn(
+                    "rounded-full border px-3 py-1 text-sm",
+                    each.id === brand?.id
+                      ? "border-teal bg-teal-soft text-teal-soft-ink font-semibold"
+                      : "border-input hover:bg-hover",
+                  )}
+                >
+                  {each.name}
+                </Link>
+              ))}
+            </div>
+            <p className="text-muted-foreground text-xs">
+              Pick the brand first: it sets the look of the slides, the voice of Claude&apos;s draft
+              and the accounts below. Changing it starts the page again, so save anything you have
+              written first.
+            </p>
+          </div>
+        )}
         <input type="hidden" name="slides" value={slides ? JSON.stringify(slides) : ""} />
         <input type="hidden" name="slides_changed" value={slidesChanged ? "1" : "0"} />
         <div className="flex flex-col gap-2">
@@ -346,25 +394,25 @@ export function Composer({
             className={textarea}
           />
           <p className="text-muted-foreground text-xs tabular-nums">{caption.length} / 2,200</p>
-          {(["facebook", "instagram"] as const).map((channel) => {
-            const name = channel === "facebook" ? "Facebook" : "Instagram";
+          {accounts.map((account) => {
+            const name = `${account.network === "facebook" ? "Facebook" : "Instagram"} (${account.label})`;
             return (
-              <div key={channel} className="flex flex-col gap-2">
+              <div key={account.id} className="flex flex-col gap-2">
                 <label className="flex items-center gap-2 text-sm">
                   <input
                     type="checkbox"
-                    name={`own_${channel}`}
-                    checked={own[channel]}
-                    onChange={(event) => setOwn({ ...own, [channel]: event.target.checked })}
+                    name={`own_${account.id}`}
+                    checked={own[account.id] ?? false}
+                    onChange={(event) => setOwn({ ...own, [account.id]: event.target.checked })}
                   />
                   Different words for {name}
                 </label>
-                {own[channel] && (
+                {own[account.id] && (
                   <textarea
-                    name={`caption_${channel}`}
+                    name={`caption_${account.id}`}
                     rows={4}
                     maxLength={2200}
-                    defaultValue={post?.captions[channel] ?? caption}
+                    defaultValue={ownWords(account) ?? caption}
                     aria-label={`Caption for ${name}`}
                     className={textarea}
                   />
@@ -617,55 +665,65 @@ export function Composer({
         </fieldset>
 
         <fieldset className="flex flex-col gap-2">
-          <legend className="pb-2 text-xs leading-tight font-semibold">Post to</legend>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              name="channel_facebook"
-              defaultChecked={
-                post?.channels.length ? post.channels.includes("facebook") : connected
-              }
-              disabled={!connected}
-            />
-            Facebook{facebook ? ` · ${facebook}` : ""}
-          </label>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              name="channel_instagram"
-              defaultChecked={
-                post?.channels.length ? post.channels.includes("instagram") : instagram !== null
-              }
-              disabled={instagram === null}
-            />
-            Instagram{instagram ? ` · @${instagram}` : ""}
-          </label>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              name="channel_instagram_story"
-              defaultChecked={post?.channels.includes("instagram_story") ?? false}
-              disabled={instagram === null}
-            />
-            Instagram Story
-          </label>
-          {instagram !== null && (
-            <p className="text-muted-foreground text-xs">
-              A Story is one photo or one video, with no caption, and stays up for a day. Photos
-              that Instagram wouldn&apos;t take as they are (taller than 4:5 or wider than 1.91:1 on
-              the feed, anything but 9:16 in a Story) are sent as a copy cropped from the middle
-              when you schedule; your photo stays as it is.
-            </p>
+          <legend className="pb-2 text-xs leading-tight font-semibold">
+            Post to{brand && brands.length > 1 ? ` · ${brand.name}'s accounts` : ""}
+          </legend>
+          <input type="hidden" name="accounts_shown" value="1" />
+          {accounts.map((account) => (
+            <label key={account.id} className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                name="account"
+                value={account.id}
+                defaultChecked={startTicked(account)}
+                disabled={!account.canPost}
+              />
+              {account.network === "facebook" ? "Facebook" : "Instagram"} · {account.label}
+              {!account.canPost && (
+                <span className="text-muted-foreground text-xs">(can&apos;t post yet)</span>
+              )}
+            </label>
+          ))}
+          {instagramAccounts.length > 0 && (
+            <div className="flex flex-col gap-1 pl-6">
+              <span className="text-muted-foreground text-xs">On Instagram, as</span>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  name="channel_instagram"
+                  defaultChecked={
+                    post?.channels.length ? post.channels.includes("instagram") : true
+                  }
+                />
+                A post (or a Reel, for a video)
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  name="channel_instagram_story"
+                  defaultChecked={post?.channels.includes("instagram_story") ?? false}
+                />
+                A Story
+              </label>
+              <p className="text-muted-foreground text-xs">
+                A Story is one photo or one video, with no caption, and stays up for a day. Photos
+                that Instagram wouldn&apos;t take as they are (taller than 4:5 or wider than 1.91:1
+                on the feed, anything but 9:16 in a Story) are sent as a copy cropped from the
+                middle when you schedule; your photo stays as it is.
+              </p>
+            </div>
           )}
-          {!connected ? (
+          {accounts.length === 0 ? (
             <p className="text-muted-foreground text-xs">
-              Connect Facebook &amp; Instagram on the Connections page to schedule posts. You can
-              still save drafts.
+              {brands.length > 1 && brand
+                ? `${brand.name} has no Facebook Page or Instagram account yet. Give it one under Settings → Social accounts. You can still save drafts.`
+                : "Connect Facebook & Instagram on the Connections page to schedule posts. You can still save drafts."}
             </p>
           ) : (
-            instagram === null && (
+            !connected && (
               <p className="text-muted-foreground text-xs">
-                No Instagram business account is linked to this Facebook Page.
+                Facebook hasn&apos;t given permission to post to these yet. You can still save
+                drafts.
               </p>
             )
           )}
@@ -821,6 +879,22 @@ function SlideThumbs({ design, kit }: { design: SlideDesign; kit: BrandKit | nul
         </li>
       ))}
     </ol>
+  );
+}
+
+/** Tries a post that only partly went out again: only the accounts that didn't get it. */
+export function RetryPostForm({ slug, postId }: { slug: string; postId: string }) {
+  const [state, action] = useActionState(retryPost.bind(null, slug, postId), {});
+  return (
+    <form action={action} className="flex flex-col gap-2">
+      <FormMessage>{state.error}</FormMessage>
+      <SubmitButton variant="outline" size="sm" pendingText="Trying again…" className="w-fit">
+        Try the rest again
+      </SubmitButton>
+      <p className="text-muted-foreground text-xs">
+        Only the accounts it didn&apos;t reach are tried. What was posted is never sent twice.
+      </p>
+    </form>
   );
 }
 

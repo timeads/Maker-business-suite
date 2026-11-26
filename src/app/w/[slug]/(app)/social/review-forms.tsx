@@ -47,6 +47,8 @@ export type QueuePost = {
   by: string | null;
   /** Has slides that are drawn into pictures when it is approved. */
   slides?: boolean;
+  /** The brand it is drawn in. */
+  brandId?: string | null;
 };
 export type QueueMonth = { month: string | null; label: string; posts: QueuePost[] };
 
@@ -60,13 +62,23 @@ export function ReviewQueue({
   months,
   canApprove,
   kit = null,
+  kits = {},
 }: {
   slug: string;
   months: QueueMonth[];
   canApprove: boolean;
   /** The workspace's kit, for drawing slides into pictures in this browser before approving. */
   kit?: BrandKit | null;
+  /** Each brand's kit, by brand id: a post's slides are drawn in its own brand. */
+  kits?: Record<string, BrandKit | null>;
 }) {
+  const brandOf = new Map(
+    months.flatMap((m) => m.posts.map((p) => [p.id, p.brandId ?? null] as const)),
+  );
+  const kitFor = (id: string) => {
+    const brand = brandOf.get(id);
+    return brand && brand in kits ? kits[brand] : kit;
+  };
   const router = useRouter();
   const [ticked, setTicked] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
@@ -83,7 +95,7 @@ export function ReviewQueue({
   const prepare = async (ids: string[]) => {
     const problems: { id: string; reason: string }[] = [];
     for (const id of ids) {
-      const ready = await getReadyToSend(slug, id, kit);
+      const ready = await getReadyToSend(slug, id, kitFor(id));
       if (ready.error) problems.push({ id, reason: ready.error });
     }
     return problems;

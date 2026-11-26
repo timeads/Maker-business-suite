@@ -10,6 +10,9 @@ import { createClient } from "@/lib/supabase/server";
 import { socialAccess } from "../gate";
 import { ReviewQueue, type QueueMonth } from "../review-forms";
 import { loadDesignKit, reviewFor } from "../shared";
+import { PostFilterBar, narrow, postFilterOf } from "../post-filter";
+import { loadBrands } from "@/lib/brand/brands";
+import type { BrandKit } from "@/lib/design/brands";
 
 export const metadata: Metadata = { title: "Review" };
 
@@ -23,6 +26,7 @@ type Row = {
   review: string;
   review_note: string | null;
   has_slides: unknown;
+  brand_id: string | null;
 };
 
 const SAVED: Record<string, string> = {
@@ -38,19 +42,26 @@ export default async function ReviewPage({
   searchParams,
 }: {
   params: Promise<{ slug: string }>;
-  searchParams: Promise<{ saved?: string }>;
+  searchParams: Promise<{ saved?: string; brand?: string; account?: string }>;
 }) {
   const { slug } = await params;
-  const { saved } = await searchParams;
+  const query = await searchParams;
+  const { saved } = query;
+  const filter = postFilterOf(query);
   const access = await socialAccess(slug, `/w/${slug}/social/review`);
   if (!access.ok) return access.upsell;
   const { tenant, role, entitlements } = access;
   const supabase = await createClient();
-  const [{ data }, { data: members }, review, kit] = await Promise.all([
-    supabase
-      .from("social_posts")
-      .select("id, caption, planned_for, asset_id, asset_ids, submitted_by, review, review_note")
-      .eq("tenant_id", tenant.id)
+  const [{ data }, { data: members }, review, kit, brands] = await Promise.all([
+    narrow(
+      supabase
+        .from("social_posts")
+        .select(
+          "id, caption, planned_for, asset_id, asset_ids, submitted_by, review, review_note, brand_id",
+        )
+        .eq("tenant_id", tenant.id),
+      filter,
+    )
       .eq("status", "draft")
       .not("review", "is", null)
       .order("planned_for", { ascending: true, nullsFirst: false })
@@ -58,7 +69,13 @@ export default async function ReviewPage({
     supabase.rpc("list_members", { p_tenant_id: tenant.id }),
     reviewFor(supabase, tenant.id, role),
     loadDesignKit(supabase, tenant.id),
+    loadBrands(supabase, tenant.id),
   ]);
+  // Each brand's kit, so a post's slides are drawn in its own brand when it is approved.
+  const kits: Record<string, BrandKit | null> = {};
+  if (brands.length > 1) {
+    for (const brand of brands) kits[brand.id] = await loadDesignKit(supabase, tenant.id, brand.id);
+  }
   const rows = (data ?? []) as unknown as Row[];
   const firstPhoto = (row: Row) => row.asset_ids?.[0] ?? row.asset_id;
   const photoIds = [...new Set(rows.map(firstPhoto).filter((id): id is string => Boolean(id)))];
@@ -112,6 +129,7 @@ export default async function ReviewPage({
       photo: photo ? (photoUrl.get(photo) ?? null) : null,
       by: row.submitted_by ? (emailOf.get(row.submitted_by) ?? null) : null,
       slides: row.has_slides != null,
+      brandId: row.brand_id,
     });
   }
   const sentBack = rows.filter((r) => r.review === "sent_back");
@@ -129,6 +147,12 @@ export default async function ReviewPage({
         }
       />
       <FormMessage kind="success">{SAVED[saved ?? ""]}</FormMessage>
+      <PostFilterBar
+        supabase={supabase}
+        tenantId={tenant.id}
+        action={`/w/${tenant.slug}/social/review`}
+        filter={filter}
+      />
 
       <Card>
         <CardHeader>
@@ -143,7 +167,13 @@ export default async function ReviewPage({
         </CardHeader>
         {waiting > 0 && (
           <CardContent>
-            <ReviewQueue slug={tenant.slug} months={months} canApprove={canApprove} kit={kit} />
+            <ReviewQueue
+              slug={tenant.slug}
+              months={months}
+              canApprove={canApprove}
+              kit={kit}
+              kits={kits}
+            />
           </CardContent>
         )}
       </Card>

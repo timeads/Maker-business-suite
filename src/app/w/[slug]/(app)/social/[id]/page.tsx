@@ -8,7 +8,7 @@ import { ownDesign } from "@/lib/brand/slides";
 import { publicAssetUrl } from "@/lib/social/worker";
 import { createClient } from "@/lib/supabase/server";
 import { Badge } from "@/components/ui/badge";
-import { Composer, DeletePostForm } from "../composer";
+import { Composer, DeletePostForm, RetryPostForm } from "../composer";
 import { socialAccess } from "../gate";
 import { SendBackForm } from "../review-forms";
 import {
@@ -19,9 +19,11 @@ import {
   loadDesignKit,
   localFields,
   photoReasons,
+  postTargets,
   reviewFor,
-  socialChannels,
 } from "../shared";
+import type { Channel } from "@/lib/social/publish";
+import { postTargets as postTargetsOf, targetLabel, type PostAccount } from "@/lib/social/targets";
 
 export const metadata: Metadata = { title: "Post" };
 
@@ -33,29 +35,47 @@ const CHANNEL_NAMES: Record<string, string> = {
 
 export default async function PostPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ slug: string; id: string }>;
+  searchParams: Promise<{ brand?: string }>;
 }) {
   const { slug, id } = await params;
+  const { brand: wanted } = await searchParams;
   const access = await socialAccess(slug, `/w/${slug}/social/${id}`);
   if (!access.ok) return access.upsell;
   const { tenant, entitlements, role } = access;
   if (!/^[0-9a-f-]{36}$/i.test(id)) notFound();
 
   const supabase = await createClient();
-  const [{ data: post }, channels, review] = await Promise.all([
+  const [{ data: post }, review] = await Promise.all([
     supabase
       .from("social_posts")
       .select(
-        "id, caption, captions, channels, status, scheduled_for, planned_for, published_at, results, error, asset_id, asset_ids, project_id, topic, ai_draft, review, review_note, slides, slide_asset_ids",
+        "id, caption, captions, channels, account_ids, brand_id, status, scheduled_for, planned_for, published_at, results, error, asset_id, asset_ids, project_id, topic, ai_draft, review, review_note, slides, slide_asset_ids",
       )
       .eq("id", id)
       .eq("tenant_id", tenant.id)
       .maybeSingle(),
-    socialChannels(supabase, tenant.id),
     reviewFor(supabase, tenant.id, role),
   ]);
   if (!post) notFound();
+  const accountIds = ((post.account_ids as string[] | null) ?? []).map(String);
+  // The post's own brand, unless the person is switching it.
+  const targets = await postTargets(
+    supabase,
+    tenant.id,
+    wanted ?? (post.brand_id as string | null),
+  );
+  // Every account the post names, for the words on what went where (any brand, any state).
+  const { data: namedRows } = accountIds.length
+    ? await supabase
+        .from("social_accounts")
+        .select("id, network, platform_id, page_id, name, handle, tasks, active")
+        .eq("tenant_id", tenant.id)
+        .in("id", accountIds)
+    : { data: [] };
+  const named = (namedRows ?? []) as PostAccount[];
   const reviewState = (post.review as "waiting" | "sent_back" | null) ?? null;
 
   const photoIds = (
@@ -67,7 +87,7 @@ export default async function PostPage({
   ) as string[];
   const [choices, kit] = await Promise.all([
     composerChoices(supabase, tenant.id, photoIds),
-    loadDesignKit(supabase, tenant.id),
+    loadDesignKit(supabase, tenant.id, targets.brand?.id),
   ]);
   // On a draft Claude wrote, say why each photo that fits the topic is there.
   const topic = choices.plan.topics.find((t) => t.id === post.topic);
@@ -89,7 +109,15 @@ export default async function PostPage({
   const when = meantFor
     ? localFields(new Date(meantFor), tenant.timezone)
     : defaultSlot(new Date(), tenant.timezone);
-  const captions = (post.captions ?? {}) as Partial<Record<"facebook" | "instagram", string>>;
+  const captions = (post.captions ?? {}) as Record<string, string>;
+  const targetsOut = postTargetsOf(
+    { channels: post.channels as Channel[], account_ids: accountIds },
+    named,
+  ).flatMap((t) => t.places);
+  const captionLabel = (key: string) => {
+    const account = named.find((a) => a.id === key);
+    return account ? targetLabel(`${key}:${account.network}`, named) : (CHANNEL_NAMES[key] ?? key);
+  };
 
   return (
     <>
@@ -105,12 +133,12 @@ export default async function PostPage({
       {post.error && (
         <FormMessage>
           This post didn&apos;t fully go out.{" "}
-          {(post.channels as string[])
-            .filter((c) => results[c]?.error)
-            .map((c) => `${CHANNEL_NAMES[c] ?? c}: ${results[c].error}.`)
+          {targetsOut
+            .filter((t) => results[t.key]?.error)
+            .map((t) => `${targetLabel(t.key, named)}: ${results[t.key].error}.`)
             .join(" ") || `${post.error}.`}
           {partlyOut
-            ? " The part that was posted stays up; write a new post for the rest."
+            ? " What was posted stays up and is never sent again."
             : " Fix it below and schedule it again."}
         </FormMessage>
       )}
@@ -158,6 +186,7 @@ export default async function PostPage({
                   caption: post.caption as string,
                   captions,
                   channels: post.channels as string[],
+                  accountIds,
                   // The slides' own pictures are the slides; they aren't picked by hand.
                   photoIds: photoIds.filter(
                     (photoId) =>
@@ -174,8 +203,9 @@ export default async function PostPage({
                 }}
                 defaults={when}
                 timezone={tenant.timezone}
-                facebook={channels.facebook}
-                instagram={channels.instagram}
+                brands={targets.brands}
+                brand={targets.brand}
+                accounts={targets.accounts}
                 library={choices.library}
                 projects={choices.projects}
                 topics={choices.topics}
@@ -192,7 +222,7 @@ export default async function PostPage({
           <CardHeader>
             <CardTitle>What was posted</CardTitle>
             <CardDescription>
-              {(post.channels as string[]).map((c) => CHANNEL_NAMES[c] ?? c).join(" and ")}
+              {targetsOut.map((t) => targetLabel(t.key, named)).join(", ")}
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
@@ -210,22 +240,28 @@ export default async function PostPage({
               </div>
             )}
             <p className="font-read text-sm whitespace-pre-line">{post.caption as string}</p>
-            {Object.entries(captions).map(([channel, words]) => (
-              <div key={channel}>
-                <p className="text-muted-foreground text-xs font-semibold">
-                  On {CHANNEL_NAMES[channel] ?? channel}
-                </p>
-                <p className="font-read text-sm whitespace-pre-line">{words}</p>
-              </div>
-            ))}
+            {Object.entries(captions)
+              // A caption kept under both a place and its one account is the same words.
+              .filter(([key]) => !(key in CHANNEL_NAMES) || accountIds.length === 0)
+              .map(([key, words]) => (
+                <div key={key}>
+                  <p className="text-muted-foreground text-xs font-semibold">
+                    On {captionLabel(key)}
+                  </p>
+                  <p className="font-read text-sm whitespace-pre-line">{words}</p>
+                </div>
+              ))}
             <ul className="text-muted-foreground text-sm">
-              {(post.channels as string[]).map((c) => (
-                <li key={c}>
-                  {CHANNEL_NAMES[c] ?? c}:{" "}
-                  {results[c]?.id ? "posted" : (results[c]?.error ?? "waiting to go out")}
+              {targetsOut.map((t) => (
+                <li key={t.key}>
+                  {targetLabel(t.key, named)}:{" "}
+                  {results[t.key]?.id ? "posted" : (results[t.key]?.error ?? "waiting to go out")}
                 </li>
               ))}
             </ul>
+            {post.status === "failed" && partlyOut && entitlements.canWrite && (
+              <RetryPostForm slug={tenant.slug} postId={post.id as string} />
+            )}
           </CardContent>
         </Card>
       )}

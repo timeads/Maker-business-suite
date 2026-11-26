@@ -1,6 +1,7 @@
 import { localDay } from "@/lib/bookings/slots";
-import { canPost } from "@/lib/connections/meta-access";
-import { loadBrandKit } from "@/lib/brand/brands";
+import { canPost, canPostAs } from "@/lib/connections/meta-access";
+import { loadBrandKit, loadBrands, pickBrand } from "@/lib/brand/brands";
+import { accountName } from "@/lib/social/accounts";
 import { toDesignKit } from "@/lib/brand/kit";
 import type { BrandKit } from "@/lib/design/brands";
 import { matchPhotos } from "@/lib/social/photo-match";
@@ -37,6 +38,68 @@ export async function socialChannels(supabase: Supabase, tenantId: string) {
     needsReconnect: data?.status === "needs_reconnect",
     /** Connected and live, but without permission to post (connected for the help desk only). */
     needsPosting: active && !facebook,
+  };
+}
+
+/** One account the composer offers. Nothing secret. */
+export type ComposerAccount = {
+  id: string;
+  network: "facebook" | "instagram";
+  label: string;
+  /** The login was granted posting, and Meta says whoever connected may post on its Page. */
+  canPost: boolean;
+};
+
+/**
+ * The brands a post can be drawn in, the one picked (the main brand unless
+ * another is named), and that brand's accounts in use, each with whether it
+ * can be posted to. A workspace with one brand and one Page sees exactly
+ * what it saw before brands and accounts were lists.
+ */
+export async function postTargets(supabase: Supabase, tenantId: string, brandId?: string | null) {
+  const [brands, { data: rows }, { data: connection }] = await Promise.all([
+    loadBrands(supabase, tenantId),
+    supabase
+      .from("social_accounts")
+      .select("id, network, name, handle, brand_id, active, tasks")
+      .eq("tenant_id", tenantId)
+      .eq("active", true)
+      .order("created_at"),
+    // Named columns only: members can't read the whole row.
+    supabase
+      .from("connections")
+      .select("status, scopes")
+      .eq("tenant_id", tenantId)
+      .eq("provider", "meta")
+      .maybeSingle(),
+  ]);
+  const brand = pickBrand(brands, brandId);
+  const live = connection?.status === "active";
+  const scopes = Array.isArray(connection?.scopes) ? (connection.scopes as string[]) : [];
+  const accounts: ComposerAccount[] = (
+    (rows ?? []) as {
+      id: string;
+      network: string;
+      name: string | null;
+      handle: string | null;
+      brand_id: string;
+      tasks: string[] | null;
+    }[]
+  )
+    .filter((row) => row.brand_id === brand?.id)
+    .filter((row) => row.network === "facebook" || row.network === "instagram")
+    .map((row) => ({
+      id: row.id,
+      network: row.network as "facebook" | "instagram",
+      label: accountName(row),
+      canPost: live && canPostAs(row, scopes),
+    }));
+  return {
+    brands: brands
+      .filter((each) => !each.archived_at || each.id === brand?.id)
+      .map((each) => ({ id: each.id, name: each.name })),
+    brand: brand ? { id: brand.id, name: brand.name } : null,
+    accounts,
   };
 }
 

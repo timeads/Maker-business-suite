@@ -62,6 +62,13 @@ const SAVE_ERRORS: Record<string, string> = {
   video_alone: "A video goes out on its own. Take the photos off, or post them separately.",
   needs_approval:
     "This workspace approves posts before they go out. Press “Send for review” and an approver will look at it.",
+  no_account_for_place:
+    "Tick an account for each place it goes (a Page for Facebook, an Instagram account for Instagram).",
+  account_not_for_post:
+    "One of those accounts isn't this brand's, or isn't in use any more. Pick again.",
+  "Brand not found": "Pick one of your brands (not one that's put away).",
+  photo_size:
+    "One of the photos isn't a size Instagram takes. Open the post and schedule it again so a copy that fits is made.",
 };
 
 type Ctx = Exclude<Awaited<ReturnType<typeof context>>, { error: string }>;
@@ -258,26 +265,90 @@ export async function savePost(
     }
   }
   const project = String(formData.get("project") ?? "");
-  const { data: savedId, error } = await ctx.supabase.rpc("save_social_post_full", {
-    p_tenant_id: ctx.tenant.id,
-    p_post_id: postId,
-    p_caption: caption,
-    p_asset_ids: assetIds,
-    p_channels: channels,
-    p_scheduled_for: scheduledFor,
-    p_captions: Object.fromEntries(
-      CAPTION_CHANNELS.map((channel) => [
-        channel,
-        formData.get(`own_${channel}`) === "on"
-          ? String(formData.get(`caption_${channel}`) ?? "").trim()
-          : "",
-      ]),
-    ),
-    p_project_id: UUID.test(project) ? project : null,
-    p_topic: String(formData.get("topic") ?? "").slice(0, 40) || null,
-    p_ai_draft: String(formData.get("ai_draft") ?? "").slice(0, 2200) || null,
-    p_planned_for: plannedFor,
-  });
+  const brandField = String(formData.get("brand_id") ?? "");
+  const brandId = UUID.test(brandField) ? brandField : null;
+  // Which accounts it goes to, and so which places: Facebook for a Page, the feed
+  // and/or a Story for an Instagram account. Each account's own words, where they differ.
+  let targets: {
+    accountIds: string[];
+    channels: string[];
+    captions: Record<string, string>;
+  } | null = null;
+  if (formData.get("accounts_shown") === "1") {
+    const accountIds = [
+      ...new Set(
+        formData
+          .getAll("account")
+          .map(String)
+          .filter((id) => UUID.test(id)),
+      ),
+    ];
+    const { data: accountRows } = accountIds.length
+      ? await ctx.supabase
+          .from("social_accounts")
+          .select("id, network")
+          .eq("tenant_id", ctx.tenant.id)
+          .in("id", accountIds)
+      : { data: [] };
+    const networks = new Set(((accountRows ?? []) as { network: string }[]).map((a) => a.network));
+    const feed = formData.get("channel_instagram") === "on";
+    const story = formData.get("channel_instagram_story") === "on";
+    if (networks.has("instagram") && !feed && !story) {
+      return { error: "Choose how it goes on Instagram: as a post, a Story, or both." };
+    }
+    targets = {
+      accountIds,
+      channels: [
+        ...(networks.has("facebook") ? ["facebook"] : []),
+        ...(networks.has("instagram") && feed ? ["instagram"] : []),
+        ...(networks.has("instagram") && story ? ["instagram_story"] : []),
+      ],
+      captions: Object.fromEntries(
+        accountIds.map((id) => [
+          id,
+          formData.get(`own_${id}`) === "on"
+            ? String(formData.get(`caption_${id}`) ?? "").trim()
+            : "",
+        ]),
+      ),
+    };
+  }
+  const { data: savedId, error } = targets
+    ? await ctx.supabase.rpc("save_social_post_to", {
+        p_tenant_id: ctx.tenant.id,
+        p_post_id: postId,
+        p_brand_id: brandId,
+        p_account_ids: targets.accountIds,
+        p_channels: targets.channels,
+        p_caption: caption,
+        p_asset_ids: assetIds,
+        p_scheduled_for: scheduledFor,
+        p_captions: targets.captions,
+        p_project_id: UUID.test(project) ? project : null,
+        p_topic: String(formData.get("topic") ?? "").slice(0, 40) || null,
+        p_ai_draft: String(formData.get("ai_draft") ?? "").slice(0, 2200) || null,
+        p_planned_for: plannedFor,
+      })
+    : await ctx.supabase.rpc("save_social_post_full", {
+        p_tenant_id: ctx.tenant.id,
+        p_post_id: postId,
+        p_caption: caption,
+        p_asset_ids: assetIds,
+        p_channels: channels,
+        p_scheduled_for: scheduledFor,
+        p_captions: Object.fromEntries(
+          CAPTION_CHANNELS.map((channel) => [
+            channel,
+            formData.get(`own_${channel}`) === "on"
+              ? String(formData.get(`caption_${channel}`) ?? "").trim()
+              : "",
+          ]),
+        ),
+        p_project_id: UUID.test(project) ? project : null,
+        p_topic: String(formData.get("topic") ?? "").slice(0, 40) || null,
+        p_ai_draft: String(formData.get("ai_draft") ?? "").slice(0, 2200) || null,
+        p_planned_for: plannedFor,
+      });
   if (error) {
     const known = Object.keys(SAVE_ERRORS).find((key) => error.message.includes(key));
     return {
@@ -408,6 +479,31 @@ export async function saveReviewSettings(
   return { message: "Saved." };
 }
 
+/** Tries a post that didn't fully go out again, for the accounts it didn't reach. */
+export async function retryPost(
+  slug: string,
+  postId: string,
+  _prev: SocialState,
+  _formData: FormData,
+): Promise<SocialState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const { error } = await ctx.supabase.rpc("retry_social_post", {
+    p_tenant_id: ctx.tenant.id,
+    p_post_id: postId,
+  });
+  if (error) {
+    const known = Object.keys(SAVE_ERRORS).find((key) => error.message.includes(key));
+    return {
+      error: known
+        ? SAVE_ERRORS[known]
+        : (reviewError(error.message) ?? "It couldn't be tried again. Please try again."),
+    };
+  }
+  revalidatePath(`/w/${slug}/social`, "layout");
+  redirect(`/w/${slug}/social?saved=schedule`);
+}
+
 export async function deletePost(
   slug: string,
   postId: string,
@@ -515,7 +611,10 @@ export async function draftPostCaption(
       ),
       recent: (recent ?? []).map((row) => String(row.caption).slice(0, 600)).filter(Boolean),
       styleNotes: plan.style_notes,
-      brand: await loadBrandBrief(ctx),
+      brand: await loadBrandBrief(
+        ctx,
+        UUID.test(String(formData.get("brand_id") ?? "")) ? String(formData.get("brand_id")) : null,
+      ),
     });
     // Metered whether or not a draft came back: the tokens were spent.
     const { error: usageError } = await getAdminClient().rpc("record_usage", {
@@ -719,7 +818,7 @@ export async function saveLinkPage(
 export async function draftTheMonth(
   slug: string,
   _prev: SocialState,
-  _formData: FormData,
+  formData: FormData,
 ): Promise<SocialState> {
   const ctx = await context(slug);
   if ("error" in ctx) return { error: ctx.error };
@@ -772,7 +871,14 @@ export async function draftTheMonth(
   const admin = getAdminClient();
   let made = 0;
   let withPhoto = 0;
-  const brand = await loadBrandBrief(ctx);
+  // The month is drafted for one brand: in its voice, and filed under it.
+  const brandField = String(formData.get("brand_id") ?? "");
+  const picked = await loadBrandKit(
+    ctx.supabase,
+    ctx.tenant.id,
+    UUID.test(brandField) ? brandField : null,
+  );
+  const brand = brandBrief(picked.kit);
   const photos = await taggedPhotos(ctx);
   // Each photo is offered to one draft only, so a month of posts doesn't show the same one.
   const taken = new Set<string>();
@@ -783,7 +889,8 @@ export async function draftTheMonth(
     const match = topic ? pickPhoto(photos, `${topic.name} ${topic.about}`, taken) : null;
     try {
       const draft = await draftCaption({
-        workspaceName: ctx.tenant.name,
+        workspaceName:
+          picked.brand && !picked.brand.is_default ? picked.brand.name : ctx.tenant.name,
         brief: topic
           ? `A "${topic.name}" post.${topic.about ? ` ${topic.about}` : ""} Leave a clear gap, marked [like this], for any detail only the owner knows.`
           : "A general update from the studio. Leave a clear gap, marked [like this], for any detail only the owner knows.",
@@ -799,12 +906,16 @@ export async function draftTheMonth(
         p_quantity: draft.tokens,
       });
       if (!draft.ok) continue;
-      const { error } = await ctx.supabase.rpc("save_social_post_full", {
+      // A draft names its brand and nothing else: no account, no time. A person
+      // picks where it goes and schedules it (CLAUDE.md rule 6).
+      const { error } = await ctx.supabase.rpc("save_social_post_to", {
         p_tenant_id: ctx.tenant.id,
         p_post_id: null,
+        p_brand_id: picked.brand?.id ?? null,
+        p_account_ids: [],
+        p_channels: [],
         p_caption: draft.text,
         p_asset_ids: match ? [match.asset.id] : [],
-        p_channels: [],
         p_scheduled_for: null,
         p_captions: {},
         p_project_id: null,

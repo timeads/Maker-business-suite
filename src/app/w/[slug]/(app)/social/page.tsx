@@ -10,6 +10,7 @@ import { canManage } from "@/lib/tenants";
 import { cn } from "@/lib/utils";
 import { AllowMetaAccess } from "../settings/helpdesk/channels/form";
 import { socialAccess } from "./gate";
+import { PostFilterBar, filterQuery, narrow, postFilterOf } from "./post-filter";
 import { REVIEW_LABELS, STATUS_LABELS, socialChannels } from "./shared";
 
 export const metadata: Metadata = { title: "Social" };
@@ -54,7 +55,7 @@ export default async function SocialPage({
   searchParams,
 }: {
   params: Promise<{ slug: string }>;
-  searchParams: Promise<{ month?: string; saved?: string }>;
+  searchParams: Promise<{ month?: string; saved?: string; brand?: string; account?: string }>;
 }) {
   const { slug } = await params;
   const query = await searchParams;
@@ -62,6 +63,7 @@ export default async function SocialPage({
   if (!access.ok) return access.upsell;
   const { tenant, role, entitlements } = access;
   const base = `/w/${tenant.slug}/social`;
+  const filter = postFilterOf(query);
 
   const today = localDay(new Date(), tenant.timezone);
   const month = /^\d{4}-(0[1-9]|1[0-2])$/.test(query.month ?? "")
@@ -81,30 +83,21 @@ export default async function SocialPage({
   const from = zonedTimeToUtc(iso(gridStart), 0, tenant.timezone) ?? gridStart;
   const to = zonedTimeToUtc(iso(gridEnd), 0, tenant.timezone) ?? gridEnd;
   const monthLink = (offset: number) =>
-    `${base}?month=${iso(new Date(Date.UTC(year, monthIndex - 1 + offset, 1))).slice(0, 7)}`;
+    `${base}?month=${iso(new Date(Date.UTC(year, monthIndex - 1 + offset, 1))).slice(0, 7)}${filterQuery(filter)}`;
 
   const supabase = await createClient();
   const columns = "id, caption, channels, status, scheduled_for, planned_for, updated_at, review";
   const [{ data: inMonth }, { data: drafts }, { data: failed }, channels] = await Promise.all([
-    supabase
-      .from("social_posts")
-      .select(columns)
-      .eq("tenant_id", tenant.id)
+    narrow(supabase.from("social_posts").select(columns).eq("tenant_id", tenant.id), filter)
       .neq("status", "draft")
       .gte("scheduled_for", from.toISOString())
       .lt("scheduled_for", to.toISOString())
       .order("scheduled_for"),
-    supabase
-      .from("social_posts")
-      .select(columns)
-      .eq("tenant_id", tenant.id)
+    narrow(supabase.from("social_posts").select(columns).eq("tenant_id", tenant.id), filter)
       .eq("status", "draft")
       .order("updated_at", { ascending: false })
       .limit(60),
-    supabase
-      .from("social_posts")
-      .select(columns)
-      .eq("tenant_id", tenant.id)
+    narrow(supabase.from("social_posts").select(columns).eq("tenant_id", tenant.id), filter)
       .eq("status", "failed")
       .order("scheduled_for", { ascending: false })
       .limit(10),
@@ -169,6 +162,14 @@ export default async function SocialPage({
       </PageHeader>
 
       <FormMessage kind="success">{SAVED[query.saved ?? ""]}</FormMessage>
+
+      <PostFilterBar
+        supabase={supabase}
+        tenantId={tenant.id}
+        action={base}
+        filter={filter}
+        keep={query.month ? { month } : {}}
+      />
 
       {channels.facebook === null && channels.needsPosting && (
         <Card>
