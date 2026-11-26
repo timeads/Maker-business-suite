@@ -595,7 +595,7 @@ export default async function MoneySetupPage({ params }: { params: Promise<{ slu
             </ul>
           </details>
         )}
-        <Button asChild className="w-fit">
+        <Button asChild variant="outline" className="w-fit">
           <Link href={`${base}/dashboard`}>See your Money page</Link>
         </Button>
       </SetupStepCard>
