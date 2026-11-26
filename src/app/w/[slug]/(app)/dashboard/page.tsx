@@ -5,7 +5,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { FormMessage } from "@/components/ui/form-message";
 import { PageHeader } from "@/components/ui/page-header";
+import { HowWorkedOut } from "@/components/setup/how-worked-out";
+import { SetupCard } from "@/components/setup/setup-card";
 import { requireUser } from "@/lib/auth";
+import { revenueExplained } from "@/lib/dashboard/explain";
+import { MONEY_TOOL, moneySetupItems } from "@/lib/dashboard/setup";
+import { loadMoneySetupFacts } from "@/lib/dashboard/setup-data";
+import { loadNotNow } from "@/lib/setup/data";
+import { sortItems, type SetupItem } from "@/lib/setup/items";
 import { loadDashboardConfig, loadDashboardData, loadRevenueSettings } from "@/lib/dashboard/data";
 import { resolveRange } from "@/lib/dashboard/range";
 import {
@@ -77,7 +84,19 @@ export default async function DashboardPage({
   const preset = isRange(query.range) ? query.range : config.range;
   // One range for the whole page, so every number agrees with its neighbours.
   const range = resolveRange(preset, new Date(), tenant.timezone);
-  const data = await loadDashboardData(supabase, tenant, config, range, revenue);
+  const manager = canManage(role);
+  const [data, setup] = await Promise.all([
+    loadDashboardData(supabase, tenant, config, range, revenue),
+    // "Finish setting up", for the people who can do it. Never stops the page.
+    manager
+      ? Promise.all([
+          loadMoneySetupFacts(supabase, tenant, { manager, revenue }),
+          loadNotNow(supabase, tenant.id, MONEY_TOOL),
+        ])
+          .then(([facts, notNow]) => sortItems(moneySetupItems(facts), notNow).open)
+          .catch((): SetupItem[] => [])
+      : Promise.resolve([] as SetupItem[]),
+  ]);
 
   return (
     <>
@@ -97,6 +116,14 @@ export default async function DashboardPage({
           />
         )}
       </PageHeader>
+
+      <SetupCard
+        slug={tenant.slug}
+        tool={MONEY_TOOL}
+        items={setup}
+        canSnooze={manager && entitlements.canWrite}
+        setupHref="dashboard/setup"
+      />
 
       {source === "invalid" && (
         <FormMessage>
@@ -122,6 +149,11 @@ export default async function DashboardPage({
           </Link>
         ))}
       </nav>
+      <HowWorkedOut
+        label="How revenue is worked out"
+        lines={revenueExplained(revenue)}
+        change={{ href: `${base}/settings/money/lines`, label: "Change how revenue is counted" }}
+      />
 
       {config.widgets.every((widget) => data[widget.id].type === "empty") ? (
         // Nothing connected yet: one clear next step beats a page of empty cards.

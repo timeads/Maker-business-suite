@@ -24,6 +24,7 @@ import {
   type WhatIfFigures,
 } from "@/lib/dashboard/debt/what-if";
 import { STRATEGIES } from "@/lib/dashboard/debt/engine";
+import { applyDebtBasics } from "@/lib/dashboard/debt/apply";
 import { debtPlanFieldsSchema } from "@/lib/dashboard/debt/plans";
 import {
   DEBT_KEY,
@@ -765,4 +766,39 @@ export async function confirmDebtImport(
       ? "Nothing needed filling: it's all set."
       : `Filled in ${Number(result.fields ?? 0)} details on ${debts} ${debts === 1 ? "debt" : "debts"}. Anything you'd already set is just as you left it.`;
   return { message: planWords ? `${planWords}. ${filled}` : filled };
+}
+
+/**
+ * Money → Set up: one debt's rate, minimum and usual payment, changed on
+ * their own (everything else stays as it is). Blank rate: not given yet.
+ */
+export async function saveDebtBasics(
+  slug: string,
+  debtId: string,
+  _prev: DebtActionState,
+  formData: FormData,
+): Promise<DebtActionState> {
+  const ctx = await debtContext(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  if (!z.string().uuid().safeParse(debtId).success) return { error: "Which debt is this?" };
+  const rateText = text(formData, "rate");
+  const rate = rateText === "" ? null : percentToBp(rateText);
+  if (rate === null && rateText !== "") return { error: "Give the rate as a percent, like 22.99." };
+  for (const name of ["minimum", "payment"] as const) {
+    if (!moneyOk(text(formData, name)))
+      return { error: `The ${name} doesn't look like an amount.` };
+  }
+  const minimum = money(text(formData, "minimum")) ?? 0;
+  const payment = money(text(formData, "payment"));
+  if (minimum < 0 || (payment !== null && payment < 0)) {
+    return { error: "An amount can't be below zero." };
+  }
+  const done = await applyDebtBasics(ctx.supabase, ctx.tenant.id, debtId, {
+    rate_bp: rate,
+    minimum_cents: minimum,
+    payment_cents: payment,
+  });
+  if (done.error) return { error: done.error };
+  refresh(slug);
+  return { message: "Saved." };
 }

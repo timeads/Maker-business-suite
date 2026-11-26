@@ -403,6 +403,11 @@ export function buildNav(viewer: NavViewer, attention: Attention = {}): NavTool[
             place("dashboard.cost-cutter", "Cost cutter", "dashboard/cost-cutter", {
               keywords: ["recurring", "subscriptions", "cancel", "price creep", "cut costs"],
             }),
+            // The guided setup. No count here: working it out takes reads
+            // the layout doesn't do on every page.
+            place("dashboard.setup", "Set up", "dashboard/setup", {
+              keywords: ["set up", "setup", "get started", "checklist", "fine tune", "finish"],
+            }),
           ],
         },
         // Owners and admins only: nobody else sees the debts at all.

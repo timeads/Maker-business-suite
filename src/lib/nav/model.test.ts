@@ -240,6 +240,7 @@ describe("buildNav: each tool's menu", () => {
       "Expenses to sort",
       "Budget",
       "Cost cutter",
+      "Set up",
       "Payoff plan",
       "Debts",
       "What if…",

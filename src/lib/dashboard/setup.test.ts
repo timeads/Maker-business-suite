@@ -4,6 +4,7 @@ import { DEFAULT_PROFIT_SETTINGS } from "./profit";
 import {
   MONEY_STEPS,
   moneySetupItems,
+  lineSuggestions,
   passThroughAccounts,
   type MoneyDebtFacts,
   type MoneySetupFacts,
@@ -211,5 +212,32 @@ describe("passThroughAccounts", () => {
         debts,
       ),
     ).toEqual([]);
+  });
+});
+
+describe("lineSuggestions", () => {
+  it("suggests the workshops, then product types and order tags by what they bring in", () => {
+    const found = lineSuggestions([
+      { order_tags: ["wholesale"], product_type: "Rug", workshop: false, revenue_cents: 90000 },
+      {
+        order_tags: ["Wholesale", "wholesale"],
+        product_type: "rug",
+        workshop: false,
+        revenue_cents: 10000,
+      },
+      { order_tags: null, product_type: "Yarn", workshop: false, revenue_cents: 20000 },
+      { order_tags: null, product_type: null, workshop: true, revenue_cents: 50000 },
+      { order_tags: ["  "], product_type: "Refunded", workshop: false, revenue_cents: -500 },
+    ]);
+    expect(found).toEqual([
+      { match: "workshop", word: "", cents: 50000 },
+      { match: "product_type", word: "Rug", cents: 100000 },
+      { match: "product_type", word: "Yarn", cents: 20000 },
+      { match: "order_tag", word: "wholesale", cents: 100000 },
+    ]);
+  });
+
+  it("suggests nothing it can't see", () => {
+    expect(lineSuggestions([])).toEqual([]);
   });
 });

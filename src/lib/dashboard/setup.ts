@@ -362,3 +362,70 @@ export function passThroughAccounts(
         : [];
     });
 }
+
+// ---------------------------------------------------------------------------
+// Business lines to suggest
+// ---------------------------------------------------------------------------
+
+/** A possible line, from what the shop's own sales already carry. */
+export type LineSuggestion = {
+  match: "order_tag" | "product_type" | "workshop";
+  /** The tag or type as the shop has it; empty for the Bookings workshops. */
+  word: string;
+  cents: number;
+};
+
+/**
+ * Lines worth suggesting, from the revenue the shop's sales already carry:
+ * the order tags and product types that bring in the most, and the Bookings
+ * workshops sold through the shop. Only words that are there, never one
+ * made up; spellings that compare the same (`sameWord` rules) are one.
+ */
+export function lineSuggestions(
+  groups: readonly {
+    order_tags: string[] | null;
+    product_type: string | null;
+    workshop: boolean;
+    revenue_cents: number;
+  }[],
+  limit = 6,
+): LineSuggestion[] {
+  const fold = (w: string) =>
+    w
+      .trim()
+      .toLowerCase()
+      .replace(/[-_\s]+/g, " ");
+  const tally = (kind: "order_tag" | "product_type") => {
+    const sums = new Map<string, { word: string; cents: number }>();
+    return {
+      add(word: string, cents: number) {
+        const key = fold(word);
+        if (!key) return;
+        const seen = sums.get(key) ?? { word: word.trim(), cents: 0 };
+        seen.cents += cents;
+        sums.set(key, seen);
+      },
+      top: () =>
+        [...sums.values()]
+          .filter((s) => s.cents > 0)
+          .sort((a, b) => b.cents - a.cents || a.word.localeCompare(b.word))
+          .slice(0, limit)
+          .map((s) => ({ match: kind, word: s.word, cents: s.cents })),
+    };
+  };
+  const tags = tally("order_tag");
+  const types = tally("product_type");
+  let workshop = 0;
+  for (const g of groups) {
+    const cents = Math.max(0, g.revenue_cents);
+    const once = new Map((g.order_tags ?? []).map((t) => [fold(t), t] as const));
+    for (const tag of once.values()) tags.add(tag, cents);
+    if (g.product_type) types.add(g.product_type, cents);
+    if (g.workshop) workshop += cents;
+  }
+  return [
+    ...(workshop > 0 ? [{ match: "workshop" as const, word: "", cents: workshop }] : []),
+    ...types.top(),
+    ...tags.top(),
+  ];
+}

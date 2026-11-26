@@ -133,7 +133,7 @@ export default async function RevenueLinesSettings({
         </CardContent>
       </Card>
 
-      <Card>
+      <Card id="rules" className="scroll-mt-4">
         <CardHeader>
           <CardTitle>Your business lines</CardTitle>
           <CardDescription>

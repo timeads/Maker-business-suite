@@ -367,7 +367,7 @@ export default async function PayoffPlanPage({
       </Card>
 
       {result.poolDebts.length > 0 && (
-        <Card>
+        <Card id="order" className="scroll-mt-4">
           <CardHeader>
             <CardTitle className="text-base">Four ways to send the extra</CardTitle>
             <CardDescription>
