@@ -74,6 +74,7 @@ describe("posting never asks a model", () => {
     const names = callers.map(rel);
     expect(names).toContain("lib/social/caption.ts");
     expect(names).toContain("lib/social/month-writer.ts");
+    expect(names).toContain("lib/social/slide-writer.ts");
     expect(names).toContain("lib/social/style-notes.ts");
   });
 

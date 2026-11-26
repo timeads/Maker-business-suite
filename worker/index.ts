@@ -94,6 +94,7 @@ import { readConversation } from "../src/lib/helpdesk/manual/reader";
 import { runClaimedManual, type ClaimedRun } from "../src/lib/helpdesk/manual/run";
 import { runClaimedMonth, type ClaimedMonthRun } from "../src/lib/social/month-run";
 import { writeMonthPost } from "../src/lib/social/month-writer";
+import { writeSlides } from "../src/lib/social/slide-writer";
 import { carrierResult } from "../src/lib/stock/tracking";
 import { getAdminClient, withTenant } from "../src/lib/supabase/admin";
 import { drainTextOptOuts } from "../src/lib/texts/opt-out";
@@ -1101,6 +1102,7 @@ async function drainSocialMonthRuns(): Promise<number> {
     const outcome = await runClaimedMonth(run, {
       admin,
       write: (input) => writeMonthPost(input),
+      writeSlides: (input) => writeSlides(input),
       now: () => new Date(),
     });
     console.log(`social month run ${run.id} (${run.source}): ${outcome}`);

@@ -2,7 +2,7 @@
 
 import type { BrandKit } from "@/lib/design/brands";
 import type { SlideDesign } from "@/lib/design/slide-design";
-import { loadSlideImage, renderSlideBlob } from "@/lib/design/slide-render";
+import { fitDesign, loadSlideImage, renderSlideBlob } from "@/lib/design/slide-render";
 import { copyCrop, type FitPlace } from "@/lib/social/fit";
 import { getBrowserClient } from "@/lib/supabase/browser";
 import { attachSlides, saveFits, sendingPlan, startUpload, type FitPlan } from "./actions";
@@ -41,11 +41,13 @@ async function drawSlides(
   key: string,
   kit: BrandKit | null,
 ): Promise<{ error?: string }> {
-  const plan = { slides, key };
   try {
+    // Slides Claude laid out (and any not yet checked) are fitted to their real typefaces
+    // first, so no words are cut off or sit on each other in the pictures.
+    const design = await fitDesign(slides, kit ?? undefined);
     const drawn = [];
-    for (const slide of plan.slides.slides) {
-      drawn.push(await renderSlideBlob(slide, plan.slides, kit ?? undefined, { jpeg: true }));
+    for (const slide of design.slides) {
+      drawn.push(await renderSlideBlob(slide, design, kit ?? undefined, { jpeg: true }));
     }
     const started = await startUpload(
       slug,
@@ -65,7 +67,7 @@ async function drawSlides(
     const attached = await attachSlides(
       slug,
       postId,
-      plan.key,
+      key,
       started.tickets.map((ticket) => ticket.path),
     );
     return "error" in attached ? { error: attached.error } : {};

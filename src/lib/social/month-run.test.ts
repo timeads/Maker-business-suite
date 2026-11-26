@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { describe, expect, it } from "vitest";
 import { describeMonthRun, runClaimedMonth, type MonthRunDeps } from "./month-run";
 import type { MonthPostInput, MonthWriter } from "./month-writer";
+import type { SlidesInput, SlidesWriter } from "./slide-writer";
 
 /**
  * The worker's path with a made-up database and a made-up writer. Every
@@ -53,7 +54,9 @@ const asset = (id: string, over: Row = {}): Row => ({
   ...over,
 });
 
-function fakeDb(over: { used?: number } = {}) {
+function fakeDb(
+  over: { used?: number; plan?: object; tweak?: (t: Record<string, Row[]>) => void } = {},
+) {
   const tables: Record<string, Row[]> = {
     tenants: [{ id: TENANT, name: "Fern & Loop", timezone: "America/New_York" }],
     brands: [
@@ -80,14 +83,27 @@ function fakeDb(over: { used?: number } = {}) {
         ]
       : [],
     configs: [
-      { tenant_id: TENANT, module: "social", key: "plan", body: PLAN },
+      { tenant_id: TENANT, module: "social", key: "plan", body: over.plan ?? PLAN },
       {
         tenant_id: TENANT,
         module: "social",
         key: "style_notes",
         body: { version: 1, notes: "- Say the size" },
       },
-      { tenant_id: TENANT, module: "brand", key: "kit", body: { version: 1, name: "Fern & Loop" } },
+      {
+        tenant_id: TENANT,
+        module: "brand",
+        key: "kit",
+        body: {
+          version: 1,
+          name: "Fern & Loop",
+          feel: "playful",
+          colors: [
+            { name: "moss", hex: "#2f4a3a" },
+            { name: "cream", hex: "#f4efe6" },
+          ],
+        },
+      },
       // Another workspace's notes are never read.
       {
         tenant_id: OTHER,
@@ -143,6 +159,7 @@ function fakeDb(over: { used?: number } = {}) {
       { tenant_id: TENANT, brand_id: BRAND, before: "So excited!", after: "Off the frame." },
     ],
   };
+  over.tweak?.(tables);
   const filed: Row[] = [];
   const calls: { fn: string; args: Row }[] = [];
   const builder = (table: string) => {
@@ -159,6 +176,8 @@ function fakeDb(over: { used?: number } = {}) {
       keep((r) => !(column in r) || r[column] === value);
     chain.in = (column: string, values: unknown[]) => keep((r) => values.includes(r[column]));
     chain.is = (column: string, value: unknown) => keep((r) => (r[column] ?? null) === value);
+    chain.not = (column: string, _op: string, value: unknown) =>
+      keep((r) => (r[column] ?? null) !== value);
     chain.like = (column: string, pattern: string) =>
       keep((r) => String(r[column]).startsWith(pattern.replace("%", "")));
     chain.gte = (column: string, value: string) =>
@@ -250,6 +269,7 @@ describe("a monthly run", () => {
       name: "Moss rug",
       note: "For a reading nook",
       photoCount: 3,
+      seen: [],
     });
     expect(seen[1].photos).toHaveLength(3);
 
@@ -278,7 +298,15 @@ describe("a monthly run", () => {
     ]);
     for (const draft of db.filed) {
       expect(Object.keys(draft).sort()).toEqual(
-        ["asset_ids", "caption", "kind", "planned_for", "project_id", "topic"].sort(),
+        [
+          "asset_ids",
+          "caption",
+          "kind",
+          "photos_show",
+          "planned_for",
+          "project_id",
+          "topic",
+        ].sort(),
       );
     }
   });
@@ -312,6 +340,148 @@ describe("a monthly run", () => {
       p_status: "failed",
       p_counts: expect.objectContaining({ failed: 1 }),
     });
+  });
+});
+
+describe("slides in the monthly run", () => {
+  const SLIDES_PLAN = {
+    ...PLAN,
+    topics: [
+      { id: "rugs", name: "Rugs in progress", about: "", from: "projects", makes: "slides" },
+      { id: "tips", name: "Tufting tips", about: "Small things that help", makes: "slides" },
+    ],
+  };
+  const slidesWriter = () => {
+    const seen: SlidesInput[] = [];
+    const writeSlides: SlidesWriter = async (input) => {
+      seen.push(input);
+      return {
+        ok: true,
+        tokens: 900,
+        draft: {
+          caption: `Slides for ${input.project?.name ?? input.topic?.name}`,
+          sees: input.project ? "A green rug, start to finish." : "",
+          slides: [
+            {
+              layout: input.offered.length > 1 ? "grid" : "statement",
+              color: "moss",
+              kicker: "",
+              headline: "Row by row",
+              body: "",
+              footer: "",
+              badge: "",
+              accent: "",
+              // One real reference, and things that must never be used.
+              photos: ["P1", "P2", "https://elsewhere.test/x.jpg", "m1"],
+            },
+          ],
+          missing: [],
+        },
+      };
+    };
+    return { writeSlides, seen };
+  };
+
+  it("designs slides for topics made as slides, over the project's photos by reference", async () => {
+    const db = fakeDb({ plan: SLIDES_PLAN });
+    const { write, seen: captions } = writer();
+    const { writeSlides, seen } = slidesWriter();
+    await runClaimedMonth(RUN, {
+      ...deps(db, write),
+      writeSlides,
+      assetUrl: (path) => `https://files.test/social/${path}`,
+    });
+    expect(captions).toHaveLength(0);
+    const project = db.filed.find((d) => d.kind === "project")!;
+    expect(project.asset_ids).toEqual([]);
+    expect(project.pictured_ids).toEqual(["m1", "m22"]);
+    expect(project.photos_show).toBe("A green rug, start to finish.");
+    const design = project.slides as { slides: { pics: { url: string }[] }[] };
+    expect(design.slides[0].pics.map((p) => p.url)).toEqual([
+      `https://files.test/social/${TENANT}/m1.jpg`,
+      `https://files.test/social/${TENANT}/m22.jpg`,
+    ]);
+    expect(JSON.stringify(project)).not.toContain("elsewhere.test");
+    // Claude saw references and pictures, never an id or an address.
+    const asked = seen.find((input) => input.project)!;
+    expect(asked.offered.map((photo) => photo.ref)).toEqual(["P1", "P2", "P3"]);
+    expect(JSON.stringify(asked.offered)).not.toMatch(/m1|files\.test/);
+    expect(asked.photos.map((photo) => photo.ref)).toEqual(["P1", "P2", "P3"]);
+    expect(asked.design.colors).toEqual(["moss", "cream"]);
+    // A topic post is offered the photo whose tags fit.
+    const topic = db.filed.find((d) => d.kind === "topic")!;
+    expect(topic.slides).toBeTruthy();
+    expect(seen.find((input) => !input.project)?.offered).toHaveLength(1);
+    expect(
+      db.calls.filter((c) => c.fn === "record_usage").every((c) => c.args.p_quantity === 900),
+    ).toBe(true);
+  });
+
+  it("writes captions when no slides writer is given or the brand has no kit", async () => {
+    const db = fakeDb({
+      plan: SLIDES_PLAN,
+      tweak: (t) => {
+        t.configs = t.configs.filter((c) => c.module !== "brand");
+      },
+    });
+    const { write, seen } = writer();
+    const { writeSlides, seen: slides } = slidesWriter();
+    await runClaimedMonth(RUN, { ...deps(db, write), writeSlides });
+    expect(slides).toHaveLength(0);
+    expect(seen.length).toBeGreaterThan(0);
+    expect(db.filed.every((d) => !("slides" in d))).toBe(true);
+  });
+
+  it("tells Claude what earlier drafts saw in the project's photos, and orders them as taken", async () => {
+    const db = fakeDb({
+      tweak: (t) => {
+        t.social_posts.push({
+          tenant_id: TENANT,
+          status: "published",
+          scheduled_for: "2026-11-01T15:00:00Z",
+          planned_for: null,
+          brand_id: BRAND,
+          asset_id: null,
+          asset_ids: [],
+          caption: "",
+          published_at: "2026-11-01T15:00:00Z",
+          project_id: PROJECT,
+          photos_show: "The first rows of a green rug.",
+        });
+        // m333 was taken first, m1 last.
+        for (const a of t.social_assets) {
+          if (a.id === "m333") a.taken_at = "2026-10-01T10:00:00Z";
+          if (a.id === "m22") a.taken_at = "2026-10-02T10:00:00Z";
+          if (a.id === "m1") a.taken_at = "2026-10-03T10:00:00Z";
+        }
+      },
+    });
+    const { write, seen } = writer();
+    await runClaimedMonth(RUN, deps(db, write));
+    const asked = seen.find((input) => input.project)!;
+    expect(asked.project?.seen).toEqual(["The first rows of a green rug."]);
+    expect(db.filed.find((d) => d.kind === "project")?.asset_ids).toEqual(["m333", "m22", "m1"]);
+  });
+
+  it("treats photos pictured on earlier slides as used", async () => {
+    const db = fakeDb({
+      tweak: (t) => {
+        t.social_posts.push({
+          tenant_id: TENANT,
+          status: "draft",
+          scheduled_for: null,
+          planned_for: null,
+          brand_id: BRAND,
+          asset_id: null,
+          asset_ids: [],
+          caption: "",
+          published_at: null,
+          slides: { slides: [{ image: `https://files.test/social/${TENANT}/m1.jpg` }] },
+        });
+      },
+    });
+    await runClaimedMonth(RUN, deps(db, writer().write));
+    expect(db.filed.find((d) => d.kind === "project")?.asset_ids).toEqual(["m22", "m333"]);
   });
 });
 
