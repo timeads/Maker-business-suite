@@ -364,6 +364,12 @@ with links as (
    and a.network in (select private.social_place_network(x) from unnest(p.channels) x)
   where cardinality(p.account_ids) = 0
   group by p.id
+  -- Only where every place has its account: a post for Instagram from a
+  -- connection with no Instagram account keeps going by its places, and
+  -- fails as it always would have rather than going out on Facebook alone.
+  having count(distinct a.network) = (
+    select count(distinct private.social_place_network(x))
+    from unnest((select q.channels from public.social_posts q where q.id = p.id)) x)
 )
 update public.social_posts p
 set account_ids = l.accounts

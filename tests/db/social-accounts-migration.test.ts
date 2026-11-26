@@ -13,6 +13,8 @@ import { applyMigrationsAfter, asService, asUser, createTestDbUntil, createUser 
 const LAST_BEFORE = "20270127000100_social_sizes.sql";
 const A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const D = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+const E = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+const NO_IG_PAGE = "5010";
 const PAGE = "5001";
 const IG = "6001";
 const OLD_PAGE = "5009";
@@ -122,6 +124,19 @@ beforeAll(async () => {
   });
   await post("waiting", { status: "scheduled", channels: ["facebook"] });
   await post("draft", { status: "draft", channels: [] });
+  // Instagram from a workspace whose Page has no Instagram account: it keeps its places.
+  await db.query(
+    "insert into public.tenants (id, slug, name, timezone, currency) values ($1, 'no-ig', 'No IG', 'UTC', 'USD')",
+    [E],
+  );
+  await connect(E, NO_IG_PAGE, null);
+  ids.noIg = (
+    await db.query<{ id: string }>(
+      `insert into public.social_posts (tenant_id, caption, channels, status, scheduled_for)
+       values ($1, 'Words', '{facebook,instagram}', 'scheduled', '2026-12-20T15:00:00Z') returning id`,
+      [E],
+    )
+  ).rows[0].id;
 
   // Review switched on afterwards: those posts have no approver, and must still move across.
   await db.query(
@@ -234,6 +249,14 @@ describe("moving an existing workspace across", () => {
     expect(
       rows.every((row) => new Date(row.updated_at).toISOString() === "2026-11-01T00:00:00.000Z"),
     ).toBe(true);
+  });
+
+  it("a post with a place its workspace has no account for keeps going by its places", async () => {
+    const { rows } = await db.query<{ account_ids: string[] }>(
+      "select account_ids from public.social_posts where id = $1",
+      [ids.noIg],
+    );
+    expect(rows[0].account_ids).toEqual([]);
   });
 
   it("the half-sent post, tried again, only sends what didn't go", async () => {
