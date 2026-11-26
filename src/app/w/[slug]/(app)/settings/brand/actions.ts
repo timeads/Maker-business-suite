@@ -1,13 +1,14 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { APPEARANCE_KEY, appearanceSchema } from "@/lib/brand/appearance";
+import { loadBrandKit, loadBrands } from "@/lib/brand/brands";
 import { draftBrandKit, type BrandGuide } from "@/lib/brand/draft";
 import {
   BRAND_MODULE,
   FEELS,
-  KIT_KEY,
   brandKitSchema,
   tidyColorName,
   tidyHex,
@@ -215,15 +216,133 @@ export async function saveKit(
             : "Something in the kit isn't quite right. Check the fields and try again.",
     };
   }
-  const { error } = await ctx.supabase.rpc("save_config", {
+  const brandId = String(formData.get("brand_id") ?? "");
+  // Through the brand's own kit key (the main brand's is still "kit"), leaving a version row.
+  const { error } = await ctx.supabase.rpc("save_brand_kit", {
     p_tenant_id: ctx.tenant.id,
-    p_module: BRAND_MODULE,
-    p_key: KIT_KEY,
+    p_brand_id: UUID.test(brandId) ? brandId : null,
     p_body: parsed.data,
   });
   if (error) return { error: "We couldn't save that. Please try again." };
   revalidatePath(`/w/${slug}`, "layout");
   return { saved: true };
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+export type BrandListState = { error?: string; message?: string };
+
+const BRAND_ERRORS: Record<string, string> = {
+  needs_name: "Give the brand a name.",
+  default_brand: "The main brand can't be put away. Make another brand the main one first.",
+  too_many_brands: "That's as many brands as a workspace can keep.",
+  has_accounts:
+    "Some social accounts still post as this brand. Move them to another brand under Settings → Social accounts first.",
+};
+const brandError = (error: { message: string }) =>
+  BRAND_ERRORS[error.message] ?? "We couldn't do that. Please try again.";
+
+/**
+ * Adds a brand. It starts with a copy of the main brand's kit (so its
+ * designs work at once) under its own name, ready to be changed.
+ */
+export async function addBrand(
+  slug: string,
+  _prev: BrandListState,
+  formData: FormData,
+): Promise<BrandListState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const name = text(formData, "name", 80);
+  if (!name) return { error: BRAND_ERRORS.needs_name };
+  const brands = await loadBrands(ctx.supabase, ctx.tenant.id);
+  const allowed = ctx.entitlements.limit("brands");
+  if (brands.length >= allowed) {
+    return {
+      error: `Your plan keeps up to ${allowed} brands, counting ones put away. Upgrade your plan to add another.`,
+    };
+  }
+  const { kit } = await loadBrandKit(ctx.supabase, ctx.tenant.id);
+  const start = brandKitSchema.safeParse({
+    ...(kit ?? {
+      version: 1,
+      colors: [
+        { name: "ink", hex: "#1f2a2e" },
+        { name: "paper", hex: "#f7f3ea" },
+        { name: "accent", hex: "#c8742a" },
+      ],
+    }),
+    name,
+    // A new brand's site, words and logos are its own to fill in.
+    site: "",
+    tagline: "",
+    logo_on_light: null,
+    logo_on_dark: null,
+  });
+  if (!start.success) return { error: "We couldn't start that brand. Please try again." };
+  const { data, error } = await ctx.supabase.rpc("add_brand", {
+    p_tenant_id: ctx.tenant.id,
+    p_name: name,
+    p_kit: start.data,
+  });
+  if (error) return { error: brandError(error) };
+  revalidatePath(`/w/${slug}`, "layout");
+  redirect(`/w/${slug}/settings/brand?brand=${data as string}`);
+}
+
+export async function renameBrand(
+  slug: string,
+  _prev: BrandListState,
+  formData: FormData,
+): Promise<BrandListState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const brandId = String(formData.get("brand_id") ?? "");
+  const name = text(formData, "name", 80);
+  if (!UUID.test(brandId)) return { error: "We couldn't find that brand." };
+  if (!name) return { error: BRAND_ERRORS.needs_name };
+  const { error } = await ctx.supabase.rpc("rename_brand", {
+    p_tenant_id: ctx.tenant.id,
+    p_brand_id: brandId,
+    p_name: name,
+  });
+  if (error) return { error: brandError(error) };
+  revalidatePath(`/w/${slug}`, "layout");
+  return { message: `Renamed to ${name}.` };
+}
+
+/** Makes a brand the main one, or puts one away (or brings it back). */
+export async function changeBrand(
+  slug: string,
+  _prev: BrandListState,
+  formData: FormData,
+): Promise<BrandListState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const brandId = String(formData.get("brand_id") ?? "");
+  const what = String(formData.get("what") ?? "");
+  if (!UUID.test(brandId)) return { error: "We couldn't find that brand." };
+  const { error } =
+    what === "default"
+      ? await ctx.supabase.rpc("set_default_brand", {
+          p_tenant_id: ctx.tenant.id,
+          p_brand_id: brandId,
+        })
+      : await ctx.supabase.rpc("archive_brand", {
+          p_tenant_id: ctx.tenant.id,
+          p_brand_id: brandId,
+          p_archived: what === "archive",
+        });
+  if (error) return { error: brandError(error) };
+  revalidatePath(`/w/${slug}`, "layout");
+  return {
+    message:
+      what === "default"
+        ? "That's your main brand now."
+        : what === "archive"
+          ? "Put away. Its posts and history are kept."
+          : "Brought back.",
+  };
 }
 
 /** Saves how the workspace looks to its team: light or dark, and brand colours or not. */

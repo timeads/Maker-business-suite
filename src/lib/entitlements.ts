@@ -24,7 +24,14 @@ import type { ModuleKey } from "@/lib/modules";
  * Bookings, with its own key for the same reason.
  */
 export type Feature = `module.${ModuleKey}` | "mcp" | "michaels" | "texts" | "eventbrite";
-export type Limit = "seats" | "ai_credits";
+/**
+ * `brands` is how many brands a workspace keeps (archived ones count: they
+ * still hold their posts); `social_accounts` is how many accounts of ONE
+ * network (Facebook Pages, or Instagram accounts) can be in use at once.
+ * Both are generous on every plan, so nothing is blocked today; a workspace
+ * always keeps at least its one brand.
+ */
+export type Limit = "seats" | "ai_credits" | "brands" | "social_accounts";
 
 /**
  * - none: no plan picked yet
@@ -122,6 +129,8 @@ export function resolveEntitlements(
     },
     limit(name) {
       if (name === "seats") return plan?.seats ?? SEATS_WITHOUT_PLAN;
+      if (name === "brands") return plan?.brands ?? 1;
+      if (name === "social_accounts") return plan?.socialAccountsPerNetwork ?? 1;
       return plan?.aiCredits ?? 0;
     },
   };

@@ -17,6 +17,31 @@ export async function createTestDb(): Promise<PGlite> {
   return db;
 }
 
+/**
+ * Boots a database as it stood after `lastApplied` (a migration's file name),
+ * for testing a later migration against rows shaped like a live database's.
+ * Finish with `applyMigrationsAfter(db, lastApplied)`.
+ */
+export async function createTestDbUntil(lastApplied: string): Promise<PGlite> {
+  const db = new PGlite();
+  await db.exec(readFileSync(join(__dirname, "supabase-shim.sql"), "utf8"));
+  for (const file of readdirSync(migrationsDir).sort()) {
+    if (file.endsWith(".sql") && file <= lastApplied) {
+      await db.exec(readFileSync(join(migrationsDir, file), "utf8"));
+    }
+  }
+  return db;
+}
+
+/** Applies every migration after `lastApplied`, in order. */
+export async function applyMigrationsAfter(db: PGlite, lastApplied: string): Promise<void> {
+  for (const file of readdirSync(migrationsDir).sort()) {
+    if (file.endsWith(".sql") && file > lastApplied) {
+      await db.exec(readFileSync(join(migrationsDir, file), "utf8"));
+    }
+  }
+}
+
 export async function createUser(db: PGlite, email: string): Promise<string> {
   const { rows } = await db.query<{ id: string }>(
     "insert into auth.users (email) values ($1) returning id",

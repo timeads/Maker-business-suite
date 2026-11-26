@@ -17,6 +17,10 @@ export type Plan = {
   moduleChoices: number;
   /** Monthly AI allowance in tokens. Placeholder until real usage is measured. */
   aiCredits: number;
+  /** How many brands a workspace can keep (each with its own look and accounts). */
+  brands: number;
+  /** How many accounts of one network (Facebook Pages, Instagram accounts) a workspace can post and answer from. */
+  socialAccountsPerNetwork: number;
   mcp: boolean;
   prioritySupport: boolean;
 };
@@ -42,6 +46,8 @@ export const PLANS: Record<PlanKey, Plan> = {
     includedModules: ["messages", "dashboard"],
     moduleChoices: 1,
     aiCredits: 250_000,
+    brands: 5,
+    socialAccountsPerNetwork: 5,
     mcp: false,
     prioritySupport: false,
   },
@@ -55,6 +61,8 @@ export const PLANS: Record<PlanKey, Plan> = {
     includedModules: ALL_MODULES,
     moduleChoices: 0,
     aiCredits: 1_000_000,
+    brands: 10,
+    socialAccountsPerNetwork: 10,
     mcp: false,
     prioritySupport: false,
   },
@@ -68,6 +76,8 @@ export const PLANS: Record<PlanKey, Plan> = {
     includedModules: ALL_MODULES,
     moduleChoices: 0,
     aiCredits: 3_000_000,
+    brands: 25,
+    socialAccountsPerNetwork: 25,
     mcp: true,
     prioritySupport: true,
   },

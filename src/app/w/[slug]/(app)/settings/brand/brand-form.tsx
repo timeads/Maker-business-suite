@@ -34,12 +34,15 @@ const WAYS: { id: Way; title: string; about: string }[] = [
 
 export function BrandKit({
   slug,
+  brandId,
   kit,
   starter,
   canEdit,
   welcome,
 }: {
   slug: string;
+  /** Which brand's kit this is; null for the workspace's default. */
+  brandId: string | null;
   /** The saved kit, if there is one. */
   kit: BrandKitConfig | null;
   /** What the editor starts from when nothing is saved. */
@@ -152,6 +155,7 @@ export function BrandKit({
 
       {showEditor ? (
         <Editor
+          brandId={brandId}
           key={suggested.draftId ?? "saved"}
           slug={slug}
           initial={suggested.draft ?? kit ?? starter}
@@ -191,11 +195,13 @@ type Swatch = { id: number; name: string; hex: string };
 
 function Editor({
   slug,
+  brandId,
   initial,
   suggestion,
   canEdit,
 }: {
   slug: string;
+  brandId: string | null;
   initial: BrandKitConfig;
   suggestion: boolean;
   canEdit: boolean;
@@ -226,6 +232,7 @@ function Editor({
 
   return (
     <form action={save} className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
+      {brandId && <input type="hidden" name="brand_id" value={brandId} />}
       <fieldset disabled={!canEdit} className="bg-card flex flex-col gap-5 rounded-lg border p-4">
         {suggestion && (
           <p className="bg-note rounded-sm px-3 py-2 text-sm">

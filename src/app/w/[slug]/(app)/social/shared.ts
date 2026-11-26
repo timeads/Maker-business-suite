@@ -1,6 +1,7 @@
 import { localDay } from "@/lib/bookings/slots";
 import { canPost } from "@/lib/connections/meta-access";
-import { BRAND_MODULE, KIT_KEY, parseBrandKit, toDesignKit } from "@/lib/brand/kit";
+import { loadBrandKit } from "@/lib/brand/brands";
+import { toDesignKit } from "@/lib/brand/kit";
 import type { BrandKit } from "@/lib/design/brands";
 import { matchPhotos } from "@/lib/social/photo-match";
 import { PLAN_KEY, SOCIAL_MODULE, parsePlan } from "@/lib/social/plan";
@@ -98,15 +99,9 @@ export const STATUS_LABELS: Record<string, string> = {
 export async function loadDesignKit(
   supabase: Supabase,
   tenantId: string,
+  brandId?: string | null,
 ): Promise<BrandKit | null> {
-  const { data } = await supabase
-    .from("configs")
-    .select("body")
-    .eq("tenant_id", tenantId)
-    .eq("module", BRAND_MODULE)
-    .eq("key", KIT_KEY)
-    .maybeSingle();
-  const kit = parseBrandKit(data?.body);
+  const { kit } = await loadBrandKit(supabase, tenantId, brandId);
   return kit ? toDesignKit(kit) : null;
 }
 

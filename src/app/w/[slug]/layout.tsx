@@ -15,6 +15,7 @@ import {
   brandThemeVarsDark,
   parseAppearance,
 } from "@/lib/brand/appearance";
+import { loadBrands, pickBrand } from "@/lib/brand/brands";
 import { BRAND_MODULE, KIT_KEY, parseBrandKit } from "@/lib/brand/kit";
 import { googleMailConfigured } from "@/lib/connections/providers/google-mail";
 import { getEntitlements } from "@/lib/entitlements";
@@ -37,18 +38,19 @@ export default async function WorkspaceLayout({
   // Not a member looks exactly like "doesn't exist".
   if (!ctx) notFound();
   const supabase = await createClient();
-  const [tenants, platformAdmin, entitlements, jar, { data: brandRows }] = await Promise.all([
-    listMyTenants(),
-    isPlatformAdmin(),
-    getEntitlements(ctx.tenant.id),
-    cookies(),
-    supabase
-      .from("configs")
-      .select("key, body")
-      .eq("tenant_id", ctx.tenant.id)
-      .eq("module", BRAND_MODULE)
-      .in("key", [KIT_KEY, APPEARANCE_KEY]),
-  ]);
+  const [tenants, platformAdmin, entitlements, jar, { data: brandRows }, brands] =
+    await Promise.all([
+      listMyTenants(),
+      isPlatformAdmin(),
+      getEntitlements(ctx.tenant.id),
+      cookies(),
+      supabase
+        .from("configs")
+        .select("key, body")
+        .eq("tenant_id", ctx.tenant.id)
+        .eq("module", BRAND_MODULE),
+      loadBrands(supabase, ctx.tenant.id),
+    ]);
   const attention = await loadAttention(
     supabase,
     ctx.tenant.id,
@@ -97,7 +99,10 @@ export default async function WorkspaceLayout({
   );
   const setting = (key: string) => (brandRows ?? []).find((row) => row.key === key)?.body;
   const look = parseAppearance(setting(APPEARANCE_KEY));
-  const kit = look.brand_colors ? parseBrandKit(setting(KIT_KEY)) : null;
+  // The workspace wears its default brand's colours.
+  const kit = look.brand_colors
+    ? parseBrandKit(setting(pickBrand(brands)?.kit_key ?? KIT_KEY))
+    : null;
   // Brand colours for a known mode are set here. For "match my device" the
   // light set is used: the text shades differ between modes and the server
   // can't know which the device will pick.

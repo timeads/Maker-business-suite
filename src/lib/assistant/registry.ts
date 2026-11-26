@@ -88,6 +88,7 @@ import {
   reviewSettingsSchema,
 } from "../social/review";
 import { APPEARANCE_KEY, DEFAULT_APPEARANCE, appearanceSchema } from "../brand/appearance";
+import { isKitKey } from "../brand/brands";
 import { BRAND_MODULE, KIT_KEY, brandKitSchema } from "../brand/kit";
 import {
   DEFAULT_SHIPPING_SETTINGS,
@@ -509,6 +510,13 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
 ];
 
 export function findConfig(module: unknown, key: unknown): ConfigEntry | null {
+  // Every brand's kit is the same setting under its own key ("kit-<brand id>").
+  if (module === BRAND_MODULE && isKitKey(key) && key !== KIT_KEY) {
+    const kit = CONFIG_REGISTRY.find(
+      (entry) => entry.module === BRAND_MODULE && entry.key === KIT_KEY,
+    );
+    return kit ? { ...kit, key } : null;
+  }
   return CONFIG_REGISTRY.find((entry) => entry.module === module && entry.key === key) ?? null;
 }
 

@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { SectionHeading } from "@/components/settings/section-heading";
 import { requireUser } from "@/lib/auth";
 import { APPEARANCE_KEY, parseAppearance } from "@/lib/brand/appearance";
+import { loadBrands, pickBrand } from "@/lib/brand/brands";
 import { BRAND_MODULE, KIT_KEY, parseBrandKit } from "@/lib/brand/kit";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
@@ -21,10 +22,11 @@ export default async function LookPage({ params }: { params: Promise<{ slug: str
     .from("configs")
     .select("key, body")
     .eq("tenant_id", ctx.tenant.id)
-    .eq("module", BRAND_MODULE)
-    .in("key", [KIT_KEY, APPEARANCE_KEY]);
+    .eq("module", BRAND_MODULE);
   const body = (key: string) => (rows ?? []).find((row) => row.key === key)?.body;
-  const kit = parseBrandKit(body(KIT_KEY));
+  // The menu and buttons wear the default brand's colours.
+  const brand = pickBrand(await loadBrands(supabase, ctx.tenant.id));
+  const kit = parseBrandKit(body(brand?.kit_key ?? KIT_KEY));
   const look = parseAppearance(body(APPEARANCE_KEY));
 
   return (

@@ -6,7 +6,8 @@ import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { parseClock, zonedTimeToUtc } from "@/lib/bookings/slots";
 import { getEntitlements } from "@/lib/entitlements";
-import { BRAND_MODULE, KIT_KEY, brandBrief, parseBrandKit } from "@/lib/brand/kit";
+import { loadBrandKit } from "@/lib/brand/brands";
+import { brandBrief } from "@/lib/brand/kit";
 import { BANNER_TAG, MAX_DESIGN_SLIDES, ownDesign } from "@/lib/brand/slides";
 import type { SlideDesign } from "@/lib/design/slide-design";
 import { draftCaption } from "@/lib/social/caption";
@@ -608,15 +609,8 @@ export async function saveProject(
 }
 
 /** The workspace's brand kit, in words, for a draft to follow. */
-async function loadBrandBrief(ctx: Ctx): Promise<string> {
-  const { data } = await ctx.supabase
-    .from("configs")
-    .select("body")
-    .eq("tenant_id", ctx.tenant.id)
-    .eq("module", BRAND_MODULE)
-    .eq("key", KIT_KEY)
-    .maybeSingle();
-  return brandBrief(parseBrandKit(data?.body));
+async function loadBrandBrief(ctx: Ctx, brandId?: string | null): Promise<string> {
+  return brandBrief((await loadBrandKit(ctx.supabase, ctx.tenant.id, brandId)).kit);
 }
 
 async function saveSocialConfig(ctx: Ctx, key: string, body: object): Promise<boolean> {

@@ -5,7 +5,8 @@ import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { newWorkspaceEmail, workspaceTemplates } from "@/lib/brand/email";
 import { emailFromWriting, logoForHeader, writeEmail } from "@/lib/brand/write-email";
-import { BRAND_MODULE, KIT_KEY, parseBrandKit, type BrandKitConfig } from "@/lib/brand/kit";
+import { loadBrandKit } from "@/lib/brand/brands";
+import type { BrandKitConfig } from "@/lib/brand/kit";
 import {
   normalizeDoc,
   normalizeSavedSections,
@@ -46,15 +47,9 @@ async function context(slug: string) {
 }
 type Ctx = Exclude<Awaited<ReturnType<typeof context>>, { error: string }>;
 
-async function loadKit(ctx: Ctx): Promise<BrandKitConfig | null> {
-  const { data } = await ctx.supabase
-    .from("configs")
-    .select("body")
-    .eq("tenant_id", ctx.tenant.id)
-    .eq("module", BRAND_MODULE)
-    .eq("key", KIT_KEY)
-    .maybeSingle();
-  return parseBrandKit(data?.body);
+/** One brand's kit (the default's unless a brand is named). */
+async function loadKit(ctx: Ctx, brandId?: string | null): Promise<BrandKitConfig | null> {
+  return (await loadBrandKit(ctx.supabase, ctx.tenant.id, brandId)).kit;
 }
 
 type Picture = TaggedAsset & { url: string };
