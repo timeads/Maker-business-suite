@@ -242,7 +242,7 @@ export function Composer({
           )
           .flatMap((place) =>
             checkPlace(place, {
-              words: own[account.id] ? (ownCaptions[account.id] ?? caption) : caption,
+              words: own[account.id] ? ownCaptions[account.id] || caption : caption,
               photos: photoCount,
               video: Boolean(hasVideo),
             }).map(problemWords),
