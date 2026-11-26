@@ -84,6 +84,8 @@ function context(job: Partial<SyncContext["job"]>) {
 }
 
 const NOW = new Date("2026-11-21T12:00:00Z");
+/** What the fake store says it granted, unless a test says otherwise. */
+const GRANTED = ["read_orders", "write_orders"];
 
 describe("Shopify order mapping", () => {
   it("turns an order into rows, with net sales, costs, customer and products", () => {
@@ -167,7 +169,16 @@ describe("Shopify sync", () => {
     let shippingFails = false;
     let deliveryMethodsFail = false;
     let pickup = false;
+    let granted: string[] | "fail" = GRANTED;
+    const scopeChecks: string[] = [];
     const graphql = (async (_shop: string, _token: TokenSet, query: string, variables?: object) => {
+      if (query.includes("currentAppInstallation")) {
+        scopeChecks.push(query);
+        if (granted === "fail") throw new Error("Shopify is having a moment");
+        return {
+          currentAppInstallation: { accessScopes: granted.map((handle) => ({ handle })) },
+        };
+      }
       if (query.includes("shippingAddress")) {
         shippingCalls.push((variables ?? {}) as Record<string, unknown>);
         shippingQueries.push(query);
@@ -310,8 +321,40 @@ describe("Shopify sync", () => {
       makePickup: () => {
         pickup = true;
       },
+      scopeChecks,
+      grant: (scopes: string[] | "fail") => {
+        granted = scopes;
+      },
     };
   }
+
+  it("asks what the store has granted once a read finishes, and never fails the read over it", async () => {
+    const net = pagedGraphql([{ nodes: [shopifyOrder("1")], hasNextPage: false, endCursor: null }]);
+    net.grant(["write_orders", "read_orders", "write_orders"]);
+    const { ctx, state } = context({ type: "incremental" });
+    const result = await syncShopify(ctx, net.graphql, NOW);
+    expect(result.scopes).toEqual(["read_orders", "write_orders"]);
+    expect(net.scopeChecks).toHaveLength(1);
+    expect(state.orders).toHaveLength(1);
+
+    net.grant("fail");
+    const second = context({ type: "incremental" });
+    const quiet = await syncShopify(second.ctx, net.graphql, NOW);
+    expect(quiet.scopes).toBeUndefined();
+    expect(quiet.cursor).toBeDefined();
+  });
+
+  it("doesn't ask about permissions for a single order notice", async () => {
+    const net = pagedGraphql([]);
+    const { ctx } = context({
+      type: "webhook",
+      topic: "customers/update",
+      payload: { id: 1 },
+    });
+    const result = await syncShopify(ctx, net.graphql, NOW);
+    expect(net.scopeChecks).toHaveLength(0);
+    expect(result.scopes).toBeUndefined();
+  });
 
   const variant = (id: string, overrides: Record<string, unknown> = {}) => ({
     legacyResourceId: id,
@@ -523,7 +566,7 @@ describe("Shopify sync", () => {
       },
       expect.objectContaining({ external_id: "v2", variant_title: null, sku: null }),
     ]);
-    expect(result).toEqual({ cursor: { synced_through: NOW.toISOString() } });
+    expect(result).toEqual({ cursor: { synced_through: NOW.toISOString() }, scopes: GRANTED });
 
     // A shop with a great many items pauses part-way and picks up from its marker.
     const big = pagedGraphql(
@@ -541,7 +584,7 @@ describe("Shopify sync", () => {
     const finished = await syncShopify(second.ctx, rest.graphql, new Date("2026-11-21T13:00:00Z"));
     expect(rest.calls).toHaveLength(0);
     expect(rest.stockCalls[0]).toMatchObject({ after: "s-more" });
-    expect(finished).toEqual({ cursor: { synced_through: NOW.toISOString() } });
+    expect(finished).toEqual({ cursor: { synced_through: NOW.toISOString() }, scopes: GRANTED });
   });
 
   it("a first sync reaches back two years, pages through, and records where it got to", async () => {
@@ -558,8 +601,8 @@ describe("Shopify sync", () => {
       query: "updated_at:>=2024-11-21T12:00:00Z status:any",
     });
     expect(net.calls[1].variables).toMatchObject({ after: "c1" });
-    expect(result).toEqual({ cursor: { synced_through: NOW.toISOString() } });
-    expect(state.usage).toBe(6);
+    expect(result).toEqual({ cursor: { synced_through: NOW.toISOString() }, scopes: GRANTED });
+    expect(state.usage).toBe(7);
   });
 
   it("a later sync only asks for what changed since the last one finished", async () => {
@@ -591,7 +634,7 @@ describe("Shopify sync", () => {
     const result = await syncShopify(second.ctx, older.graphql, NOW);
     expect(older.photoCalls).toHaveLength(2);
     expect(second.state.productPhotos[0].image_url).toBe("https://cdn.shopify.com/old.jpg");
-    expect(result).toEqual({ cursor: { synced_through: NOW.toISOString() } });
+    expect(result).toEqual({ cursor: { synced_through: NOW.toISOString() }, scopes: GRANTED });
   });
 
   it("a very long sync stops after a batch of pages and asks to be continued", async () => {
@@ -614,7 +657,7 @@ describe("Shopify sync", () => {
       after: "more",
       query: "updated_at:>=2024-11-21T12:00:00Z status:any",
     });
-    expect(finished).toEqual({ cursor: { synced_through: NOW.toISOString() } });
+    expect(finished).toEqual({ cursor: { synced_through: NOW.toISOString() }, scopes: GRANTED });
   });
 
   it("an order webhook re-reads that order from Shopify rather than trusting the payload", async () => {

@@ -14,6 +14,7 @@ import type {
   TokenSet,
 } from "../types";
 import { shopPhotoAddress } from "../../social/product-photos";
+import { readShopifyGrantedScopes } from "./shopify-scopes";
 import { ReconnectRequiredError } from "../types";
 
 /** How far back the first sync reaches. */
@@ -926,10 +927,27 @@ async function handleWebhook(ctx: SyncContext, graphql: ShopifyGraphql): Promise
   return {};
 }
 
-export function syncShopify(
+export async function syncShopify(
   ctx: SyncContext,
   graphql: ShopifyGraphql,
   now = new Date(),
 ): Promise<SyncResult> {
-  return ctx.job.type === "webhook" ? handleWebhook(ctx, graphql) : pullOrders(ctx, graphql, now);
+  if (ctx.job.type === "webhook") return handleWebhook(ctx, graphql);
+  const result = await pullOrders(ctx, graphql, now);
+  // Once a read of the shop has finished, ask what the store has granted
+  // now, so an app update the merchant approved (or a permission taken back)
+  // reaches every gate without a reconnect. One small question, allowed to
+  // fail: the read still counts and the scopes on record stand.
+  if (result.disconnected || result.continueWith) return result;
+  try {
+    const scopes = await readShopifyGrantedScopes(graphql, ctx.externalAccountId, ctx.token);
+    await ctx.store.recordUsage(1);
+    return { ...result, scopes };
+  } catch (err) {
+    console.error(
+      "shopify granted-scopes check failed",
+      err instanceof Error ? err.message : "unknown error",
+    );
+    return result;
+  }
 }

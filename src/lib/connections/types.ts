@@ -290,6 +290,11 @@ export type SyncResult = {
   account?: { displayName?: string; metadata?: Record<string, unknown> };
   /** Set when there is more to fetch: the job is re-queued with this cursor. */
   continueWith?: Record<string, unknown>;
+  /**
+   * What the provider says the connection is granted right now, when the sync
+   * asked. Recorded as the connection's `scopes`; absent when it couldn't ask.
+   */
+  scopes?: string[];
   /** Set when the provider told us the connection is over (app uninstalled). */
   disconnected?: string;
 };
@@ -390,6 +395,12 @@ export interface ProviderAdapter {
   ): Promise<void>;
   /** Returns new tokens. Throws ReconnectRequiredError when they can't be renewed. */
   refresh(token: TokenSet, externalAccountId: string): Promise<TokenSet>;
+  /**
+   * Asks the provider which permissions the connection really has now (the
+   * raw answer; the database keeps only the reading half for a watch-only
+   * connection). Throws when the provider can't say.
+   */
+  grantedScopes?(token: TokenSet, externalAccountId: string): Promise<string[]>;
   /** Best-effort revoke on the provider's side. */
   disconnect(token: TokenSet, externalAccountId: string): Promise<void>;
   sync(ctx: SyncContext): Promise<SyncResult>;

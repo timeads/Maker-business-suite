@@ -118,6 +118,9 @@ describe("Shopify adapter", () => {
         myshopifyDomain: "wild-thread.myshopify.com",
         currencyCode: "USD",
       },
+      currentAppInstallation: {
+        accessScopes: [{ handle: "read_orders" }, { handle: "read_products" }],
+      },
     },
   };
 
@@ -226,11 +229,50 @@ describe("Shopify adapter", () => {
     expect(account.externalAccountId).toBe("wild-thread.myshopify.com");
     expect(account.displayName).toBe("Wild Thread");
     expect(account.scopes).toEqual(["read_orders", "read_products"]);
+    expect(net.calls[1].body).toContain("currentAppInstallation");
+    expect(account.metadata).toMatchObject({ asked_scopes: expect.any(Array) });
     expect(account.token.access_token).toBe("shpat");
     expect(account.token.refresh_token).toBe("shprt");
     expect(account.token.expires_at).toBeGreaterThan(Date.now());
     expect(JSON.parse(net.calls[0].body)).toMatchObject({ code: "abc", expiring: 1 });
     expect(net.calls[0].url).toBe("https://wild-thread.myshopify.com/admin/oauth/access_token");
+  });
+
+  it("records what the store granted, not what we asked for or the token response said", async () => {
+    const answer = (handles: string[] | null) => ({
+      data: {
+        ...shopInfo.data,
+        currentAppInstallation: handles && { accessScopes: handles.map((handle) => ({ handle })) },
+      },
+    });
+    const finish = async (handles: string[] | null, input: Record<string, string>) => {
+      const net = fakeFetch([
+        // The token response claims more than the store really granted.
+        ["/admin/oauth/access_token", 200, { access_token: "shpat", scope: "write_orders" }],
+        ["/graphql.json", 200, answer(handles)],
+      ]);
+      const params = signedShopifyParams({ code: "abc", shop: "wild-thread.myshopify.com" });
+      return createShopifyAdapter(net.impl).completeConnect({
+        params,
+        redirectUri: "x",
+        input: { shop: "wild-thread.myshopify.com", ...input },
+      });
+    };
+
+    // Asked for order tags, but the store (managed install) didn't grant them.
+    const asked = await finish(["read_orders"], { access: "full", order_tags: "yes" });
+    expect(asked.scopes).toEqual(["read_orders"]);
+    expect(asked.metadata?.asked_scopes).toContain("write_orders");
+
+    // Shopify couldn't say: nothing counts as granted.
+    expect((await finish(null, { access: "full" })).scopes).toEqual([]);
+
+    // Watch only never records a write, even one the store granted.
+    const watching = await finish(["read_orders", "write_orders", "write_inventory"], {
+      access: "read",
+    });
+    expect(watching.scopes).toEqual(["read_orders"]);
+    expect(watching.metadata).toMatchObject({ watch_only: true });
   });
 
   it("refuses a callback that is unsigned or for a different store, before any network call", async () => {

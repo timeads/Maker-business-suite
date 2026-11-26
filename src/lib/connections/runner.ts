@@ -32,6 +32,8 @@ export type RunnerDeps = {
   /** Puts the job back on the queue to carry on from `cursor`. */
   requeue(jobId: number, cursor: object): Promise<void>;
   updateAccount(connectionId: string, account: NonNullable<SyncResult["account"]>): Promise<void>;
+  /** Records what the provider says the connection is granted now. */
+  updateScopes(tenantId: string, connectionId: string, scopes: string[]): Promise<void>;
   disconnect(connectionId: string, reason: string): Promise<void>;
 };
 
@@ -72,6 +74,18 @@ export async function runSyncJob(job: SyncJob, deps: RunnerDeps): Promise<JobOut
       return "disconnected";
     }
     if (result.account) await deps.updateAccount(job.connection_id, result.account);
+    if (result.scopes) {
+      // Allowed to fail: the sync's own work is done, and the scopes on
+      // record stand until the next look.
+      try {
+        await deps.updateScopes(job.tenant_id, job.connection_id, result.scopes);
+      } catch (err) {
+        console.error(
+          `${job.provider} scopes not recorded`,
+          err instanceof Error ? err.message : "unknown error",
+        );
+      }
+    }
     if (result.continueWith) {
       await deps.requeue(job.id, result.continueWith);
       return "continued";

@@ -210,6 +210,14 @@ function runnerDeps(): RunnerDeps {
       });
       check("Could not update connection", error);
     },
+    async updateScopes(tenantId, connectionId, scopes) {
+      const { error } = await admin.rpc("record_granted_scopes", {
+        p_tenant_id: tenantId,
+        p_connection_id: connectionId,
+        p_scopes: scopes,
+      });
+      check("Could not record granted scopes", error);
+    },
     async disconnect(connectionId, reason) {
       const { error } = await admin.rpc("mark_connection", {
         p_connection_id: connectionId,

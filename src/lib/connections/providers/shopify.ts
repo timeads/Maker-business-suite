@@ -1,5 +1,12 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { ProviderHttpError, requestJson, requiredEnv } from "../http";
+import {
+  ACCESS_SCOPES_QUERY,
+  grantedHandles,
+  readShopifyGrantedScopes,
+  usableShopifyScopes,
+  type AccessScopesAnswer,
+} from "./shopify-scopes";
 import { syncShopify } from "./shopify-sync";
 import {
   ConnectError,
@@ -38,6 +45,11 @@ export const shopifyScopes = (watchOnly = false) => {
  * Optional: changing orders, asked for only from Settings → Bookings → Order
  * tags, so Bookings can tag orders that need a person. Never part of what a
  * store is asked for by default, and never asked of a watch-only connection.
+ *
+ * Asking is not getting: under Shopify-managed installation the store gets
+ * what the app's released version lists, whatever this link asks for. What
+ * we record (and every gate reads) is what the store reports it granted
+ * (`shopify-scopes.ts`, docs/shopify-permissions.md).
  */
 export const SHOPIFY_ORDER_TAGS_SCOPE = "write_orders";
 export const WITH_ORDER_TAGS = "yes";
@@ -158,9 +170,16 @@ export function createShopifyAdapter(fetchImpl: Fetch = fetch): ProviderAdapter 
     }
   }
 
-  type ShopInfo = { shop: { name: string; myshopifyDomain: string; currencyCode: string } };
+  type ShopInfo = {
+    shop: { name: string; myshopifyDomain: string; currencyCode: string };
+  } & AccessScopesAnswer;
+  // The store's name and what it really granted, in one question.
   const shopInfo = (shop: string, token: TokenSet) =>
-    graphql<ShopInfo>(shop, token, "{ shop { name myshopifyDomain currencyCode } }");
+    graphql<ShopInfo>(
+      shop,
+      token,
+      `{ shop { name myshopifyDomain currencyCode } ${ACCESS_SCOPES_QUERY.slice(1, -1)} }`,
+    );
 
   return {
     key: "shopify",
@@ -247,14 +266,21 @@ export function createShopifyAdapter(fetchImpl: Fetch = fetch): ProviderAdapter 
       );
       const token = toTokenSet(response, now);
       const info = await shopInfo(shop, token);
+      const watchOnly = input.access === "read";
       return {
         externalAccountId: shop,
         displayName: info.shop.name,
-        scopes: (response.scope ?? "").split(",").filter(Boolean),
+        // What the store says it granted, never what we asked for or the
+        // token response: a scope we can't confirm counts as not granted.
+        scopes: usableShopifyScopes(grantedHandles(info), watchOnly),
         token,
         metadata: {
           currency: info.shop.currencyCode,
-          ...(input.access === "read" ? { watch_only: true } : {}),
+          ...(watchOnly ? { watch_only: true } : {}),
+          // What this connection asked for, so a screen can say "asked, but
+          // your shop didn't grant it" instead of offering the same button.
+          asked_scopes: shopifyScopesFor(input),
+          scopes_checked_at: new Date(now).toISOString(),
         },
       };
     },
@@ -322,6 +348,8 @@ export function createShopifyAdapter(fetchImpl: Fetch = fetch): ProviderAdapter 
         },
       );
     },
+
+    grantedScopes: (token, shop) => readShopifyGrantedScopes(graphql, shop, token),
 
     tokenlessTopics: ["app/uninstalled", ...SHOPIFY_COMPLIANCE_TOPICS],
 

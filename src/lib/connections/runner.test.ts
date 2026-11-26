@@ -48,6 +48,10 @@ function setup(sync: (ctx: SyncContext) => Promise<SyncResult>) {
     updateAccount: async (_id, account) => {
       log.push(`account ${account.displayName}`);
     },
+    updateScopes: async (tenantId, connectionId, scopes) => {
+      if (scopes.includes("explode")) throw new Error("database said no");
+      log.push(`scopes ${tenantId} ${connectionId} ${scopes.join(",")}`);
+    },
     disconnect: async (_id, reason) => {
       log.push(`disconnect ${reason}`);
     },
@@ -65,6 +69,19 @@ describe("runSyncJob", () => {
     expect(await runSyncJob(job(), t.deps)).toBe("succeeded");
     expect(seen!.externalAccountId).toBe("alice.myshopify.com");
     expect(t.log).toEqual(["account Alice Rugs", 'finish 7 {"cursor":{"since":"x"}}']);
+  });
+
+  it("records the scopes a sync read, and a failure to record them never fails the sync", async () => {
+    const t = setup(async () => ({ scopes: ["read_orders", "write_orders"] }));
+    expect(await runSyncJob(job(), t.deps)).toBe("succeeded");
+    expect(t.log[0]).toMatch(/^scopes .+ read_orders,write_orders$/);
+
+    const quiet = setup(async () => ({ cursor: { since: "y" } }));
+    await runSyncJob(job(), quiet.deps);
+    expect(quiet.log.some((line) => line.startsWith("scopes"))).toBe(false);
+
+    const failing = setup(async () => ({ scopes: ["explode"] }));
+    expect(await runSyncJob(job(), failing.deps)).toBe("succeeded");
   });
 
   it("fetches a token for order webhooks but not for uninstall or erase notices", async () => {
