@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { usageState } from "../ai/usage";
-import { CONFIG_REGISTRY, configJsonSchema, findConfig, validateConfig } from "./registry";
+import {
+  CONFIG_REGISTRY,
+  configJsonSchema,
+  describeConfig,
+  findConfig,
+  validateConfig,
+} from "./registry";
 import { buildUserMessage, runAssistant } from "./run";
 import { TOOLS, runTool, type ToolContext } from "./tools";
 
@@ -47,6 +53,50 @@ describe("config registry", () => {
     const checked = validateConfig(entry!, { version: 1, questions: [{ id: "q1", label: "" }] });
     expect(checked.ok).toBe(false);
     if (!checked.ok) expect(checked.problems.join(" ")).toContain("questions.0");
+  });
+
+  it("describes Money's expense rules and profit setting in words for the preview", () => {
+    const sorting = findConfig("dashboard", "expenses")!;
+    expect(
+      describeConfig(sorting, {
+        version: 1,
+        vendors: [{ id: "v-1", payee: "Yarn Barn", action: { sort: "line", line: "shop" } }],
+        rules: [
+          {
+            id: "r-1",
+            field: "account",
+            words: "Rent",
+            action: { sort: "split", split: { shop: 60, classes: 40 } },
+            fill_in: false,
+            firm: true,
+          },
+        ],
+      }),
+    ).toEqual([
+      "Everything from Yarn Barn → shop",
+      '1. The QuickBooks account is "Rent" → 60% shop, 40% classes (only suggested), before payee defaults',
+    ]);
+    const profit = findConfig("dashboard", "profit")!;
+    expect(
+      describeConfig(profit, {
+        version: 1,
+        shared_split: { shop: 50, classes: 50 },
+        monthly_costs: [
+          {
+            id: "c-1",
+            name: "Help",
+            how: "weekly_hours",
+            rate_cents: 2000,
+            hours_per_week: 2,
+            split: { shop: 100 },
+          },
+        ],
+      }),
+    ).toEqual([
+      "Cost of goods counted in the sorted expenses",
+      "Shared costs: 50% shop, 50% classes",
+      "Help: 173.32 a month (an hourly rate × hours a week), 100% shop",
+    ]);
   });
 
   it("knows nothing outside the list", () => {

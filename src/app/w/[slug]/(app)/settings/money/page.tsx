@@ -21,6 +21,21 @@ export default async function MoneySettingsPage({ params }: { params: Promise<{ 
           href: "settings/money/lines",
         },
         {
+          name: "Sorting expenses",
+          about: "Payee defaults and rules that sort the expenses from your books into lines.",
+          href: "settings/money/expenses",
+        },
+        {
+          name: "Profit by line",
+          about: "Cost of goods, how shared costs split, and monthly costs your books don't hold.",
+          href: "settings/money/profit",
+        },
+        {
+          name: "Expenses to sort",
+          about: "The inbox itself is on Money, with the expenses still waiting for a line.",
+          href: "dashboard/expenses",
+        },
+        {
           name: "Dashboard layout",
           about: "Pick a layout on Money itself, or ask the Assistant to change what it shows.",
           href: "dashboard",
