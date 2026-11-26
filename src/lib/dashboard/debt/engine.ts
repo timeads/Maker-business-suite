@@ -527,6 +527,11 @@ export type PlanInput = {
   };
   /** Pool and emergency amounts set by hand, by `YYYY-MM`. */
   overrides: ReadonlyMap<string, PlanOverride>;
+  /**
+   * A what-if's extra a month for the debts, on top of the pool (never part
+   * of the saved plan). Once no pool debt is left it is set aside instead.
+   */
+  extraEachMonth?: number;
 };
 
 export type PlanMonth = {
@@ -542,6 +547,8 @@ export type PlanMonth = {
   /** What the pool has for debts after the emergency share (or the amount set by hand). */
   poolBudget: number;
   poolSpent: number;
+  /** A what-if's extra in this month's pool budget (0 in the plan itself). */
+  extraIn: number;
   overridden: boolean;
 };
 
@@ -599,7 +606,11 @@ export function projectPlan(input: PlanInput): PlanMonth[] {
     } else {
       emergencyIn = 0;
     }
-    const poolBudget = setPool !== null ? clean(setPool) : Math.max(0, pool - emergencyIn);
+    const extra = clean(input.extraEachMonth ?? 0);
+    const extraIn = hasPoolDebt ? extra : 0;
+    const poolBudget =
+      (setPool !== null ? clean(setPool) : Math.max(0, pool - emergencyIn)) + extraIn;
+    if (!hasPoolDebt) emergencyIn += extra;
     emergencyBalance += emergencyIn;
 
     const targetAt = debts.findIndex((d) => !d.paidOff && d.plan === "pool");
@@ -652,6 +663,7 @@ export function projectPlan(input: PlanInput): PlanMonth[] {
       pool,
       poolBudget,
       poolSpent: spent,
+      extraIn,
       overridden: setPool !== null || setEmergency !== null,
     });
   }
@@ -706,7 +718,11 @@ export function debtPlan(
   const totalMinimums = poolDebts.reduce((s, d) => s + d.minimum, 0);
   // The extra each month: the plan's pool budget (which honours amounts set
   // by hand) less the pool debts' own minimums.
-  const extraSchedule = plan.map((m) => Math.max(0, m.poolBudget - totalMinimums));
+  // A what-if's extra always reaches the debts, even in a month whose pool
+  // doesn't yet cover the minimums.
+  const extraSchedule = plan.map(
+    (m) => Math.max(0, m.poolBudget - m.extraIn - totalMinimums) + m.extraIn,
+  );
   const config = {
     start: input.start,
     extraMonthly: 0,
