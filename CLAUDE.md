@@ -589,6 +589,20 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   only fills the editor, and every caption prompt gets the notes and recent
   edits as data (`learningBlock`). `send-guard.test.ts` keeps models off the
   posting path; keep it and `tests/db/social-month-run.test.ts` passing.
+  Every Claude draft goes through `writeDraft` (`lib/social/write-draft.ts`):
+  words, or slides where the topic's `makes` is "slides" (`slide-writer.ts`:
+  structured output, no tools, photos offered only as `P1`… and checked by
+  `tidySlides` against the kit; never an id or address from the model). A
+  project's photos are ordered by `taken_at` (read by the server from EXIF,
+  `taken-at.ts`, never from the browser), else when added; `role` (finished,
+  process, artwork) is a person's mark; photos on slides count as used.
+  "Draft from this project" files through `file_social_project_draft`
+  (photos re-checked under the project's lock). "Write it again"
+  (`redraft_social_post`, refused if the post changed since it was read) and
+  "Bring this back" keep the earlier words in `social_post_versions`;
+  `ai_draft` is always the draft the person sees. `photos_show` (what Claude
+  saw) is kept on the draft and fed to the project's next drafts as data.
+  Keep `tests/db/social-drafts-again.test.ts` passing.
 - Stock: `stock_items` mirror the shop's variants and are written only by
   the sync (`upsert_stock_items`), which leaves the workspace's own planning
   columns alone. Every reorder figure is worked out on read by the pure
