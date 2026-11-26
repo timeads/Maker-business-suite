@@ -183,6 +183,32 @@ export function parseBalanceSheet(report: QuickBooksReport, asOf: string): Snaps
   };
 }
 
+/**
+ * Each liability account's own line from a BalanceSheet report (cards,
+ * loans, lines of credit), for Money's debts. Never stored as it is: the
+ * database keeps a balance only for a debt an owner or admin linked to an
+ * account of that name, so nobody else can read what is owed.
+ */
+export function parseLiabilityAccounts(
+  report: QuickBooksReport,
+): { name: string; cents: number }[] {
+  const liabilities = findGroup(report.Rows?.Row, "Liabilities");
+  if (!liabilities) return [];
+  const out: { name: string; cents: number }[] = [];
+  const collect = (list: ReportRow[] | undefined) => {
+    for (const row of list ?? []) {
+      const cells = row.ColData ?? [];
+      const name = (cells[0]?.value ?? "").trim();
+      if (row.type === "Data" && name && cells.length > 1 && out.length < 500) {
+        out.push({ name: name.slice(0, 200), cents: cents(cells[cells.length - 1]?.value) });
+      }
+      collect(row.Rows?.Row);
+    }
+  };
+  collect(liabilities.Rows?.Row);
+  return out;
+}
+
 /** What customers owe, by how overdue it is, from an AgedReceivables report. */
 export function parseAgedReceivables(report: QuickBooksReport, asOf: string): SnapshotRow | null {
   const columns = report.Columns?.Column ?? [];

@@ -36,6 +36,7 @@ export function memoryStore() {
     /** Set to true for a workspace with Money, which reads expenses from its books. */
     bookExpensesWanted: false,
     expenseCloses: [] as { run: string; since: string; entities: string[] }[],
+    debtBalances: [] as { asOf: string; accounts: { name: string; cents: number }[] }[],
     /** How many full reads of the orders finished with Money's details. */
     detailsRead: 0,
     redacted: [] as { externalId: string; email: string | null }[],
@@ -90,6 +91,9 @@ export function memoryStore() {
     },
     async saveSnapshots(rows) {
       state.snapshots.push(...rows);
+    },
+    async noteDebtBalances(asOf, accounts) {
+      state.debtBalances.push({ asOf, accounts });
     },
     async redactCustomer(externalId, email) {
       state.redacted.push({ externalId, email });

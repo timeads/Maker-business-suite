@@ -314,6 +314,11 @@ export type SyncStore = {
    * them in that window that this read didn't see is gone from the books.
    */
   closeBookExpenses(run: string, since: string, entities: string[]): Promise<void>;
+  /**
+   * The books' liability accounts as of a day, for Money's debts. The
+   * database keeps a balance only for a debt linked to one of them.
+   */
+  noteDebtBalances(asOf: string, accounts: { name: string; cents: number }[]): Promise<void>;
   /** Erases one shopper's personal details, keeping the sales figures. */
   redactCustomer(externalId: string, email: string | null): Promise<void>;
   /** Deletes everything synced from this provider for the workspace. */

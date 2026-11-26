@@ -32,6 +32,7 @@ import {
 import {
   parseAgedReceivables,
   parseBalanceSheet,
+  parseLiabilityAccounts,
   parseCashFlow,
   parseProfitAndLoss,
   type QuickBooksReport,
@@ -313,6 +314,19 @@ export function createQuickBooksAdapter(fetchImpl: Fetch = fetch): ProviderAdapt
         parseAgedReceivables(receivables, iso(today)),
       ].filter((row): row is SnapshotRow => row !== null);
       await store.saveSnapshots(snapshots);
+      // The same balance sheet's cards and loans, for Money's debts. Never
+      // stops the sync.
+      try {
+        if (await store.bookExpensesWanted()) {
+          const accounts = parseLiabilityAccounts(balanceSheet);
+          if (accounts.length > 0) await store.noteDebtBalances(iso(today), accounts);
+        }
+      } catch (err) {
+        console.warn(
+          `QuickBooks debt balances not noted for ${externalAccountId}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
       let calls = 4;
       // The cash flow statement by month, for burn and runway. Cash basis,
       // as the earlier dashboard asks for it (QuickBooks answers the cash

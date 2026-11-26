@@ -96,6 +96,8 @@ export function rpcSyncStore(
     },
     closeBookExpenses: (run, since, entities) =>
       call("close_book_expenses", { p_run: run, p_since: since, p_entities: entities }),
+    noteDebtBalances: (asOf, accounts) =>
+      call("note_debt_balances_from_books", { p_as_of: asOf, p_rows: accounts }),
     redactCustomer: (externalId, email) =>
       call("redact_customer", { p_customer_external_id: externalId, p_email: email }),
     purgeProviderData: () => call("purge_provider_data", {}),
