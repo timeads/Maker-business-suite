@@ -91,7 +91,25 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   (`upsert_commerce_batch`, ...); dashboard queries run as the member under
   RLS. Chart text is formatted on the server (`prepareTimeChart`) so server
   and browser output match. Charts follow one validated series colour
-  (`--chart-1`) and always offer a table view.
+  (`--chart-1`) and always offer a table view; several business lines are
+  small multiples on one scale (`LineMultiples`), never a second colour.
+  Revenue settings are a config (`dashboard` / `revenue`,
+  `lib/dashboard/lines.ts`, Settings → Money → Revenue and business lines):
+  the figure (`net_sales`, the default, served by the earlier queries so
+  nothing changes, or `order_totals`, refunds always out:
+  `orderRevenueCents` = `private.money_order_cents`), `by_class_date` (off by
+  default) and the workspace's own lines and rules (order tag, product tag,
+  product type, Bookings workshop; first match wins, else `default_line`;
+  never a line or tag word in code). `lineFor` is the one evaluator, run on
+  rows `money_line_revenue` adds up per set of facts (paged), which shares an
+  order among its items to the cent (`splitCents`) and finds a class's date
+  from Bookings, then from the cart line. The sync keeps `orders.tags`,
+  `products.tags` and `order_lines.session_ref` / `class_date`; a sender that
+  leaves them out keeps what is stored, a forgotten shopper keeps only the
+  tags a line rule names, and `queue_commerce_detail_reads` reads each older
+  shop's history once (done only when the new code's full read says so).
+  Keep `tests/db/money-lines.test.ts` and `money-order-details.test.ts`
+  passing.
 - Help desk: inbound email is authenticated by a secret in the webhook URL,
   queued (`private.inbound_emails`) and filed by the worker through
   `file_inbound_email` (the older `ingest_inbound_email` hands over to it),
