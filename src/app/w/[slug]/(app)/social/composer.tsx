@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState, useRef, useState } from "react";
+import { startTransition, useActionState, useEffect, useRef, useState } from "react";
 import { DesignDialog } from "@/components/slides/DesignDialog";
 import { Button } from "@/components/ui/button";
 import { FormMessage } from "@/components/ui/form-message";
@@ -10,6 +10,7 @@ import { SubmitButton } from "@/components/ui/submit-button";
 import { starterDesignFor } from "@/lib/brand/slides";
 import type { BrandKit } from "@/lib/design/brands";
 import type { SlideDesign } from "@/lib/design/slide-design";
+import { renderSlideBlob } from "@/lib/design/slide-render";
 import { cn } from "@/lib/utils";
 import {
   deletePost,
@@ -20,6 +21,7 @@ import {
   type SocialState,
 } from "./actions";
 import { designTitle, saveDesignAsPictures } from "./designed";
+import { getReadyToSend } from "./send-prep";
 
 const textarea =
   "border-input bg-card placeholder:text-muted-foreground focus-visible:border-ochre focus-visible:ring-ochre/25 font-read w-full rounded-sm border px-[11px] py-2 text-sm outline-none focus-visible:ring-2";
@@ -56,6 +58,10 @@ export type ComposerPost = {
   planned: boolean;
   day: string;
   time: string;
+  /** The carousel's slides, kept as one design until the post is approved. */
+  slides?: SlideDesign | null;
+  /** Approved or scheduled: the slides were drawn and are fixed now. */
+  slidesFixed?: boolean;
 };
 
 export function Composer({
@@ -108,7 +114,14 @@ export function Composer({
   const [designing, setDesigning] = useState<{
     design: SlideDesign;
     replaces: string | null;
+    /** "slides": the post's own carousel, kept as one design. */
+    mode: "slides" | "picture";
   } | null>(null);
+  const [slides, setSlides] = useState<SlideDesign | null>(post?.slides ?? null);
+  const [slidesChanged, setSlidesChanged] = useState(false);
+  const [preparing, setPreparing] = useState("");
+  const [prepError, setPrepError] = useState("");
+  const formRef = useRef<HTMLFormElement>(null);
   const [designNote, setDesignNote] = useState("");
   const captionRef = useRef<HTMLTextAreaElement>(null);
   const [draftState, draft, drafting] = useActionState<SocialState, FormData>(
@@ -149,20 +162,82 @@ export function Composer({
   const hasVideo = picked.some((id) => byId.get(id)?.video);
   const firstPhoto = picked.map((id) => byId.get(id)).find((photo) => photo && !photo.video);
 
+  const slidesFixed = Boolean(post?.slidesFixed);
   const openDesigner = (photo?: string) => {
     if (!kit) return;
     setDesignNote("");
-    setDesigning({ design: starterDesignFor(kit, { photo }), replaces: null });
+    setDesigning({
+      design: slides ?? starterDesignFor(kit, { photo }),
+      replaces: null,
+      mode: "slides",
+    });
+  };
+  const keepSlides = async (design: SlideDesign) => {
+    const others = picked.filter((id) => !byId.get(id)?.video);
+    if (others.length + design.slides.length > 10) {
+      throw new Error("A post can have up to 10 photos, slides included. Take some off first.");
+    }
+    if (picked.some((id) => byId.get(id)?.video)) setPicked(others);
+    setSlides(design);
+    setSlidesChanged(true);
+    setDesigning(null);
+    setDesignNote(
+      "Your slides are kept on this post as one design. They're made into pictures when the post is approved or scheduled. Save the post to keep them.",
+    );
+  };
+
+  /**
+   * Schedule, Post now and Approve on a post with slides: save it as a draft, draw the slides
+   * here, then let the same press schedule it. If drawing fails it stays a draft, with why.
+   */
+  const submit = (event: React.FormEvent<HTMLFormElement>) => {
+    const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
+    const intent = submitter?.value ?? "draft";
+    if (!slides || (intent !== "schedule" && intent !== "now")) return;
+    event.preventDefault();
+    const form = event.currentTarget;
+    void (async () => {
+      setPrepError("");
+      setPreparing("Saving…");
+      try {
+        const first = new FormData(form, submitter);
+        first.set("intent", "prepare");
+        const saved = await savePost(slug, post?.id ?? null, {}, first);
+        if (saved.error || !saved.postId) {
+          setPrepError(saved.error ?? "That didn't save. Please try again.");
+          return;
+        }
+        setPreparing("Making the slides into pictures…");
+        const ready = await getReadyToSend(slug, saved.postId, kit);
+        if (ready.error) {
+          setPrepError(
+            `${ready.error} The post is saved as a draft and hasn't been ${intent === "now" ? "sent" : "scheduled"}.`,
+          );
+          return;
+        }
+        setPreparing("Scheduling…");
+        const second = new FormData(form, submitter);
+        second.set("post_id", saved.postId);
+        second.set("slides_changed", "0");
+        second.delete("photos");
+        second.delete("asset");
+        for (const id of saved.assetIds ?? []) second.append("asset", id);
+        startTransition(() => save(second));
+      } finally {
+        setPreparing("");
+      }
+    })();
   };
   const editDesign = async (id: string) => {
     setDesignNote("");
     const found = await loadAssetDesign(slug, id);
     if ("error" in found) return setDesignNote(found.error);
-    setDesigning({ design: found.design, replaces: id });
+    setDesigning({ design: found.design, replaces: id, mode: "picture" });
   };
   /** Draws the pictures, keeps them in the assets and puts them on the post, in order. */
   const saveDesign = async (design: SlideDesign) => {
     if (!kit || !designing) return;
+    if (designing.mode === "slides") return keepSlides(design);
     const replaces = designing.replaces;
     const others = picked.filter((id) => !byId.get(id)?.video && id !== replaces);
     if (others.length + design.slides.length > 10) {
@@ -208,16 +283,30 @@ export function Composer({
           initial={designing.design}
           kit={kit}
           loadPhotos={() => listDesignPhotos(slug)}
-          title={designing.replaces ? "Edit this design" : "Design an image"}
-          description="Click any text to change it, drag to move it, or change the layout, colour and photos. The pictures are made when you save."
-          saveLabel={designing.replaces ? "Save the new picture" : "Save to this post"}
+          title={
+            designing.replaces ? "Edit this design" : slides ? "Edit the slides" : "Design slides"
+          }
+          description={
+            designing.mode === "slides"
+              ? "Click any text to change it, drag to move it, or change the layout, colour and photos. The slides stay one design on this post until it's approved; that's when they become pictures."
+              : "Click any text to change it, drag to move it, or change the layout, colour and photos. The pictures are made when you save."
+          }
+          saveLabel={
+            designing.replaces
+              ? "Save the new picture"
+              : designing.mode === "slides"
+                ? "Keep these slides"
+                : "Save to this post"
+          }
           single={Boolean(designing.replaces)}
           onClose={() => setDesigning(null)}
           onSave={saveDesign}
         />
       )}
-      <form action={save} className="flex flex-col gap-6">
+      <form ref={formRef} action={save} onSubmit={submit} className="flex flex-col gap-6">
         <input type="hidden" name="ai_draft" value={aiDraft} />
+        <input type="hidden" name="slides" value={slides ? JSON.stringify(slides) : ""} />
+        <input type="hidden" name="slides_changed" value={slidesChanged ? "1" : "0"} />
         <div className="flex flex-col gap-2">
           <Label htmlFor="brief">Want a first draft?</Label>
           <div className="flex flex-col gap-2 sm:flex-row">
@@ -389,17 +478,47 @@ export function Composer({
             </p>
           )}
           <div className="flex flex-col gap-1.5">
+            {slides && (
+              <div className="flex flex-col gap-2">
+                <p className="text-xs font-semibold">
+                  Slides{" "}
+                  <span className="text-muted-foreground font-normal">
+                    ({slides.slides.length}, first on the post)
+                  </span>
+                </p>
+                <SlideThumbs design={slides} kit={kit} />
+                <p className="text-muted-foreground text-xs">
+                  {slidesFixed
+                    ? "This post is approved, so its slides are pictures now. Save it as a draft to change them."
+                    : "Kept as one design on this post. They're made into pictures when it's approved or scheduled."}
+                </p>
+              </div>
+            )}
             <div className="flex flex-wrap items-center gap-2">
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
-                disabled={!kit}
+                disabled={!kit || slidesFixed}
                 onClick={() => openDesigner()}
               >
-                Design an image
+                {slides ? "Edit the slides" : "Design slides"}
               </Button>
-              {kit && firstPhoto && (
+              {slides && !slidesFixed && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setSlides(null);
+                    setSlidesChanged(true);
+                    setDesignNote("The slides come off when you save the post.");
+                  }}
+                >
+                  Take the slides off
+                </Button>
+              )}
+              {kit && firstPhoto && !slides && (
                 <Button
                   type="button"
                   variant="ghost"
@@ -412,7 +531,7 @@ export function Composer({
             </div>
             <p className="text-muted-foreground text-xs">
               {kit ? (
-                "Words on a colour or a photo, in your brand's look. Make one picture or several; each is saved to your assets and added here."
+                "Words on a colour or a photo, in your brand's look: one slide or a whole swipe-through. They stay editable on the post until it's approved."
               ) : (
                 <>
                   Designed pictures use your colours.{" "}
@@ -585,21 +704,31 @@ export function Composer({
         </div>
 
         {review.state === "waiting" && <input type="hidden" name="after" value="review" />}
-        <FormMessage>{state.error}</FormMessage>
-        <div className="flex flex-wrap gap-3">
+        <FormMessage>{prepError || state.error}</FormMessage>
+        {preparing && (
+          <p role="status" className="bg-note rounded-sm px-3 py-2 text-sm">
+            {preparing}
+          </p>
+        )}
+        <div className="flex flex-wrap gap-3" aria-busy={Boolean(preparing)}>
           {review.canSchedule ? (
             <>
               <SubmitButton
                 name="intent"
                 value="schedule"
                 pendingText="Saving…"
-                disabled={!connected}
+                disabled={!connected || Boolean(preparing)}
               >
                 {review.canApprove && review.state === "waiting"
                   ? "Approve and schedule"
                   : "Schedule"}
               </SubmitButton>
-              <SubmitButton name="intent" value="now" variant="outline" disabled={!connected}>
+              <SubmitButton
+                name="intent"
+                value="now"
+                variant="outline"
+                disabled={!connected || Boolean(preparing)}
+              >
                 Post now
               </SubmitButton>
               {review.state !== "waiting" && !review.canApprove && (
@@ -625,6 +754,50 @@ export function Composer({
         )}
       </form>
     </>
+  );
+}
+
+/** Small pictures of the slides, drawn here from the design (nothing is saved). */
+function SlideThumbs({ design, kit }: { design: SlideDesign; kit: BrandKit | null }) {
+  const [urls, setUrls] = useState<string[]>([]);
+  useEffect(() => {
+    let live = true;
+    const made: string[] = [];
+    void (async () => {
+      for (const slide of design.slides) {
+        try {
+          const { blob } = await renderSlideBlob(slide, design, kit ?? undefined, { jpeg: true });
+          made.push(URL.createObjectURL(blob));
+        } catch {
+          made.push("");
+        }
+      }
+      if (live) setUrls([...made]);
+    })();
+    return () => {
+      live = false;
+      made.forEach((url) => url && URL.revokeObjectURL(url));
+    };
+  }, [design, kit]);
+  return (
+    <ol className="flex flex-wrap gap-2">
+      {design.slides.map((slide, index) => (
+        <li key={slide.id} className="w-20">
+          {urls[index] ? (
+            // eslint-disable-next-line @next/next/no-img-element -- drawn here, a blob address
+            <img
+              src={urls[index]}
+              alt={`Slide ${index + 1}`}
+              className="border-border w-20 rounded-sm border"
+            />
+          ) : (
+            <span className="bg-muted text-muted-foreground flex aspect-[4/5] w-20 items-center justify-center rounded-sm text-xs">
+              {index + 1}
+            </span>
+          )}
+        </li>
+      ))}
+    </ol>
   );
 }
 

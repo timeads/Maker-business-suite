@@ -35,6 +35,9 @@ export type SocialState = {
   message?: string;
   draft?: string;
   photo?: SuggestedPhoto;
+  /** A post saved to get it ready for sending, and its photos as saved. */
+  postId?: string;
+  assetIds?: string[];
 };
 
 const NO_ACCESS = "Social isn't part of this workspace's plan right now.";
@@ -162,8 +165,56 @@ export async function savePost(
     formData.getAll("photos").filter((file): file is File => file instanceof File),
   );
   if ("error" in uploaded) return { error: uploaded.error };
-  const assetIds = [...new Set([...picked, ...uploaded.ids])];
-  if (assetIds.length > 10) return { error: SAVE_ERRORS.too_many_photos };
+  let assetIds = [...new Set([...picked, ...uploaded.ids])];
+
+  // Slides: kept on the post as one design while it is a draft. Their pictures, once drawn,
+  // come first and are never picked by hand, so they are put back in front here.
+  const slidesChanged = formData.get("slides_changed") === "1";
+  let slides: SlideDesign | null = null;
+  if (slidesChanged) {
+    const raw = String(formData.get("slides") ?? "");
+    if (raw) {
+      let parsed: unknown = null;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        parsed = null;
+      }
+      slides = ownDesign(parsed, publicAssetUrl(`${ctx.tenant.id}/`));
+      if (!slides) return { error: "Those slides couldn't be read. Please try again." };
+    }
+  }
+  let drawnSlides: string[] = [];
+  if (postId) {
+    const { data: current } = await ctx.supabase
+      .from("social_posts")
+      .select("slide_asset_ids, slides")
+      .eq("tenant_id", ctx.tenant.id)
+      .eq("id", postId)
+      .maybeSingle();
+    const hasSlides = slidesChanged ? slides !== null : current?.slides != null;
+    drawnSlides = hasSlides ? ((current?.slide_asset_ids as string[] | null) ?? []) : [];
+  }
+  assetIds = [...drawnSlides, ...assetIds.filter((id) => !drawnSlides.includes(id))];
+  const slideCount = slidesChanged ? (slides?.slides.length ?? 0) : drawnSlides.length;
+  if (assetIds.length - drawnSlides.length + slideCount > 10) {
+    return { error: "A post can have up to 10 photos, slides included. Take some off first." };
+  }
+  if (slidesChanged && postId) {
+    const { error: slidesError } = await ctx.supabase.rpc("set_social_post_slides", {
+      p_tenant_id: ctx.tenant.id,
+      p_post_id: postId,
+      p_slides: slides,
+    });
+    if (slidesError) {
+      return {
+        error: slidesError.message.includes("locked")
+          ? "This post is approved, so its slides are fixed. Save it as a draft first to change them."
+          : "The slides didn't save. Please try again.",
+      };
+    }
+    if (!slides) assetIds = assetIds.filter((id) => !drawnSlides.includes(id));
+  }
   if (scheduledFor && assetIds.length > 0 && channels.includes("instagram")) {
     const { data: kinds } = await ctx.supabase
       .from("social_assets")
@@ -178,13 +229,13 @@ export async function savePost(
   // A draft keeps the date it's meant for, so it shows in the plan. One sent for review always
   // does: that is the time it is approved for.
   let plannedFor: string | null = null;
-  if (intent === "draft" || intent === "review") {
+  if (intent === "draft" || intent === "review" || intent === "prepare") {
     const day = String(formData.get("day") ?? "");
     const minutes = parseClock(String(formData.get("time") ?? ""));
     if (
       /^\d{4}-\d{2}-\d{2}$/.test(day) &&
       minutes !== null &&
-      (intent === "review" || formData.get("keep_date") === "on")
+      (intent !== "draft" || formData.get("keep_date") === "on")
     ) {
       plannedFor = zonedTimeToUtc(day, minutes, ctx.tenant.timezone)?.toISOString() ?? null;
     }
@@ -212,7 +263,23 @@ export async function savePost(
   });
   if (error) {
     const known = Object.keys(SAVE_ERRORS).find((key) => error.message.includes(key));
-    return { error: known ? SAVE_ERRORS[known] : "That didn't save. Please try again." };
+    return {
+      error: known
+        ? SAVE_ERRORS[known]
+        : (reviewError(error.message) ?? "That didn't save. Please try again."),
+    };
+  }
+  if (slidesChanged && !postId && slides) {
+    const { error: slidesError } = await ctx.supabase.rpc("set_social_post_slides", {
+      p_tenant_id: ctx.tenant.id,
+      p_post_id: savedId as string,
+      p_slides: slides,
+    });
+    if (slidesError) return { error: "The post saved, but its slides didn't. Please try again." };
+  }
+  if (intent === "prepare") {
+    revalidatePath(`/w/${slug}/social`, "layout");
+    return { postId: savedId as string, assetIds };
   }
   if (intent === "review") {
     const { error: submitError } = await ctx.supabase.rpc("submit_social_post", {
@@ -1054,6 +1121,106 @@ export async function saveDesignedPictures(
       title: named.find((item) => item.path === file.path)?.title ?? "",
     })),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Slides on a post: drawn into pictures by the person approving or scheduling it
+// ---------------------------------------------------------------------------
+
+export type SendingPlan = {
+  /** The post's slides, when it has them and they haven't been drawn as they are now. */
+  slides: SlideDesign | null;
+  key: string | null;
+};
+
+/** What has to be done in the browser before this post can be scheduled. */
+export async function sendingPlan(
+  slug: string,
+  postId: string,
+): Promise<SendingPlan | { error: string }> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: String(ctx.error) };
+  if (!UUID.test(postId)) return { error: "That post couldn't be found." };
+  const { data } = await ctx.supabase
+    .from("social_posts")
+    .select("slides, slides_key, slides_drawn")
+    .eq("tenant_id", ctx.tenant.id)
+    .eq("id", postId)
+    .maybeSingle();
+  if (!data) return { error: "That post couldn't be found." };
+  if (data.slides == null || data.slides_drawn === data.slides_key) {
+    return { slides: null, key: null };
+  }
+  const slides = ownDesign(data.slides, publicAssetUrl(`${ctx.tenant.id}/`));
+  if (!slides)
+    return { error: "This post's slides couldn't be read. Open the slides and save them again." };
+  return { slides, key: data.slides_key as string };
+}
+
+/**
+ * Puts the pictures drawn from a post's slides on the post. The browser has sent each to
+ * storage with a link from `startUpload`; here each is checked like any upload, kept with its
+ * own slide's design, put away out of the library (they live on the post), and attached in
+ * order for the version of the slides they were drawn from. Nothing is attached if any fails.
+ */
+export async function attachSlides(
+  slug: string,
+  postId: string,
+  key: string,
+  paths: string[],
+): Promise<{ ok: true } | { error: string }> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: String(ctx.error) };
+  if (!process.env.SUPABASE_SECRET_KEY) {
+    return { error: "Uploads aren't switched on for this environment yet." };
+  }
+  if (!UUID.test(postId) || typeof key !== "string" || !Array.isArray(paths)) {
+    return { error: "That post couldn't be found." };
+  }
+  const plan = await sendingPlan(slug, postId);
+  if ("error" in plan) return plan;
+  if (!plan.slides || plan.key !== key) {
+    return { error: "The slides changed while they were being drawn. Please try again." };
+  }
+  const wanted = paths.slice(0, MAX_DESIGN_SLIDES);
+  const filed = await registerUploads(
+    ctx,
+    wanted.map((path, index) => ({ path, title: `Slide ${index + 1}` })),
+    null,
+    "pictures",
+  );
+  const ids = filed.map((file) => file.id);
+  const putAway = () =>
+    ids.length
+      ? ctx.supabase.rpc("sort_social_assets", {
+          p_tenant_id: ctx.tenant.id,
+          p_asset_ids: ids,
+          p_move: false,
+          p_folder_id: null,
+          p_add_tags: ["slides"],
+          p_hidden: true,
+        })
+      : Promise.resolve();
+  await putAway();
+  if (filed.length !== plan.slides.slides.length || filed.length !== wanted.length) {
+    return { error: "Some slides didn't arrive. Check your connection and try again." };
+  }
+  for (const [index, file] of filed.entries()) {
+    await ctx.supabase.rpc("set_social_asset_design", {
+      p_tenant_id: ctx.tenant.id,
+      p_asset_id: file.id,
+      p_design: { v: 1, format: plan.slides.format, slides: [plan.slides.slides[index]] },
+    });
+  }
+  const { error } = await ctx.supabase.rpc("attach_social_slide_pictures", {
+    p_tenant_id: ctx.tenant.id,
+    p_post_id: postId,
+    p_key: key,
+    p_asset_ids: ids,
+  });
+  if (error) return { error: reviewError(error.message) ?? OOPS };
+  done(slug);
+  return { ok: true };
 }
 
 export async function saveFolder(

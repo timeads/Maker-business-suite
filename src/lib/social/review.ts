@@ -66,7 +66,10 @@ export const REVIEW_ERRORS: Record<string, string> = {
 /** The plain words for a database refusal, or null when it isn't one of ours. */
 export function reviewError(message: string | undefined | null): string | null {
   if (!message) return null;
-  const key = Object.keys(REVIEW_ERRORS).find((k) => message.includes(k));
+  // Longest first, so "too_many_photos" isn't read as "too_many".
+  const key = Object.keys(REVIEW_ERRORS)
+    .sort((a, b) => b.length - a.length)
+    .find((k) => message.includes(k));
   return key ? REVIEW_ERRORS[key] : null;
 }
 

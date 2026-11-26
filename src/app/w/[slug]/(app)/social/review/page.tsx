@@ -9,7 +9,7 @@ import { publicAssetUrl } from "@/lib/social/worker";
 import { createClient } from "@/lib/supabase/server";
 import { socialAccess } from "../gate";
 import { ReviewQueue, type QueueMonth } from "../review-forms";
-import { reviewFor } from "../shared";
+import { loadDesignKit, reviewFor } from "../shared";
 
 export const metadata: Metadata = { title: "Review" };
 
@@ -22,6 +22,7 @@ type Row = {
   submitted_by: string | null;
   review: string;
   review_note: string | null;
+  has_slides: unknown;
 };
 
 const SAVED: Record<string, string> = {
@@ -45,7 +46,7 @@ export default async function ReviewPage({
   if (!access.ok) return access.upsell;
   const { tenant, role, entitlements } = access;
   const supabase = await createClient();
-  const [{ data }, { data: members }, review] = await Promise.all([
+  const [{ data }, { data: members }, review, kit] = await Promise.all([
     supabase
       .from("social_posts")
       .select("id, caption, planned_for, asset_id, asset_ids, submitted_by, review, review_note")
@@ -56,6 +57,7 @@ export default async function ReviewPage({
       .limit(300),
     supabase.rpc("list_members", { p_tenant_id: tenant.id }),
     reviewFor(supabase, tenant.id, role),
+    loadDesignKit(supabase, tenant.id),
   ]);
   const rows = (data ?? []) as unknown as Row[];
   const firstPhoto = (row: Row) => row.asset_ids?.[0] ?? row.asset_id;
@@ -109,6 +111,7 @@ export default async function ReviewPage({
         : null,
       photo: photo ? (photoUrl.get(photo) ?? null) : null,
       by: row.submitted_by ? (emailOf.get(row.submitted_by) ?? null) : null,
+      slides: row.has_slides != null,
     });
   }
   const sentBack = rows.filter((r) => r.review === "sent_back");
@@ -140,7 +143,7 @@ export default async function ReviewPage({
         </CardHeader>
         {waiting > 0 && (
           <CardContent>
-            <ReviewQueue slug={tenant.slug} months={months} canApprove={canApprove} />
+            <ReviewQueue slug={tenant.slug} months={months} canApprove={canApprove} kit={kit} />
           </CardContent>
         )}
       </Card>

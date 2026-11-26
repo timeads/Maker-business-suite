@@ -8,8 +8,10 @@ import { Button } from "@/components/ui/button";
 import { FormMessage } from "@/components/ui/form-message";
 import { Label } from "@/components/ui/input";
 import { SubmitButton } from "@/components/ui/submit-button";
+import type { BrandKit } from "@/lib/design/brands";
 import type { ReviewSettings } from "@/lib/social/review";
 import { approvePosts, saveReviewSettings, sendBackPost } from "./actions";
+import { getReadyToSend } from "./send-prep";
 
 const textarea =
   "border-input bg-card placeholder:text-muted-foreground focus-visible:border-ochre focus-visible:ring-ochre/25 font-read w-full rounded-sm border px-[11px] py-2 text-sm outline-none focus-visible:ring-2";
@@ -57,16 +59,13 @@ export function ReviewQueue({
   slug,
   months,
   canApprove,
-  prepare,
+  kit = null,
 }: {
   slug: string;
   months: QueueMonth[];
   canApprove: boolean;
-  /**
-   * Anything to do in this browser before posts can be approved (drawing slides into pictures).
-   * Returns the ids it couldn't get ready, with why.
-   */
-  prepare?: (ids: string[]) => Promise<{ id: string; reason: string }[]>;
+  /** The workspace's kit, for drawing slides into pictures in this browser before approving. */
+  kit?: BrandKit | null;
 }) {
   const router = useRouter();
   const [ticked, setTicked] = useState<string[]>([]);
@@ -77,6 +76,16 @@ export function ReviewQueue({
   }>({
     problems: [],
   });
+  const slidesOf = new Set(months.flatMap((m) => m.posts.filter((p) => p.slides).map((p) => p.id)));
+  /** Draws the slides of the posts that have them, one post at a time; says which couldn't be. */
+  const prepare = async (ids: string[]) => {
+    const problems: { id: string; reason: string }[] = [];
+    for (const id of ids.filter((one) => slidesOf.has(one))) {
+      const ready = await getReadyToSend(slug, id, kit);
+      if (ready.error) problems.push({ id, reason: ready.error });
+    }
+    return problems;
+  };
   const titleOf = new Map(months.flatMap((m) => m.posts.map((p) => [p.id, p.snippet] as const)));
 
   const approve = async (ids: string[], month: string | null) => {
@@ -86,7 +95,7 @@ export function ReviewQueue({
       const wanted = month
         ? (months.find((m) => m.month === month)?.posts.map((p) => p.id) ?? [])
         : ids;
-      const unready = prepare ? await prepare(wanted) : [];
+      const unready = await prepare(wanted);
       const ready = wanted.filter((id) => !unready.some((u) => u.id === id));
       // A month is approved by its ids once some needed getting ready, so a post that
       // couldn't be drawn isn't approved with stale pictures.

@@ -4,6 +4,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { FormMessage } from "@/components/ui/form-message";
 import { PageHeader } from "@/components/ui/page-header";
 import { formatWhen } from "@/lib/bookings/slots";
+import { ownDesign } from "@/lib/brand/slides";
+import { publicAssetUrl } from "@/lib/social/worker";
 import { createClient } from "@/lib/supabase/server";
 import { Badge } from "@/components/ui/badge";
 import { Composer, DeletePostForm } from "../composer";
@@ -41,7 +43,7 @@ export default async function PostPage({
     supabase
       .from("social_posts")
       .select(
-        "id, caption, captions, channels, status, scheduled_for, planned_for, published_at, results, error, asset_id, asset_ids, project_id, topic, ai_draft, review, review_note",
+        "id, caption, captions, channels, status, scheduled_for, planned_for, published_at, results, error, asset_id, asset_ids, project_id, topic, ai_draft, review, review_note, slides, slide_asset_ids",
       )
       .eq("id", id)
       .eq("tenant_id", tenant.id)
@@ -152,7 +154,13 @@ export default async function PostPage({
                   caption: post.caption as string,
                   captions,
                   channels: post.channels as string[],
-                  photoIds,
+                  // The slides' own pictures are the slides; they aren't picked by hand.
+                  photoIds: photoIds.filter(
+                    (photoId) =>
+                      !((post.slide_asset_ids as string[] | null) ?? []).includes(photoId),
+                  ),
+                  slides: ownDesign(post.slides, publicAssetUrl(`${tenant.id}/`)),
+                  slidesFixed: post.status === "scheduled",
                   projectId: (post.project_id as string | null) ?? null,
                   topic: (post.topic as string | null) ?? null,
                   aiDraft: (post.ai_draft as string | null) ?? null,
