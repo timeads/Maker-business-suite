@@ -12,7 +12,7 @@ import {
   encodeOAuthState,
 } from "@/lib/connections/oauth-state";
 import { getAdapter, isProviderKey } from "@/lib/connections/registry";
-import { vaultTokenStore } from "@/lib/connections/tokens";
+import { getProviderToken, vaultTokenStore } from "@/lib/connections/tokens";
 import { ConnectError, type ProviderKey } from "@/lib/connections/types";
 import { getEntitlements } from "@/lib/entitlements";
 import { getSiteUrl } from "@/lib/site-url";
@@ -204,4 +204,55 @@ export async function syncNow(
       ? "Sync started. This page updates when it finishes."
       : "A sync is already underway.",
   };
+}
+
+/**
+ * "Check again": asks the shop now which permissions it has really granted
+ * and records that as the connection's scopes, so every gate (and the screen
+ * the person pressed it on) tells the truth at once. Changes nothing in the
+ * shop. Owners and admins only, like everything else about a connection.
+ */
+export async function checkShopPermissions(
+  slug: string,
+  _prev: ConnectionState,
+): Promise<ConnectionState> {
+  const ctx = await context(slug, "shopify");
+  if ("error" in ctx) return { error: ctx.error };
+  if (!ctx.adapter.grantedScopes) return { error: NOT_READY };
+
+  // Read as the signed-in person, so RLS confirms the connection is theirs.
+  const { data: connection } = await (
+    await createClient()
+  )
+    .from("connections")
+    .select("id, status")
+    .eq("tenant_id", ctx.tenant.id)
+    .eq("provider", "shopify")
+    .maybeSingle();
+  if (!connection || connection.status !== "active") {
+    return { error: "Connect your shop first." };
+  }
+
+  try {
+    const stored = await getProviderToken(ctx.tenant.id, "shopify");
+    const granted = await ctx.adapter.grantedScopes(stored.token, stored.externalAccountId);
+    const { error } = await getAdminClient().rpc("record_granted_scopes", {
+      p_tenant_id: ctx.tenant.id,
+      p_connection_id: connection.id,
+      p_scopes: granted,
+    });
+    if (error) throw new Error(error.message);
+  } catch (err) {
+    console.error(
+      "shopify permission check failed",
+      err instanceof Error ? err.message : "unknown error",
+    );
+    return { error: "We couldn't reach your shop just now. Try again in a moment." };
+  }
+  revalidatePath(`/w/${slug}/settings`, "layout");
+  revalidatePath(`/w/${slug}/connections`);
+  revalidatePath(`/w/${slug}/shipping`, "layout");
+  revalidatePath(`/w/${slug}/stock`, "layout");
+  revalidatePath(`/w/${slug}/bookings`, "layout");
+  return { message: "Checked with your shop just now." };
 }

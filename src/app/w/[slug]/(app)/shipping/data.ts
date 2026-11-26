@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { canSendInShopify } from "@/lib/connections/providers/shopify-fulfil";
+import { shopPermission } from "@/lib/connections/shop-permission";
 import {
   SHIPPING_MODULE,
   SHIPPING_SETTINGS_KEY,
@@ -110,7 +111,7 @@ export async function loadShippingSetup(supabase: SupabaseClient, tenantId: stri
       .in("key", [SHIPPING_SETTINGS_KEY, SLIP_LAYOUT_KEY, SHIPPING_RULES_KEY]),
     supabase
       .from("connections")
-      .select("status, scopes")
+      .select("status, scopes, metadata")
       .eq("tenant_id", tenantId)
       .eq("provider", "shopify")
       .maybeSingle(),
@@ -125,6 +126,8 @@ export async function loadShippingSetup(supabase: SupabaseClient, tenantId: stri
     rules: parseShippingRules(body(SHIPPING_RULES_KEY)),
     connected,
     canSend: connected && canSendInShopify(shop.scopes),
+    /** Where the shop stands on telling it about parcels, for the settings screen. */
+    shopPermission: shopPermission(shop, canSendInShopify),
   };
 }
 

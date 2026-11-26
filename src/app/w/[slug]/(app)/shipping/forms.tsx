@@ -635,7 +635,7 @@ export function ShippingSettingsForm({
             <span className="text-muted-foreground block text-xs">
               {canSend
                 ? "The tracking number goes with it. You can untick it for any one parcel."
-                : "Your shop hasn't given permission for this yet. Until it does, mark orders as sent in your shop yourself."}
+                : "Your shop hasn't given permission for this yet (more under “Your shop's permission” on this page). Until it does, mark orders as sent in your shop yourself."}
             </span>
           </span>
         </label>
@@ -662,7 +662,7 @@ export function ShippingSettingsForm({
             <span className="text-muted-foreground block text-xs">
               {canSend
                 ? "When you mark a pickup ready, your shop emails the customer to come and collect. When it's picked up, the order is marked fulfilled there."
-                : "Your shop hasn't given permission for this yet. Until it does, pickup steps are kept here and your shop isn't told."}
+                : "Your shop hasn't given permission for this yet (more under “Your shop's permission” on this page). Until it does, pickup steps are kept here and your shop isn't told."}
             </span>
           </span>
         </label>

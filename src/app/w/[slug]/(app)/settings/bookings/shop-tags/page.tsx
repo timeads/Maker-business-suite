@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
+import { shopPermission } from "@/lib/connections/shop-permission";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { SectionHeading } from "@/components/settings/section-heading";
 import { BOOKINGS_MODULE } from "@/lib/bookings/config";
@@ -15,6 +15,7 @@ import {
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
 import { startConnection } from "../../../connections/actions";
+import { ShopPermissionNote } from "../../../connections/shop-permission-note";
 import { bookingsAccess } from "../../../bookings/gate";
 import { ConnectTagsForm, ShopTagsForm } from "../../../bookings/shop-tags-form";
 
@@ -65,9 +66,8 @@ export default async function ShopTagsSettings({ params }: { params: Promise<{ s
       .limit(20),
   ]);
   const settings = parseShopTags(config?.body);
-  const connected = shop?.status === "active";
-  const watchOnly = Boolean((shop?.metadata as { watch_only?: boolean } | null)?.watch_only);
-  const allowed = connected && canTagInShopify(shop?.scopes);
+  // What the shop reported it granted, and whether this connection asked.
+  const permission = shopPermission(shop, canTagInShopify);
   const rows = (recent ?? []) as {
     id: string;
     shop_order_name: string;
@@ -92,44 +92,32 @@ export default async function ShopTagsSettings({ params }: { params: Promise<{ s
             stays.
           </CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-col gap-3 text-sm">
-          {!shop || shop.status === "disconnected" ? (
-            <p>
-              Your shop isn&apos;t connected.{" "}
-              <Link href={`/w/${tenant.slug}/connections`} className="underline">
-                Connect it under Connections
-              </Link>
-              .
-            </p>
-          ) : allowed ? (
-            <p className="flex flex-wrap items-center gap-2">
-              <Badge tone="good">Allowed</Badge>
-              Your shop lets us add tags to its orders.
-            </p>
-          ) : (
-            <>
-              <p className="flex flex-wrap items-center gap-2">
-                <Badge tone="waiting">Not allowed yet</Badge>
-                {!connected
-                  ? "Your shop needs connecting again."
-                  : watchOnly
-                    ? "Your shop is connected to watch only, so nothing in it is ever changed from here, tags included."
-                    : "Your shop hasn't given permission to change orders, so no tags are added."}
-              </p>
-              <p className="text-muted-foreground">
-                To allow it, connect your shop again with order tags. Your shop will ask you to
-                approve changing orders.
-                {watchOnly &&
-                  " This ends watch only: you'll also be able to mark orders sent or add stock when you ask."}
-              </p>
-              {canEdit && shop.external_account_id && (
-                <ConnectTagsForm
-                  action={startConnection.bind(null, tenant.slug, "shopify")}
-                  shop={shop.external_account_id}
-                />
-              )}
-            </>
-          )}
+        <CardContent>
+          <ShopPermissionNote
+            slug={tenant.slug}
+            permission={permission}
+            what="add tags to its orders"
+            canCheck={canEdit}
+            timezone={tenant.timezone}
+          >
+            {/* Asking again only helps a connection that never asked: once
+                Shopify has said no, the same button would loop. */}
+            {(permission.state === "not_granted" || permission.state === "watch_only") && (
+              <>
+                <p className="text-muted-foreground">
+                  {permission.state === "watch_only"
+                    ? "To allow tags, connect your shop again with order tags. This ends watch only: you'll also be able to mark orders sent or add stock when you ask."
+                    : "Or connect your shop again with order tags, and your shop will ask you to approve changing orders."}
+                </p>
+                {canEdit && shop?.external_account_id && (
+                  <ConnectTagsForm
+                    action={startConnection.bind(null, tenant.slug, "shopify")}
+                    shop={shop.external_account_id}
+                  />
+                )}
+              </>
+            )}
+          </ShopPermissionNote>
         </CardContent>
       </Card>
       <Card>

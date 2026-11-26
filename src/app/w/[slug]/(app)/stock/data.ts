@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { localDay } from "@/lib/bookings/slots";
 import { canWriteShopifyStock } from "@/lib/connections/providers/shopify-stock";
+import { shopPermission, type ShopPermission } from "@/lib/connections/shop-permission";
 import {
   STOCK_MODULE,
   STOCK_SEASONS_KEY,
@@ -64,6 +65,8 @@ export type ShopLink = {
   connected: boolean;
   /** The shop has given permission to have deliveries added to its count. */
   canPush: boolean;
+  /** Where the shop stands on that permission, for the settings screen. */
+  permission: ShopPermission;
   lastSyncedAt: string | null;
 };
 
@@ -182,7 +185,7 @@ export async function loadStock(
       .in("key", [STOCK_SETTINGS_KEY, STOCK_VIEWS_KEY, STOCK_SEASONS_KEY]),
     supabase
       .from("connections")
-      .select("status, scopes, last_synced_at")
+      .select("status, scopes, metadata, last_synced_at")
       .eq("tenant_id", tenant.id)
       .eq("provider", "shopify")
       .maybeSingle(),
@@ -207,6 +210,7 @@ export async function loadStock(
   const link: ShopLink = {
     connected: shop?.status === "active",
     canPush: shop?.status === "active" && canWriteShopifyStock(shop.scopes),
+    permission: shopPermission(shop, canWriteShopifyStock),
     lastSyncedAt: (shop?.last_synced_at as string | null) ?? null,
   };
   return {

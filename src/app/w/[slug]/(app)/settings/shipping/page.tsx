@@ -5,6 +5,7 @@ import { SectionHeading } from "@/components/settings/section-heading";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
+import { ShopPermissionNote } from "../../connections/shop-permission-note";
 import { BoxesForm } from "../../shipping/box-forms";
 import { loadBoxes, loadShippingSetup } from "../../shipping/data";
 import { ShippingSettingsForm } from "../../shipping/forms";
@@ -42,6 +43,24 @@ export default async function ShippingSettingsPage({
         title="Ship-from & boxes"
         description="Where parcels leave from, what happens when you record one, and the boxes you pack in."
       />
+      <Card id="shop-permission" className="scroll-mt-6">
+        <CardHeader>
+          <CardTitle>Your shop&apos;s permission</CardTitle>
+          <CardDescription>
+            Needed to mark orders as sent in your shop and to tell it about pickups. Nothing else in
+            your shop is changed.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ShopPermissionNote
+            slug={tenant.slug}
+            permission={setup.shopPermission}
+            what="mark its orders as sent"
+            canCheck={manager}
+            timezone={tenant.timezone}
+          />
+        </CardContent>
+      </Card>
       <Card>
         <CardHeader>
           <CardTitle>Shipping from, and recording parcels</CardTitle>

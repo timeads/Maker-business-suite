@@ -850,7 +850,7 @@ export function StockSettingsForm({
           <span className="text-muted-foreground block text-xs">
             {canPush
               ? "It only ever adds what arrived. Nothing else in your shop is changed."
-              : "Your shop hasn't given permission for this yet. Until it does, update the count in your shop yourself."}
+              : "Your shop hasn't given permission for this yet (more under “Your shop's permission” on this page). Until it does, update the count in your shop yourself."}
           </span>
         </span>
       </label>

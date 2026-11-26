@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
+import { ShopPermissionNote } from "../../connections/shop-permission-note";
 import { loadStock } from "../../stock/data";
 import { StockSettingsForm } from "../../stock/forms";
 import { stockAccess } from "../../stock/gate";
@@ -108,6 +109,26 @@ export default async function StockSettingsPage({ params }: { params: Promise<{ 
           )}
         </CardContent>
       </Card>
+      {link.permission.state !== "not_connected" && (
+        <Card id="shop-permission" className="scroll-mt-6">
+          <CardHeader>
+            <CardTitle>Your shop&apos;s permission</CardTitle>
+            <CardDescription>
+              Needed to add checked-in deliveries to your shop&apos;s count. It only ever adds what
+              arrived.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ShopPermissionNote
+              slug={tenant.slug}
+              permission={link.permission}
+              what="add deliveries to its stock counts"
+              canCheck={canManage(role) && entitlements.canWrite}
+              timezone={tenant.timezone}
+            />
+          </CardContent>
+        </Card>
+      )}
       {canManage(role) && link.connected && (
         <Card>
           <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
