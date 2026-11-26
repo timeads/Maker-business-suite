@@ -78,6 +78,13 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   lives there; tokens are in Vault) but not the whole row, so always name
   the columns: a `select` that names a column members can't read fails as a
   whole and the page quietly behaves as if nothing were connected.
+  A Shopify connection's `scopes` is what the store reports
+  (`currentAppInstallation.accessScopes`, `shopify-scopes.ts`), written by
+  `record_granted_scopes` on connect, after each shop read and on "Check
+  again"; never what we asked for (managed installation ignores the `scope`
+  we send). Watch-only keeps only `read_*`. Screens that need a shop
+  permission use `shopPermission()` and `<ShopPermissionNote>`
+  (docs/shopify-permissions.md).
 - Money view: dashboards are JSON in `configs` (module `dashboard`), parsed
   with the Zod schemas in `lib/dashboard/schema.ts` on every read. Sync writes
   go through service-role functions that name the workspace
