@@ -89,6 +89,13 @@ import {
 } from "../social/review";
 import { APPEARANCE_KEY, DEFAULT_APPEARANCE, appearanceSchema } from "../brand/appearance";
 import { isKitKey } from "../brand/brands";
+import {
+  DEFAULT_STYLE_NOTES,
+  STYLE_NOTES_KEY,
+  isStyleNotesKey,
+  styleNotesSchema,
+} from "../social/style-notes";
+import { reviewDayWords } from "../social/month";
 import { BRAND_MODULE, KIT_KEY, brandKitSchema } from "../brand/kit";
 import {
   DEFAULT_SHIPPING_SETTINGS,
@@ -456,7 +463,7 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
     feature: "social",
     name: "Social content plan",
     description:
-      "The topics the business posts about, the times of the week it likes to post (each with its usual topic), and notes on its voice that drafts follow.",
+      "The topics the business posts about (each topic's `from` is claude: Claude writes its posts, or projects: the monthly run makes a carousel from a project's photos that haven't been posted), the times of the week it likes to post (each with its usual topic and, with several brands, the brand it is for; null is the main brand), notes on its voice that drafts follow, and review_days: each brand's monthly review day (week 1 to 4 and weekday 0 Sunday to 6 Saturday, brand_id null for the main brand), lead_days (how many days before it the month is drafted, 0 is on the day) and auto (whether the month is drafted by itself, for a person to review; drafts are never scheduled or posted by it).",
     schema: socialPlanSchema,
     defaultBody: () => DEFAULT_PLAN,
   },
@@ -469,6 +476,16 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
       "The public page of links for a social profile: its heading, a short intro, the links (https only), whether recent posts show, and whether it is published.",
     schema: linkPageSchema,
     defaultBody: () => DEFAULT_LINKS,
+  },
+  {
+    module: SOCIAL_MODULE,
+    key: STYLE_NOTES_KEY,
+    feature: "social",
+    name: "Style notes",
+    description:
+      "Plain notes on how the business likes its captions written, learned from how people changed Claude's drafts: notes is the text, one note per line. The first brand's notes are under style_notes, every other brand's under style_notes-<brand id>. Drafting reads them; they never send anything.",
+    schema: styleNotesSchema,
+    defaultBody: () => DEFAULT_STYLE_NOTES,
   },
   {
     module: SOCIAL_MODULE,
@@ -516,6 +533,13 @@ export function findConfig(module: unknown, key: unknown): ConfigEntry | null {
       (entry) => entry.module === BRAND_MODULE && entry.key === KIT_KEY,
     );
     return kit ? { ...kit, key } : null;
+  }
+  // Every brand's style notes too ("style_notes-<brand id>").
+  if (module === SOCIAL_MODULE && isStyleNotesKey(key) && key !== STYLE_NOTES_KEY) {
+    const notes = CONFIG_REGISTRY.find(
+      (entry) => entry.module === SOCIAL_MODULE && entry.key === STYLE_NOTES_KEY,
+    );
+    return notes ? { ...notes, key } : null;
   }
   return CONFIG_REGISTRY.find((entry) => entry.module === module && entry.key === key) ?? null;
 }
@@ -621,7 +645,23 @@ export function describeConfig(entry: ConfigEntry, body: unknown): string[] {
           `${WEEKDAY_NAMES[slot.weekday]} ${slot.time}: ${topics.find((t) => t.id === slot.topic)?.name ?? "anything"}`,
       ),
       `Voice notes: ${notes ? `"${notes.slice(0, 120)}${notes.length > 120 ? "…" : ""}"` : "none"}`,
+      ...(
+        list("review_days") as {
+          brand_id: string | null;
+          week: number;
+          weekday: number;
+          lead_days: number;
+          auto: boolean;
+        }[]
+      ).map(
+        (day) =>
+          `Review day${day.brand_id ? ` (brand ${day.brand_id.slice(0, 8)})` : ""}: ${reviewDayWords(day)}, drafted ${day.lead_days === 0 ? "on the day" : `${day.lead_days} days ahead`}${day.auto ? " by itself" : " only when asked"}`,
+      ),
     ];
+  }
+  if (entry.module === SOCIAL_MODULE && isStyleNotesKey(entry.key)) {
+    const notes = String(value.notes ?? "").trim();
+    return notes ? notes.split("\n").slice(0, 12) : ["No style notes yet"];
   }
   if (entry.module === SOCIAL_MODULE && entry.key === REVIEW_KEY) {
     const review = parseReview(body);

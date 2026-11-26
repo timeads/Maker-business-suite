@@ -7,7 +7,10 @@ import type { ModuleKey } from "./modules";
  * couldn't open. A count that fails to load is simply left out.
  */
 export type Attention = Partial<Record<ModuleKey, number>> & {
-  /** Social posts waiting for review, for the Review row in Social's menu. */
+  /**
+   * Social posts waiting for review, and drafts the monthly run wrote that are
+   * still plain drafts, for the Review row in Social's menu.
+   */
   socialReview?: number;
 };
 
@@ -46,7 +49,12 @@ export async function loadAttention(
           .gt("seats", 0)
           .eq("order_cancelled", false)
       : none,
-    has("social") ? count("social_posts").eq("status", "draft").eq("review", "waiting") : none,
+    // Waiting for review, and the monthly run's drafts nobody has looked at yet.
+    has("social")
+      ? count("social_posts")
+          .eq("status", "draft")
+          .or("review.eq.waiting,and(review.is.null,month_run_id.not.is.null)")
+      : none,
   ]);
   const unread = ((chat.data ?? []) as { unread?: number }[]).reduce(
     (n, row) => n + Number(row.unread ?? 0),

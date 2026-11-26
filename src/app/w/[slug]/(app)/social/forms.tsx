@@ -199,15 +199,19 @@ export function PlanForm({
   topics,
   slots,
   styleNotes,
+  brands = [],
 }: {
   slug: string;
-  topics: { id: string; name: string; about: string }[];
-  slots: { weekday: number; time: string; topic: string | null }[];
+  topics: { id: string; name: string; about: string; from: "claude" | "projects" }[];
+  slots: { weekday: number; time: string; topic: string | null; brand_id: string | null }[];
   styleNotes: string;
+  /** With more than one brand, each time says which brand it is for. */
+  brands?: { id: string; name: string; main: boolean }[];
 }) {
   const [state, action] = useActionState(savePlan.bind(null, slug), {});
   // Existing times, plus three empty rows to add more.
   const rows = [...slots, ...Array.from({ length: 3 }, () => null)].slice(0, 21);
+  const manyBrands = brands.length > 1;
   return (
     <form action={action} className="flex flex-col gap-6">
       <div className="flex flex-col gap-1.5">
@@ -229,12 +233,44 @@ export function PlanForm({
         </p>
       </div>
 
+      {topics.length > 0 && (
+        <fieldset className="flex flex-col gap-2">
+          <legend className="pb-1 text-xs leading-tight font-semibold">
+            Filled from your projects&apos; photos
+          </legend>
+          <p className="text-muted-foreground text-xs">
+            Tick a topic and the monthly run makes its posts as carousels from a project&apos;s
+            photos that haven&apos;t been posted yet. Claude writes the others from the topic.
+          </p>
+          <div className="flex flex-wrap gap-x-5 gap-y-2">
+            {topics.map((topic) => (
+              <label key={topic.id} className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  name="topic_projects"
+                  value={topic.id}
+                  defaultChecked={topic.from === "projects"}
+                />
+                {topic.name}
+              </label>
+            ))}
+          </div>
+        </fieldset>
+      )}
+
       <fieldset className="flex flex-col gap-2">
         <legend className="pb-2 text-xs leading-tight font-semibold">
           When you like to post each week
         </legend>
         {rows.map((slot, index) => (
-          <div key={index} className="grid grid-cols-[1fr_7rem_1fr] gap-2">
+          <div
+            key={index}
+            className={
+              manyBrands
+                ? "grid grid-cols-[1fr_7rem_1fr_1fr] gap-2"
+                : "grid grid-cols-[1fr_7rem_1fr] gap-2"
+            }
+          >
             <Select
               name={`slot_day_${index}`}
               defaultValue={String(slot?.weekday ?? 1)}
@@ -264,6 +300,22 @@ export function PlanForm({
                 </option>
               ))}
             </Select>
+            {manyBrands && (
+              <Select
+                name={`slot_brand_${index}`}
+                defaultValue={slot?.brand_id ?? ""}
+                aria-label="Brand"
+              >
+                <option value="">{brands.find((brand) => brand.main)?.name ?? "Main brand"}</option>
+                {brands
+                  .filter((brand) => !brand.main)
+                  .map((brand) => (
+                    <option key={brand.id} value={brand.id}>
+                      {brand.name}
+                    </option>
+                  ))}
+              </Select>
+            )}
           </div>
         ))}
         <p className="text-muted-foreground text-xs">

@@ -458,6 +458,19 @@ const TOOLS: Def[] = [
         keywords: ["approve", "approval", "review", "send back", "who can schedule", "sign off"],
       },
       {
+        id: "social.style",
+        name: "Style notes",
+        path: "social/style",
+        keywords: [
+          "learn from my edits",
+          "how claude writes",
+          "voice",
+          "captions",
+          "drafts",
+          "suggest notes",
+        ],
+      },
+      {
         id: "social.accounts",
         name: "Social accounts",
         path: "social/accounts",

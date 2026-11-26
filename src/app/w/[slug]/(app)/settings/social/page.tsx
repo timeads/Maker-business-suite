@@ -29,6 +29,16 @@ export default async function SocialSettingsPage({
           href: "settings/social/review",
         },
         {
+          name: "Style notes",
+          about: "What Claude has learned from how you change its drafts.",
+          href: "settings/social/style",
+        },
+        {
+          name: "Monthly run",
+          about: "Your review day, and the month drafted for you, on Social's Plan tab.",
+          href: "social/plan",
+        },
+        {
           name: "Link page",
           about: "The one page with all your links, on Social's Link page tab.",
           href: "social/links",

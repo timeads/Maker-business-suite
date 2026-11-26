@@ -52,25 +52,42 @@ export default async function ReviewPage({
   if (!access.ok) return access.upsell;
   const { tenant, role, entitlements } = access;
   const supabase = await createClient();
-  const [{ data }, { data: members }, review, kit, brands] = await Promise.all([
-    narrow(
-      supabase
-        .from("social_posts")
-        .select(
-          "id, caption, planned_for, asset_id, asset_ids, submitted_by, review, review_note, brand_id",
-        )
-        .eq("tenant_id", tenant.id),
-      filter,
-    )
-      .eq("status", "draft")
-      .not("review", "is", null)
-      .order("planned_for", { ascending: true, nullsFirst: false })
-      .limit(300),
-    supabase.rpc("list_members", { p_tenant_id: tenant.id }),
-    reviewFor(supabase, tenant.id, role),
-    loadDesignKit(supabase, tenant.id),
-    loadBrands(supabase, tenant.id),
-  ]);
+  const [{ data }, { data: members }, review, kit, brands, { data: runDrafts }] = await Promise.all(
+    [
+      narrow(
+        supabase
+          .from("social_posts")
+          .select(
+            "id, caption, planned_for, asset_id, asset_ids, submitted_by, review, review_note, brand_id",
+          )
+          .eq("tenant_id", tenant.id),
+        filter,
+      )
+        .eq("status", "draft")
+        .not("review", "is", null)
+        .order("planned_for", { ascending: true, nullsFirst: false })
+        .limit(300),
+      supabase.rpc("list_members", { p_tenant_id: tenant.id }),
+      reviewFor(supabase, tenant.id, role),
+      loadDesignKit(supabase, tenant.id),
+      loadBrands(supabase, tenant.id),
+      // Where review isn't required, the monthly run's drafts are plain drafts: listed here too.
+      narrow(
+        supabase.from("social_posts").select("id, caption, planned_for").eq("tenant_id", tenant.id),
+        filter,
+      )
+        .eq("status", "draft")
+        .is("review", null)
+        .not("month_run_id", "is", null)
+        .order("planned_for", { ascending: true, nullsFirst: false })
+        .limit(100),
+    ],
+  );
+  const fromRun = (runDrafts ?? []) as {
+    id: string;
+    caption: string;
+    planned_for: string | null;
+  }[];
   // Each brand's kit, so a post's slides are drawn in its own brand when it is approved.
   const kits: Record<string, BrandKit | null> = {};
   if (brands.length > 1) {
@@ -177,6 +194,41 @@ export default async function ReviewPage({
           </CardContent>
         )}
       </Card>
+
+      {fromRun.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Drafted for you this month</CardTitle>
+            <CardDescription>
+              The monthly run wrote these. Open each one, change what you like, then schedule it or
+              send it for review.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ul className="divide-border flex flex-col divide-y">
+              {fromRun.map((row) => (
+                <li key={row.id} className="flex flex-wrap items-baseline gap-x-3 py-2">
+                  <Link
+                    href={`/w/${tenant.slug}/social/${row.id}`}
+                    className="font-read min-w-0 flex-1 text-sm hover:underline"
+                  >
+                    {snippet(row.caption)}
+                  </Link>
+                  {row.planned_for && (
+                    <span className="text-muted-foreground text-xs">
+                      {
+                        formatWhen(row.planned_for, row.planned_for, tenant.timezone).split(
+                          " – ",
+                        )[0]
+                      }
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
 
       {sentBack.length > 0 && (
         <Card>

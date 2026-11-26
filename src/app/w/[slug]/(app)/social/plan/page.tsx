@@ -7,7 +7,12 @@ import { daysFromNow, formatDay, formatMinutes, parseClock } from "@/lib/booking
 import { monthReview, openSlots } from "@/lib/social/plan";
 import { loadBrands } from "@/lib/brand/brands";
 import { createClient } from "@/lib/supabase/server";
+import { canManage } from "@/lib/tenants";
+import { reviewDayFor, reviewDayWords, upcomingMonth, todayIn } from "@/lib/social/month";
+import { describeMonthRun, type MonthRunRow } from "@/lib/social/month-run";
+import { Badge } from "@/components/ui/badge";
 import { DraftMonthForm, PlanForm } from "../forms";
+import { ReviewDaysForm, RunNowForm } from "../month-forms";
 import { socialAccess } from "../gate";
 import { composerChoices } from "../shared";
 
@@ -17,26 +22,44 @@ export default async function SocialPlanPage({ params }: { params: Promise<{ slu
   const { slug } = await params;
   const access = await socialAccess(slug, `/w/${slug}/social/plan`);
   if (!access.ok) return access.upsell;
-  const { tenant, entitlements } = access;
+  const { tenant, entitlements, role } = access;
   const base = `/w/${tenant.slug}/social`;
   const supabase = await createClient();
-  const [{ plan }, { data: ahead }, { data: lately }, brands] = await Promise.all([
-    composerChoices(supabase, tenant.id, []),
-    supabase
-      .from("social_posts")
-      .select("status, scheduled_for, planned_for, topic")
-      .eq("tenant_id", tenant.id)
-      .or(`scheduled_for.gte.${daysFromNow(-1)},planned_for.gte.${daysFromNow(-1)}`)
-      .limit(500),
-    supabase
-      .from("social_posts")
-      .select("status, topic, channels")
-      .eq("tenant_id", tenant.id)
-      .gte("scheduled_for", daysFromNow(-30))
-      .lt("scheduled_for", daysFromNow(0))
-      .limit(1000),
-    loadBrands(supabase, tenant.id),
-  ]);
+  const [{ plan }, { data: ahead }, { data: lately }, brands, { data: runRows }] =
+    await Promise.all([
+      composerChoices(supabase, tenant.id, []),
+      supabase
+        .from("social_posts")
+        .select("status, scheduled_for, planned_for, topic")
+        .eq("tenant_id", tenant.id)
+        .or(`scheduled_for.gte.${daysFromNow(-1)},planned_for.gte.${daysFromNow(-1)}`)
+        .limit(500),
+      supabase
+        .from("social_posts")
+        .select("status, topic, channels")
+        .eq("tenant_id", tenant.id)
+        .gte("scheduled_for", daysFromNow(-30))
+        .lt("scheduled_for", daysFromNow(0))
+        .limit(1000),
+      loadBrands(supabase, tenant.id),
+      supabase
+        .from("social_month_runs")
+        .select(
+          "id, brand_id, window_start, window_end, status, source, created_at, finished_at, counts, error",
+        )
+        .eq("tenant_id", tenant.id)
+        .order("created_at", { ascending: false })
+        .limit(6),
+    ]);
+  const liveBrands = brands.filter((brand) => !brand.archived_at);
+  const runs = (runRows ?? []) as MonthRunRow[];
+  const manager = canManage(role) && entitlements.canWrite;
+  const today = todayIn(new Date(daysFromNow(0)), tenant.timezone);
+  const brandName = (id: string) => brands.find((brand) => brand.id === id)?.name ?? "";
+  const dayWords = (day: string) =>
+    new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "long", day: "numeric" }).format(
+      new Date(`${day}T00:00:00Z`),
+    );
   const open = openSlots(plan, ahead ?? [], new Date(daysFromNow(0)), 28, tenant.timezone);
   const review = monthReview(plan, (lately ?? []) as never);
   const topicName = (id: string | null) =>
@@ -147,6 +170,101 @@ export default async function SocialPlanPage({ params }: { params: Promise<{ slu
 
       <Card>
         <CardHeader>
+          <CardTitle>The monthly run</CardTitle>
+          <CardDescription>
+            Pick the day each month you sit down to review posts. Claude drafts the month ahead for
+            you to read, change and approve.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-5">
+          <ul className="flex flex-col gap-1.5 text-sm">
+            {liveBrands.map((brand) => {
+              const day = reviewDayFor(plan, brand);
+              const month = day ? upcomingMonth(today, day) : null;
+              return (
+                <li key={brand.id}>
+                  {liveBrands.length > 1 && <span className="font-semibold">{brand.name}: </span>}
+                  {day && month ? (
+                    <>
+                      You review on {reviewDayWords(day)}. Next month runs {dayWords(month.start)}{" "}
+                      to {dayWords(month.end)}
+                      {day.auto ? ", drafted by itself." : ". It isn't drafted by itself."}
+                    </>
+                  ) : (
+                    <span className="text-muted-foreground">No review day yet.</span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+          {manager ? (
+            <ReviewDaysForm
+              slug={tenant.slug}
+              rows={liveBrands.map((brand) => {
+                const day = reviewDayFor(plan, brand);
+                return {
+                  brandId: brand.id,
+                  brandName: brand.name,
+                  week: day?.week ?? null,
+                  weekday: day?.weekday ?? 1,
+                  leadDays: day?.lead_days ?? 0,
+                  auto: day?.auto ?? false,
+                };
+              })}
+            />
+          ) : (
+            <p className="text-muted-foreground text-sm">
+              An owner or admin sets the review day and switches the monthly run on.
+            </p>
+          )}
+          {manager && canDraft && liveBrands.some((brand) => reviewDayFor(plan, brand)) && (
+            <RunNowForm
+              slug={tenant.slug}
+              brands={liveBrands
+                .filter((brand) => reviewDayFor(plan, brand))
+                .map((brand) => ({ id: brand.id, name: brand.name }))}
+            />
+          )}
+          {runs.length > 0 && (
+            <ul className="divide-border flex flex-col divide-y text-sm">
+              {runs.map((run) => (
+                <li key={run.id} className="flex flex-col gap-1 py-2">
+                  <span className="flex flex-wrap items-center gap-2">
+                    <Badge
+                      tone={
+                        run.status === "done" ? "good" : run.status === "failed" ? "bad" : "waiting"
+                      }
+                    >
+                      {run.status === "done"
+                        ? "Drafted"
+                        : run.status === "failed"
+                          ? "Didn't finish"
+                          : run.status === "running"
+                            ? "Drafting"
+                            : "Waiting to start"}
+                    </Badge>
+                    {liveBrands.length > 1 && `${brandName(run.brand_id)} · `}
+                    {dayWords(run.window_start)} to {dayWords(run.window_end)}
+                    <span className="text-muted-foreground text-xs">
+                      {run.source === "manual" ? "asked for" : "by itself"}
+                    </span>
+                  </span>
+                  {(run.status === "done" || run.status === "failed") && (
+                    <span className="text-muted-foreground text-xs">
+                      {run.status === "failed" && run.error
+                        ? run.error
+                        : describeMonthRun(run.counts)}
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle>Your plan</CardTitle>
           <CardDescription>
             Topics and times are a guide, never a rule: you can post anything at any time.
@@ -159,6 +277,11 @@ export default async function SocialPlanPage({ params }: { params: Promise<{ slu
               topics={plan.topics}
               slots={plan.slots}
               styleNotes={plan.style_notes}
+              brands={liveBrands.map((brand) => ({
+                id: brand.id,
+                name: brand.name,
+                main: brand.is_default,
+              }))}
             />
           ) : (
             <p className="text-muted-foreground text-sm">
