@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getAiUsage } from "@/lib/ai/usage";
+import { previewAction } from "@/lib/assistant/action-proposals";
 import { findConfig } from "@/lib/assistant/registry";
 import { PageHeader } from "@/components/ui/page-header";
 import { requireUser } from "@/lib/auth";
@@ -29,24 +30,36 @@ export default async function AssistantPage({ params }: { params: Promise<{ slug
   const supabase = await createClient();
   const manager = canManage(role) && entitlements.canWrite;
 
-  const [usage, { data: pending }, { data: versions }] = await Promise.all([
-    getAiUsage(supabase, tenant.id, entitlements.limit("ai_credits")),
-    supabase
-      .from("config_proposals")
-      .select("id, module, key, body, summary")
-      .eq("tenant_id", tenant.id)
-      .eq("status", "pending")
-      .order("created_at", { ascending: false })
-      .limit(5),
-    supabase
-      .from("config_versions")
-      .select("id, module, key, version, source, note, created_at")
-      .eq("tenant_id", tenant.id)
-      .order("created_at", { ascending: false })
-      .limit(8),
-  ]);
+  const [usage, { data: pending }, { data: versions }, { data: pendingActions }] =
+    await Promise.all([
+      getAiUsage(supabase, tenant.id, entitlements.limit("ai_credits")),
+      supabase
+        .from("config_proposals")
+        .select("id, module, key, body, summary")
+        .eq("tenant_id", tenant.id)
+        .eq("status", "pending")
+        .order("created_at", { ascending: false })
+        .limit(5),
+      supabase
+        .from("config_versions")
+        .select("id, module, key, version, source, note, created_at")
+        .eq("tenant_id", tenant.id)
+        .order("created_at", { ascending: false })
+        .limit(8),
+      // Read as the member: debt proposals reach owners and admins only.
+      supabase
+        .from("action_proposals")
+        .select("id, kind, target, body, summary")
+        .eq("tenant_id", tenant.id)
+        .eq("status", "pending")
+        .order("created_at", { ascending: false })
+        .limit(5),
+    ]);
   const waiting = (
-    await Promise.all((pending ?? []).map((p) => previewProposal(supabase, tenant.id, p)))
+    await Promise.all([
+      ...(pending ?? []).map((p) => previewProposal(supabase, tenant.id, p)),
+      ...(pendingActions ?? []).map((p) => previewAction(supabase, tenant, p)),
+    ])
   ).filter((p): p is ProposalPreview => p !== null);
   // The newest version of each setting is what's live now; only older ones can be put back.
   const live = new Set<string>();

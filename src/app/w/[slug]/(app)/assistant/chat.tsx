@@ -4,7 +4,14 @@ import { useActionState, useRef, useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { FormMessage } from "@/components/ui/form-message";
 import { SubmitButton } from "@/components/ui/submit-button";
-import { applyProposal, askAssistant, dismissProposal, restoreVersion } from "./actions";
+import {
+  applyActionProposal,
+  applyProposal,
+  askAssistant,
+  dismissActionProposal,
+  dismissProposal,
+  restoreVersion,
+} from "./actions";
 import type { ProposalPreview } from "./preview";
 
 type Turn = {
@@ -43,8 +50,15 @@ export function ProposalCard({
   proposal: ProposalPreview;
   canApply: boolean;
 }) {
-  const [applied, apply] = useActionState(applyProposal.bind(null, slug, proposal.id), {});
-  const [dismissed, dismiss] = useActionState(dismissProposal.bind(null, slug, proposal.id), {});
+  const action = proposal.source === "action";
+  const [applied, apply] = useActionState(
+    (action ? applyActionProposal : applyProposal).bind(null, slug, proposal.id),
+    {},
+  );
+  const [dismissed, dismiss] = useActionState(
+    (action ? dismissActionProposal : dismissProposal).bind(null, slug, proposal.id),
+    {},
+  );
   const done = applied.done ?? dismissed.done;
   return (
     <div className="border-border bg-card flex flex-col gap-3 rounded-md border p-4">
@@ -59,7 +73,11 @@ export function ProposalCard({
       <FormMessage>{applied.error ?? dismissed.error}</FormMessage>
       {done ? (
         <FormMessage kind="success">
-          {done === "applied" ? "Applied. You can put it back from Recent changes." : "Dismissed."}
+          {done === "applied"
+            ? action
+              ? "Applied."
+              : "Applied. You can put it back from Recent changes."
+            : "Dismissed."}
         </FormMessage>
       ) : (
         <div className="flex flex-wrap items-center gap-3">

@@ -2,6 +2,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { zonedTimeToUtc } from "../bookings/slots";
 import type { ModuleKey } from "../modules";
+import { DEBT_TOOLS, MONEY_TOOLS, runMoneyTool } from "./money-tools";
 import { CONFIG_REGISTRY, configJsonSchema, findConfig, validateConfig } from "./registry";
 
 /**
@@ -14,13 +15,21 @@ import { CONFIG_REGISTRY, configJsonSchema, findConfig, validateConfig } from ".
 export type ToolContext = {
   /** The member's own client, never the service role. */
   supabase: SupabaseClient;
-  tenant: { id: string; timezone: string; currency: string };
+  tenant: { id: string; timezone: string; currency: string; slug?: string };
   can(module: ModuleKey): boolean;
   /** Owner or admin: only they may see a setting marked `ownersOnly`. */
   manager: boolean;
 };
 
-export type Proposal = { id: string; module: string; key: string; name: string; summary: string };
+/** A filed proposal: a setting (`config_proposals`) or a Money action (`action_proposals`). */
+export type Proposal = {
+  id: string;
+  source: "config" | "action";
+  module: string;
+  key: string;
+  name: string;
+  summary: string;
+};
 
 export type ToolOutcome = { content: string; isError?: boolean; proposal?: Proposal };
 
@@ -100,6 +109,14 @@ export const TOOLS: Anthropic.Tool[] = [
   },
 ];
 
+/**
+ * The tools this person's assistant is offered: the debt tools only for
+ * owners and admins (for anyone else they don't exist).
+ */
+export function toolsFor(ctx: Pick<ToolContext, "manager">): Anthropic.Tool[] {
+  return [...TOOLS, ...MONEY_TOOLS, ...(ctx.manager ? DEBT_TOOLS : [])];
+}
+
 const json = (value: unknown) => JSON.stringify(value);
 const fail = (message: string): ToolOutcome => ({ content: message, isError: true });
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -119,6 +136,8 @@ export async function runTool(
   ctx: ToolContext,
 ): Promise<ToolOutcome> {
   const args = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+  const money = await runMoneyTool(name, args, ctx);
+  if (money) return money;
 
   switch (name) {
     case "list_configs": {
@@ -206,6 +225,7 @@ export async function runTool(
           "Proposal filed. Nothing has changed yet: the person now sees a preview and decides whether to apply it. Tell them briefly what you proposed.",
         proposal: {
           id: data,
+          source: "config",
           module: entry.module,
           key: entry.key,
           name: entry.name,

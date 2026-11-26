@@ -3,6 +3,8 @@ import type { createClient } from "@/lib/supabase/server";
 
 export type ProposalPreview = {
   id: string;
+  /** A setting (`config_proposals`) or a Money action (`action_proposals`). */
+  source: "config" | "action";
   name: string;
   summary: string;
   before: string[];
@@ -28,6 +30,7 @@ export async function previewProposal(
     .maybeSingle();
   return {
     id: proposal.id,
+    source: "config",
     name: entry.name,
     summary: proposal.summary,
     before: describeConfig(entry, data?.body),

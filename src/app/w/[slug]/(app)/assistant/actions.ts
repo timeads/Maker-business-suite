@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { AI_EXHAUSTED, getAiUsage, usageState, type AiUsage } from "@/lib/ai/usage";
+import { applyAction, previewAction } from "@/lib/assistant/action-proposals";
 import { runAssistant, type ChatTurn } from "@/lib/assistant/run";
 import { requireUser } from "@/lib/auth";
 import { localDay } from "@/lib/bookings/slots";
@@ -89,6 +90,17 @@ export async function askAssistant(
     }
     const proposals: ProposalPreview[] = [];
     for (const filed of reply.proposals) {
+      if (filed.source === "action") {
+        const { data: row } = await ctx.supabase
+          .from("action_proposals")
+          .select("id, kind, target, body, summary")
+          .eq("id", filed.id)
+          .eq("tenant_id", ctx.tenant.id)
+          .maybeSingle();
+        const preview = row ? await previewAction(ctx.supabase, ctx.tenant, row) : null;
+        if (preview) proposals.push(preview);
+        continue;
+      }
       const { data } = await ctx.supabase
         .from("config_proposals")
         .select("id, module, key, body, summary")
@@ -164,4 +176,52 @@ export async function restoreVersion(
   if (error) return { error: "That couldn't be put back. Please try again." };
   revalidatePath(`/w/${slug}`, "layout");
   return { done: "restored" };
+}
+
+/**
+ * Applies one of the assistant's Money proposals that isn't a setting: taken
+ * once (`claim_action_proposal`), then done through the same checked
+ * function the page uses, as this owner or admin. If that refuses, the
+ * proposal is put back to wait.
+ */
+export async function applyActionProposal(
+  slug: string,
+  proposalId: string,
+  _prev: DecisionState,
+  _formData: FormData,
+): Promise<DecisionState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  if (!canManage(ctx.role)) return { error: "Only owners and admins can apply changes." };
+  const { data, error } = await ctx.supabase.rpc("claim_action_proposal", { p_id: proposalId });
+  const row = (
+    (data ?? []) as { tenant_id: string; kind: string; target: string; body: unknown }[]
+  )[0];
+  if (error || !row || row.tenant_id !== ctx.tenant.id) {
+    return {
+      error: error?.message.includes("already_decided")
+        ? "This suggestion was already applied or dismissed."
+        : "That didn't apply. Please try again.",
+    };
+  }
+  const done = await applyAction(ctx.supabase, ctx.tenant.id, row);
+  if (done.error) {
+    await ctx.supabase.rpc("reopen_action_proposal", { p_id: proposalId });
+    return { error: done.error };
+  }
+  revalidatePath(`/w/${slug}`, "layout");
+  return { done: "applied" };
+}
+
+export async function dismissActionProposal(
+  slug: string,
+  proposalId: string,
+  _prev: DecisionState,
+  _formData: FormData,
+): Promise<DecisionState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  await ctx.supabase.rpc("dismiss_action_proposal", { p_id: proposalId });
+  revalidatePath(`/w/${slug}/assistant`);
+  return { done: "dismissed" };
 }
