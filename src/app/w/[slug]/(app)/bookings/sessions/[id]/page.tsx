@@ -11,6 +11,7 @@ import { loadReturning } from "@/lib/bookings/runsheet-data";
 import { limitsToFit, loadSeatFigures, overShared, sharedWords } from "@/lib/bookings/seats";
 import { formatWhen, isUpcoming, localClock } from "@/lib/bookings/slots";
 import { formatMoney } from "@/lib/dashboard/format";
+import { LISTING_COLUMNS, linkState, type ListingRow } from "@/lib/eventbrite/events";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
 import { DeleteDateForm, MoveDateForm, RaiseToFitForm } from "../../date-forms";
@@ -25,6 +26,7 @@ import {
   type RosterPerson,
 } from "../../roster";
 import { SharedLimitForms, ShareSeatsForm, type SharedDate } from "../../shared-seats";
+import { RetryLinkForm } from "../../eventbrite-forms";
 import { AddShopOrderForm } from "../../shop-orders";
 
 export const metadata: Metadata = { title: "Who's coming" };
@@ -44,10 +46,11 @@ type BookingRow = {
   attendance: "attended" | "no_show" | null;
   notes: string;
   tags: string[];
-  source: "online" | "manual";
+  source: "online" | "manual" | "eventbrite";
   email_opt_in: boolean;
   shop_order_id: string | null;
   shop_order_name: string | null;
+  eventbrite_order_id: string | null;
 };
 
 const MAIL_WORDS: Record<string, string> = {
@@ -72,13 +75,18 @@ export default async function SessionPage({
   const { data: session } = await supabase
     .from("sessions")
     .select(
-      "id, starts_at, ends_at, capacity, cancelled_at, bookings_closed, private, notes, service_id, seat_group_id, services(name, kind, location)",
+      "id, starts_at, ends_at, capacity, cancelled_at, bookings_closed, private, notes, service_id, seat_group_id, services(name, kind, location, eventbrite_on)",
     )
     .eq("id", id)
     .eq("tenant_id", tenant.id)
     .maybeSingle();
   if (!session) notFound();
-  const service = session.services as unknown as { name: string; kind: string; location: string };
+  const service = session.services as unknown as {
+    name: string;
+    kind: string;
+    location: string;
+    eventbrite_on: boolean;
+  };
   const [
     { data: bookingRows },
     { data: waiting },
@@ -88,11 +96,12 @@ export default async function SessionPage({
     { data: mailRows },
     { data: sameTime },
     { data: shop },
+    { data: eventbriteRow },
   ] = await Promise.all([
     supabase
       .from("bookings")
       .select(
-        "id, customer_name, customer_email, customer_phone, seats, status, oversold, answers, confirmed_at, amount_cents, currency, attendance, notes, tags, source, email_opt_in, shop_order_id, shop_order_name",
+        "id, customer_name, customer_email, customer_phone, seats, status, oversold, answers, confirmed_at, amount_cents, currency, attendance, notes, tags, source, email_opt_in, shop_order_id, shop_order_name, eventbrite_order_id",
       )
       .eq("session_id", id)
       .order("created_at"),
@@ -147,6 +156,8 @@ export default async function SessionPage({
       .eq("tenant_id", tenant.id)
       .eq("provider", "shopify")
       .maybeSingle(),
+    // Where this date is sold on Eventbrite too, and how its places stand there.
+    supabase.from("eventbrite_listings").select(LISTING_COLUMNS).eq("session_id", id).maybeSingle(),
   ]);
   const overlapping = (
     (sameTime ?? []) as unknown as {
@@ -187,6 +198,9 @@ export default async function SessionPage({
     new Date(Date.parse(session.starts_at) - 24 * 3600 * 1000).toISOString(),
   );
 
+  const eventbrite = (eventbriteRow ?? null) as ListingRow | null;
+  const eventbriteState = eventbrite ? linkState(eventbrite) : null;
+
   const mailTrouble = new Map<string, string[]>();
   for (const row of (mailRows ?? []) as { booking_id: string; kind: string; status: string }[]) {
     const what = MAIL_WORDS[row.kind] ?? "Email";
@@ -223,6 +237,7 @@ export default async function SessionPage({
     notes: b.notes,
     tags: b.tags ?? [],
     manual: b.source === "manual",
+    eventbrite: b.source === "eventbrite" ? (b.eventbrite_order_id ?? "") || "?" : null,
     oversold: b.oversold,
     emails: b.email_opt_in,
     paid: b.amount_cents > 0 ? formatMoney(b.amount_cents / 100, b.currency) : null,
@@ -304,6 +319,40 @@ export default async function SessionPage({
           )}
         </CardContent>
       </Card>
+
+      {service.kind === "workshop" &&
+        (eventbriteRow || service.eventbrite_on) &&
+        entitlements.can("eventbrite") && (
+          <Card className="print:hidden">
+            <CardHeader>
+              <CardTitle>Eventbrite</CardTitle>
+              <CardDescription>
+                {eventbrite
+                  ? `Also sold as “${eventbrite.event_name || `event ${eventbrite.event_id}`}”. Eventbrite can sell only the places still free here. Changing this date's day or time here doesn't change the event there.`
+                  : "This workshop is sold on Eventbrite too, but this date isn't linked to an event yet."}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-2 text-sm">
+              {eventbriteState && (
+                <p className="flex flex-wrap items-center gap-2">
+                  <Badge tone={eventbriteState.tone}>{eventbriteState.label}</Badge>
+                  {eventbrite?.status === "done" && eventbrite.eb_total !== null && (
+                    <span className="text-muted-foreground">
+                      {eventbrite.eb_sold ?? 0} sold there, {eventbrite.eb_total} for sale in all
+                    </span>
+                  )}
+                </p>
+              )}
+              {eventbriteState?.detail && <p className="text-brick">{eventbriteState.detail}</p>}
+              {manager && entitlements.canWrite && eventbriteState?.retry && eventbrite && (
+                <RetryLinkForm slug={tenant.slug} listingId={eventbrite.id} />
+              )}
+              <Link href={`${base}/eventbrite`} className="w-fit underline">
+                {manager ? "Link or change the event" : "See every date on Eventbrite"}
+              </Link>
+            </CardContent>
+          </Card>
+        )}
 
       {(waiting ?? []).length > 0 && (
         <Card className="print:hidden">

@@ -32,6 +32,25 @@ export function pickTicketClass(event: EventbriteEvent, wanted: string | null): 
   return event.ticketClasses[0]?.id ?? null;
 }
 
+/** A date's link as members read it (name the columns: see CLAUDE.md, Connections). */
+export type ListingRow = {
+  id: string;
+  session_id: string;
+  event_id: string;
+  ticket_class_id: string | null;
+  event_name: string;
+  status: string;
+  detail: string;
+  checked_at: string | null;
+  eb_total: number | null;
+  eb_sold: number | null;
+  eb_hidden: boolean | null;
+  seats_left: number | null;
+};
+
+export const LISTING_COLUMNS =
+  "id, session_id, event_id, ticket_class_id, event_name, status, detail, checked_at, eb_total, eb_sold, eb_hidden, seats_left";
+
 /** How a link stands, in the words the date's page shows. */
 export type LinkState = {
   tone: "good" | "waiting" | "bad" | "closed";

@@ -156,6 +156,14 @@ function bookingsMenu(attention: Attention, viewer: NavViewer): NavGroup[] {
     place("bookings.emails", "Messages sent", "bookings/emails", {
       keywords: ["message log", "reminders", "failed", "thank-you"],
     }),
+    // Dates sold on Eventbrite too, and how their places stand there.
+    ...(viewer.can("eventbrite")
+      ? [
+          place("bookings.eventbrite", "Eventbrite", "bookings/eventbrite", {
+            keywords: ["eventbrite", "tickets", "sold out", "link event"],
+          }),
+        ]
+      : []),
   ];
   // Shop orders that paid for a workshop with no date: a place only while
   // some are waiting (the page itself is always reachable from a roster).

@@ -52,6 +52,8 @@ export type RosterPerson = {
   notes: string;
   tags: string[];
   manual: boolean;
+  /** Came in as an Eventbrite order, with the order's number. */
+  eventbrite?: string | null;
   oversold: boolean;
   emails: boolean;
   paid: string | null;
@@ -285,6 +287,7 @@ export function Roster({
                 {p.seats > 1 && <Badge tone="open">{p.seats} places</Badge>}
                 {p.oversold && <Badge tone="bad">Over the limit</Badge>}
                 {p.manual && <Badge>Added by you</Badge>}
+                {p.eventbrite && <Badge tone="open">From Eventbrite</Badge>}
                 {p.attendance === "attended" && (
                   <Badge tone="good" className="hidden print:inline-flex">
                     Here
@@ -314,6 +317,7 @@ export function Roster({
                   </>
                 )}
                 {p.paid && ` · paid ${p.paid}`}
+                {p.eventbrite && ` · Eventbrite order ${p.eventbrite}`}
                 {p.order && (
                   <>
                     {" · "}

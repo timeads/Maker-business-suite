@@ -93,6 +93,7 @@ export default async function AllBookingsPage({
   if (filters.source === "shop") query = query.not("shop_order_id", "is", null);
   if (filters.source === "online") query = query.eq("source", "online").is("shop_order_id", null);
   if (filters.source === "manual") query = query.eq("source", "manual");
+  if (filters.source === "eventbrite") query = query.eq("source", "eventbrite");
   const search = searchFilter(filters.q);
   if (search) query = query.or(search);
   const first = (filters.page - 1) * PAGE_SIZE;

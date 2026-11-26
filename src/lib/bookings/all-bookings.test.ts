@@ -69,5 +69,6 @@ describe("the all-bookings list", () => {
     expect(sourceOf({ source: "online", shop_order_id: "123" })).toBe("shop");
     expect(sourceOf({ source: "online", shop_order_id: null })).toBe("online");
     expect(sourceOf({ source: "manual", shop_order_id: null })).toBe("manual");
+    expect(sourceOf({ source: "eventbrite", shop_order_id: null })).toBe("eventbrite");
   });
 });

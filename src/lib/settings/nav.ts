@@ -265,6 +265,21 @@ const TOOLS: Def[] = [
         ],
       },
       {
+        id: "bookings.eventbrite",
+        name: "Eventbrite",
+        path: "bookings/eventbrite",
+        show: (viewer) => viewer.can("eventbrite"),
+        keywords: [
+          "eventbrite",
+          "tickets",
+          "private token",
+          "order updates",
+          "webhook",
+          "sold out",
+          "second place to sell",
+        ],
+      },
+      {
         id: "bookings.shop-page",
         name: "Shop product page",
         path: "bookings/shop-page",

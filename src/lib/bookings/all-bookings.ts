@@ -21,10 +21,11 @@ export const WHEN_NAMES: Record<When, string> = {
   any: "Any time",
 };
 
-export const SOURCES = ["shop", "online", "manual"] as const;
+export const SOURCES = ["shop", "eventbrite", "online", "manual"] as const;
 export type Source = (typeof SOURCES)[number];
 export const SOURCE_NAMES: Record<Source, string> = {
   shop: "From your shop",
+  eventbrite: "From Eventbrite",
   online: "Booked online",
   manual: "Added by you",
 };
@@ -93,9 +94,10 @@ export function bookingsHref(
   return query ? `${base}?${query}` : base;
 }
 
-/** Where a booking came from: the shop's order, our own pages, or a person. */
+/** Where a booking came from: the shop's order, Eventbrite, our own pages, or a person. */
 export function sourceOf(row: { source: string; shop_order_id: string | null }): Source {
   if (row.shop_order_id) return "shop";
+  if (row.source === "eventbrite") return "eventbrite";
   return row.source === "manual" ? "manual" : "online";
 }
 
