@@ -56,6 +56,21 @@ describe("resolveEntitlements", () => {
     expect(studio.limit("ai_credits")).toBeGreaterThan(growth.limit("ai_credits"));
   });
 
+  it("keeps several brands and accounts per network on every plan, and always one", () => {
+    for (const plan of ["starter", "growth", "studio"] as const) {
+      const e = resolveEntitlements(sub({ plan }));
+      expect(e.limit("brands")).toBeGreaterThanOrEqual(5);
+      expect(e.limit("social_accounts")).toBeGreaterThanOrEqual(5);
+    }
+    // The database's own ceilings (50) sit above every plan's limit.
+    expect(resolveEntitlements(sub({ plan: "studio" })).limit("brands")).toBeLessThanOrEqual(50);
+    expect(
+      resolveEntitlements(sub({ plan: "studio" })).limit("social_accounts"),
+    ).toBeLessThanOrEqual(50);
+    expect(resolveEntitlements(null).limit("brands")).toBe(1);
+    expect(resolveEntitlements(null).limit("social_accounts")).toBe(1);
+  });
+
   it("opens the Michaels connector wherever Stock is open, and nowhere else", () => {
     expect(resolveEntitlements(null).can("michaels")).toBe(false);
     expect(resolveEntitlements(sub({ plan: "starter" })).can("michaels")).toBe(false);
