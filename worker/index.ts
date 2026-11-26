@@ -70,6 +70,7 @@ import {
   sendQueuedSocial,
 } from "../src/lib/helpdesk/social/worker";
 import { postAlert } from "../src/lib/messages/alerts";
+import { nudgeMoneySetup } from "../src/lib/dashboard/setup-nudge";
 import { runClaimedLook, type ClaimedLook } from "../src/lib/michaels/worker";
 import { moduleOpen } from "../src/lib/module-access";
 import { trackWithUps } from "../src/lib/shipping/label-access";
@@ -248,6 +249,10 @@ async function drainSyncJobs(): Promise<number> {
   for (const job of jobs) {
     const outcome = await runSyncJob(job, deps);
     console.log(`sync job ${job.id} (${job.provider} ${job.topic ?? job.type}): ${outcome}`);
+    // The books read for the first time: point at Money → Set up, once.
+    if (job.provider === "quickbooks" && outcome === "succeeded") {
+      await nudgeMoneySetup(getAdminClient(), job.tenant_id);
+    }
   }
   return jobs.length;
 }
