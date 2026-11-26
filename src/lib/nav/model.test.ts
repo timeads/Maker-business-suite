@@ -228,6 +228,7 @@ describe("buildNav: each tool's menu", () => {
     expect(waiting.menu[0].items[1]).toMatchObject({ to: "bookings/needs-date", count: 2 });
     expect(labels(tool(tools, "social"))).toEqual([
       "Calendar",
+      "Review",
       "Assets",
       "Emails",
       "Projects",
@@ -340,6 +341,13 @@ describe("activeIn", () => {
     expect(lit("shipping", "shipping/orders/abc").item).toBe("shipping.to-ship");
     expect(lit("bookings", "bookings/sessions/abc").item).toBe("bookings.coming-up");
     expect(lit("social", "social/new").item).toBe("social.calendar");
+  });
+
+  it("counts the social posts waiting for review on the Review row", () => {
+    const social = tool(buildNav(viewer(), { socialReview: 4 }), "social");
+    const row = social.menu[0].items.find((item) => item.id === "social.review")!;
+    expect(row).toMatchObject({ to: "social/review", count: 4 });
+    expect(tool(buildNav(viewer()), "social").menu[0].items[1].count).toBeUndefined();
   });
 
   it("lets the longest address win, with the row it sits under", () => {

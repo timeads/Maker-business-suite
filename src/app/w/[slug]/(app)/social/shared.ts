@@ -4,6 +4,8 @@ import { BRAND_MODULE, KIT_KEY, parseBrandKit, toDesignKit } from "@/lib/brand/k
 import type { BrandKit } from "@/lib/design/brands";
 import { matchPhotos } from "@/lib/social/photo-match";
 import { PLAN_KEY, SOCIAL_MODULE, parsePlan } from "@/lib/social/plan";
+import { REVIEW_KEY, canApprove, canSchedule, parseReview } from "@/lib/social/review";
+import type { Role } from "@/lib/tenants";
 import { publicAssetUrl } from "@/lib/social/worker";
 import type { createClient } from "@/lib/supabase/server";
 
@@ -59,6 +61,30 @@ export function defaultSlot(now: Date, timeZone: string) {
     time: "10:00",
   };
 }
+
+/** The workspace's review setting and what this person may do under it. */
+export async function reviewFor(supabase: Supabase, tenantId: string, role: Role) {
+  const { data } = await supabase
+    .from("configs")
+    .select("body")
+    .eq("tenant_id", tenantId)
+    .eq("module", SOCIAL_MODULE)
+    .eq("key", REVIEW_KEY)
+    .maybeSingle();
+  const settings = parseReview(data?.body);
+  return {
+    settings,
+    canApprove: canApprove(role, settings),
+    canSchedule: canSchedule(role, settings),
+    required: settings.require_approval,
+  };
+}
+
+/** Words for where a draft is in review. */
+export const REVIEW_LABELS: Record<string, string> = {
+  waiting: "Waiting for review",
+  sent_back: "Sent back",
+};
 
 export const STATUS_LABELS: Record<string, string> = {
   draft: "Draft",

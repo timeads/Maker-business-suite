@@ -33,6 +33,17 @@ export type LibraryPhoto = {
   designed?: boolean;
 };
 
+/** Where the post is in review, and what this person may do about it. */
+export type ComposerReview = {
+  /** May schedule straight away (approval isn't required, or they approve). */
+  canSchedule: boolean;
+  /** May approve: their Schedule press is the approval. */
+  canApprove: boolean;
+  /** Whether this workspace requires approval at all. */
+  required: boolean;
+  state: "waiting" | "sent_back" | null;
+};
+
 export type ComposerPost = {
   id: string;
   caption: string;
@@ -59,6 +70,7 @@ export function Composer({
   topics,
   kit,
   photoNotes = {},
+  review = { canSchedule: true, canApprove: false, required: false, state: null },
 }: {
   slug: string;
   post?: ComposerPost;
@@ -76,6 +88,7 @@ export function Composer({
   kit: BrandKit | null;
   /** Why a photo already on a drafted post was picked, by photo. */
   photoNotes?: Record<string, string>;
+  review?: ComposerReview;
 }) {
   const [state, save] = useActionState(savePost.bind(null, slug, post?.id ?? null), {});
   const [caption, setCaption] = useState(post?.caption ?? "");
@@ -571,18 +584,45 @@ export function Composer({
           </label>
         </div>
 
+        {review.state === "waiting" && <input type="hidden" name="after" value="review" />}
         <FormMessage>{state.error}</FormMessage>
         <div className="flex flex-wrap gap-3">
-          <SubmitButton name="intent" value="schedule" pendingText="Saving…" disabled={!connected}>
-            Schedule
-          </SubmitButton>
-          <SubmitButton name="intent" value="now" variant="outline" disabled={!connected}>
-            Post now
-          </SubmitButton>
+          {review.canSchedule ? (
+            <>
+              <SubmitButton
+                name="intent"
+                value="schedule"
+                pendingText="Saving…"
+                disabled={!connected}
+              >
+                {review.canApprove && review.state === "waiting"
+                  ? "Approve and schedule"
+                  : "Schedule"}
+              </SubmitButton>
+              <SubmitButton name="intent" value="now" variant="outline" disabled={!connected}>
+                Post now
+              </SubmitButton>
+              {review.state !== "waiting" && !review.canApprove && (
+                <SubmitButton name="intent" value="review" variant="outline">
+                  Send for review
+                </SubmitButton>
+              )}
+            </>
+          ) : (
+            <SubmitButton name="intent" value="review" pendingText="Sending…">
+              {review.state === "waiting" ? "Save and keep it in review" : "Send for review"}
+            </SubmitButton>
+          )}
           <SubmitButton name="intent" value="draft" variant="outline">
             Save as draft
           </SubmitButton>
         </div>
+        {!review.canSchedule && (
+          <p className="text-muted-foreground text-xs">
+            This workspace approves posts before they go out. An approver will look at it, then
+            schedule it or send it back with a note.
+          </p>
+        )}
       </form>
     </>
   );

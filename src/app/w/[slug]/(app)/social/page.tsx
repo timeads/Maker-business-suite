@@ -10,7 +10,7 @@ import { canManage } from "@/lib/tenants";
 import { cn } from "@/lib/utils";
 import { AllowMetaAccess } from "../settings/helpdesk/channels/form";
 import { socialAccess } from "./gate";
-import { STATUS_LABELS, socialChannels } from "./shared";
+import { REVIEW_LABELS, STATUS_LABELS, socialChannels } from "./shared";
 
 export const metadata: Metadata = { title: "Social" };
 
@@ -22,12 +22,14 @@ type PostRow = {
   scheduled_for: string | null;
   planned_for: string | null;
   updated_at: string;
+  review: string | null;
 };
 
 const SAVED: Record<string, string> = {
   schedule: "Scheduled. It'll go out on time.",
   now: "On its way. It should appear within a minute.",
   draft: "Draft saved.",
+  review: "Sent for review. An approver will look at it.",
   deleted: "Post deleted.",
 };
 
@@ -82,7 +84,7 @@ export default async function SocialPage({
     `${base}?month=${iso(new Date(Date.UTC(year, monthIndex - 1 + offset, 1))).slice(0, 7)}`;
 
   const supabase = await createClient();
-  const columns = "id, caption, channels, status, scheduled_for, planned_for, updated_at";
+  const columns = "id, caption, channels, status, scheduled_for, planned_for, updated_at, review";
   const [{ data: inMonth }, { data: drafts }, { data: failed }, channels] = await Promise.all([
     supabase
       .from("social_posts")
@@ -146,7 +148,9 @@ export default async function SocialPage({
       <span className="font-medium tabular-nums">
         {formatTime((post.scheduled_for ?? post.planned_for) as string, tenant.timezone)}
       </span>{" "}
-      {post.status !== "scheduled" && <span>· {STATUS_LABELS[post.status]} </span>}
+      {post.status !== "scheduled" && (
+        <span>· {(post.review && REVIEW_LABELS[post.review]) || STATUS_LABELS[post.status]} </span>
+      )}
       <span className="line-clamp-2">{snippet(post.caption)}</span>
     </Link>
   );
@@ -334,6 +338,9 @@ export default async function SocialPage({
                     className="hover:bg-muted -mx-2 block rounded px-2 py-2 text-sm"
                   >
                     {snippet(post.caption)}
+                    {post.review && (
+                      <span className="text-muted-foreground"> · {REVIEW_LABELS[post.review]}</span>
+                    )}
                   </Link>
                 </li>
               ))}

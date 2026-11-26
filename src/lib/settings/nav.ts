@@ -444,6 +444,20 @@ const TOOLS: Def[] = [
     path: "social",
     module: "social",
     keywords: ["content plan", "topics", "link page", "saved sections", "templates", "posts"],
+    children: [
+      {
+        id: "social.where",
+        name: "Where things live",
+        path: "social",
+        keywords: ["content plan", "topics", "link page", "saved sections", "templates"],
+      },
+      {
+        id: "social.review",
+        name: "Post review",
+        path: "social/review",
+        keywords: ["approve", "approval", "review", "send back", "who can schedule", "sign off"],
+      },
+    ],
   },
   {
     id: "money",

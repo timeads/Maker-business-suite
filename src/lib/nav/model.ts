@@ -397,6 +397,7 @@ export function buildNav(viewer: NavViewer, attention: Attention = {}): NavTool[
           id: "social.main",
           items: [
             first("social.calendar", "Calendar", "social"),
+            place("social.review", "Review", "social/review", count(attention.socialReview)),
             place("social.assets", "Assets", "social/library"),
             place("social.emails", "Emails", "social/emails"),
             place("social.projects", "Projects", "social/projects"),

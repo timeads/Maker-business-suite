@@ -24,6 +24,11 @@ export default async function SocialSettingsPage({
           href: "social/plan",
         },
         {
+          name: "Post review",
+          about: "Whether posts are approved before they go out, and who approves them.",
+          href: "settings/social/review",
+        },
+        {
           name: "Link page",
           about: "The one page with all your links, on Social's Link page tab.",
           href: "social/links",

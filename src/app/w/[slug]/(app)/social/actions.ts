@@ -22,6 +22,7 @@ import {
   parsePlan,
   socialPlanSchema,
 } from "@/lib/social/plan";
+import { REVIEW_KEY, reviewError, reviewSettingsSchema } from "@/lib/social/review";
 import { publicAssetUrl } from "@/lib/social/worker";
 import { getAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -51,6 +52,8 @@ const SAVE_ERRORS: Record<string, string> = {
   too_many_photos: "A post can have up to 10 photos.",
   caption_too_long: "Captions can be up to 2,200 characters.",
   video_alone: "A video goes out on its own. Take the photos off, or post them separately.",
+  needs_approval:
+    "This workspace approves posts before they go out. Press “Send for review” and an approver will look at it.",
 };
 
 type Ctx = Exclude<Awaited<ReturnType<typeof context>>, { error: string }>;
@@ -172,17 +175,22 @@ export async function savePost(
     }
   }
 
-  // A draft keeps the date it's meant for, so it shows in the plan.
+  // A draft keeps the date it's meant for, so it shows in the plan. One sent for review always
+  // does: that is the time it is approved for.
   let plannedFor: string | null = null;
-  if (intent === "draft") {
+  if (intent === "draft" || intent === "review") {
     const day = String(formData.get("day") ?? "");
     const minutes = parseClock(String(formData.get("time") ?? ""));
-    if (/^\d{4}-\d{2}-\d{2}$/.test(day) && minutes !== null && formData.get("keep_date") === "on") {
+    if (
+      /^\d{4}-\d{2}-\d{2}$/.test(day) &&
+      minutes !== null &&
+      (intent === "review" || formData.get("keep_date") === "on")
+    ) {
       plannedFor = zonedTimeToUtc(day, minutes, ctx.tenant.timezone)?.toISOString() ?? null;
     }
   }
   const project = String(formData.get("project") ?? "");
-  const { error } = await ctx.supabase.rpc("save_social_post_full", {
+  const { data: savedId, error } = await ctx.supabase.rpc("save_social_post_full", {
     p_tenant_id: ctx.tenant.id,
     p_post_id: postId,
     p_caption: caption,
@@ -206,8 +214,114 @@ export async function savePost(
     const known = Object.keys(SAVE_ERRORS).find((key) => error.message.includes(key));
     return { error: known ? SAVE_ERRORS[known] : "That didn't save. Please try again." };
   }
+  if (intent === "review") {
+    const { error: submitError } = await ctx.supabase.rpc("submit_social_post", {
+      p_tenant_id: ctx.tenant.id,
+      p_post_id: savedId as string,
+    });
+    if (submitError) {
+      return { error: "It saved as a draft, but didn't go for review. Please try again." };
+    }
+  }
   revalidatePath(`/w/${slug}/social`, "layout");
+  if (formData.get("after") === "review" && intent !== "draft") {
+    redirect(`/w/${slug}/social/review?saved=${intent === "review" ? "review" : "approved"}`);
+  }
   redirect(`/w/${slug}/social?saved=${intent}`);
+}
+
+// ---------------------------------------------------------------------------
+// Review: send back with a note, approve several, the setting
+// ---------------------------------------------------------------------------
+
+/** An approver sends a post back with a note saying what to change. */
+export async function sendBackPost(
+  slug: string,
+  postId: string,
+  _prev: SocialState,
+  formData: FormData,
+): Promise<SocialState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const note = String(formData.get("note") ?? "")
+    .trim()
+    .slice(0, 1000);
+  const { error } = await ctx.supabase.rpc("send_back_social_post", {
+    p_tenant_id: ctx.tenant.id,
+    p_post_id: postId,
+    p_note: note,
+  });
+  if (error) return { error: reviewError(error.message) ?? OOPS };
+  done(slug);
+  redirect(`/w/${slug}/social/review?saved=sent_back`);
+}
+
+export type ApproveResult = {
+  error?: string;
+  approved?: number;
+  skipped?: { id: string; reason: string }[];
+};
+
+/**
+ * "Approve all": the ticked posts and/or every post waiting for review in a month, in one
+ * checked database function. Each is approved for the time it was pencilled in for; one that
+ * can't go out is skipped with the reason, and the rest still go.
+ */
+export async function approvePosts(
+  slug: string,
+  ids: string[],
+  month: string | null,
+): Promise<ApproveResult> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const posts = (Array.isArray(ids) ? ids : []).filter((id) => UUID.test(id)).slice(0, 200);
+  const wantedMonth = month && /^\d{4}-(0[1-9]|1[0-2])$/.test(month) ? month : null;
+  if (posts.length === 0 && !wantedMonth) return { error: "Tick some posts first." };
+  const { data, error } = await ctx.supabase.rpc("approve_social_posts", {
+    p_tenant_id: ctx.tenant.id,
+    p_post_ids: posts,
+    p_month: wantedMonth,
+  });
+  if (error) return { error: reviewError(error.message) ?? OOPS };
+  const result = (data ?? {}) as {
+    approved?: string[];
+    skipped?: { id: string; reason: string }[];
+  };
+  done(slug);
+  return {
+    approved: (result.approved ?? []).length,
+    skipped: (result.skipped ?? []).map((skip) => ({
+      id: skip.id,
+      reason: reviewError(skip.reason) ?? "It couldn't be approved. Open it to see why.",
+    })),
+  };
+}
+
+/** Settings → Social & emails → Post review. Owners and admins only, like every setting. */
+export async function saveReviewSettings(
+  slug: string,
+  _prev: SocialState,
+  formData: FormData,
+): Promise<SocialState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  if (!canManage(ctx.role)) return { error: "Only owners and admins can change this." };
+  const parsed = reviewSettingsSchema.safeParse({
+    version: 1,
+    require_approval: formData.get("require_approval") === "on",
+    approvers: [
+      ...new Set(
+        ["owner", ...formData.getAll("approvers").map(String)].filter(
+          (role) => role === "owner" || role === "admin" || role === "member",
+        ),
+      ),
+    ],
+  });
+  if (!parsed.success) return { error: OOPS };
+  if (!(await saveSocialConfig(ctx, REVIEW_KEY, parsed.data))) return { error: OOPS };
+  done(slug);
+  revalidatePath(`/w/${slug}/settings`, "layout");
+  return { message: "Saved." };
 }
 
 export async function deletePost(

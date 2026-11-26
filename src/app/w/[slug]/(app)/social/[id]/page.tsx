@@ -5,15 +5,19 @@ import { FormMessage } from "@/components/ui/form-message";
 import { PageHeader } from "@/components/ui/page-header";
 import { formatWhen } from "@/lib/bookings/slots";
 import { createClient } from "@/lib/supabase/server";
+import { Badge } from "@/components/ui/badge";
 import { Composer, DeletePostForm } from "../composer";
 import { socialAccess } from "../gate";
+import { SendBackForm } from "../review-forms";
 import {
+  REVIEW_LABELS,
   STATUS_LABELS,
   composerChoices,
   defaultSlot,
   loadDesignKit,
   localFields,
   photoReasons,
+  reviewFor,
   socialChannels,
 } from "../shared";
 
@@ -29,22 +33,24 @@ export default async function PostPage({
   const { slug, id } = await params;
   const access = await socialAccess(slug, `/w/${slug}/social/${id}`);
   if (!access.ok) return access.upsell;
-  const { tenant, entitlements } = access;
+  const { tenant, entitlements, role } = access;
   if (!/^[0-9a-f-]{36}$/i.test(id)) notFound();
 
   const supabase = await createClient();
-  const [{ data: post }, channels] = await Promise.all([
+  const [{ data: post }, channels, review] = await Promise.all([
     supabase
       .from("social_posts")
       .select(
-        "id, caption, captions, channels, status, scheduled_for, planned_for, published_at, results, error, asset_id, asset_ids, project_id, topic, ai_draft",
+        "id, caption, captions, channels, status, scheduled_for, planned_for, published_at, results, error, asset_id, asset_ids, project_id, topic, ai_draft, review, review_note",
       )
       .eq("id", id)
       .eq("tenant_id", tenant.id)
       .maybeSingle(),
     socialChannels(supabase, tenant.id),
+    reviewFor(supabase, tenant.id, role),
   ]);
   if (!post) notFound();
+  const reviewState = (post.review as "waiting" | "sent_back" | null) ?? null;
 
   const photoIds = (
     (post.asset_ids as string[] | null)?.length
@@ -103,6 +109,38 @@ export default async function PostPage({
         </FormMessage>
       )}
 
+      {reviewState && (
+        <Card>
+          <CardHeader>
+            <div className="flex flex-wrap items-center gap-2">
+              <CardTitle>Review</CardTitle>
+              <Badge tone={reviewState === "waiting" ? "waiting" : "bad"}>
+                {REVIEW_LABELS[reviewState]}
+              </Badge>
+            </div>
+            <CardDescription>
+              {reviewState === "waiting"
+                ? review.canApprove
+                  ? "Read it through, change anything you like, then approve it below, or send it back with a note."
+                  : "An approver will look at it, then schedule it or send it back with a note."
+                : "It came back with a note. Change what it asks for, then send it for review again."}
+            </CardDescription>
+          </CardHeader>
+          {(post.review_note || (reviewState === "waiting" && review.canApprove && editable)) && (
+            <CardContent className="flex flex-col gap-4">
+              {post.review_note && (
+                <p className="bg-note font-read rounded-sm px-3 py-2 text-sm whitespace-pre-line">
+                  {post.review_note as string}
+                </p>
+              )}
+              {reviewState === "waiting" && review.canApprove && editable && (
+                <SendBackForm slug={tenant.slug} postId={post.id as string} />
+              )}
+            </CardContent>
+          )}
+        </Card>
+      )}
+
       {editable ? (
         <>
           <Card>
@@ -131,6 +169,7 @@ export default async function PostPage({
                 topics={choices.topics}
                 kit={kit}
                 photoNotes={photoNotes}
+                review={{ ...review, state: reviewState }}
               />
             </CardContent>
           </Card>
