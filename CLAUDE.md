@@ -567,6 +567,28 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   doesn't fit (`private.social_photo_fits`, kept in step by a test). No image
   library on the server: don't add one. Keep `tests/db/social-review.test.ts`,
   `social-slides.test.ts` and `social-sizes.test.ts` passing.
+  The monthly run (`lib/social/month.ts` pure, ported from the Content Hub
+  with its tests; `month-run.ts` on the worker): each brand's review day is
+  in the plan config (`review_days`, the main brand's names no brand; a
+  topic's `from` says "projects" or "claude"; a slot can name its brand).
+  OFF by default; `auto` is switched on by owners and admins.
+  `claim_social_month_runs` queues once per workspace + brand + month (twin
+  of `monthDue`: `private.social_month_due`, held equal by a test), a run
+  never finished is marked failed and not re-queued, and "Run it now" is
+  `request_social_month_run` through the same unique index. Project times
+  get a carousel of up to six photos no post has used (`planProjects`), the
+  others a post from the topic; Claude writes with structured output and no
+  tools (`month-writer.ts`), its answer only data for `tidyCaption`, and
+  `file_social_month_draft` is the ONLY writer: always a draft, waiting for
+  review where approval is required. It stops at the AI allowance, posts a
+  heads-up and the Review row counts its drafts. Learning from edits:
+  `social_post_edits` (before = `ai_draft`, after = the caption, per
+  caption) is written ONLY by a trigger on `social_posts`; style notes are a
+  config per brand (`social` / `style_notes`, `style_notes-<brand id>`,
+  Settings → Social & emails → Style notes), "Suggest notes from my edits"
+  only fills the editor, and every caption prompt gets the notes and recent
+  edits as data (`learningBlock`). `send-guard.test.ts` keeps models off the
+  posting path; keep it and `tests/db/social-month-run.test.ts` passing.
 - Stock: `stock_items` mirror the shop's variants and are written only by
   the sync (`upsert_stock_items`), which leaves the workspace's own planning
   columns alone. Every reorder figure is worked out on read by the pure
