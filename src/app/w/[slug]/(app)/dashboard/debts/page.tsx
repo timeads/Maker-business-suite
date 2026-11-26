@@ -2,22 +2,18 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { StatTile } from "@/components/charts/stat-tile";
-import { TimeChart } from "@/components/charts/time-chart";
+import { LineMultiples } from "@/components/charts/line-multiples";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { requireUser } from "@/lib/auth";
 import { loadDebtView } from "@/lib/dashboard/debt/data";
-import {
-  STRATEGIES,
-  STRATEGY_META,
-  addMonth,
-  strategiesConverge,
-} from "@/lib/dashboard/debt/engine";
+import { STRATEGIES, STRATEGY_META, strategiesConverge } from "@/lib/dashboard/debt/engine";
 import { bankKey, scheduleLength } from "@/lib/dashboard/debt/figures";
 import { bpWords } from "@/lib/dashboard/debt/settings";
-import { formatMoney, formatPercent, prepareTimeChart } from "@/lib/dashboard/format";
+import { formatMoney, formatPercent, prepareSharedTimeCharts } from "@/lib/dashboard/format";
+import { payoffProjection } from "@/lib/dashboard/debt/projection";
 import { periodLabel } from "@/lib/dashboard/range";
 import { getEntitlements } from "@/lib/entitlements";
 import { createClient } from "@/lib/supabase/server";
@@ -113,29 +109,28 @@ export default async function PayoffPlanPage({
   const thisMonth = result.schedule[0];
   const atYear = result.plan[11]?.emergencyBalance ?? null;
   const shown = result.plan.slice(0, scheduleLength(result.plan, all));
-  const chartMonths = result.plan.slice(0, 36);
-  const point = (month: string, cents: number) => ({
-    key: `${month}-01`,
-    label: periodLabel(`${month}-01`, "month"),
-    longLabel: periodLabel(`${month}-01`, "month", true),
-    value: cents / 100,
+  // The projection, a small chart per debt on one scale and one time axis
+  // (the house's one series colour), its words worked out here on the server.
+  const projection = payoffProjection({
+    plan: result.plan,
+    debts: view.input.debts,
+    fundTarget: emergency.target,
+    monthWords: (month) => monthWords(month, false),
+    money,
   });
-  const owedChart = prepareTimeChart(
-    [
-      point(view.current, totals.owed),
-      ...chartMonths.map((m) => point(addMonth(m.month, 1), m.total)),
-    ].slice(0, 37),
+  const shared = prepareSharedTimeCharts(
+    projection.series.map((line) =>
+      line.values.map((cents, i) => ({
+        key: `${projection.months[i]}-01`,
+        label: periodLabel(`${projection.months[i]}-01`, "month"),
+        longLabel: periodLabel(`${projection.months[i]}-01`, "month", true),
+        value: cents / 100,
+      })),
+    ),
     "money",
     tenant.currency,
   );
-  const fundChart = prepareTimeChart(
-    [
-      point(view.current, emergency.current),
-      ...chartMonths.map((m) => point(addMonth(m.month, 1), m.emergencyBalance)),
-    ].slice(0, 37),
-    "money",
-    tenant.currency,
-  );
+  const markWords = { total: "Debt-free", debt: "Paid off", fund: "Reached" } as const;
   const converge = result.poolDebts.length > 0 && strategiesConverge(result.sims);
   const fastest = Math.min(...STRATEGIES.map((s) => result.sims[s].monthsToFreedom));
   const cheapest = Math.min(...STRATEGIES.map((s) => result.sims[s].totalInterest));
@@ -265,42 +260,33 @@ export default async function PayoffPlanPage({
         </Card>
       )}
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Owed, over the next three years</CardTitle>
-            <CardDescription>Starting from what&apos;s owed today.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <TimeChart
-              points={owedChart.points}
-              ticks={owedChart.ticks}
-              variant="column"
-              valueLabel="Owed at the start of the month"
-            />
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Emergency fund, over the next three years</CardTitle>
-            <CardDescription>
-              {emergency.target > 0
-                ? view.emergencyAt
-                  ? `Reaches ${money(emergency.target)} in ${monthWords(view.emergencyAt)}.`
-                  : `Doesn't reach ${money(emergency.target)} within five years at this pace.`
-                : "Set a target in plan settings."}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <TimeChart
-              points={fundChart.points}
-              ticks={fundChart.ticks}
-              variant="column"
-              valueLabel="In the fund at the start of the month"
-            />
-          </CardContent>
-        </Card>
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Payoff projection</CardTitle>
+          <CardDescription>
+            What&apos;s owed at the end of each month, a small chart for each debt, with all of them
+            together and the emergency fund. Every chart shares one scale, so a taller bar always
+            means more. A plan that pays other debts is one debt here.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <LineMultiples
+            ticks={shared.ticks}
+            valueLabel="At the end of the month"
+            periodHeading="Month"
+            totalRow={false}
+            series={projection.series.map((line, index) => ({
+              id: line.id,
+              name: line.name,
+              total: line.words,
+              points: shared.series[index],
+              marker: line.payoff
+                ? { key: `${line.payoff}-01`, label: markWords[line.kind] }
+                : null,
+            }))}
+          />
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

@@ -24,6 +24,8 @@ type Props = {
   plotHeight?: number;
   /** Small multiples share one table beneath them instead of one each. */
   table?: boolean;
+  /** A point to mark (a payoff month), drawn as a dashed rule in the axis colour, with its words. */
+  marker?: { key: string; label: string } | null;
 };
 
 const PLOT_HEIGHT = 200;
@@ -42,6 +44,7 @@ export function TimeChart({
   valueLabel,
   plotHeight = PLOT_HEIGHT,
   table = true,
+  marker = null,
 }: Props) {
   const frame = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(640);
@@ -82,6 +85,7 @@ export function TimeChart({
     if (current.length) segments.push(current);
   }
   const lastIndex = points.reduce((last, p, i) => (p.value !== null ? i : last), -1);
+  const markAt = marker ? points.findIndex((p) => p.key === marker.key) : -1;
   const activePoint = active !== null ? points[active] : null;
 
   return (
@@ -206,6 +210,28 @@ export function TimeChart({
             stroke="var(--border)"
             strokeWidth={1}
           />
+
+          {marker && markAt >= 0 && (
+            <g aria-hidden>
+              <line
+                x1={x(markAt)}
+                x2={x(markAt)}
+                y1={TOP}
+                y2={TOP + plotHeight}
+                stroke="var(--muted-foreground)"
+                strokeWidth={1}
+                strokeDasharray="3 3"
+              />
+              <text
+                x={x(markAt) + (x(markAt) > LEFT + plotWidth - 90 ? -6 : 6)}
+                y={TOP + 10}
+                textAnchor={x(markAt) > LEFT + plotWidth - 90 ? "end" : "start"}
+                className="fill-muted-foreground text-[11px]"
+              >
+                {marker.label}
+              </text>
+            </g>
+          )}
 
           {points.map((point, index) =>
             index % labelEvery === 0 ? (
