@@ -369,7 +369,7 @@ returns table (
 language sql stable set search_path = ''
 as $$
   select max(e.account_ref),
-         (array_agg(e.account order by e.txn_date desc, e.id))[1],
+         (array_agg(e.account order by e.txn_date desc, e.read_at desc, e.id))[1],
          count(*) filter (where e.txn_date >= p_since),
          coalesce(sum(e.amount_cents) filter (where e.txn_date >= p_since), 0)::bigint,
          count(*),
