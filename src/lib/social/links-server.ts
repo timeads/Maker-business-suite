@@ -37,12 +37,18 @@ export async function getPublicLinkPage(
         .maybeSingle();
       const page = parseLinkPage((config as { body?: unknown } | null)?.body);
       if (!page.published) return null;
+      // A page for one of several brands is headed by that brand and shows its posts.
+      const { data: brandRow } = page.brand_id
+        ? await scope.select("brands", "id, name, is_default").eq("id", page.brand_id).maybeSingle()
+        : { data: null };
+      const brand = brandRow as { id: string; name: string; is_default: boolean } | null;
       let photos: string[] = [];
       if (page.show_posts) {
-        const { data: posts } = await scope
+        const recent = scope
           .select("social_posts", "asset_id")
           .eq("status", "published")
-          .not("asset_id", "is", null)
+          .not("asset_id", "is", null);
+        const { data: posts } = await (brand ? recent.eq("brand_id", brand.id) : recent)
           .order("published_at", { ascending: false })
           .limit(9);
         const ids = ((posts ?? []) as unknown as { asset_id: string }[]).map((p) => p.asset_id);
@@ -59,7 +65,11 @@ export async function getPublicLinkPage(
           photos = ids.flatMap((id) => (paths.has(id) ? [publicAssetUrl(paths.get(id)!)] : []));
         }
       }
-      return { name: tenant.name as string, page, photos };
+      return {
+        name: brand && !brand.is_default ? brand.name : (tenant.name as string),
+        page,
+        photos,
+      };
     },
     admin,
   );

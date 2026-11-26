@@ -197,6 +197,61 @@ describe("brands", () => {
   });
 });
 
+describe("an email's brand", () => {
+  let db: PGlite;
+  let owner: User;
+  let other: User;
+  let tenantA: string;
+  let tenantB: string;
+  beforeAll(async () => {
+    db = await createTestDb();
+    owner = { id: await createUser(db, "o@a.test"), email: "o@a.test" };
+    other = { id: await createUser(db, "o@b.test"), email: "o@b.test" };
+    tenantA = (
+      await as<{ id: string }>(db, owner, "select id from public.create_tenant('A', 'UTC', 'USD')")
+    )[0].id;
+    tenantB = (
+      await as<{ id: string }>(db, other, "select id from public.create_tenant('B', 'UTC', 'USD')")
+    )[0].id;
+  });
+  afterAll(() => db.close());
+
+  it("is one of the workspace's own live brands", async () => {
+    const [{ id: email }] = await as<{ id: string }>(
+      db,
+      owner,
+      `select public.save_email($1, null, '{"title":"Hello"}'::jsonb) as id`,
+      [tenantA],
+    );
+    const [{ id: second }] = await as<{ id: string }>(
+      db,
+      owner,
+      "select public.add_brand($1, 'Second', $2::jsonb) as id",
+      [tenantA, JSON.stringify(KIT)],
+    );
+    await as(db, owner, "select public.set_email_brand($1, $2, $3)", [tenantA, email, second]);
+    const [row] = await as<{ brand_id: string }>(
+      db,
+      owner,
+      "select brand_id from public.emails where id = $1",
+      [email],
+    );
+    expect(row.brand_id).toBe(second);
+    const [theirs] = await as<{ id: string }>(
+      db,
+      other,
+      "select id from public.brands where tenant_id = $1",
+      [tenantB],
+    );
+    await expect(
+      as(db, owner, "select public.set_email_brand($1, $2, $3)", [tenantA, email, theirs.id]),
+    ).rejects.toThrow(/Brand not found/);
+    await expect(
+      as(db, other, "select public.set_email_brand($1, $2, $3)", [tenantB, email, theirs.id]),
+    ).rejects.toThrow(/Email not found/);
+  });
+});
+
 describe("brands: an existing workspace, migrated in place", () => {
   const LAST_BEFORE = "20270127000100_social_sizes.sql";
   let db: PGlite;

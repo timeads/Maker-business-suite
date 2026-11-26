@@ -67,6 +67,11 @@ export const linkPageSchema = z.object({
     )
     .max(20)
     .default([]),
+  /**
+   * The brand the page speaks for: its name heads the page, and its posts'
+   * photos are the ones shown. Null: the workspace's main brand.
+   */
+  brand_id: z.string().uuid().nullable().default(null),
   /** Show the latest posted photos under the links. */
   show_posts: z.boolean().default(true),
 });

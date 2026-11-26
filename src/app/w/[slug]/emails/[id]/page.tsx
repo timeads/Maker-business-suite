@@ -3,7 +3,8 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { workspaceTemplates } from "@/lib/brand/email";
-import { BRAND_MODULE, KIT_KEY, parseBrandKit, toDesignKit } from "@/lib/brand/kit";
+import { loadBrandKit, loadBrands, pickBrand } from "@/lib/brand/brands";
+import { toDesignKit } from "@/lib/brand/kit";
 import { normalizeDoc } from "@/lib/design";
 import { getEntitlements } from "@/lib/entitlements";
 import { createClient } from "@/lib/supabase/server";
@@ -29,20 +30,14 @@ export default async function EmailBuilderPage({
   if (!/^[0-9a-f-]{36}$/i.test(id)) notFound();
 
   const supabase = await createClient();
-  const [{ data: row }, { data: kitRow }, logos] = await Promise.all([
+  const [{ data: row }, brands, logos] = await Promise.all([
     supabase
       .from("emails")
-      .select("id, doc")
+      .select("id, doc, brand_id")
       .eq("tenant_id", ctx.tenant.id)
       .eq("id", id)
       .maybeSingle(),
-    supabase
-      .from("configs")
-      .select("body")
-      .eq("tenant_id", ctx.tenant.id)
-      .eq("module", BRAND_MODULE)
-      .eq("key", KIT_KEY)
-      .maybeSingle(),
+    loadBrands(supabase, ctx.tenant.id),
     loadLogos(slug),
   ]);
   if (!row) {
@@ -55,7 +50,12 @@ export default async function EmailBuilderPage({
       </div>
     );
   }
-  const kit = parseBrandKit(kitRow?.body);
+  // Drawn in the email's own brand (the main brand's, for one from before brands).
+  const { kit } = await loadBrandKit(
+    supabase,
+    ctx.tenant.id,
+    pickBrand(brands, (row.brand_id as string | null) ?? null)?.id,
+  );
   return (
     <BuilderMount
       key={row.id as string}

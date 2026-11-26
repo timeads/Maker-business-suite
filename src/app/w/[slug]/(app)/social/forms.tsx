@@ -342,16 +342,45 @@ export function LinkPageForm({
   page,
   linksText,
   canEdit,
+  brands = [],
 }: {
   slug: string;
-  page: { published: boolean; heading: string; intro: string; show_posts: boolean };
+  page: {
+    published: boolean;
+    heading: string;
+    intro: string;
+    show_posts: boolean;
+    brand_id?: string | null;
+  };
   linksText: string;
   canEdit: boolean;
+  /** With more than one brand, the page speaks for the one picked. */
+  brands?: { id: string; name: string; main: boolean }[];
 }) {
   const [state, action] = useActionState(saveLinkPage.bind(null, slug), {});
   return (
     <form action={action} className="flex flex-col gap-4">
       <fieldset disabled={!canEdit} className="flex flex-col gap-4">
+        {brands.length > 1 && (
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="links-brand">For which brand</Label>
+            <Select
+              id="links-brand"
+              name="brand_id"
+              defaultValue={page.brand_id ?? brands.find((brand) => brand.main)?.id}
+            >
+              {brands.map((brand) => (
+                <option key={brand.id} value={brand.id}>
+                  {brand.name}
+                </option>
+              ))}
+            </Select>
+            <p className="text-muted-foreground text-xs">
+              Its name heads the page when there&apos;s no heading, and its posted photos are the
+              ones shown.
+            </p>
+          </div>
+        )}
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="links-heading">Heading</Label>
           <Input

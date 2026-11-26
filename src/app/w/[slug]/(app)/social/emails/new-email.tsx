@@ -9,13 +9,17 @@ import { createEmail, writeEmailWithClaude, type EmailState } from "../../../ema
 export function NewEmail({
   slug,
   starters,
+  brandId = null,
 }: {
   slug: string;
   starters: { id: string; name: string; about: string }[];
+  /** The brand it is drawn in; null for the main brand. */
+  brandId?: string | null;
 }) {
   const [state, action] = useActionState<EmailState, FormData>(createEmail.bind(null, slug), {});
   return (
     <form action={action} className="flex flex-col gap-3">
+      {brandId && <input type="hidden" name="brand_id" value={brandId} />}
       <fieldset className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
         <legend className="sr-only">Start from</legend>
         {starters.map((starter, index) => (
@@ -40,13 +44,20 @@ export function NewEmail({
 }
 
 /** Describe the email; Claude writes a first draft in your voice and it opens in the builder. */
-export function WriteWithClaude({ slug }: { slug: string }) {
+export function WriteWithClaude({
+  slug,
+  brandId = null,
+}: {
+  slug: string;
+  brandId?: string | null;
+}) {
   const [state, action] = useActionState<EmailState, FormData>(
     writeEmailWithClaude.bind(null, slug),
     {},
   );
   return (
     <form action={action} className="flex flex-col gap-3">
+      {brandId && <input type="hidden" name="brand_id" value={brandId} />}
       <label className="flex flex-col gap-1.5">
         <span className="text-xs leading-tight font-semibold">What is this email about?</span>
         <textarea

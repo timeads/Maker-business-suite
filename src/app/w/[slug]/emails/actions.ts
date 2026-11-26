@@ -47,6 +47,23 @@ async function context(slug: string) {
 }
 type Ctx = Exclude<Awaited<ReturnType<typeof context>>, { error: string }>;
 
+/** The brand picked on the form, if it names one. */
+const brandOf = (formData: FormData) => {
+  const raw = String(formData.get("brand_id") ?? "");
+  return /^[0-9a-f-]{36}$/.test(raw) ? raw : null;
+};
+
+/** Notes which brand a new email is drawn in (the main brand's, when none was picked). */
+async function keepBrand(ctx: Ctx, emailId: string, brandId: string | null) {
+  if (!brandId) return;
+  const { error } = await ctx.supabase.rpc("set_email_brand", {
+    p_tenant_id: ctx.tenant.id,
+    p_email_id: emailId,
+    p_brand_id: brandId,
+  });
+  if (error) console.error(`could not note an email's brand: ${error.message}`);
+}
+
 /** One brand's kit (the default's unless a brand is named). */
 async function loadKit(ctx: Ctx, brandId?: string | null): Promise<BrandKitConfig | null> {
   return (await loadBrandKit(ctx.supabase, ctx.tenant.id, brandId)).kit;
@@ -88,7 +105,8 @@ export async function createEmail(
 ): Promise<EmailState> {
   const ctx = await context(slug);
   if ("error" in ctx) return { error: ctx.error };
-  const kit = await loadKit(ctx);
+  const brandId = brandOf(formData);
+  const kit = await loadKit(ctx, brandId);
   if (!kit)
     return { error: "Set up your brand kit first, so the email comes out in your colours." };
   const templateId = String(formData.get("template") ?? "") || null;
@@ -110,6 +128,7 @@ export async function createEmail(
         : "We couldn't start that email. Please try again.",
     };
   }
+  await keepBrand(ctx, data as string, brandId);
   revalidatePath(`/w/${slug}/social/emails`);
   redirect(`/w/${slug}/emails/${data as string}`);
 }
@@ -132,7 +151,8 @@ export async function writeEmailWithClaude(
     .trim()
     .slice(0, 2000);
   if (ask.length < 8) return { error: "Say what the email is about, in a sentence or two." };
-  const kit = await loadKit(ctx);
+  const brandId = brandOf(formData);
+  const kit = await loadKit(ctx, brandId);
   if (!kit)
     return { error: "Set up your brand kit first, so the email sounds and looks like you." };
 
@@ -205,6 +225,7 @@ export async function writeEmailWithClaude(
     console.error(`Email draft failed: ${err instanceof Error ? err.message : "unknown"}`);
     return { error: "Claude isn't answering right now. Try again in a minute." };
   }
+  await keepBrand(ctx, id, brandId);
   revalidatePath(`/w/${slug}/social/emails`);
   redirect(`/w/${slug}/emails/${id}`);
 }
@@ -227,17 +248,19 @@ export async function copyEmail(slug: string, id: string): Promise<void> {
   if ("error" in ctx || !UUID.test(id)) return;
   const { data: row } = await ctx.supabase
     .from("emails")
-    .select("doc, title")
+    .select("doc, title, brand_id")
     .eq("tenant_id", ctx.tenant.id)
     .eq("id", id)
     .maybeSingle();
   if (!row) return;
   const doc = normalizeDoc(row.doc);
-  await ctx.supabase.rpc("save_email", {
+  const { data: copyId } = await ctx.supabase.rpc("save_email", {
     p_tenant_id: ctx.tenant.id,
     p_email_id: null,
     p_doc: { ...doc, title: `Copy of ${row.title as string}`.slice(0, 120) },
   });
+  // A copy is drawn in the same brand.
+  if (copyId) await keepBrand(ctx, copyId as string, (row.brand_id as string | null) ?? null);
   revalidatePath(`/w/${slug}/social/emails`);
 }
 

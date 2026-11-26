@@ -801,6 +801,9 @@ export async function saveLinkPage(
     intro: String(formData.get("intro") ?? ""),
     links: links.links,
     show_posts: formData.get("show_posts") === "on",
+    brand_id: UUID.test(String(formData.get("brand_id") ?? ""))
+      ? String(formData.get("brand_id"))
+      : null,
   });
   if (!parsed.success) {
     return { error: "Keep the heading under 80 characters and the intro under 300." };

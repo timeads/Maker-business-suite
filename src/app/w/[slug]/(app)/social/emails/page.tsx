@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { workspaceTemplates } from "@/lib/brand/email";
-import { BRAND_MODULE, KIT_KEY, parseBrandKit } from "@/lib/brand/kit";
+import { loadBrandKit, loadBrands, pickBrand } from "@/lib/brand/brands";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
 import { socialAccess } from "../gate";
@@ -13,28 +13,35 @@ import { RowActions } from "./row-actions";
 
 export const metadata: Metadata = { title: "Emails" };
 
-export default async function EmailsPage({ params }: { params: Promise<{ slug: string }> }) {
+export default async function EmailsPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ slug: string }>;
+  searchParams: Promise<{ brand?: string }>;
+}) {
   const { slug } = await params;
+  const { brand: wanted } = await searchParams;
   const access = await socialAccess(slug, `/w/${slug}/social/emails`);
   if (!access.ok) return access.upsell;
   const { tenant, entitlements, role } = access;
   const supabase = await createClient();
-  const [{ data: rows }, { data: kitRow }] = await Promise.all([
+  const [{ data: rows }, brands] = await Promise.all([
     supabase
       .from("emails")
       .select("id, title, updated_at")
       .eq("tenant_id", tenant.id)
       .order("updated_at", { ascending: false })
       .limit(100),
-    supabase
-      .from("configs")
-      .select("body")
-      .eq("tenant_id", tenant.id)
-      .eq("module", BRAND_MODULE)
-      .eq("key", KIT_KEY)
-      .maybeSingle(),
+    loadBrands(supabase, tenant.id),
   ]);
-  const kit = parseBrandKit(kitRow?.body);
+  // New emails are drawn in the brand picked here (the main brand unless another is chosen).
+  const brand = pickBrand(
+    brands.filter((each) => !each.archived_at),
+    wanted,
+  );
+  const { kit } = await loadBrandKit(supabase, tenant.id, brand?.id);
+  const many = brands.filter((each) => !each.archived_at).length > 1;
   const emails = (rows ?? []) as { id: string; title: string; updated_at: string }[];
   const when = new Intl.DateTimeFormat("en-US", {
     timeZone: tenant.timezone,
@@ -51,6 +58,29 @@ export default async function EmailsPage({ params }: { params: Promise<{ slug: s
         description="Design an email in your brand, then copy it into whatever you send email with."
       />
 
+      {entitlements.canWrite && many && (
+        <form method="get" className="flex flex-wrap items-end gap-2 text-sm">
+          <label className="flex flex-col gap-1">
+            <span className="text-muted-foreground text-xs">New emails are drawn in</span>
+            <select
+              name="brand"
+              defaultValue={brand?.id}
+              className="border-input bg-card h-8 rounded-sm border px-2 text-sm"
+            >
+              {brands
+                .filter((each) => !each.archived_at)
+                .map((each) => (
+                  <option key={each.id} value={each.id}>
+                    {each.name}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <Button type="submit" variant="outline" size="sm">
+            Use this brand
+          </Button>
+        </form>
+      )}
       {entitlements.canWrite &&
         (kit ? (
           <>
@@ -63,7 +93,7 @@ export default async function EmailsPage({ params }: { params: Promise<{ slug: s
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <WriteWithClaude slug={tenant.slug} />
+                <WriteWithClaude slug={tenant.slug} brandId={many ? (brand?.id ?? null) : null} />
               </CardContent>
             </Card>
             <Card>
@@ -76,6 +106,7 @@ export default async function EmailsPage({ params }: { params: Promise<{ slug: s
               <CardContent>
                 <NewEmail
                   slug={tenant.slug}
+                  brandId={many ? (brand?.id ?? null) : null}
                   starters={workspaceTemplates(kit).map(({ id, name, about }) => ({
                     id,
                     name,

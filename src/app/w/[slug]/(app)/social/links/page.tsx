@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
+import { loadBrands } from "@/lib/brand/brands";
 import { getSiteUrl } from "@/lib/site-url";
 import { LINKS_KEY, SOCIAL_MODULE, linksToText, parseLinkPage } from "@/lib/social/plan";
 import { createClient } from "@/lib/supabase/server";
@@ -17,7 +18,7 @@ export default async function SocialLinksPage({ params }: { params: Promise<{ sl
   if (!access.ok) return access.upsell;
   const { tenant, role, entitlements } = access;
   const supabase = await createClient();
-  const [{ data }, site] = await Promise.all([
+  const [{ data }, site, brands] = await Promise.all([
     supabase
       .from("configs")
       .select("body")
@@ -26,6 +27,7 @@ export default async function SocialLinksPage({ params }: { params: Promise<{ sl
       .eq("key", LINKS_KEY)
       .maybeSingle(),
     getSiteUrl(),
+    loadBrands(supabase, tenant.id),
   ]);
   const page = parseLinkPage(data?.body);
   const address = `${site}/links/${tenant.slug}`;
@@ -61,6 +63,9 @@ export default async function SocialLinksPage({ params }: { params: Promise<{ sl
             slug={tenant.slug}
             page={page}
             linksText={linksToText(page)}
+            brands={brands
+              .filter((brand) => !brand.archived_at || brand.id === page.brand_id)
+              .map((brand) => ({ id: brand.id, name: brand.name, main: brand.is_default }))}
             canEdit={canManage(role) && entitlements.canWrite}
           />
         </CardContent>
