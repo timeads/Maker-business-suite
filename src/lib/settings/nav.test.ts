@@ -73,6 +73,7 @@ describe("settingsNav", () => {
       "bookings.emails",
       "bookings.words",
       "bookings.shop-page",
+      "bookings.daily-email",
       "bookings.import",
     ]);
     expect(kids(nav, "helpdesk")).toEqual([

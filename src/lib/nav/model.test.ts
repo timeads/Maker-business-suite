@@ -463,6 +463,7 @@ describe("filterMenu", () => {
       "› Emails & questions",
       "› Email words",
       "› Shop product page",
+      "› Daily email",
       "› Bring your bookings across",
     ]);
     expect(names("shipping")[0]).toBe("Shipping");

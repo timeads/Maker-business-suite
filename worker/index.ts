@@ -22,6 +22,7 @@ import { ensureStripeCatalog } from "../src/lib/billing/setup";
 import { liveSyncDeps } from "../src/lib/billing/store";
 import { billingConfigured, getStripe } from "../src/lib/billing/stripe";
 import { processStripeEvent, type StripeEventLike } from "../src/lib/billing/sync";
+import { drainDailyEmails } from "../src/lib/bookings/daily-email";
 import { drainBookingEmails } from "../src/lib/bookings/email-sends";
 import { isConnectEvent, processConnectEvent } from "../src/lib/bookings/payments";
 import { livePaymentDeps } from "../src/lib/bookings/server";
@@ -505,6 +506,12 @@ async function drainOutbound(): Promise<number> {
  * keeps the record of every try (`lib/bookings/email-sends.ts`).
  */
 const sendBookingReminders = () => drainBookingEmails(getAdminClient());
+
+/**
+ * The owner's daily email, for workspaces that switched it on: the database
+ * hands each person's email for a day out once (`lib/bookings/daily-email.ts`).
+ */
+const sendDailyBookingEmails = () => drainDailyEmails(getAdminClient());
 
 /**
  * Adds deliveries that were checked in to the shop's own count, for
@@ -1056,6 +1063,7 @@ async function main() {
       lastSchedule = Date.now();
       await attempt(queueScheduledSyncs, undefined);
       await attempt(sendBookingReminders, 0);
+      await attempt(sendDailyBookingEmails, 0);
     }
     if (Date.now() - lastPurge > PURGE_EVERY_MS) {
       lastPurge = Date.now();

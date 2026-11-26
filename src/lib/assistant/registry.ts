@@ -9,6 +9,7 @@ import {
   bookingFormSchema,
 } from "../bookings/config";
 import { DEFAULT_SHOP_PAGE, SHOP_PAGE_KEY, shopPageSchema } from "../bookings/shop-page";
+import { DAILY_KEY, DEFAULT_DAILY_EMAIL, dailyEmailSchema } from "../bookings/daily-config";
 import { DEFAULT_UPCOMING, UPCOMING_KEY, upcomingSchema } from "../bookings/upcoming";
 import {
   DEFAULT_EMAIL_WORDS,
@@ -266,6 +267,16 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
       messageWordsChanged(next as EmailWords, current as EmailWords)
         ? "The words of a booking email go to customers by themselves, so only a person can write them: Settings → Bookings → Email words. Propose the change again with messages exactly as they are now, and tell the person where to write the words."
         : null,
+  },
+  {
+    module: BOOKINGS_MODULE,
+    key: DAILY_KEY,
+    feature: "bookings",
+    name: "Daily bookings email",
+    description:
+      "A short email once a day to chosen people in the workspace: today's and tomorrow's classes and how full they are, bookings made in the last day, and anything over its limit or waiting for a date. on (off by default), hour (0 to 23 on the workspace's own clock, 7 by default) and recipients (the user ids of workspace members, up to 20; anyone not a member is never sent it).",
+    schema: dailyEmailSchema,
+    defaultBody: () => DEFAULT_DAILY_EMAIL,
   },
   {
     module: BOOKINGS_MODULE,

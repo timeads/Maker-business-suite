@@ -13,6 +13,7 @@ import type { BookingDetails } from "@/lib/bookings/emails";
 import { readEmailSettings } from "@/lib/bookings/email-settings";
 import { bookingEmail } from "@/lib/bookings/words";
 import { SHOP_PAGE_KEY, shopPageSchema } from "@/lib/bookings/shop-page";
+import { DAILY_KEY, dailyEmailSchema, hourWords } from "@/lib/bookings/daily-config";
 import { DEFAULT_UPCOMING, UPCOMING_KEY, upcomingSchema } from "@/lib/bookings/upcoming";
 import { parseClock, zonedTimeToUtc } from "@/lib/bookings/slots";
 import { sendEmail } from "@/lib/email";
@@ -305,6 +306,45 @@ export async function saveShopPage(
   revalidatePath(`/w/${slug}/bookings`, "layout");
   revalidatePath(`/w/${slug}/settings`, "layout");
   return { message: "Saved." };
+}
+
+/** Saves who gets the daily email and when. Only workspace members can be chosen. */
+export async function saveDailyEmail(
+  slug: string,
+  _prev: BookingsState,
+  formData: FormData,
+): Promise<BookingsState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const { data: members } = await ctx.supabase.rpc("list_members", { p_tenant_id: ctx.tenant.id });
+  const memberIds = new Set(((members ?? []) as { user_id: string }[]).map((m) => m.user_id));
+  const chosen = formData
+    .getAll("recipient")
+    .map(String)
+    .filter((id) => memberIds.has(id));
+  const parsed = dailyEmailSchema.safeParse({
+    version: 1,
+    on: formData.get("on") === "on",
+    hour: Number.parseInt(text(formData, "hour") || "7", 10),
+    recipients: [...new Set(chosen)],
+  });
+  if (!parsed.success) return { error: "Pick an hour, and up to 20 people." };
+  if (parsed.data.on && parsed.data.recipients.length === 0) {
+    return { error: "Choose at least one person to send it to." };
+  }
+  const { error } = await ctx.supabase.rpc("save_config", {
+    p_tenant_id: ctx.tenant.id,
+    p_module: BOOKINGS_MODULE,
+    p_key: DAILY_KEY,
+    p_body: parsed.data,
+  });
+  if (error) return { error: OOPS };
+  revalidatePath(`/w/${slug}/settings`, "layout");
+  return {
+    message: parsed.data.on
+      ? `Saved. It goes out each day from ${hourWords(parsed.data.hour)} on your workspace's clock.`
+      : "Saved. The daily email is off.",
+  };
 }
 
 /** Saves the "Upcoming classes" list for the shop's workshops page. */

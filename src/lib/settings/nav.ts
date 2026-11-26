@@ -267,6 +267,13 @@ const TOOLS: Def[] = [
         ],
       },
       {
+        id: "bookings.daily-email",
+        name: "Daily email",
+        path: "bookings/daily-email",
+        show: managers,
+        keywords: ["digest", "owner email", "summary", "tomorrow's classes", "every morning"],
+      },
+      {
         id: "bookings.import",
         name: "Bring your bookings across",
         path: "bookings/import",
