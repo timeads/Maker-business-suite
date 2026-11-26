@@ -2,16 +2,16 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { deliverEmail, emailConfigured, type Delivery } from "../email";
 import { postAlert } from "../messages/alerts";
 import type { BookingEmails } from "./config";
-import {
-  dayOfEmail,
-  followupEmail,
-  reminderEmail,
-  shopCancelledEmail,
-  type BookingDetails,
-  type Email,
-} from "./emails";
-import { getBookingDetails, getBookingEmails } from "./server";
+import type { BookingDetails, Email } from "./emails";
+import { getBookingDetails, getBookingEmails, getEmailWords } from "./server";
 import { formatWhen } from "./slots";
+import {
+  DEFAULT_EMAIL_WORDS,
+  bookingEmail,
+  noteFor,
+  type EmailWords,
+  type MessageKey,
+} from "./words";
 
 /**
  * The booking emails that go out by themselves: the reminder, the day-of
@@ -35,12 +35,22 @@ const KIND_WORDS: Record<EmailKind, string> = {
   cancelled: "cancellation email",
 };
 
-/** The email for one kind, with the words the business added. */
-export function emailFor(kind: EmailKind, details: BookingDetails, words: BookingEmails): Email {
-  if (kind === "reminder") return reminderEmail(details, words.reminder_note);
-  if (kind === "day_of") return dayOfEmail(details, words.day_of_note);
-  if (kind === "followup") return followupEmail(details, words.followup_message);
-  return shopCancelledEmail(details);
+const MESSAGE: Record<EmailKind, MessageKey> = {
+  reminder: "reminder",
+  day_of: "day_of",
+  followup: "followup",
+  cancelled: "shop_cancelled",
+};
+
+/** The email for one kind, in the business's own words (ours where it changed nothing). */
+export function emailFor(
+  kind: EmailKind,
+  details: BookingDetails,
+  settings: BookingEmails,
+  words: EmailWords = DEFAULT_EMAIL_WORDS,
+): Email {
+  const key = MESSAGE[kind];
+  return bookingEmail(key, details, words, { note: noteFor(key, settings) });
 }
 
 export type EmailSendDeps = {
@@ -51,6 +61,7 @@ export type EmailSendDeps = {
     admin: SupabaseClient,
   ) => Promise<BookingDetails | null>;
   settings?: (tenantId: string) => Promise<BookingEmails>;
+  words?: (tenantId: string) => Promise<EmailWords>;
   alert?: typeof postAlert;
 };
 
@@ -64,11 +75,13 @@ export async function drainBookingEmails(
   const deliver = deps.deliver ?? ((email: Email) => deliverEmail(email));
   const details = deps.details ?? getBookingDetails;
   const settings = deps.settings ?? getBookingEmails;
+  const loadWords = deps.words ?? getEmailWords;
   const alert = deps.alert ?? postAlert;
 
   const { data, error } = await admin.rpc("claim_booking_email_sends", { p_limit: 50 });
   if (error) throw new Error(`Could not claim booking emails: ${error.message}`);
-  const words = new Map<string, BookingEmails>();
+  const timing = new Map<string, BookingEmails>();
+  const words = new Map<string, EmailWords>();
   let sent = 0;
 
   for (const claim of (data ?? []) as Claim[]) {
@@ -79,10 +92,19 @@ export async function drainBookingEmails(
       if (!about) {
         delivery = { outcome: "rejected", detail: "The booking is no longer there." };
       } else {
-        if (!words.has(claim.tenant_id))
-          words.set(claim.tenant_id, await settings(claim.tenant_id));
+        if (!timing.has(claim.tenant_id)) {
+          timing.set(claim.tenant_id, await settings(claim.tenant_id));
+          words.set(claim.tenant_id, await loadWords(claim.tenant_id));
+        }
         // Everything up to here can be tried again; only `deliver` reaches the mail service.
-        delivery = await deliver(emailFor(claim.kind, about, words.get(claim.tenant_id)!));
+        delivery = await deliver(
+          emailFor(
+            claim.kind,
+            about,
+            timing.get(claim.tenant_id)!,
+            words.get(claim.tenant_id) ?? DEFAULT_EMAIL_WORDS,
+          ),
+        );
         if (delivery.outcome === "off") {
           delivery = { outcome: "refused", detail: "Email isn't set up." };
         }

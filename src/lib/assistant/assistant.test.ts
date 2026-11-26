@@ -84,6 +84,35 @@ describe("tools", () => {
     expect(calls.filter((c) => c.kind === "rpc")).toHaveLength(0);
   });
 
+  it("never lets the assistant write the words of a booking email", async () => {
+    const saved = {
+      version: 1,
+      reply_to: "",
+      messages: { reminder: { subject: "Soon!", body: "Hi {{first_name}}" } },
+    };
+    const propose = (body: unknown) => {
+      const db = fakeSupabase({ configs: { body: saved }, rpc: { propose_config_change: "p-8" } });
+      return runTool(
+        "propose_config_change",
+        { module: "bookings", key: "email_words", body, summary: "s" },
+        ctxWith(db.supabase),
+      ).then((outcome) => ({ outcome, rpcs: db.calls.filter((c) => c.kind === "rpc") }));
+    };
+    const fine = await propose({ ...saved, reply_to: "hello@studio.example" });
+    expect(fine.outcome.isError).toBeFalsy();
+    expect(fine.rpcs).toHaveLength(1);
+    for (const body of [
+      { ...saved, messages: {} },
+      { ...saved, messages: { reminder: { subject: "Soon!", body: "Hello {{first_name}}" } } },
+      { ...saved, messages: { ...saved.messages, followup: { subject: "x", body: "y" } } },
+    ]) {
+      const refused = await propose(body);
+      expect(refused.outcome.isError).toBe(true);
+      expect(refused.outcome.content).toContain("only a person can write them");
+      expect(refused.rpcs).toEqual([]);
+    }
+  });
+
   it("never lets the assistant write the words of an automatic reply", async () => {
     const saved = {
       version: 1,

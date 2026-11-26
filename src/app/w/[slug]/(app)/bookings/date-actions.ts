@@ -3,7 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth";
-import { dateChangedEmail } from "@/lib/bookings/emails";
+import { readEmailSettings } from "@/lib/bookings/email-settings";
+import { bookingEmail } from "@/lib/bookings/words";
 import { parseClock, zonedTimeToUtc } from "@/lib/bookings/slots";
 import { sendEmail } from "@/lib/email";
 import { getEntitlements } from "@/lib/entitlements";
@@ -188,11 +189,14 @@ export async function moveDate(
       }[]
     ).filter((b) => b.status === "confirmed" && b.email_opt_in && b.customer_email);
     const unique = [...new Map(people.map((p) => [p.customer_email, p])).values()];
+    const { words } = await readEmailSettings(ctx.supabase, ctx.tenant.id);
     for (const person of unique) {
       const sent = await sendEmail(
-        dateChangedEmail(
-          person,
+        bookingEmail(
+          "date_changed",
           {
+            customer_name: person.customer_name,
+            customer_email: person.customer_email,
             service_name: service.name,
             workspace_name: ctx.tenant.name,
             starts_at: (after?.starts_at as string) ?? startsAt.toISOString(),
@@ -200,7 +204,8 @@ export async function moveDate(
             timezone: ctx.tenant.timezone,
             location: service.location,
           },
-          { starts_at: before.starts_at as string, ends_at: before.ends_at as string },
+          words,
+          { was: { starts_at: before.starts_at as string, ends_at: before.ends_at as string } },
         ),
       );
       if (sent) told += 1;

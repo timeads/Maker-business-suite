@@ -7,18 +7,16 @@ import {
   BOOKINGS_MODULE,
   EMAILS_KEY,
   bookingEmailsSchema,
-  parseBookingEmails,
   tagsFromText,
 } from "@/lib/bookings/config";
 import {
-  bookingCancelledEmail,
   broadcastEmail,
-  confirmationEmail,
   manageUrl,
-  movedEmail,
   waitlistEmail,
   type BookingDetails,
 } from "@/lib/bookings/emails";
+import { readEmailSettings } from "@/lib/bookings/email-settings";
+import { bookingEmail } from "@/lib/bookings/words";
 import { emailConfigured, sendEmail } from "@/lib/email";
 import { getEntitlements } from "@/lib/entitlements";
 import { getSiteUrl } from "@/lib/site-url";
@@ -205,7 +203,13 @@ export async function addPerson(
   if (formData.get("tell") === "on") {
     const details = await detailsFor(ctx, data as string);
     if (details) {
-      emailed = await sendEmail(confirmationEmail(details, manageUrl(await getSiteUrl(), token)));
+      const { words } = await readEmailSettings(ctx.supabase, ctx.tenant.id);
+      // Someone added by hand gets the confirmation without the timing settings' note, as before.
+      emailed = await sendEmail(
+        bookingEmail("confirmation", details, words, {
+          link: manageUrl(await getSiteUrl(), token),
+        }),
+      );
     }
   }
   done(slug);
@@ -238,7 +242,8 @@ export async function moveBooking(
     };
   }
   const after = await detailsFor(ctx, bookingId);
-  const emailed = after ? await sendEmail(movedEmail(after, null)) : false;
+  const { words } = await readEmailSettings(ctx.supabase, ctx.tenant.id);
+  const emailed = after ? await sendEmail(bookingEmail("moved", after, words)) : false;
   await tellWaitlist(data, before, slug);
   done(slug);
   return {
@@ -281,16 +286,12 @@ export async function resendConfirmation(slug: string, bookingId: string): Promi
     p_manage_token: token,
   });
   if (error) return { error: OOPS };
-  const { data: config } = await ctx.supabase
-    .from("configs")
-    .select("body")
-    .eq("tenant_id", ctx.tenant.id)
-    .eq("module", BOOKINGS_MODULE)
-    .eq("key", EMAILS_KEY)
-    .maybeSingle();
-  const note = parseBookingEmails(config?.body).confirmation_note;
+  const { timing, words } = await readEmailSettings(ctx.supabase, ctx.tenant.id);
   const sent = await sendEmail(
-    confirmationEmail(details, manageUrl(await getSiteUrl(), token), note),
+    bookingEmail("confirmation", details, words, {
+      link: manageUrl(await getSiteUrl(), token),
+      note: timing.confirmation_note,
+    }),
   );
   done(slug);
   return sent
@@ -316,7 +317,15 @@ export async function cancelBooking(
   });
   if (error) return { error: OOPS };
   const emailed =
-    formData.get("tell") === "on" ? await sendEmail(bookingCancelledEmail(details)) : false;
+    formData.get("tell") === "on"
+      ? await sendEmail(
+          bookingEmail(
+            "booking_cancelled",
+            details,
+            (await readEmailSettings(ctx.supabase, ctx.tenant.id)).words,
+          ),
+        )
+      : false;
   const told = await tellWaitlist(data, details, slug);
   done(slug);
   return {
@@ -557,19 +566,12 @@ export async function placeShopLine(
   if (formData.get("tell") === "on" && placed.has_email) {
     const details = await detailsFor(ctx, placed.booking_id);
     if (details) {
-      const { data: config } = await ctx.supabase
-        .from("configs")
-        .select("body")
-        .eq("tenant_id", ctx.tenant.id)
-        .eq("module", BOOKINGS_MODULE)
-        .eq("key", EMAILS_KEY)
-        .maybeSingle();
+      const { timing, words } = await readEmailSettings(ctx.supabase, ctx.tenant.id);
       emailed = await sendEmail(
-        confirmationEmail(
-          details,
-          manageUrl(await getSiteUrl(), token),
-          parseBookingEmails(config?.body).confirmation_note,
-        ),
+        bookingEmail("confirmation", details, words, {
+          link: manageUrl(await getSiteUrl(), token),
+          note: timing.confirmation_note,
+        }),
       );
     }
   }

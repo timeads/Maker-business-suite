@@ -196,10 +196,21 @@ describe("buildNav: each tool's menu", () => {
 
   it("Bookings, Social, Money and Assistant carry their old tabs", () => {
     const tools = buildNav(viewer());
-    expect(labels(tool(tools, "bookings"))).toEqual(["Coming up", "Calendar", "Customers"]);
+    expect(labels(tool(tools, "bookings"))).toEqual([
+      "Coming up",
+      "Calendar",
+      "Customers",
+      "Emails sent",
+    ]);
     // "Needs a date" is a place only while a shop order is waiting for one.
     const waiting = tool(buildNav(viewer(), { bookings: 2 }), "bookings");
-    expect(labels(waiting)).toEqual(["Coming up", "Needs a date", "Calendar", "Customers"]);
+    expect(labels(waiting)).toEqual([
+      "Coming up",
+      "Needs a date",
+      "Calendar",
+      "Customers",
+      "Emails sent",
+    ]);
     expect(waiting.count).toBe(2);
     expect(waiting.menu[0].items[1]).toMatchObject({ to: "bookings/needs-date", count: 2 });
     expect(labels(tool(tools, "social"))).toEqual([
@@ -446,6 +457,7 @@ describe("filterMenu", () => {
     expect(names("bookings")).toEqual([
       "Bookings",
       "› Emails & questions",
+      "› Email words",
       "› Shop product page",
       "› Bring your bookings across",
     ]);

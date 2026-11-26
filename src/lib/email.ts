@@ -30,7 +30,7 @@ const NEVER_LEFT = new Set(["ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED"]);
 
 /** Sends a plain-text email through Postmark and says exactly how it went. */
 export async function deliverEmail(
-  message: { to: string; subject: string; text: string },
+  message: { to: string; subject: string; text: string; replyTo?: string },
   fetcher: typeof fetch = fetch,
 ): Promise<Delivery> {
   const token = process.env.POSTMARK_SERVER_TOKEN;
@@ -50,6 +50,10 @@ export async function deliverEmail(
         To: message.to,
         Subject: message.subject,
         TextBody: message.text,
+        // Where a customer's reply goes, when the business has said. One plain address only.
+        ...(message.replyTo && /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/.test(message.replyTo)
+          ? { ReplyTo: message.replyTo }
+          : {}),
         MessageStream: "outbound",
       }),
     });
@@ -82,6 +86,7 @@ export async function sendEmail(message: {
   to: string;
   subject: string;
   text: string;
+  replyTo?: string;
 }): Promise<boolean> {
   return (await deliverEmail(message)).outcome === "sent";
 }

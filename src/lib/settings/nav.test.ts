@@ -71,6 +71,7 @@ describe("settingsNav", () => {
     ]);
     expect(kids(nav, "bookings")).toEqual([
       "bookings.emails",
+      "bookings.words",
       "bookings.shop-page",
       "bookings.import",
     ]);
@@ -112,7 +113,11 @@ describe("settingsNav", () => {
   it("keeps the manager-only Stock screens from the rest of the team", () => {
     const nav = settingsNav(viewer({ manager: false }));
     expect(kids(nav, "stock")).toEqual(["stock.planning", "stock.seasons", "stock.michaels"]);
-    expect(kids(nav, "bookings")).toEqual(["bookings.emails", "bookings.shop-page"]);
+    expect(kids(nav, "bookings")).toEqual([
+      "bookings.emails",
+      "bookings.words",
+      "bookings.shop-page",
+    ]);
   });
 
   it("treats a manager of a read-only workspace as before: no Shipping forms, no order emails", () => {

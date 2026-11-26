@@ -25,8 +25,14 @@ export type BookingDetails = {
   location?: string;
 };
 
-export type Email = { to: string; subject: string; text: string };
+/** `replyTo`: where the customer's reply goes, when the business has said. */
+export type Email = { to: string; subject: string; text: string; replyTo?: string };
 
+/*
+ * The words below are the emails as they were before a business could change
+ * them. The editable defaults in `words.ts` are tested against these, line for
+ * line; the waitlist, owner and whole-date notes are still sent from here.
+ */
 const firstName = (name: string) => name.trim().split(/\s+/)[0] || "there";
 const when = (d: BookingDetails) => formatWhen(d.starts_at, d.ends_at, d.timezone);
 /** "Where: ..." under the time, only when the business has said where. */

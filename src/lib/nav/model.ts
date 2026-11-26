@@ -147,6 +147,9 @@ function bookingsMenu(attention: Attention): NavGroup[] {
     first("bookings.coming-up", "Coming up", "bookings"),
     place("bookings.calendar", "Calendar", "bookings/calendar"),
     place("bookings.customers", "Customers", "bookings/customers"),
+    place("bookings.emails", "Emails sent", "bookings/emails", {
+      keywords: ["message log", "reminders", "failed", "thank-you"],
+    }),
   ];
   // Shop orders that paid for a workshop with no date: a place only while
   // some are waiting (the page itself is always reachable from a roster).

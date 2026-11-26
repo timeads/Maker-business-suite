@@ -15,13 +15,7 @@ import {
   type BookingEmails,
   type BookingForm,
 } from "./config";
-import {
-  confirmationEmail,
-  manageUrl,
-  ownerNoticeEmail,
-  waitlistEmail,
-  type BookingDetails,
-} from "./emails";
+import { manageUrl, ownerNoticeEmail, waitlistEmail, type BookingDetails } from "./emails";
 import type { CheckoutInfo, PaymentDeps } from "./payments";
 import {
   SHOP_PAGE_KEY,
@@ -38,6 +32,7 @@ import {
   type AvailabilityRule,
   type Busy,
 } from "./slots";
+import { WORDS_KEY, bookingEmail, parseEmailWords, type EmailWords } from "./words";
 
 /**
  * Server-only. The public booking pages have no database access of their
@@ -193,6 +188,18 @@ export async function getBookingEmails(tenantId: string): Promise<BookingEmails>
   });
 }
 
+/** The business's own words for its booking emails, and where replies go. */
+export async function getEmailWords(tenantId: string): Promise<EmailWords> {
+  return withTenant(tenantId, async (scope) => {
+    const { data } = await scope
+      .select("configs", "body")
+      .eq("module", BOOKINGS_MODULE)
+      .eq("key", WORDS_KEY)
+      .maybeSingle();
+    return parseEmailWords((data as { body?: unknown } | null)?.body);
+  });
+}
+
 /** The Stripe account a workspace takes booking payments into, once it can charge. */
 export async function getPayoutAccount(
   tenantId: string,
@@ -295,7 +302,13 @@ export async function announceBooking(
   const site = siteUrl();
   if (manageToken) {
     const { confirmation_note } = await getBookingEmails(details.tenant_id);
-    await sendEmail(confirmationEmail(details, manageUrl(site, manageToken), confirmation_note));
+    const words = await getEmailWords(details.tenant_id);
+    await sendEmail(
+      bookingEmail("confirmation", details, words, {
+        link: manageUrl(site, manageToken),
+        note: confirmation_note,
+      }),
+    );
   }
   const { data: owners } = await admin.rpc("tenant_owner_emails", {
     p_tenant_id: details.tenant_id,

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { SectionHeading } from "@/components/settings/section-heading";
 import {
@@ -49,8 +50,12 @@ export default async function BookingSettingsPage({
         <CardHeader>
           <CardTitle>Emails to your customers</CardTitle>
           <CardDescription>
-            Everyone gets a confirmation with a link to change or cancel, then a reminder. Add your
-            own words to each.
+            Everyone gets a confirmation with a link to change or cancel, then a reminder. Add a
+            note to each here, or change every word of them under{" "}
+            <Link className="underline" href={`/w/${tenant.slug}/settings/bookings/words`}>
+              Email words
+            </Link>
+            .
           </CardDescription>
         </CardHeader>
         <CardContent>

@@ -4,6 +4,7 @@ import { deliverEmail, type Delivery } from "../email";
 import { DEFAULT_EMAILS } from "./config";
 import { drainBookingEmails, emailFor } from "./email-sends";
 import type { BookingDetails } from "./emails";
+import { DEFAULT_EMAIL_WORDS } from "./words";
 
 const details: BookingDetails = {
   booking_id: "b1",
@@ -61,6 +62,7 @@ function run(
     configured: () => true,
     details: async () => details,
     settings: async () => ({ ...DEFAULT_EMAILS, reminder_note: "Bring an apron." }),
+    words: async () => DEFAULT_EMAIL_WORDS,
     deliver: async (email) => {
       sentEmails.push(email);
       if (delivery instanceof Error) throw delivery;
@@ -156,6 +158,7 @@ describe("sending the booking emails that are due", () => {
       configured: () => true,
       details: async () => details,
       settings: async () => DEFAULT_EMAILS,
+      words: async () => DEFAULT_EMAIL_WORDS,
       deliver: async () => ({ outcome: "sent", detail: "" }),
       alert: async () => {},
     });
@@ -173,6 +176,48 @@ describe("sending the booking emails that are due", () => {
     expect(dayOf.text).toContain("Door code 12.");
     expect(dayOf.text).toContain("10:00");
     expect(emailFor("cancelled", details, DEFAULT_EMAILS).text).toContain("has been cancelled");
+  });
+
+  it("goes out in the business's own words, with replies to its own address", () => {
+    const email = emailFor(
+      "reminder",
+      details,
+      { ...DEFAULT_EMAILS, reminder_note: "Bring an apron." },
+      {
+        version: 1,
+        reply_to: "studio@alice.example",
+        messages: {
+          reminder: { subject: "Soon: {{workshop}}", body: "Hi {{first_name}}! {{note}}" },
+        },
+      },
+    );
+    expect(email).toEqual({
+      to: "sam@example.com",
+      subject: "Soon: Rug Tufting",
+      text: "Hi Sam! Bring an apron.",
+      replyTo: "studio@alice.example",
+    });
+  });
+
+  it("an email whose words can't be read is a refusal, tried again later", async () => {
+    const { admin, calls } = fakeAdmin([claim("reminder")], () => ({
+      status: "failed",
+      final: false,
+      changed: true,
+    }));
+    await drainBookingEmails(admin, {
+      configured: () => true,
+      details: async () => details,
+      settings: async () => DEFAULT_EMAILS,
+      words: async () => {
+        throw new Error("database blip");
+      },
+      deliver: async () => {
+        throw new Error("must not be reached");
+      },
+      alert: async () => {},
+    });
+    expect(calls[1].args).toMatchObject({ p_outcome: "refused" });
   });
 });
 
@@ -203,6 +248,21 @@ describe("how a send went", () => {
     expect((await deliverEmail(message, answer(422, { ErrorCode: 400 }))).outcome).toBe("refused");
     expect((await deliverEmail(message, answer(422, { ErrorCode: 406 }))).outcome).toBe("rejected");
     expect((await deliverEmail(message, answer(422, { ErrorCode: 300 }))).outcome).toBe("rejected");
+  });
+
+  it("passes the business's reply-to address along, and only a plain one", async () => {
+    on();
+    const bodies: Record<string, unknown>[] = [];
+    const capture = (async (_url: string, init: RequestInit) => {
+      bodies.push(JSON.parse(String(init.body)));
+      return new Response("{}", { status: 200 });
+    }) as unknown as typeof fetch;
+    await deliverEmail({ ...message, replyTo: "hello@studio.example" }, capture);
+    await deliverEmail({ ...message, replyTo: "a@b.example, c@d.example" }, capture);
+    await deliverEmail(message, capture);
+    expect(bodies[0].ReplyTo).toBe("hello@studio.example");
+    expect(bodies[1]).not.toHaveProperty("ReplyTo");
+    expect(bodies[2]).not.toHaveProperty("ReplyTo");
   });
 
   it("is unsure when the answer never came, unless the request never left", async () => {

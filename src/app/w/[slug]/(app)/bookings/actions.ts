@@ -9,7 +9,9 @@ import {
   bookingFormSchema,
   questionsFromText,
 } from "@/lib/bookings/config";
-import { sessionCancelledEmail, type BookingDetails } from "@/lib/bookings/emails";
+import type { BookingDetails } from "@/lib/bookings/emails";
+import { readEmailSettings } from "@/lib/bookings/email-settings";
+import { bookingEmail } from "@/lib/bookings/words";
 import { SHOP_PAGE_KEY, shopPageSchema } from "@/lib/bookings/shop-page";
 import { parseClock, zonedTimeToUtc } from "@/lib/bookings/slots";
 import { sendEmail } from "@/lib/email";
@@ -165,6 +167,7 @@ export async function cancelSession(
     confirmed_at: string | null;
   }[];
   let told = 0;
+  const { words } = await readEmailSettings(ctx.supabase, ctx.tenant.id);
   for (const booking of cancelled) {
     // People who never finished paying don't need to hear about it.
     if (!booking.confirmed_at) continue;
@@ -189,7 +192,7 @@ export async function cancelSession(
       workspace_slug: ctx.tenant.slug,
       timezone: ctx.tenant.timezone,
     };
-    if (await sendEmail(sessionCancelledEmail(details))) told += 1;
+    if (await sendEmail(bookingEmail("session_cancelled", details, words))) told += 1;
   }
   const booked = cancelled.filter((b) => b.confirmed_at).length;
   revalidatePath(`/w/${slug}/bookings`, "layout");

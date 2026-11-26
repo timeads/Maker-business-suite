@@ -231,6 +231,23 @@ const TOOLS: Def[] = [
         ],
       },
       {
+        id: "bookings.words",
+        name: "Email words",
+        path: "bookings/words",
+        keywords: [
+          "wording",
+          "template",
+          "subject",
+          "fill-ins",
+          "preview",
+          "send me a test",
+          "reply-to",
+          "replies",
+          "moved",
+          "cancelled",
+        ],
+      },
+      {
         id: "bookings.shop-page",
         name: "Shop product page",
         path: "bookings/shop-page",

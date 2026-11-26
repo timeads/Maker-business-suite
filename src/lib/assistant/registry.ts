@@ -9,6 +9,13 @@ import {
   bookingFormSchema,
 } from "../bookings/config";
 import { DEFAULT_SHOP_PAGE, SHOP_PAGE_KEY, shopPageSchema } from "../bookings/shop-page";
+import {
+  DEFAULT_EMAIL_WORDS,
+  WORDS_KEY,
+  emailWordsSchema,
+  messageWordsChanged,
+  type EmailWords,
+} from "../bookings/words";
 import { DASHBOARD_KEY, DASHBOARD_MODULE, dashboardSchema } from "../dashboard/schema";
 import { DEFAULT_TEMPLATE, templateConfig } from "../dashboard/templates";
 import {
@@ -243,6 +250,21 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
       "How many hours ahead the reminder goes out (reminder_hours), whether a second short reminder goes out on the day (day_of_on, off unless switched on) and how many hours before the start (day_of_hours, 1 to 24, only sent when shorter than reminder_hours), whether a thank-you is sent afterwards, whether the customer is emailed when a refund or cancellation in the shop cancels their booking (shop_cancel_email), and the business's own note added to the confirmation, reminder, day-of reminder and thank-you emails.",
     schema: bookingEmailsSchema,
     defaultBody: () => DEFAULT_EMAILS,
+  },
+  {
+    module: BOOKINGS_MODULE,
+    key: WORDS_KEY,
+    feature: "bookings",
+    name: "Booking email words",
+    description:
+      "The business's own words for each booking email (messages: confirmation, reminder, day_of, followup, booking_cancelled, session_cancelled, shop_cancelled, moved, date_changed; each a subject and a plain-text body with fill-ins like {{first_name}}; a message left out uses the standard words) and where customers' replies go (reply_to, an email address, empty for none). These emails go to customers by themselves, so only a person may write their words, under Settings → Bookings → Email words: a proposal must leave messages exactly as they are now, and one that changes any is refused. You can propose reply_to.",
+    schema: emailWordsSchema,
+    defaultBody: () => DEFAULT_EMAIL_WORDS,
+    // No model writes what goes to customers by itself (CLAUDE.md rule 6).
+    refuse: (next, current) =>
+      messageWordsChanged(next as EmailWords, current as EmailWords)
+        ? "The words of a booking email go to customers by themselves, so only a person can write them: Settings → Bookings → Email words. Propose the change again with messages exactly as they are now, and tell the person where to write the words."
+        : null,
   },
   {
     module: BOOKINGS_MODULE,
