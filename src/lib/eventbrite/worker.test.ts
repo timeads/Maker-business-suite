@@ -236,6 +236,19 @@ describe("the order queue", () => {
     expect(calls.some((c) => c.fn === "book_from_eventbrite")).toBe(false);
   });
 
+  it("tells the team about a refund for an order that is on no date", async () => {
+    const alert = vi.fn();
+    const { admin } = fakeAdmin({
+      claim_eventbrite_events: [
+        { id: "e1", tenant_id: "t1", order_id: "8", refunded: true, tries: 1 },
+      ],
+      book_from_eventbrite: { result: "nothing" },
+    });
+    const client = fakeClient({ getOrder: async () => ({ id: "8", event_id: "9" }) });
+    await drainEventbriteOrders(admin, deps(client, alert));
+    expect(alert.mock.calls[0][3]).toMatch(/order 8 was refunded or cancelled/);
+  });
+
   it("tells the team about an order for an unlinked event, and one given up on", async () => {
     const alert = vi.fn();
     const { admin } = fakeAdmin({

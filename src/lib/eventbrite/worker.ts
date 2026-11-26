@@ -307,6 +307,17 @@ async function afterBooking(
     );
     return;
   }
+  if (outcome.result === "nothing") {
+    // A refund or cancellation for an order that is on no date here (one
+    // brought across from the earlier app, say): the team gives the place back.
+    await alert(
+      admin,
+      each.tenant_id,
+      "bookings",
+      `Eventbrite order ${each.order_id} was refunded or cancelled, but it isn't on any date here. If you added the person yourself, take them off the date.`,
+    );
+    return;
+  }
   if (outcome.result === "cancelled" && open) {
     await (deps.cancelEmails ?? queueCancelEmails)(admin, each.tenant_id, outcome.cancelled ?? []);
     return;

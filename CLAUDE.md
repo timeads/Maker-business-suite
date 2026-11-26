@@ -445,6 +445,27 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   only what a person said is stored (counts, deliveries, corrections,
   orders, costs). Not linked to Stock yet. Keep
   `tests/db/booking-supplies.test.ts` passing.
+  Eventbrite (docs/eventbrite.md; Settings → Bookings → Eventbrite, Bookings
+  → Eventbrite; gated by the `eventbrite` entitlement): provider
+  `eventbrite`, a pasted private token read only through
+  `getEventbriteAccess()`, ALL Eventbrite HTTP through
+  `lib/eventbrite/client.ts` (plain fetch, reads retried, writes never). As
+  in the earlier app, events are made on Eventbrite by hand; we never create,
+  publish or cancel one. A date of a workshop switched on
+  (`services.eventbrite_on`, off by default) is linked to an event and ticket
+  type (`eventbrite_listings`, manager-only `link_session_eventbrite`), and
+  its places left (`private.seats_left`) are pushed to that ticket type on
+  the once-only pattern (`claim_eventbrite_pushes` / `finish_eventbrite_push`:
+  read first, write only what differs, `planTicketClass`; a refusal is tried
+  twice more, then a manager's `retry_eventbrite_listing`; unsure is never
+  asked again by itself), every five minutes and at once after any booking
+  change (triggers). Eventbrite doesn't sign webhooks: each workspace's
+  address carries a secret (hash only in `private.eventbrite_hooks`), the
+  route queues only the order's number (`enqueue_eventbrite_event`), and the
+  worker reads the order from the API and books it with
+  `book_from_eventbrite` (lock through `private.lock_seats`, once per order,
+  full dates booked and flagged, refunds and fewer tickets follow). Keep
+  `tests/db/booking-eventbrite.test.ts` passing.
   The imports' fourth file is the earlier app's message wording
   (`lib/bookings/import/wording.ts`: its messages and fill-ins mapped to
   ours, pure and tested), saved through `save_config` after a preview;
