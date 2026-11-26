@@ -148,3 +148,93 @@ describe("the preview's words", () => {
     ).toEqual(["rate 22.99%", "minimum $50.00", "fixed payment", "due on day 3"]);
   });
 });
+
+describe("plans that pay other debts", () => {
+  /** Made-up names: no real lender, bank or account. */
+  const debts = [
+    debt({ id: "c1", name: "Card One", booksAccount: "Card One" }),
+    debt({ id: "c2", name: "Card Two", booksAccount: "Card Two" }),
+    debt({ id: "c3", name: "Card Three", booksAccount: "Card Three", coveredBy: "p0" }),
+    debt({
+      id: "p0",
+      name: "Older plan",
+      booksAccount: null,
+      consolidated: true,
+      savedByPerson: true,
+    }),
+  ];
+  const file = readDebtFile(
+    [
+      "Name,Consolidated,Paid through,Rate,Minimum,Usual payment,Plan,Due day",
+      "Card One,,Card Plan,19.99,40,,,",
+      "Card Two,no,card plan,,,,,",
+      "Card Three,,Card Plan,,,,,",
+      "Card Plan,yes,,0,,400,fixed,3",
+      "Older plan,yes,,0,25,,pool,",
+      "Card Four,,Nowhere,,,,,",
+    ].join("\n"),
+  );
+
+  it("reads which rows are plans and which plan pays a debt", () => {
+    expect(
+      file.ok && file.rows.map((r) => [r.name, r.isPlan ?? false, r.paidThrough ?? null]),
+    ).toEqual([
+      ["Card One", false, "Card Plan"],
+      ["Card Two", false, "card plan"],
+      ["Card Three", false, "Card Plan"],
+      ["Card Plan", true, null],
+      ["Older plan", true, null],
+      ["Card Four", false, "Nowhere"],
+    ]);
+    const odd = readDebtFile("name,consolidated\nCard,perhaps\n");
+    expect(odd.ok && odd.problems[0].text).toMatch(/whether it's a plan/);
+  });
+
+  it("makes a new plan, linked to its account by name, and covers only debts no plan pays", () => {
+    if (!file.ok) throw new Error("file");
+    const plan = planDebtImport(file.rows, debts, [
+      { id: "a9", name: "card plan" },
+      { id: "a1", name: "Card One" },
+    ]);
+    expect(plan.plans).toEqual([
+      {
+        line: 5,
+        name: "Card Plan",
+        details: { rate_bp: 0, payment_cents: 40000, due_day: 3 },
+        account: { id: "a9", name: "card plan" },
+      },
+    ]);
+    expect(plan.covers).toEqual([
+      { line: 2, debtId: "c1", debtName: "Card One", planName: "Card Plan" },
+      { line: 3, debtId: "c2", debtName: "Card Two", planName: "Card Plan" },
+    ]);
+    // Their own details still fill, as for any debt.
+    expect(plan.fills.find((f) => f.debtId === "c1")?.details).toEqual({
+      rate_bp: 1999,
+      minimum_cents: 4000,
+    });
+    // A plan here already: its details fill, but never how it's paid or a minimum.
+    expect(plan.fills.find((f) => f.debtId === "p0")?.details).toEqual({ rate_bp: 0 });
+    expect(plan.skipped).toEqual([
+      { line: 4, text: "Card Three: already paid through a plan, so it stays where it is" },
+      {
+        line: 7,
+        text: "Card Four: no debt from your books by that name",
+      },
+    ]);
+  });
+
+  it("never makes a plan of a debt that's counted by itself, nor of a name twice", () => {
+    const again = readDebtFile(
+      "name,consolidated,usual payment\nCard One,yes,100\nNew plan,yes,1\nnew  plan,yes,2\n",
+    );
+    if (!again.ok) throw new Error("file");
+    const plan = planDebtImport(again.rows, debts);
+    expect(plan.plans.map((p) => p.name)).toEqual(["New plan"]);
+    expect(plan.fills).toEqual([]);
+    expect(plan.skipped.map((s) => s.text)).toEqual([
+      expect.stringMatching(/^Card One: is a debt by itself here/),
+      "new plan: already earlier in the file",
+    ]);
+  });
+});

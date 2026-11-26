@@ -45,3 +45,40 @@ an empty cell leaves that detail alone.
 | `note` (`notes`)                               | Anything to remember, up to 500 characters                                    | Pay early   |
 
 Money takes `1200.50` or `$1,200.50`. The example values are made up.
+
+## Debts paid through a plan
+
+If the business pays one amount a month to a company that pays several of
+its debts (a debt-management or consolidation plan), the earlier app may
+have kept that as one "consolidated" debt. Two more optional columns bring
+it across:
+
+| Column (also read as)                                              | What goes in it                                                                        | Example   |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------- | --------- |
+| `consolidated` (`is plan`, `pays other debts`, `debt plan`)        | `yes` on the plan's own row (`y`, `true`, `1` or `x` too); blank or `no` on the others | yes       |
+| `paid through` (`covered by`, `consolidated into`, `paid by plan`) | On a debt's row, the name of the plan that pays it                                     | Card Plan |
+
+- A plan's row is made into a plan (one fixed payment: its usual payment,
+  else its minimum; its rate and due day; its balance the debts it pays,
+  added up from the books) **only if no plan of that name is here yet**. If
+  one is, its details are filled like any debt's, never how it's paid or a
+  minimum. If its name is one of the books' accounts (exactly, then
+  ignoring capitals and spaces, never a guess), that becomes the plan's own
+  account: its payments are the money moved into it.
+- A plan's name that is already a debt counted by itself here is left for a
+  person: make the plan on Money → Debts and tick what it pays.
+- A debt is put under a plan **only if no plan pays it yet**; one already
+  under a plan stays where it is. Its own details still fill as usual.
+- It's written by its own checked function (`import_money_debt_plans`), with
+  its own request key, before the details: pressing again changes nothing,
+  and the same file again makes and covers nothing.
+
+For example (made-up names):
+
+```csv
+name,consolidated,paid through,rate %,usual payment,due day
+Card Plan,yes,,0,400,3
+Studio Card,,Card Plan,22.99,,
+Supply Card,,Card Plan,19.99,,
+Van Loan,,,6.5,310,15
+```

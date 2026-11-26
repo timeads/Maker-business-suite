@@ -601,6 +601,10 @@ export type DebtImportPreview = {
   message?: string;
   /** What would be filled, in words, one line per debt. */
   fills?: { line: number; debt: string; words: string[]; kept: string[] }[];
+  /** Plans that pay other debts, to be made, in words. */
+  plans?: { line: number; name: string; words: string[] }[];
+  /** Debts to be put under a plan. */
+  covers?: { line: number; debt: string; plan: string }[];
   skipped?: { line: number; text: string }[];
   problems?: { line: number; text: string }[];
 };
@@ -620,12 +624,21 @@ async function planImport(
   const { data, error } = await ctx.supabase
     .from("money_debts")
     .select(
-      "id, name, books_account, rate_bp, minimum_cents, payment_cents, plan, priority, due_day, note, updated_by",
+      "id, name, books_account, rate_bp, minimum_cents, payment_cents, plan, priority, due_day, note, updated_by, consolidated, covered_by",
     )
     .eq("tenant_id", ctx.tenant.id)
     .is("left_out_at", null)
     .limit(500);
   if (error) return { error: "We couldn't read your debts. Try again in a moment." } as const;
+  // The books' accounts, for linking a new plan to its own account by name.
+  const accounts = await ctx.supabase
+    .from("money_book_accounts")
+    .select("id, name")
+    .eq("tenant_id", ctx.tenant.id)
+    .is("gone_at", null)
+    .limit(1000);
+  if (accounts.error)
+    return { error: "We couldn't read your books. Try again in a moment." } as const;
   const debts: ImportDebt[] = ((data as Record<string, unknown>[] | null) ?? []).map((row) => ({
     id: String(row.id),
     name: String(row.name),
@@ -641,8 +654,13 @@ async function planImport(
     dueDay: row.due_day === null || row.due_day === undefined ? null : Number(row.due_day),
     note: (row.note as string | null) ?? null,
     savedByPerson: row.updated_by !== null && row.updated_by !== undefined,
+    consolidated: row.consolidated === true,
+    coveredBy: (row.covered_by as string | null) ?? null,
   }));
-  return { file, plan: planDebtImport(file.rows, debts) } as const;
+  const bookAccounts = ((accounts.data as { id: string; name: string }[] | null) ?? []).map(
+    (a) => ({ id: String(a.id), name: String(a.name) }),
+  );
+  return { file, plan: planDebtImport(file.rows, debts, bookAccounts) } as const;
 }
 
 /** "Bring your debt details across", for a look: what would be filled, and what wouldn't. */
@@ -659,6 +677,19 @@ export async function previewDebtImport(slug: string, text: string): Promise<Deb
       words: detailWords(fill.details, money),
       kept: fill.kept.map((field) => IMPORT_FIELD_WORDS[field]),
     })),
+    plans: planned.plan.plans.map((plan) => ({
+      line: plan.line,
+      name: plan.name,
+      words: [
+        ...detailWords(plan.details, money),
+        plan.account ? `its own account in your books, “${plan.account.name}”` : "",
+      ].filter(Boolean),
+    })),
+    covers: planned.plan.covers.map((cover) => ({
+      line: cover.line,
+      debt: cover.debtName,
+      plan: cover.planName,
+    })),
     skipped: planned.plan.skipped,
     problems: planned.file.problems,
   };
@@ -672,6 +703,8 @@ export async function confirmDebtImport(
   slug: string,
   text: string,
   requestKey: string,
+  /** A second key for the plans' part (each part is once per press). */
+  planKey?: string,
 ): Promise<DebtActionState> {
   const ctx = await debtContext(slug);
   if ("error" in ctx) return { error: ctx.error };
@@ -680,7 +713,42 @@ export async function confirmDebtImport(
   }
   const planned = await planImport(ctx, text);
   if ("error" in planned) return { error: planned.error };
-  if (planned.plan.fills.length === 0) return { message: "Nothing to bring across: it's all set." };
+  const { fills, plans, covers } = planned.plan;
+  if (fills.length === 0 && plans.length === 0 && covers.length === 0) {
+    return { message: "Nothing to bring across: it's all set." };
+  }
+  // Plans first: they're made, and debts put under them, before details fill.
+  let planWords = "";
+  if (plans.length > 0 || covers.length > 0) {
+    if (!planKey || !z.string().uuid().safeParse(planKey).success || planKey === requestKey) {
+      return { error: "Look at the file again first." };
+    }
+    const { data: made, error: planError } = await ctx.supabase.rpc("import_money_debt_plans", {
+      p_tenant_id: ctx.tenant.id,
+      p_request_key: planKey,
+      p_plans: plans.map((plan) => ({
+        name: plan.name,
+        ...plan.details,
+        plan_account_id: plan.account?.id ?? null,
+      })),
+      p_covers: covers.map((cover) => ({ debt_id: cover.debtId, plan_name: cover.planName })),
+    });
+    if (planError) return { error: "We couldn't bring those across. Nothing was changed." };
+    const r = (made ?? {}) as { plans?: number; covered?: number };
+    const n = Number(r.plans ?? 0);
+    const c = Number(r.covered ?? 0);
+    planWords = [
+      n > 0 ? `Made ${n} ${n === 1 ? "plan" : "plans"}` : "",
+      c > 0 ? `put ${c} ${c === 1 ? "debt" : "debts"} under ${n === 1 ? "it" : "a plan"}` : "",
+    ]
+      .filter(Boolean)
+      .join(" and ");
+  }
+  if (fills.length === 0) {
+    refresh(slug);
+    revalidatePath(`/w/${slug}/settings`, "layout");
+    return { message: planWords ? `${planWords}.` : "Already brought across." };
+  }
   const { data, error } = await ctx.supabase.rpc("import_money_debt_details", {
     p_tenant_id: ctx.tenant.id,
     p_request_key: requestKey,
@@ -691,11 +759,10 @@ export async function confirmDebtImport(
   revalidatePath(`/w/${slug}/settings`, "layout");
   const result = (data ?? {}) as { debts?: number; fields?: number; again?: boolean };
   const debts = Number(result.debts ?? 0);
-  return {
-    message: result.again
-      ? "Already brought across. Nothing changed the second time."
-      : debts === 0
-        ? "Nothing needed filling: it's all set."
-        : `Filled in ${Number(result.fields ?? 0)} details on ${debts} ${debts === 1 ? "debt" : "debts"}. Anything you'd already set is just as you left it.`,
-  };
+  const filled = result.again
+    ? "Already brought across. Nothing changed the second time."
+    : debts === 0
+      ? "Nothing needed filling: it's all set."
+      : `Filled in ${Number(result.fields ?? 0)} details on ${debts} ${debts === 1 ? "debt" : "debts"}. Anything you'd already set is just as you left it.`;
+  return { message: planWords ? `${planWords}. ${filled}` : filled };
 }

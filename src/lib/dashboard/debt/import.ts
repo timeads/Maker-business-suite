@@ -25,6 +25,19 @@ export const DEBT_IMPORT_COLUMNS = {
   due_day: ["due_day", "due", "due_date"],
   note: ["note", "notes"],
 } as const;
+
+/**
+ * Two optional columns for a plan that pays other debts (a consolidated
+ * debt): a row that IS such a plan, and, on a debt's own row, the plan that
+ * pays it.
+ */
+export const PLAN_IMPORT_COLUMNS = {
+  consolidated: ["consolidated", "is_plan", "pays_other_debts", "debt_plan"],
+  paid_through: ["paid_through", "covered_by", "consolidated_into", "paid_by_plan"],
+} as const;
+
+const YES = new Set(["yes", "y", "true", "1", "x"]);
+const NO = new Set(["no", "n", "false", "0", ""]);
 export type ImportField = Exclude<keyof typeof DEBT_IMPORT_COLUMNS, "name">;
 export const IMPORT_FIELDS: readonly ImportField[] = [
   "rate",
@@ -70,7 +83,15 @@ export type DebtDetails = {
   note?: string;
 };
 
-export type ImportRow = { line: number; name: string; details: DebtDetails };
+export type ImportRow = {
+  line: number;
+  name: string;
+  details: DebtDetails;
+  /** This row is a plan that pays other debts. */
+  isPlan?: boolean;
+  /** The plan that pays this row's debt, as the file names it. */
+  paidThrough?: string | null;
+};
 
 export type ReadDebtFile =
   | { ok: true; rows: ImportRow[]; problems: { line: number; text: string }[] }
@@ -112,6 +133,10 @@ export function readDebtFile(text: string): ReadDebtFile {
     ImportField,
     string | undefined
   >;
+  const planColumn = (field: keyof typeof PLAN_IMPORT_COLUMNS) =>
+    (PLAN_IMPORT_COLUMNS[field] as readonly string[]).find((name) => file.headers.includes(name));
+  const isPlanColumn = planColumn("consolidated");
+  const throughColumn = planColumn("paid_through");
   const rows: ImportRow[] = [];
   const problems: { line: number; text: string }[] = [];
   for (const row of file.rows) {
@@ -170,13 +195,25 @@ export function readDebtFile(text: string): ReadDebtFile {
     }
     const note = cell("note");
     if (note) details.note = note.slice(0, 500);
+    const planCell = isPlanColumn ? (row.cells[isPlanColumn] ?? "").trim().toLowerCase() : "";
+    const isPlan = YES.has(planCell);
+    if (!isPlan && !NO.has(planCell)) bad.push("whether it's a plan");
+    const paidThrough = throughColumn
+      ? (row.cells[throughColumn] ?? "").trim().replace(/\s+/g, " ").slice(0, 80) || null
+      : null;
     if (bad.length > 0) {
       problems.push({
         line: row.line,
         text: `${name}: we couldn't read ${bad.join(", ")}, so ${bad.length === 1 ? "it's" : "those are"} left out`,
       });
     }
-    rows.push({ line: row.line, name, details });
+    rows.push({
+      line: row.line,
+      name,
+      details,
+      ...(isPlan ? { isPlan } : {}),
+      ...(paidThrough && !isPlan ? { paidThrough } : {}),
+    });
   }
   return { ok: true, rows, problems };
 }
@@ -195,7 +232,14 @@ export type ImportDebt = {
   note: string | null;
   /** Someone has saved this debt by hand (so its plan is their word, even "pool"). */
   savedByPerson: boolean;
+  /** A plan that pays other debts. */
+  consolidated?: boolean;
+  /** Paid through a plan already. */
+  coveredBy?: string | null;
 };
+
+/** One of the books' accounts, for linking a new plan to its own account by name. */
+export type ImportAccount = { id: string; name: string };
 
 const folded = (name: string) => name.toLowerCase().replace(/\s+/g, "");
 
@@ -255,19 +299,84 @@ export type ImportPlan = {
     details: DebtDetails;
     kept: ImportField[];
   }[];
+  /** Plans that pay other debts, to be made (none of that name is here yet). */
+  plans: {
+    line: number;
+    name: string;
+    details: Pick<DebtDetails, "rate_bp" | "payment_cents" | "due_day" | "note">;
+    /** Its own account in the books, found by its name (only ever one). */
+    account: ImportAccount | null;
+  }[];
+  /** Debts to put under a plan (only ones no plan pays yet). */
+  covers: { line: number; debtId: string; debtName: string; planName: string }[];
   /** Rows not used, in words. */
   skipped: { line: number; text: string }[];
 };
 
-/** What the import would do: only fields not set yet, one row per debt. */
+/** The one account a name means, exactly then ignoring capitals and spaces; never a guess. */
+function matchAccount(name: string, accounts: readonly ImportAccount[]): ImportAccount | null {
+  const exact = accounts.filter((a) => a.name.trim() === name);
+  if (exact.length === 1) return exact[0];
+  if (exact.length > 1) return null;
+  const loose = accounts.filter((a) => folded(a.name) === folded(name));
+  return loose.length === 1 ? loose[0] : null;
+}
+
+/**
+ * What the import would do: only fields not set yet, one row per debt; a
+ * plan row naming no debt here becomes a new plan, and a "paid through"
+ * puts a debt under a plan only when no plan pays it yet.
+ */
 export function planDebtImport(
   rows: readonly ImportRow[],
   debts: readonly ImportDebt[],
+  accounts: readonly ImportAccount[] = [],
 ): ImportPlan {
   const fills: ImportPlan["fills"] = [];
+  const plans: ImportPlan["plans"] = [];
+  const covers: ImportPlan["covers"] = [];
   const skipped: ImportPlan["skipped"] = [];
   const used = new Set<string>();
+  const planNames = new Map(
+    debts.filter((d) => d.consolidated).map((d) => [folded(d.name), d.name] as const),
+  );
+  // Plans first, so a debt's row may name a plan that comes later in the file.
+  const making = new Set<number>();
   for (const row of rows) {
+    if (!row.isPlan) continue;
+    const found = matchDebt(row.name, debts);
+    if ("debt" in found && !found.debt.consolidated) {
+      skipped.push({
+        line: row.line,
+        text: `${row.name}: is a debt by itself here, so it isn't made a plan. Make the plan on Money → Debts and tick what it pays`,
+      });
+      making.add(row.line);
+      continue;
+    }
+    if (!("none" in found)) continue;
+    making.add(row.line);
+    if (planNames.has(folded(row.name))) {
+      skipped.push({ line: row.line, text: `${row.name}: already earlier in the file` });
+      continue;
+    }
+    planNames.set(folded(row.name), row.name);
+    const { rate_bp, minimum_cents, payment_cents, due_day, note } = row.details;
+    const payment = payment_cents ?? minimum_cents;
+    plans.push({
+      line: row.line,
+      name: row.name,
+      details: {
+        ...(rate_bp !== undefined ? { rate_bp } : {}),
+        ...(payment !== undefined ? { payment_cents: payment } : {}),
+        ...(due_day !== undefined ? { due_day } : {}),
+        ...(note !== undefined ? { note } : {}),
+      },
+      account: matchAccount(row.name, accounts),
+    });
+  }
+
+  for (const row of rows) {
+    if (making.has(row.line)) continue;
     const found = matchDebt(row.name, debts);
     if ("none" in found) {
       skipped.push({ line: row.line, text: `${row.name}: no debt from your books by that name` });
@@ -285,25 +394,50 @@ export function planDebtImport(
       continue;
     }
     used.add(found.debt.id);
+    // Said something about this row already (so "everything is set" isn't said too).
+    let noted = false;
+    if (row.paidThrough) {
+      const planName = planNames.get(folded(row.paidThrough));
+      if (!planName) {
+        skipped.push({
+          line: row.line,
+          text: `${found.debt.name}: no plan called “${row.paidThrough}” here or in the file, so it isn't put under one`,
+        });
+      } else if (found.debt.consolidated) {
+        skipped.push({ line: row.line, text: `${found.debt.name}: a plan can't pay another plan` });
+      } else if (found.debt.coveredBy) {
+        skipped.push({
+          line: row.line,
+          text: `${found.debt.name}: already paid through a plan, so it stays where it is`,
+        });
+      } else {
+        covers.push({ line: row.line, debtId: found.debt.id, debtName: found.debt.name, planName });
+      }
+      noted = true;
+    }
     const details: DebtDetails = {};
     const kept: ImportField[] = [];
     for (const field of IMPORT_FIELDS) {
       const key = DETAIL_OF[field];
       if (row.details[key] === undefined) continue;
+      // A plan is always one fixed payment: how it's paid and a minimum aren't its.
+      if (found.debt.consolidated && (field === "plan" || field === "minimum")) continue;
       if (fieldOpen(found.debt, field)) {
         (details as Record<string, unknown>)[key] = row.details[key];
       } else kept.push(field);
     }
     if (Object.keys(details).length === 0) {
-      skipped.push({
-        line: row.line,
-        text: `${found.debt.name}: everything in this row is set already`,
-      });
+      if (!noted) {
+        skipped.push({
+          line: row.line,
+          text: `${found.debt.name}: everything in this row is set already`,
+        });
+      }
       continue;
     }
     fills.push({ line: row.line, debtId: found.debt.id, debtName: found.debt.name, details, kept });
   }
-  return { fills, skipped };
+  return { fills, plans, covers, skipped };
 }
 
 /** What a row fills, in words, for the preview. */

@@ -139,7 +139,9 @@ export default async function DebtSettingsPage({ params }: { params: Promise<{ s
             debt&apos;s name or account, and any of: rate %, minimum, usual payment, plan, priority,
             due day and note. Each row is matched to a debt from your books by its account name.
             Only details you haven&apos;t set are filled in, and you see everything before it
-            happens.
+            happens. Paid several debts through one plan? Add a &ldquo;consolidated&rdquo; column
+            (yes on the plan&apos;s row) and a &ldquo;paid through&rdquo; column naming the plan on
+            each debt it pays.
           </CardDescription>
         </CardHeader>
         <CardContent>

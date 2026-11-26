@@ -896,6 +896,7 @@ export function DebtImportForm({ slug }: { slug: string }) {
   const [fileName, setFileName] = useState("");
   const [preview, setPreview] = useState<DebtImportPreview>({});
   const [key, setKey] = useState("");
+  const [planKey, setPlanKey] = useState("");
   const [said, setSaid] = useState<DebtActionState>({});
   const [pending, start] = useTransition();
 
@@ -904,6 +905,7 @@ export function DebtImportForm({ slug }: { slug: string }) {
       setSaid({});
       setPreview(await previewDebtImport(slug, body));
       setKey(crypto.randomUUID());
+      setPlanKey(crypto.randomUUID());
     });
 
   return (
@@ -939,6 +941,34 @@ export function DebtImportForm({ slug }: { slug: string }) {
       )}
       {preview.fills && (
         <div className="flex flex-col gap-3 text-sm" role="status">
+          {(preview.plans ?? []).length > 0 && (
+            <div className="flex flex-col gap-1">
+              <p>
+                {(preview.plans ?? []).length === 1 ? "A plan" : "Plans"} that pay other debts, to
+                be made:
+              </p>
+              <ul className="flex flex-col gap-1">
+                {(preview.plans ?? []).map((plan) => (
+                  <li key={plan.line}>
+                    <span className="font-medium">{plan.name}</span>
+                    {plan.words.length > 0 ? `: ${plan.words.join(", ")}` : ""}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {(preview.covers ?? []).length > 0 && (
+            <div className="flex flex-col gap-1">
+              <p>Paid through a plan from now on (each counted with its plan, not on its own):</p>
+              <ul className="flex flex-col gap-1">
+                {(preview.covers ?? []).map((cover) => (
+                  <li key={cover.line}>
+                    <span className="font-medium">{cover.debt}</span>, through {cover.plan}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           <p>
             {preview.fills.length === 0
               ? `Nothing in ${fileName || "that file"} needs filling in.`
@@ -975,20 +1005,25 @@ export function DebtImportForm({ slug }: { slug: string }) {
               </ul>
             </details>
           )}
-          {preview.fills.length > 0 && text && (
-            <span className="flex flex-wrap items-center gap-2">
-              <Button
-                size="sm"
-                variant="dark"
-                className="w-fit"
-                disabled={pending}
-                onClick={() => start(async () => setSaid(await confirmDebtImport(slug, text, key)))}
-              >
-                {pending ? "Bringing across…" : "Bring these across"}
-              </Button>
-              {say(said)}
-            </span>
-          )}
+          {(preview.fills.length > 0 ||
+            (preview.plans ?? []).length > 0 ||
+            (preview.covers ?? []).length > 0) &&
+            text && (
+              <span className="flex flex-wrap items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="dark"
+                  className="w-fit"
+                  disabled={pending}
+                  onClick={() =>
+                    start(async () => setSaid(await confirmDebtImport(slug, text, key, planKey)))
+                  }
+                >
+                  {pending ? "Bringing across…" : "Bring these across"}
+                </Button>
+                {say(said)}
+              </span>
+            )}
         </div>
       )}
     </div>

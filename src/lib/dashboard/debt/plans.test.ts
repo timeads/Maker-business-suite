@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { debtPlan } from "./engine";
+import { whatIfFigures } from "./what-if";
 import { debtBudgetRows, debtHomeLine, debtTotals, toPlanDebt, type Debt } from "./figures";
 import {
   coverWords,
@@ -279,5 +280,31 @@ describe("a plan's details as saved", () => {
     expect(debtPlanFieldsSchema.safeParse({ ...fields, covers: ["not-an-id"] }).success).toBe(
       false,
     );
+  });
+});
+
+describe("a what-if with a plan", () => {
+  it("sees the plan as one debt, and a change to its payment moves it alone", () => {
+    const fold = foldDebts([
+      plan({ id: "0b6f1d1e-7f0e-4c9e-9a51-3c1c2f6a00aa" }),
+      { ...cardA, coveredBy: "0b6f1d1e-7f0e-4c9e-9a51-3c1c2f6a00aa" },
+      { ...cardB, coveredBy: "0b6f1d1e-7f0e-4c9e-9a51-3c1c2f6a00aa" },
+    ]);
+    const input = {
+      debts: fold.debts.map(toPlanDebt),
+      start: "2026-11",
+      averageRevenue: 0,
+      revenueSharePct: 10,
+      emergency: { target: 0, current: 0, splitPct: 0, monthly: 0 },
+      overrides: new Map(),
+      strategy: "avalanche" as const,
+    };
+    const figures = whatIfFigures(input, {
+      debts: [{ id: "0b6f1d1e-7f0e-4c9e-9a51-3c1c2f6a00aa", payment: 50001 }],
+    });
+    expect(figures.now.payoffs.map((p) => [p.name, p.month])).toEqual([["Card plan", "2027-04"]]);
+    expect(figures.whatIf.payoffs.map((p) => [p.name, p.month])).toEqual([
+      ["Card plan", "2027-02"],
+    ]);
   });
 });
