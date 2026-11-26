@@ -7,13 +7,21 @@ import { requireUser } from "@/lib/auth";
 import { parseClock, zonedTimeToUtc } from "@/lib/bookings/slots";
 import { getEntitlements } from "@/lib/entitlements";
 import { loadBrandKit } from "@/lib/brand/brands";
-import { brandBrief } from "@/lib/brand/kit";
+import { brandBrief, toDesignKit } from "@/lib/brand/kit";
+import { draftDeps, libraryPhotos, meter } from "@/lib/social/draft-context";
+import { writeDraft } from "@/lib/social/write-draft";
 import { BANNER_TAG, MAX_DESIGN_SLIDES, ownDesign } from "@/lib/brand/slides";
 import type { SlideDesign } from "@/lib/design/slide-design";
 import { draftCaption } from "@/lib/social/caption";
 import { loadLearning } from "@/lib/social/learning";
 import { productPhotoTags, productSourceRef, shopPhotoAddress } from "@/lib/social/product-photos";
-import { LOGO_LIGHT_TAG, LOGO_TAG, pickPhoto, type TaggedAsset } from "@/lib/social/photo-match";
+import {
+  LOGO_LIGHT_TAG,
+  LOGO_TAG,
+  matchPhotos,
+  pickPhoto,
+  type TaggedAsset,
+} from "@/lib/social/photo-match";
 import {
   LINKS_KEY,
   PLAN_KEY,
@@ -1007,9 +1015,76 @@ export async function draftTheMonth(
   const photos = await taggedPhotos(ctx);
   // Each photo is offered to one draft only, so a month of posts doesn't show the same one.
   const taken = new Set<string>();
+  // Topics made as slides get a designed carousel in the brand's kit, through the monthly
+  // run's own path (`writeDraft`); without a kit they get words like the rest.
+  const kit = picked.kit ? toDesignKit(picked.kit) : null;
+  const wantsSlides = kit !== null && plan.topics.some((t) => t.makes === "slides");
+  const library = wantsSlides ? await libraryPhotos(ctx.supabase, ctx.tenant.id) : [];
+  let slidesMade = 0;
   for (const slot of open) {
     if (used >= limit) break;
     const topic = plan.topics.find((t) => t.id === slot.topic);
+    if (topic?.makes === "slides" && kit) {
+      try {
+        const offered = matchPhotos(photos, `${topic.name} ${topic.about}`, {
+          limit: 6,
+          skip: taken,
+        }).map((m) => m.asset.id);
+        const written = await writeDraft(
+          {
+            about: {
+              business:
+                picked.brand && !picked.brand.is_default ? picked.brand.name : ctx.tenant.name,
+              brand,
+              houseStyle: plan.style_notes,
+              learned: learning.learned,
+              lessons: learning.lessons,
+              recent: (recent ?? [])
+                .map((row) => String(row.caption).slice(0, 600))
+                .filter(Boolean),
+              topic: { name: topic.name, about: topic.about },
+              project: null,
+            },
+            makes: "slides",
+            kit,
+            assets: library.filter((asset) => offered.includes(asset.id)),
+          },
+          draftDeps(ctx.tenant.id, library),
+        );
+        used += written.tokens;
+        await meter(ctx.tenant.id, written.tokens);
+        const design = written.draft?.slides;
+        if (!written.draft || !design) continue;
+        const { data: savedId, error } = await ctx.supabase.rpc("save_social_post_to", {
+          p_tenant_id: ctx.tenant.id,
+          p_post_id: null,
+          p_brand_id: picked.brand?.id ?? null,
+          p_account_ids: [],
+          p_channels: [],
+          p_caption: written.draft.caption,
+          p_asset_ids: [],
+          p_scheduled_for: null,
+          p_captions: {},
+          p_project_id: null,
+          p_topic: slot.topic,
+          p_ai_draft: written.draft.caption,
+          p_planned_for: slot.at,
+        });
+        if (error || !savedId) continue;
+        await ctx.supabase.rpc("set_social_post_slides", {
+          p_tenant_id: ctx.tenant.id,
+          p_post_id: savedId as string,
+          p_slides: design,
+        });
+        made += 1;
+        slidesMade += 1;
+        for (const id of written.draft.pictured_ids ?? []) taken.add(id);
+      } catch (err) {
+        console.error("Month slides draft failed", err instanceof Error ? err.message : err);
+        break;
+      }
+      continue;
+    }
     // One photo at most, matched by its tags to the topic. The draft's page says why it is there.
     const match = topic ? pickPhoto(photos, `${topic.name} ${topic.about}`, taken) : null;
     try {
@@ -1070,12 +1145,16 @@ export async function draftTheMonth(
           : "Drafting didn't work just now. Please try again.",
     };
   }
+  const slidesNote =
+    slidesMade === 0
+      ? ""
+      : ` ${slidesMade === made ? (made === 1 ? "It is" : "All are") : `${slidesMade} are`} designed as slides; open one to change them.`;
   const photoNote =
     withPhoto === 0
       ? ""
       : ` ${withPhoto === made ? (made === 1 ? "It has" : "Each has") : `${withPhoto} have`} a photo picked by its tags; open the draft to see why, or take it off.`;
   return {
-    message: `${made} draft${made === 1 ? "" : "s"} written.${photoNote} Read each one, check the photo, then schedule it.`,
+    message: `${made} draft${made === 1 ? "" : "s"} written.${slidesNote}${photoNote} Read each one, check the photo, then schedule it.`,
   };
 }
 

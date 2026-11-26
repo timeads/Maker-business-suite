@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Composer, DeletePostForm, RetryPostForm, SettleTargetForm } from "../composer";
 import { socialAccess } from "../gate";
 import { SendBackForm } from "../review-forms";
+import { RedraftForm, RestoreVersionForm } from "../draft-forms";
 import {
   REVIEW_LABELS,
   STATUS_LABELS,
@@ -56,28 +57,47 @@ export default async function PostPage({
   searchParams,
 }: {
   params: Promise<{ slug: string; id: string }>;
-  searchParams: Promise<{ brand?: string }>;
+  searchParams: Promise<{
+    brand?: string;
+    drafted?: string;
+    rewritten?: string;
+    restored?: string;
+  }>;
 }) {
   const { slug, id } = await params;
-  const { brand: wanted } = await searchParams;
+  const { brand: wanted, drafted, rewritten, restored } = await searchParams;
   const access = await socialAccess(slug, `/w/${slug}/social/${id}`);
   if (!access.ok) return access.upsell;
   const { tenant, entitlements, role } = access;
   if (!/^[0-9a-f-]{36}$/i.test(id)) notFound();
 
   const supabase = await createClient();
-  const [{ data: post }, review] = await Promise.all([
+  const [{ data: post }, review, { data: versionRows }] = await Promise.all([
     supabase
       .from("social_posts")
       .select(
-        "id, caption, captions, channels, account_ids, brand_id, status, scheduled_for, planned_for, published_at, results, error, asset_id, asset_ids, project_id, topic, ai_draft, review, review_note, slides, slide_asset_ids, target_options",
+        "id, caption, captions, channels, account_ids, brand_id, status, scheduled_for, planned_for, published_at, results, error, asset_id, asset_ids, project_id, topic, ai_draft, review, review_note, slides, slide_asset_ids, target_options, photos_show, updated_at",
       )
       .eq("id", id)
       .eq("tenant_id", tenant.id)
       .maybeSingle(),
     reviewFor(supabase, tenant.id, role),
+    supabase
+      .from("social_post_versions")
+      .select("id, caption, why, kept_at, has_slides:slides->v")
+      .eq("tenant_id", tenant.id)
+      .eq("post_id", id)
+      .order("kept_at", { ascending: false })
+      .limit(10),
   ]);
   if (!post) notFound();
+  const versions = (versionRows ?? []) as {
+    id: string;
+    caption: string;
+    why: "rewritten" | "replaced";
+    kept_at: string;
+    has_slides: unknown;
+  }[];
   const accountIds = ((post.account_ids as string[] | null) ?? []).map(String);
   // The post's own brand, unless the person is switching it.
   const targets = await postTargets(
@@ -198,11 +218,75 @@ export default async function PostPage({
         </Card>
       )}
 
+      {(drafted || rewritten || restored) && (
+        <FormMessage kind="success">
+          {drafted
+            ? "Claude drafted this from the project. Read it through and change anything you like; nothing goes out until you send it for review or schedule it."
+            : rewritten
+              ? "Claude wrote it again. What it said before is kept below, in case you'd rather have it back."
+              : "The earlier version is back. What it said a moment ago is kept below."}
+        </FormMessage>
+      )}
+
+      {editable && post.ai_draft && (post.status as string) === "draft" && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Claude&apos;s draft</CardTitle>
+            {post.photos_show && (
+              <CardDescription>
+                What Claude saw in the photos:{" "}
+                <span className="font-read">{post.photos_show as string}</span>
+              </CardDescription>
+            )}
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4">
+            <RedraftForm
+              slug={tenant.slug}
+              postId={post.id as string}
+              seen={post.updated_at as string}
+              slides={Boolean(post.slides)}
+            />
+            {versions.length > 0 && (
+              <div className="flex flex-col gap-2">
+                <p className="text-xs font-semibold">Earlier versions</p>
+                <ul className="divide-border flex flex-col divide-y">
+                  {versions.map((version) => (
+                    <li key={version.id} className="flex flex-col gap-1 py-2">
+                      <span className="text-muted-foreground text-xs">
+                        {version.why === "rewritten"
+                          ? "Before Claude wrote it again"
+                          : "Before an earlier version was brought back"}
+                        {" · "}
+                        {
+                          formatWhen(version.kept_at, version.kept_at, tenant.timezone).split(
+                            " – ",
+                          )[0]
+                        }
+                        {version.has_slides != null ? " · with slides" : ""}
+                      </span>
+                      <p className="font-read line-clamp-3 text-sm whitespace-pre-line">
+                        {version.caption || "No caption"}
+                      </p>
+                      <RestoreVersionForm
+                        slug={tenant.slug}
+                        postId={post.id as string}
+                        versionId={version.id}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {editable ? (
         <>
           <Card>
             <CardContent className="pt-6">
               <Composer
+                key={post.updated_at as string}
                 slug={tenant.slug}
                 post={{
                   id: post.id as string,

@@ -10,7 +10,7 @@ import { SubmitButton } from "@/components/ui/submit-button";
 import { starterDesignFor } from "@/lib/brand/slides";
 import type { BrandKit } from "@/lib/design/brands";
 import type { SlideDesign } from "@/lib/design/slide-design";
-import { renderSlideBlob } from "@/lib/design/slide-render";
+import { fitDesign, renderSlideBlob } from "@/lib/design/slide-render";
 import {
   NETWORK_LABELS,
   checkPlace,
@@ -38,6 +38,7 @@ import {
   type SocialState,
 } from "./actions";
 import { designTitle, saveDesignAsPictures } from "./designed";
+import { draftPostSlides, type DraftState } from "./draft-actions";
 import { getReadyToSend } from "./send-prep";
 import type { ComposerAccount } from "./shared";
 import { loadTikTokChoices } from "./tiktok-actions";
@@ -215,6 +216,35 @@ export function Composer({
   );
   const connected = accounts.some((account) => account.canPost);
   const byId = new Map([...library, ...extra].map((photo) => [photo.id, photo]));
+  // Slides from Claude: they land in the post's own design, unsaved, for the person to change.
+  const [slidesState, draftSlides, draftingSlides] = useActionState<DraftState, FormData>(
+    async (prev, formData) => {
+      const result = await draftPostSlides(slug, prev, formData);
+      if (!result.slides || !result.draft) return result;
+      const others = picked.filter((id) => !byId.get(id)?.video);
+      if (others.length + result.slides.slides.length > 10) {
+        return {
+          error:
+            "Claude's slides and the photos already on this post come to more than 10. Take some photos off, then try again.",
+        };
+      }
+      // Measured in their real typefaces here, so no words are cut off or overlap.
+      const fitted = await fitDesign(result.slides, kit ?? undefined).catch(() => result.slides!);
+      setCaption(result.draft);
+      setAiDraft(result.draft);
+      setSlides(fitted);
+      setSlidesChanged(true);
+      setDesignNote(
+        "Claude's slides are on this post as one design. Open “Edit the slides” to change anything; they're made into pictures when the post is approved or scheduled. Save the post to keep them.",
+      );
+      return {
+        message: result.missing?.length
+          ? `Slides and a caption are in. Check before it goes out, as nobody said: ${result.missing.join("; ")}.`
+          : "Slides and a caption are in. Read them through and change anything you like.",
+      };
+    },
+    {},
+  );
   // A video goes out on its own, so picking one replaces what was picked,
   // and picking a photo afterwards replaces the video.
   const toggle = (id: string) =>
@@ -456,14 +486,32 @@ export function Composer({
               placeholder="What's the post about? e.g. new autumn colours, restock on Friday"
               className="sm:flex-1"
             />
-            <Button type="submit" variant="outline" formAction={draft} disabled={drafting}>
+            <Button
+              type="submit"
+              variant="outline"
+              formAction={draft}
+              disabled={drafting || draftingSlides}
+            >
               {drafting ? "Drafting…" : "Draft with Claude"}
             </Button>
+            {kit && !slidesFixed && (
+              <Button
+                type="submit"
+                variant="outline"
+                formAction={draftSlides}
+                disabled={drafting || draftingSlides}
+              >
+                {draftingSlides ? "Designing…" : "Draft slides"}
+              </Button>
+            )}
           </div>
           <p className="text-muted-foreground text-xs">
-            The draft goes into the caption box for you to edit. Nothing is posted until you say so.
+            The draft goes into the caption box for you to edit. “Draft slides” also designs a
+            carousel in your brand kit{slides ? ", in place of the slides here" : ""}, using your
+            own photos. Nothing is posted until you say so.
           </p>
-          <FormMessage>{draftState.error}</FormMessage>
+          <FormMessage>{draftState.error ?? slidesState.error}</FormMessage>
+          <FormMessage kind="success">{slidesState.message}</FormMessage>
         </div>
 
         <div className="flex flex-col gap-2">
