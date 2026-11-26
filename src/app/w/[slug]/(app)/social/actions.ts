@@ -26,6 +26,7 @@ import {
 } from "@/lib/social/plan";
 import { FIT_PLACES, needsCopy, type FitPlace } from "@/lib/social/fit";
 import { imageSize, type ImageSize } from "@/lib/social/image-size";
+import { takenAtFrom } from "@/lib/social/taken-at";
 import { REVIEW_KEY, reviewError, reviewSettingsSchema } from "@/lib/social/review";
 import { placeRuleError } from "@/lib/social/networks";
 import { tiktokOptionsSchema, type TikTokOptions } from "@/lib/social/tiktok-options";
@@ -128,8 +129,10 @@ async function storePhotos(
       p_created_by: ctx.user.id,
     });
     if (error) return { error: "A photo didn't upload. Please try again." };
-    const size = imageSize(new Uint8Array(await photo.arrayBuffer()));
+    const bytes = new Uint8Array(await photo.arrayBuffer());
+    const size = imageSize(bytes);
     if (size) await keepSize(ctx.tenant.id, data as string, size);
+    await keepTakenAt(ctx.tenant, data as string, bytes);
     ids.push(data as string);
   }
   return { ids };
@@ -146,11 +149,36 @@ async function keepSize(tenantId: string, assetId: string, size: ImageSize): Pro
   if (error) console.error(`Photo size not kept: ${error.message}`);
 }
 
+/**
+ * Keeps when a photo was taken, read from its own bytes on the workspace's clock (EXIF; see
+ * `taken-at.ts`). Nothing the browser says is used. Never throws: without it the photo is
+ * ordered by when it was added.
+ */
+async function keepTakenAt(
+  tenant: { id: string; timezone: string },
+  assetId: string,
+  bytes: Uint8Array,
+): Promise<void> {
+  const taken = takenAtFrom(bytes, tenant.timezone);
+  if (!taken) return;
+  const { error } = await getAdminClient().rpc("set_social_asset_taken_at", {
+    p_tenant_id: tenant.id,
+    p_asset_id: assetId,
+    p_taken_at: taken.toISOString(),
+  });
+  if (error) console.error(`When a photo was taken wasn't kept: ${error.message}`);
+}
+
+/** Reads a stored file back. Null when it can't be read. */
+async function readStored(path: string): Promise<Uint8Array | null> {
+  const { data } = await getAdminClient().storage.from("social").download(path);
+  return data ? new Uint8Array(await data.arrayBuffer()) : null;
+}
+
 /** Reads a stored picture back and measures it from its own bytes. */
 async function measureStored(path: string): Promise<ImageSize | null> {
-  const { data } = await getAdminClient().storage.from("social").download(path);
-  if (!data) return null;
-  return imageSize(new Uint8Array(await data.arrayBuffer()));
+  const bytes = await readStored(path);
+  return bytes ? imageSize(bytes) : null;
 }
 
 const UUID = /^[0-9a-f-]{36}$/i;
@@ -1137,7 +1165,8 @@ async function registerUploads(
       continue;
     }
     // A picture must say it is one in its own first bytes, and is measured while we look.
-    const measured = type.startsWith("image/") ? await measureStored(item.path) : null;
+    const stored = type.startsWith("image/") ? await readStored(item.path) : null;
+    const measured = stored ? imageSize(stored) : null;
     if (type.startsWith("image/") && measured?.type !== type) {
       await bucket.remove([item.path]);
       continue;
@@ -1153,6 +1182,7 @@ async function registerUploads(
     });
     if (!error && data) {
       if (measured) await keepSize(ctx.tenant.id, data as string, measured);
+      if (stored) await keepTakenAt(ctx.tenant, data as string, stored);
       filed.push({
         id: data as string,
         path: item.path,

@@ -15,32 +15,17 @@ import {
   monthSlots,
   picturedOnSlides,
   planProjects,
-  spread,
   usedPhotos,
   type PhotoRole,
   type MonthPost,
   type MonthProject,
   type ProjectPhoto,
 } from "./month";
-import {
-  MAX_PHOTO_BYTES,
-  MAX_SHOWN,
-  PHOTO_TYPES,
-  tidyCaption,
-  type MonthPostInput,
-  type MonthWriter,
-  type PhotoType,
-} from "./month-writer";
+import type { MonthWriter } from "./month-writer";
 import { matchPhotos, pickLogoAsset, pickPhoto } from "./photo-match";
 import { PLAN_KEY, SOCIAL_MODULE, parsePlan } from "./plan";
-import {
-  DEFAULT_SLIDES,
-  designWords,
-  line,
-  offerPhotos,
-  tidySlides,
-  type SlidesWriter,
-} from "./slide-writer";
+import type { SlidesWriter } from "./slide-writer";
+import { earlierReadings, writeDraft, writesSlides, type Drafted } from "./write-draft";
 import { editLessons, parseStyleNotes, styleNotesKey } from "./style-notes";
 import { publicAssetUrl } from "./worker";
 
@@ -243,43 +228,6 @@ async function defaultLoadPhoto(admin: SupabaseClient, path: string): Promise<Ui
   return new Uint8Array(await data.arrayBuffer());
 }
 
-/**
- * Up to four of a carousel's photos, spread across it, that can be shown to
- * Claude, each with its reference when the photos are offered for slides.
- */
-export async function shownPhotos(
-  assets: { storage_path: string; mime_type: string; ref?: string }[],
-  load: (path: string) => Promise<Uint8Array | null>,
-): Promise<MonthPostInput["photos"]> {
-  const out: MonthPostInput["photos"] = [];
-  for (const asset of spread(assets, MAX_SHOWN)) {
-    if (!(PHOTO_TYPES as readonly string[]).includes(asset.mime_type)) continue;
-    const bytes = await load(asset.storage_path).catch(() => null);
-    if (!bytes || bytes.byteLength > MAX_PHOTO_BYTES) continue;
-    out.push({
-      type: asset.mime_type as PhotoType,
-      base64: Buffer.from(bytes).toString("base64"),
-      ...(asset.ref ? { ref: asset.ref } : {}),
-    });
-  }
-  return out;
-}
-
-/** What earlier drafts of each project said its photos showed, newest first. */
-export function earlierReadings(
-  posts: { project_id?: string | null; photos_show?: string | null }[],
-): Map<string, string[]> {
-  const seen = new Map<string, string[]>();
-  for (const post of posts) {
-    const sentence = (post.photos_show ?? "").trim();
-    if (!post.project_id || !sentence) continue;
-    const list = seen.get(post.project_id) ?? [];
-    if (list.length < 3 && !list.includes(sentence)) list.push(sentence);
-    seen.set(post.project_id, list);
-  }
-  return seen;
-}
-
 /** The run's result in a sentence, for the plan page and the run's record. */
 export function describeMonthRun(counts: Partial<MonthCounts>): string {
   const parts: string[] = [];
@@ -400,90 +348,55 @@ export async function runClaimedMonth(run: ClaimedMonthRun, deps: MonthRunDeps):
         counts.empty += 1;
         continue;
       }
-      const asSlides = slot.makes === "slides" && loaded.kit !== null && !!deps.writeSlides;
+      const draftDeps = {
+        write: deps.write,
+        writeSlides: deps.writeSlides,
+        loadPhoto,
+        assetUrl,
+        home,
+        logos: { dark: logo(false), light: logo(true) },
+      };
+      const asSlides = writesSlides({ makes: slot.makes, kit: loaded.kit }, draftDeps);
       const about = topic ? `${topic.name} ${topic.about}` : "";
       // A caption post takes one photo whose tags fit; slides are offered a few to choose from.
       const match = !pick && topic && !asSlides ? pickPhoto(tagged, about, taken) : null;
-      const offeredAssets = pick
+      const assets = pick
         ? pick.photos.map((photo) => assetById.get(photo.id)).filter((a): a is AssetRow => !!a)
         : asSlides && topic
           ? matchPhotos(tagged, about, { limit: 6, skip: taken }).map((m) => m.asset)
           : match
             ? [match.asset]
             : [];
-      const chosen = asSlides ? [] : offeredAssets;
-      const common = {
-        business: brand.is_default || !brand.name ? loaded.tenant.name : brand.name,
-        brand: loaded.brief,
-        houseStyle: loaded.plan.style_notes,
-        learned: loaded.learned,
-        lessons: loaded.lessons,
-        recent: loaded.recent,
-        topic: topic ? { name: topic.name, about: topic.about } : null,
-        project: pick
-          ? {
-              name: pick.project.name,
-              note: pick.project.note,
-              photoCount: offeredAssets.length,
-              seen: readings.get(pick.project.id) ?? [],
-            }
-          : null,
-      };
       let tokens = 0;
-      let filed: Record<string, unknown> | null = null;
+      let filed: Drafted | null = null;
       try {
-        if (asSlides && loaded.kit && deps.writeSlides) {
-          const { offered, files } = offerPhotos(
-            offeredAssets.map((asset) => ({
-              id: asset.id,
-              url: assetUrl(asset.storage_path),
-              title: asset.title ?? "",
-              tags: asset.tags ?? [],
-            })),
-          );
-          const result = await deps.writeSlides({
-            ...common,
-            photos: await shownPhotos(
-              offeredAssets.map((asset, index) => ({ ...asset, ref: files[index]?.ref })),
-              loadPhoto,
-            ),
-            design: designWords(loaded.kit),
-            offered,
-            slideCount: DEFAULT_SLIDES,
-          });
-          tokens = result.tokens;
-          const tidy = result.ok
-            ? tidySlides(result.draft, {
-                kit: loaded.kit,
-                offered: files,
-                home,
-                logos: { dark: logo(false), light: logo(true) },
-              })
-            : null;
-          if (tidy) {
-            filed = {
-              caption: tidy.caption,
-              asset_ids: [],
-              pictured_ids: tidy.pictured,
-              slides: tidy.design,
-              photos_show: tidy.sees,
-            };
-          }
-        } else {
-          const result = await deps.write({
-            ...common,
-            photos: await shownPhotos(chosen, loadPhoto),
-          });
-          tokens = result.tokens;
-          const caption = result.ok ? tidyCaption(result.post.caption) : null;
-          if (caption) {
-            filed = {
-              caption,
-              asset_ids: chosen.map((asset) => asset.id),
-              photos_show: result.ok ? line(result.post.sees, 400) : "",
-            };
-          }
-        }
+        const written = await writeDraft(
+          {
+            about: {
+              business: brand.is_default || !brand.name ? loaded.tenant.name : brand.name,
+              brand: loaded.brief,
+              houseStyle: loaded.plan.style_notes,
+              learned: loaded.learned,
+              lessons: loaded.lessons,
+              recent: loaded.recent,
+              topic: topic ? { name: topic.name, about: topic.about } : null,
+              project: pick
+                ? {
+                    name: pick.project.name,
+                    note: pick.project.note,
+                    photoCount: assets.length,
+                    seen: readings.get(pick.project.id) ?? [],
+                  }
+                : null,
+            },
+            makes: slot.makes,
+            kit: loaded.kit,
+            assets,
+          },
+          draftDeps,
+        );
+        tokens = written.tokens;
+        filed = written.draft;
       } catch (err) {
         console.error(
           `month run ${run.id}: Claude couldn't be reached`,
@@ -509,7 +422,10 @@ export async function runClaimedMonth(run: ClaimedMonthRun, deps: MonthRunDeps):
         p_draft: {
           kind: pick ? "project" : "topic",
           planned_for: slot.at,
-          ...filed,
+          caption: filed.caption,
+          asset_ids: filed.asset_ids,
+          photos_show: filed.photos_show,
+          ...(filed.slides ? { slides: filed.slides, pictured_ids: filed.pictured_ids ?? [] } : {}),
           project_id: pick?.project.id ?? null,
           topic: slot.topic,
         },
@@ -523,8 +439,7 @@ export async function runClaimedMonth(run: ClaimedMonthRun, deps: MonthRunDeps):
       counts.drafted += 1;
       if (pick) counts.projects += 1;
       else counts.topics += 1;
-      for (const asset of chosen) taken.add(asset.id);
-      for (const id of (filed.pictured_ids as string[] | undefined) ?? []) taken.add(id);
+      for (const id of [...filed.asset_ids, ...(filed.pictured_ids ?? [])]) taken.add(id);
     }
 
     if (counts.drafted > 0) {
