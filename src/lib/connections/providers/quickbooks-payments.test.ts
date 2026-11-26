@@ -125,7 +125,7 @@ describe("the QuickBooks sync and supplier payments", () => {
     const { state, urls } = await run(false);
     expect(urls.some((url) => url.includes("/query?"))).toBe(false);
     expect(state.bookPayments).toEqual([]);
-    expect(state.usage).toBe(4);
+    expect(state.usage).toBe(5);
   });
 
   it("hands over what it read when asked, and only ever reads", async () => {
@@ -145,7 +145,7 @@ describe("the QuickBooks sync and supplier payments", () => {
         memo: "",
       },
     ]);
-    expect(state.usage).toBe(6);
+    expect(state.usage).toBe(7);
   });
 
   it("still finishes the sync when the payments can't be read", async () => {

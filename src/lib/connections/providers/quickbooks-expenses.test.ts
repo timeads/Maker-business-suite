@@ -196,13 +196,18 @@ describe("reading expenses from the books", () => {
 
 describe("the QuickBooks sync and expenses", () => {
   const report = { Header: {}, Columns: { Column: [] }, Rows: { Row: [] } };
-  function net(options: { failTransfers?: boolean; fullPage?: boolean } = {}) {
+  function net(
+    options: { failTransfers?: boolean; fullPage?: boolean; failCashFlow?: boolean } = {},
+  ) {
     const urls: string[] = [];
     const impl = (async (input: RequestInfo | URL) => {
       const url = decodeURIComponent(String(input).replace(/\+/g, " "));
       urls.push(url);
       const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
       if (url.includes("/companyinfo/")) return json({ CompanyInfo: { CompanyName: "Rugs" } });
+      if (url.includes("/reports/CashFlow") && options.failCashFlow) {
+        return json({ Fault: {} }, 400);
+      }
       if (url.includes("/reports/")) return json(report);
       if (url.includes("/query?")) {
         if (url.includes("from Transfer") && options.failTransfers) return json({ Fault: {} }, 500);
@@ -265,7 +270,25 @@ describe("the QuickBooks sync and expenses", () => {
       "CreditCardPayment",
     ]);
     expect(state.expenseCloses[0].run).toBe(state.bookExpenses[0].run);
-    expect(state.usage).toBe(4 + 5);
+    expect(state.usage).toBe(5 + 5);
+  });
+
+  it("reads the monthly reports from three Januaries back, cash flow on the cash basis", async () => {
+    const { urls } = await run(false);
+    const year = new Date().getUTCFullYear();
+    const pnl = urls.find((url) => url.includes("/reports/ProfitAndLoss"))!;
+    expect(pnl).toContain(`start_date=${year - 3}-01-01`);
+    expect(pnl).toContain("summarize_column_by=Month");
+    const cash = urls.find((url) => url.includes("/reports/CashFlow"))!;
+    expect(cash).toContain(`start_date=${year - 3}-01-01`);
+    expect(cash).toContain("summarize_column_by=Month");
+    expect(cash).toContain("accounting_method=Cash");
+  });
+
+  it("finishes the sync when the cash flow report can't be read", async () => {
+    const { result, state } = await run(true, { failCashFlow: true });
+    expect(result.cursor).toBeDefined();
+    expect(state.bookExpenses.length).toBeGreaterThan(0);
   });
 
   it("asks for the next page when one comes back full", async () => {

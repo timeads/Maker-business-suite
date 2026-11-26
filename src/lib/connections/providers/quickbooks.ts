@@ -32,6 +32,7 @@ import {
 import {
   parseAgedReceivables,
   parseBalanceSheet,
+  parseCashFlow,
   parseProfitAndLoss,
   type QuickBooksReport,
 } from "./quickbooks-reports";
@@ -40,6 +41,19 @@ const SCOPE = "com.intuit.quickbooks.accounting";
 const AUTHORIZE_URL = "https://appcenter.intuit.com/connect/oauth2";
 const TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer";
 const REVOKE_URL = "https://developer.api.intuit.com/v2/oauth2/tokens/revoke";
+
+/**
+ * How far back the monthly reports go: from the first of January this many
+ * years before this one, as the earlier finance dashboard reads its history
+ * (enough for a year on year and the comparisons cash health makes). Each
+ * report is still one call, summarised by month.
+ */
+export const REPORT_HISTORY_YEARS = 3;
+
+/** The first day the monthly reports are read from. */
+export function reportsSince(today: Date): string {
+  return `${today.getUTCFullYear() - REPORT_HISTORY_YEARS}-01-01`;
+}
 
 const apiBase = () =>
   process.env.QUICKBOOKS_ENVIRONMENT === "production"
@@ -280,13 +294,13 @@ export function createQuickBooksAdapter(fetchImpl: Fetch = fetch): ProviderAdapt
       const info = await companyInfo(externalAccountId, token);
       const today = new Date();
       const iso = (date: Date) => date.toISOString().slice(0, 10);
-      const start = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - 12, 1));
+      const since = reportsSince(today);
 
       // Three report pulls per sync, cached as snapshots. Dashboards read the
       // cache, never QuickBooks, which keeps us well inside Intuit's limits.
       const [profitAndLoss, balanceSheet, receivables] = await Promise.all([
         report(externalAccountId, token, "ProfitAndLoss", {
-          start_date: iso(start),
+          start_date: since,
           end_date: iso(today),
           summarize_column_by: "Month",
         }),
@@ -300,6 +314,27 @@ export function createQuickBooksAdapter(fetchImpl: Fetch = fetch): ProviderAdapt
       ].filter((row): row is SnapshotRow => row !== null);
       await store.saveSnapshots(snapshots);
       let calls = 4;
+      // The cash flow statement by month, for burn and runway. Cash basis,
+      // as the earlier dashboard asks for it (QuickBooks answers the cash
+      // flow report on that basis). Trouble here never stops the sync: the
+      // other reports are already saved.
+      try {
+        calls += 1;
+        const cashFlow = await report(externalAccountId, token, "CashFlow", {
+          start_date: since,
+          end_date: iso(today),
+          summarize_column_by: "Month",
+          accounting_method: "Cash",
+        });
+        const months = parseCashFlow(cashFlow);
+        if (months.length > 0) await store.saveSnapshots(months);
+      } catch (err) {
+        if (err instanceof ReconnectRequiredError) throw err;
+        console.warn(
+          `QuickBooks cash flow not read for ${externalAccountId}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
       // Payments to suppliers, for Stock's balances. The reports matter more:
       // trouble here is noted and never stops the sync.
       try {

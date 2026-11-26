@@ -4,6 +4,7 @@ import type { SyncContext, TokenSet } from "../types";
 import {
   parseAgedReceivables,
   parseBalanceSheet,
+  parseCashFlow,
   parseProfitAndLoss,
   type QuickBooksReport,
 } from "./quickbooks-reports";
@@ -829,6 +830,8 @@ describe("QuickBooks reports", () => {
           gross_profit: 600,
           expenses: 250,
           net_income: 350,
+          other_income_cents: 0,
+          other_expenses_cents: 0,
           currency: "USD",
         },
       },
@@ -842,9 +845,125 @@ describe("QuickBooks reports", () => {
           gross_profit: 1600.5,
           expenses: 300,
           net_income: 1300.5,
+          other_income_cents: 0,
+          other_expenses_cents: 0,
           currency: "USD",
         },
       },
+    ]);
+  });
+
+  it("reads other income and other expenses in whole cents", () => {
+    const withOther: QuickBooksReport = {
+      ...profitAndLoss,
+      Rows: {
+        Row: [
+          ...(profitAndLoss.Rows?.Row ?? []),
+          {
+            group: "NetOtherIncome",
+            Rows: {
+              Row: [
+                section("OtherIncome", "Total Other Income", ["5,000.10", "0.00", "5,000.10"]),
+                section("OtherExpenses", "Total Other Expenses", ["12.34", "0.01", "12.35"]),
+              ],
+            },
+          },
+        ],
+      },
+    };
+    const months = parseProfitAndLoss(withOther);
+    expect(months[0].data).toMatchObject({
+      other_income_cents: 500010,
+      other_expenses_cents: 1234,
+    });
+    expect(months[1].data).toMatchObject({ other_income_cents: 0, other_expenses_cents: 1 });
+  });
+
+  it("reads the cash flow statement month by month, in whole cents", () => {
+    const cashFlow: QuickBooksReport = {
+      Header: { Currency: "USD" },
+      Columns: profitAndLoss.Columns,
+      Rows: {
+        Row: [
+          section("OperatingActivities", "Net cash provided by operating activities", [
+            "-1,234.56",
+            "800.00",
+            "-434.56",
+          ]),
+          section("InvestingActivities", "Net cash provided by investing activities", [
+            "-500.00",
+            "",
+            "-500.00",
+          ]),
+          section("FinancingActivities", "Net cash provided by financing activities", [
+            "2,000.00",
+            "-100.00",
+            "1,900.00",
+          ]),
+          section("CashIncrease", "Net cash increase for period", ["265.44", "700.00", "965.44"]),
+          section("EndingCash", "Cash at end of period", ["10,265.44", "10,965.44", "10,965.44"]),
+        ],
+      },
+    };
+    expect(parseCashFlow(cashFlow)).toEqual([
+      {
+        kind: "cash_flow",
+        period_start: "2026-10-01",
+        period_end: "2026-10-31",
+        data: {
+          operating_cents: -123456,
+          investing_cents: -50000,
+          financing_cents: 200000,
+          net_change_cents: 26544,
+          ending_cash_cents: 1026544,
+          currency: "USD",
+        },
+      },
+      {
+        kind: "cash_flow",
+        period_start: "2026-11-01",
+        period_end: "2026-11-21",
+        data: {
+          operating_cents: 80000,
+          investing_cents: 0,
+          financing_cents: -10000,
+          net_change_cents: 70000,
+          ending_cash_cents: 1096544,
+          currency: "USD",
+        },
+      },
+    ]);
+    // No net change row: the three sections added up. No operating section: nothing.
+    const bare = {
+      ...cashFlow,
+      Rows: { Row: (cashFlow.Rows?.Row ?? []).slice(0, 3) },
+    };
+    expect(parseCashFlow(bare)[0].data).toMatchObject({
+      net_change_cents: 26544,
+      ending_cash_cents: null,
+    });
+    expect(parseCashFlow({ ...cashFlow, Rows: { Row: [] } })).toEqual([]);
+  });
+
+  it("keeps each bank account's line under cash in the bank", () => {
+    const sheet: QuickBooksReport = {
+      Rows: {
+        Row: [
+          {
+            ...section("BankAccounts", "Total Bank Accounts", ["1,500.25"]),
+            Rows: {
+              Row: [
+                { type: "Data", ColData: [{ value: "Checking" }, { value: "1,000.00" }] },
+                { type: "Data", ColData: [{ value: "Savings" }, { value: "500.25" }] },
+              ],
+            },
+          },
+        ],
+      },
+    };
+    expect(parseBalanceSheet(sheet, "2026-11-21")?.data.bank_accounts).toEqual([
+      { name: "Checking", cents: 100000 },
+      { name: "Savings", cents: 50025 },
     ]);
   });
 
@@ -889,7 +1008,13 @@ describe("QuickBooks reports", () => {
       kind: "balance_sheet",
       period_start: "2026-11-21",
       period_end: "2026-11-21",
-      data: { cash: 4321.09, receivables: 650, total_assets: 9000, currency: "USD" },
+      data: {
+        cash: 4321.09,
+        bank_accounts: [],
+        receivables: 650,
+        total_assets: 9000,
+        currency: "USD",
+      },
     });
     expect(parseBalanceSheet({ Rows: { Row: [] } }, "2026-11-21")).toBeNull();
   });

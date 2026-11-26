@@ -114,7 +114,7 @@ export type OrderRow = {
 };
 
 export type SnapshotRow = {
-  kind: "profit_and_loss" | "balance_sheet" | "ar_aging";
+  kind: "profit_and_loss" | "balance_sheet" | "ar_aging" | "cash_flow";
   period_start: string;
   period_end: string;
   data: Record<string, unknown>;
