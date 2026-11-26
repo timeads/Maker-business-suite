@@ -57,7 +57,8 @@ export default async function DebtSettingsPage({ params }: { params: Promise<{ s
         <CardHeader>
           <CardTitle>The plan</CardTitle>
           <CardDescription>
-            The debts themselves are typed in on{" "}
+            The debts themselves come from your QuickBooks balance sheet, and you add their rates
+            and payments on{" "}
             <Link
               href={`${base}/dashboard/debts/accounts`}
               className="underline underline-offset-4"

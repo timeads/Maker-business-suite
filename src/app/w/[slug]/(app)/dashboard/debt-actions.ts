@@ -77,8 +77,10 @@ export async function saveDebt(
     if (!moneyOk(text(formData, name)))
       return { error: `The ${name} doesn't look like an amount.` };
   }
-  const rate = text(formData, "rate") === "" ? 0 : percentToBp(text(formData, "rate"));
-  if (rate === null) return { error: "Give the rate as a percent, like 22.99." };
+  // Blank is "not given yet": the pages say the debt needs a rate.
+  const rateText = text(formData, "rate");
+  const rate = rateText === "" ? null : percentToBp(rateText);
+  if (rate === null && rateText !== "") return { error: "Give the rate as a percent, like 22.99." };
   const revolvingText = text(formData, "revolving");
   const revolving = revolvingText === "" ? null : percentToBp(revolvingText);
   if (revolving === null && revolvingText !== "") {
@@ -125,6 +127,36 @@ export async function saveDebt(
   }
   refresh(slug);
   return { message: id ? "Saved." : `${parsed.data.name} is added.` };
+}
+
+/**
+ * "Count this as a debt", "Not a debt", or back to what the rule says, for
+ * one of the books' liability accounts. Sticks across syncs.
+ */
+export async function chooseBookLiability(
+  slug: string,
+  accountId: string,
+  choice: "debt" | "not_debt" | "rule",
+): Promise<DebtActionState> {
+  const ctx = await debtContext(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  if (!z.string().uuid().safeParse(accountId).success) return { error: "Which account is this?" };
+  if (!["debt", "not_debt", "rule"].includes(choice)) return { error: "Which way is it?" };
+  const { error } = await ctx.supabase.rpc("choose_book_liability", {
+    p_tenant_id: ctx.tenant.id,
+    p_account_id: accountId,
+    p_choice: choice,
+  });
+  if (error) return { error: "We couldn't change that. Try again in a moment." };
+  refresh(slug);
+  return {
+    message:
+      choice === "debt"
+        ? "Counted. It's with your debts now."
+        : choice === "not_debt"
+          ? "Done. It stays out of your debts, even after the next sync."
+          : "Done. It follows your setting again.",
+  };
 }
 
 export async function removeDebt(slug: string, debtId: string): Promise<DebtActionState> {

@@ -41,6 +41,7 @@ function fake(options: {
       },
       gte: () => chain,
       lt: () => chain,
+      is: () => chain,
       order: () => chain,
       limit: () => chain,
       range: (start: number) => {

@@ -87,16 +87,16 @@ export default async function PayoffPlanPage({
         {header}
         <Card>
           <CardHeader>
-            <CardTitle>Start with the debts you&apos;re paying down</CardTitle>
+            <CardTitle>Your debts come from your books</CardTitle>
             <CardDescription>
-              Add each card, loan or line of credit with its rate and minimum. The plan works out
-              the rest, month by month. Nothing here changes anything in your books or with a
-              lender.
+              Each time QuickBooks syncs, the cards, loans and lines of credit on your balance sheet
+              come in by themselves. Add each one&apos;s rate and minimum and the plan works out the
+              rest, month by month. Nothing here changes anything in your books or with a lender.
             </CardDescription>
           </CardHeader>
           <CardContent>
             <Button asChild>
-              <Link href={`${base}/dashboard/debts/accounts`}>Add your debts</Link>
+              <Link href={`${base}/dashboard/debts/accounts`}>See your debts</Link>
             </Button>
           </CardContent>
         </Card>
@@ -149,8 +149,24 @@ export default async function PayoffPlanPage({
           {view.noBalance.length === 1 ? "it" : "them"} out.{" "}
           <Link href={`${base}/dashboard/debts/accounts`} className="underline underline-offset-4">
             Give a balance
+          </Link>
+          .
+        </p>
+      )}
+
+      {view.noRate.length > 0 && (
+        <p
+          className="border-ochre/30 bg-ochre-soft text-ochre-text rounded-lg border px-3 py-2 text-sm"
+          role="status"
+        >
+          {view.noRate.map((d) => d.name).join(", ")} {view.noRate.length === 1 ? "has" : "have"} no
+          rate yet, so the plan counts {view.noRate.length === 1 ? "it" : "them"} at 0%: the
+          interest below leaves {view.noRate.length === 1 ? "it" : "them"} out, and paying off may
+          take longer than shown.{" "}
+          <Link href={`${base}/dashboard/debts/accounts`} className="underline underline-offset-4">
+            Add the rate
           </Link>{" "}
-          or link {view.noBalance.length === 1 ? "it" : "them"} to the books.
+          from the statement.
         </p>
       )}
 

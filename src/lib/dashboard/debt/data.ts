@@ -24,6 +24,7 @@ import {
   type DebtTotals,
   type EmergencyFund,
 } from "./figures";
+import { liabilityTypeWords } from "./books";
 import { DEBT_KEY, DEBT_MODULE, parseDebtSettings, type DebtSettings } from "./settings";
 
 /**
@@ -61,9 +62,11 @@ export async function loadDebts(supabase: SupabaseClient, tenantId: string): Pro
     supabase
       .from("money_debts")
       .select(
-        "id, name, kind, plan, status, rate_bp, minimum_cents, payment_cents, revolving_bp, due_day, priority, opening_cents, books_account, note",
+        "id, name, kind, plan, status, rate_bp, minimum_cents, payment_cents, revolving_bp, due_day, priority, opening_cents, books_account, note, source, book_account_id",
       )
       .eq("tenant_id", tenantId)
+      // "Not a debt": out of every list and figure.
+      .is("left_out_at", null)
       .order("priority", { ascending: true, nullsFirst: false })
       .order("name")
       .limit(200),
@@ -94,11 +97,93 @@ export async function loadDebts(supabase: SupabaseClient, tenantId: string): Pro
       opening: numOrNull(row.opening_cents),
       booksAccount: (row.books_account as string | null) ?? null,
       note: (row.note as string | null) ?? null,
+      source: row.source === "books" ? "books" : "person",
+      bookAccountId: (row.book_account_id as string | null) ?? null,
+      needsRate: row.rate_bp === null || row.rate_bp === undefined,
       balance: balance ? num(balance.balance_cents) : null,
       balanceAsOf: balance ? String(balance.as_of) : null,
       balanceFrom: balance ? (balance.source as "person" | "books") : null,
     };
   });
+}
+
+/** One of the books' other liabilities, for "Also in your books". */
+export type OtherLiability = {
+  id: string;
+  name: string;
+  /** What the books call it ("Sales Tax Payable"). */
+  typeWords: string;
+  /** Signed as the books show it; owed is positive. */
+  balance: number;
+  asOf: string | null;
+  /** A person said "Not a debt" (else the rule leaves it out). */
+  markedNotDebt: boolean;
+};
+
+export type BooksState = {
+  /** QuickBooks is connected and working. */
+  connected: boolean;
+  /** When the books' liabilities were last read for the debts (else the last sync). */
+  lastRead: string | null;
+  /** Liabilities in the books that aren't debts here, biggest first. */
+  others: OtherLiability[];
+};
+
+/**
+ * Where the debts come from: whether the books are connected, when they
+ * were last read, and the liabilities that aren't counted as debts. As the
+ * member: owners and admins only, by row-level security.
+ */
+export async function loadBooksState(
+  supabase: SupabaseClient,
+  tenantId: string,
+  debts: readonly Debt[],
+): Promise<BooksState> {
+  const [accounts, connection] = await Promise.all([
+    supabase
+      .from("money_book_accounts")
+      .select(
+        "id, name, account_type, account_subtype, section, balance_cents, as_of, choice, seen_at",
+      )
+      .eq("tenant_id", tenantId)
+      .is("gone_at", null)
+      .order("seen_at", { ascending: false })
+      .limit(1000),
+    supabase
+      .from("connections")
+      .select("status, last_synced_at")
+      .eq("tenant_id", tenantId)
+      .eq("provider", "quickbooks")
+      .maybeSingle(),
+  ]);
+  if (accounts.error)
+    throw new Error(`Could not load the books' accounts: ${accounts.error.message}`);
+  const rows = (accounts.data as Record<string, unknown>[] | null) ?? [];
+  const shown = new Set(debts.map((d) => d.bookAccountId).filter(Boolean));
+  const others = rows
+    .filter((row) => !shown.has(String(row.id)))
+    .map((row) => ({
+      id: String(row.id),
+      name: String(row.name),
+      typeWords: liabilityTypeWords({
+        type: (row.account_type as string | null) ?? null,
+        subtype: (row.account_subtype as string | null) ?? null,
+        section: (row.section as string | null) ?? null,
+      }),
+      balance: num(row.balance_cents),
+      asOf: (row.as_of as string | null) ?? null,
+      markedNotDebt: row.choice === "not_debt",
+    }))
+    .sort((a, b) => b.balance - a.balance || a.name.localeCompare(b.name));
+  const conn = connection.error ? null : (connection.data as Record<string, unknown> | null);
+  return {
+    connected: conn?.status === "active",
+    lastRead:
+      (rows[0]?.seen_at as string | undefined) ??
+      (conn?.last_synced_at as string | null | undefined) ??
+      null,
+    others,
+  };
 }
 
 /** What the books show paid into each debt's own account, per month. */
@@ -143,6 +228,8 @@ export type DebtView = {
   totals: DebtTotals;
   /** Debts with no balance yet: the plan leaves them out until one is given. */
   noBalance: Debt[];
+  /** Debts owing something with no rate given yet: the plan counts them at 0%. */
+  noRate: Debt[];
   /** The plan's figures as the engine takes them, for a what-if to change a copy of. */
   input: PlanInput & { strategy: Strategy; hybridThreshold: number };
   result: DebtPlan;
@@ -245,6 +332,7 @@ export async function loadDebtView(
     totals: debtTotals(debts),
     input,
     noBalance: debts.filter((d) => d.balance === null && d.status !== "closed"),
+    noRate: debts.filter((d) => d.needsRate && d.status === "active" && (d.balance ?? 0) > 0),
     result,
     payoffs: planPayoffs(
       result.plan,

@@ -12,7 +12,9 @@ import {
   DEBT_STATUS_WORDS,
   PLAN_KIND_WORDS,
 } from "@/lib/dashboard/debt/settings";
+import { syncNow, type ConnectionState } from "../connections/actions";
 import {
+  chooseBookLiability,
   noteBalance,
   removeBalance,
   chooseStrategy,
@@ -53,18 +55,24 @@ const say = (state: DebtActionState) =>
     </span>
   ) : null;
 
-/** Add a debt or change one: what it is, how the plan pays it, and where it sits in the books. */
+/**
+ * Add a debt or change one: what it is, how the plan pays it, and where it
+ * sits in the books. A debt from the books (`fromBooks`) keeps the books'
+ * name and account: only what the books can't say is asked.
+ */
 export function DebtForm({
   slug,
   values,
   currency,
   accounts,
+  fromBooks = false,
 }: {
   slug: string;
   values: DebtFormValues;
   currency: string;
   /** Accounts the books show money moving into, to link the debt to. */
   accounts: string[];
+  fromBooks?: boolean;
 }) {
   const [state, action] = useActionState<DebtActionState, FormData>(saveDebt.bind(null, slug), {});
   const id = (name: string) => `debt-${values.id ?? "new"}-${name}`;
@@ -115,8 +123,14 @@ export function DebtForm({
   return (
     <form action={action} className="flex flex-col gap-4">
       {values.id && <input type="hidden" name="id" value={values.id} />}
+      {fromBooks && (
+        <>
+          <input type="hidden" name="name" value={values.name} />
+          <input type="hidden" name="books_account" value={values.books_account} />
+        </>
+      )}
       <div className="grid gap-4 sm:grid-cols-2">
-        {field("name", "Name", { wide: true })}
+        {!fromBooks && field("name", "Name", { wide: true })}
         {choose(
           "kind",
           "What it is",
@@ -127,7 +141,13 @@ export function DebtForm({
           "How it's paid",
           (["pool", "fixed", "revenue_share"] as const).map((k) => [k, PLAN_KIND_WORDS[k]]),
         )}
-        {field("rate", "Yearly rate", { suffix: "%", inputMode: "decimal" })}
+        {field("rate", "Yearly rate", {
+          suffix: "%",
+          inputMode: "decimal",
+          help: fromBooks
+            ? "QuickBooks doesn't keep this: take it from your statement."
+            : undefined,
+        })}
         {field("minimum", "Minimum a month", { suffix: currency, inputMode: "decimal" })}
         {field("payment", "Usual payment a month", {
           suffix: currency,
@@ -161,10 +181,11 @@ export function DebtForm({
             "Status",
             DEBT_STATUSES.map((s) => [s, DEBT_STATUS_WORDS[s]]),
           )}
-        {field("books_account", "Its account in your books", {
-          wide: true,
-          help: "The card or loan account as QuickBooks names it. Payments into it show here, and its balance is read from your balance sheet.",
-        })}
+        {!fromBooks &&
+          field("books_account", "Its account in your books", {
+            wide: true,
+            help: "Leave blank for a debt that isn't in your books, like money a person lent you. Debts in your books come in by themselves when they sync.",
+          })}
         <datalist id={id("accounts")}>
           {accounts.map((name) => (
             <option key={name} value={name} />
@@ -430,5 +451,66 @@ export function RemoveWhatIf({ slug, id }: { slug: string; id: string }) {
       </Button>
       {say(said)}
     </span>
+  );
+}
+
+/** "Count this as a debt" / "Not a debt" / "Let the setting decide", for one of the books' accounts. */
+export function BookChoiceButton({
+  slug,
+  accountId,
+  choice,
+  label,
+  variant = "outline",
+}: {
+  slug: string;
+  accountId: string;
+  choice: "debt" | "not_debt" | "rule";
+  label: string;
+  variant?: "outline" | "ghost";
+}) {
+  const [said, setSaid] = useState<DebtActionState>({});
+  const [pending, start] = useTransition();
+  return (
+    <span className="inline-flex flex-wrap items-center gap-2">
+      <Button
+        size="sm"
+        variant={variant}
+        disabled={pending}
+        onClick={() =>
+          start(async () => setSaid(await chooseBookLiability(slug, accountId, choice)))
+        }
+      >
+        {pending ? "…" : label}
+      </Button>
+      {say(said)}
+    </span>
+  );
+}
+
+/** "Read the books now": queues a QuickBooks sync through the usual path (owners and admins). */
+export function ReadBooksButton({ slug }: { slug: string }) {
+  const [state, action] = useActionState<ConnectionState, FormData>(
+    syncNow.bind(null, slug, "quickbooks"),
+    {},
+  );
+  return (
+    <form action={action} className="flex flex-col gap-1">
+      <SubmitButton variant="outline" size="sm" pendingText="Starting…" className="w-fit">
+        Read the books now
+      </SubmitButton>
+      {state.error && (
+        <span role="alert" className="text-brick text-xs">
+          {state.error}
+        </span>
+      )}
+      {state.message && (
+        <span role="status" className="text-muted-foreground text-xs">
+          {state.message.replace(
+            "This page updates when it finishes.",
+            "Give it a few minutes, then refresh this page.",
+          )}
+        </span>
+      )}
+    </form>
   );
 }

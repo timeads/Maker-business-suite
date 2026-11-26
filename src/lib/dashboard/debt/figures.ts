@@ -27,6 +27,12 @@ export type Debt = {
   opening: number | null;
   booksAccount: string | null;
   note: string | null;
+  /** From the books' balance sheet (its balance is the books'), or typed in. */
+  source: "books" | "person";
+  /** The books' account it comes from, for "Not a debt". */
+  bookAccountId: string | null;
+  /** No rate given yet: the plan counts it at 0% (`rateBp` is 0) and says so. */
+  needsRate: boolean;
   /** The latest balance a person or the books gave; null when none yet. */
   balance: number | null;
   balanceAsOf: string | null;

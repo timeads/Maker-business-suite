@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { requireUser } from "@/lib/auth";
-import { loadDebtView } from "@/lib/dashboard/debt/data";
+import { loadBooksState, loadDebtView } from "@/lib/dashboard/debt/data";
 import { usualPayment, type Debt } from "@/lib/dashboard/debt/figures";
 import {
   DEBT_KIND_WORDS,
@@ -20,7 +20,14 @@ import { localDate, periodLabel } from "@/lib/dashboard/range";
 import { getEntitlements } from "@/lib/entitlements";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
-import { BalanceForm, DebtForm, RowButton, type DebtFormValues } from "../../debt-forms";
+import {
+  BalanceForm,
+  BookChoiceButton,
+  DebtForm,
+  ReadBooksButton,
+  RowButton,
+  type DebtFormValues,
+} from "../../debt-forms";
 
 export const metadata: Metadata = { title: "Debts" };
 
@@ -39,7 +46,7 @@ const formValues = (d: Debt | null): DebtFormValues => ({
   kind: d?.kind ?? "card",
   plan: d?.plan ?? "pool",
   status: d?.status ?? "active",
-  rate: d ? percentText(d.rateBp) : "",
+  rate: d && !d.needsRate ? percentText(d.rateBp) : "",
   minimum: d ? amountText(d.minimum) : "",
   payment: amountText(d?.payment ?? null),
   revolving: percentText(d?.revolvingBp ?? null),
@@ -52,9 +59,11 @@ const formValues = (d: Debt | null): DebtFormValues => ({
 });
 
 /**
- * Money → Debts: each card, loan and line of credit, typed in by hand, with
- * its balances (given by a person or read from the books) and the payments
- * the books show into it. Owners and admins only.
+ * Money → Debts: each card, loan and line of credit, made from the books'
+ * balance sheet each time QuickBooks syncs (or typed in, for one that isn't
+ * in the books), with its balances and the payments the books show into it;
+ * and the books' other liabilities, which an owner or admin can count as a
+ * debt. Owners and admins only.
  */
 export default async function DebtsPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
@@ -90,7 +99,19 @@ export default async function DebtsPage({ params }: { params: Promise<{ slug: st
   const accounts = [
     ...new Set(((moves.data ?? []) as { account: string }[]).map((row) => row.account)),
   ];
+  const books = await loadBooksState(supabase, tenant.id, view.debts);
   const money = (cents: number) => formatMoney(cents / 100, tenant.currency);
+  const when = (iso: string) =>
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: tenant.timezone,
+      month: "long",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(new Date(iso));
+  const readWords = books.lastRead
+    ? `Last read from QuickBooks on ${when(books.lastRead)}.`
+    : "Not read from QuickBooks yet.";
   const day = (iso: string) => periodLabel(iso, "day", true);
   const local = localDate(new Date(), tenant.timezone);
   const today = `${local.year}-${String(local.month).padStart(2, "0")}-${String(local.day).padStart(2, "0")}`;
@@ -99,12 +120,39 @@ export default async function DebtsPage({ params }: { params: Promise<{ slug: st
     <>
       <PageHeader
         title="Debts"
-        description="Each card, loan and line of credit you're paying down. Only owners and admins can see these."
+        description="Each card, loan and line of credit you're paying down, straight from your books. Only owners and admins can see these."
       >
         <Button asChild variant="outline" size="sm">
           <Link href={`${base}/dashboard/debts`}>Payoff plan</Link>
         </Button>
       </PageHeader>
+
+      {view.debts.length === 0 ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Your debts come from your books</CardTitle>
+            <CardDescription>
+              Each time QuickBooks syncs, the cards, loans and lines of credit on your balance sheet
+              show up here with what&apos;s owed on them. You add the rate and the usual payment,
+              which QuickBooks doesn&apos;t keep. {readWords}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-2">
+            {books.connected ? (
+              canEdit && <ReadBooksButton slug={tenant.slug} />
+            ) : (
+              <Button asChild variant="outline" size="sm" className="w-fit">
+                <Link href={`${base}/connections`}>Connect QuickBooks</Link>
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="text-muted-foreground flex flex-wrap items-center justify-between gap-3 text-sm">
+          <p>Balances come from your QuickBooks balance sheet. {readWords}</p>
+          {books.connected && canEdit && <ReadBooksButton slug={tenant.slug} />}
+        </div>
+      )}
 
       {view.debts.length > 0 && (
         <Card>
@@ -162,7 +210,13 @@ export default async function DebtsPage({ params }: { params: Promise<{ slug: st
                       <td className="px-2 py-2 text-right tabular-nums">
                         {d.opening === null ? "–" : money(d.opening)}
                       </td>
-                      <td className="px-2 py-2 text-right tabular-nums">{bpWords(d.rateBp)}</td>
+                      <td className="px-2 py-2 text-right tabular-nums">
+                        {d.needsRate ? (
+                          <Badge tone="waiting">Needs a rate</Badge>
+                        ) : (
+                          bpWords(d.rateBp)
+                        )}
+                      </td>
                       <td className="px-2 py-2 text-right tabular-nums">
                         {money(usualPayment(d))}
                       </td>
@@ -187,10 +241,63 @@ export default async function DebtsPage({ params }: { params: Promise<{ slug: st
         </Card>
       )}
 
+      {books.others.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Also in your books</CardTitle>
+            <CardDescription>
+              Other things your balance sheet says you owe, like bills to suppliers or sales tax.
+              They aren&apos;t counted as debts to pay down. If one is, count it and it joins the
+              plan.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ul className="flex flex-col gap-2 text-sm">
+              {books.others.map((o) => (
+                <li
+                  key={o.id}
+                  className="border-border flex flex-wrap items-center justify-between gap-2 border-b pb-2 last:border-0"
+                >
+                  <span>
+                    <span className="font-medium">{o.name}</span>
+                    <span className="text-muted-foreground block text-xs">
+                      {o.typeWords}
+                      {o.markedNotDebt ? " · you said this isn't a debt" : ""}
+                    </span>
+                  </span>
+                  <span className="flex flex-wrap items-center gap-2">
+                    <span className="tabular-nums">{money(o.balance)}</span>
+                    {canEdit && (
+                      <BookChoiceButton
+                        slug={tenant.slug}
+                        accountId={o.id}
+                        choice="debt"
+                        label="Count this as a debt"
+                      />
+                    )}
+                    {canEdit && o.markedNotDebt && (
+                      <BookChoiceButton
+                        slug={tenant.slug}
+                        accountId={o.id}
+                        choice="rule"
+                        label="Let my setting decide"
+                        variant="ghost"
+                      />
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
+
       {canEdit && (
         <Card>
-          <details open={view.debts.length === 0}>
-            <summary className="cursor-pointer px-6 py-4 font-semibold">Add a debt</summary>
+          <details>
+            <summary className="cursor-pointer px-6 py-4 font-semibold">
+              Add a debt that isn&apos;t in your books
+            </summary>
             <CardContent>
               <DebtForm
                 slug={tenant.slug}
@@ -211,15 +318,18 @@ export default async function DebtsPage({ params }: { params: Promise<{ slug: st
             <CardHeader>
               <CardTitle className="text-base">{d.name}</CardTitle>
               <CardDescription>
-                {d.booksAccount
-                  ? `Linked to “${d.booksAccount}” in your books: its balance and the payments into it come from there.`
-                  : "Not linked to your books: give its balance by hand."}
+                {d.source === "books"
+                  ? `From “${d.booksAccount ?? d.name}” in your books: its balance and the payments into it come from there.`
+                  : d.booksAccount
+                    ? `Linked to “${d.booksAccount}” in your books: payments into it come from there.`
+                    : "Not in your books: give its balance by hand."}
+                {d.needsRate && " It needs a rate: until it has one, the plan counts it at 0%."}
               </CardDescription>
             </CardHeader>
             <CardContent className="grid gap-6 lg:grid-cols-2">
               <div className="flex flex-col gap-3">
                 <h3 className="text-sm font-semibold">Balances</h3>
-                {canEdit && (
+                {canEdit && d.source === "person" && (
                   <BalanceForm
                     slug={tenant.slug}
                     debtId={d.id}
@@ -289,18 +399,38 @@ export default async function DebtsPage({ params }: { params: Promise<{ slug: st
                       values={formValues(d)}
                       currency={tenant.currency}
                       accounts={accounts}
+                      fromBooks={d.source === "books"}
                     />
-                    <p className="text-muted-foreground text-xs">
-                      Paid off? Set it to Closed to keep its history. Remove it only if it was added
-                      by mistake.
-                    </p>
-                    <RowButton
-                      slug={tenant.slug}
-                      what="debt"
-                      id={d.id}
-                      label="Remove this debt"
-                      confirm={`Remove ${d.name} and its balances? This can't be undone.`}
-                    />
+                    {d.source === "books" && d.bookAccountId ? (
+                      <>
+                        <p className="text-muted-foreground text-xs">
+                          Its name and balance follow your books, and a sync never changes what you
+                          fill in here. Not something you&apos;re paying down? Leave it out: it
+                          stays out after every sync.
+                        </p>
+                        <BookChoiceButton
+                          slug={tenant.slug}
+                          accountId={d.bookAccountId}
+                          choice="not_debt"
+                          label="Not a debt"
+                          variant="ghost"
+                        />
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-muted-foreground text-xs">
+                          Paid off? Set it to Closed to keep its history. Remove it only if it was
+                          added by mistake.
+                        </p>
+                        <RowButton
+                          slug={tenant.slug}
+                          what="debt"
+                          id={d.id}
+                          label="Remove this debt"
+                          confirm={`Remove ${d.name} and its balances? This can't be undone.`}
+                        />
+                      </>
+                    )}
                   </div>
                 </details>
               )}

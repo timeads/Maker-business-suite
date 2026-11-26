@@ -58,6 +58,7 @@ function fakeSupabase(
         if (column === "kind") kinds = values;
         return chain;
       },
+      is: () => chain,
       order: () => chain,
       limit: () => chain,
       maybeSingle: () => {
