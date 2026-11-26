@@ -76,6 +76,7 @@ describe("settingsNav", () => {
       "bookings.texts",
       "bookings.shop-page",
       "bookings.shop-tags",
+      "bookings.budget",
       "bookings.daily-email",
       "bookings.import",
     ]);

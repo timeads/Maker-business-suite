@@ -11,6 +11,7 @@ import {
 import { DEFAULT_SHOP_PAGE, SHOP_PAGE_KEY, shopPageSchema } from "../bookings/shop-page";
 import { DAILY_KEY, DEFAULT_DAILY_EMAIL, dailyEmailSchema } from "../bookings/daily-config";
 import { DEFAULT_SHOP_TAGS, SHOP_TAGS_KEY, shopTagsSchema } from "../bookings/shop-tags";
+import { BUDGET_KEY, DEFAULT_BUDGET, budgetSettingsSchema } from "../bookings/budget";
 import {
   DEFAULT_TEXT_SETTINGS,
   TEXTS_KEY,
@@ -300,6 +301,16 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
       textWordsChanged(parseTextSettings(next), parseTextSettings(current))
         ? "The words of a text, the line beside the tick box and the opt-out line can only be written by a person: Settings → Bookings → Text reminders. Propose the change again with them exactly as they are now, and tell the person where to write the words."
         : null,
+  },
+  {
+    module: BOOKINGS_MODULE,
+    key: BUDGET_KEY,
+    feature: "bookings",
+    name: "Classroom budget",
+    description:
+      "How the Bookings budget prices teaching and materials: the teachers (up to ten, each with a short id of lowercase letters, digits and dashes, a name and an hourly rate in cents, hourly_cents; the first is who teaches a class unless the class says otherwise), the prep and clean-up hours paid on top of each class (overhead_hours, 0 to 24, 2 by default) and the waste allowance on materials priced by the square foot (waste_percent, 0 to 100, 10 by default). Fixed costs, material rates and other income are typed in on the Budget page, not here.",
+    schema: budgetSettingsSchema,
+    defaultBody: () => DEFAULT_BUDGET,
   },
   {
     module: BOOKINGS_MODULE,

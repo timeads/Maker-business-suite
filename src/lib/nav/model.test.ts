@@ -204,7 +204,12 @@ describe("buildNav: each tool's menu", () => {
       "Runsheet",
       "Customers",
       "Messages sent",
+      "Classroom supplies",
+      "Vendors",
+      "Budget",
     ]);
+    // The budget is money: owners and admins only.
+    expect(labels(tool(buildNav(viewer({ manager: false })), "bookings"))).not.toContain("Budget");
     // "Needs a date" is a place only while a shop order is waiting for one.
     const waiting = tool(buildNav(viewer(), { bookings: 2 }), "bookings");
     expect(labels(waiting)).toEqual([
@@ -215,6 +220,9 @@ describe("buildNav: each tool's menu", () => {
       "Runsheet",
       "Customers",
       "Messages sent",
+      "Classroom supplies",
+      "Vendors",
+      "Budget",
     ]);
     expect(waiting.count).toBe(2);
     expect(waiting.menu[0].items[1]).toMatchObject({ to: "bookings/needs-date", count: 2 });
@@ -466,6 +474,7 @@ describe("filterMenu", () => {
       "› Text reminders",
       "› Shop product page",
       "› Order tags",
+      "› Budget",
       "› Daily email",
       "› Bring your bookings across",
     ]);

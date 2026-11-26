@@ -142,7 +142,7 @@ function shippingMenu(attention: Attention): NavGroup[] {
   ];
 }
 
-function bookingsMenu(attention: Attention): NavGroup[] {
+function bookingsMenu(attention: Attention, viewer: NavViewer): NavGroup[] {
   const items = [
     first("bookings.coming-up", "Coming up", "bookings"),
     place("bookings.calendar", "Calendar", "bookings/calendar"),
@@ -169,7 +169,27 @@ function bookingsMenu(attention: Attention): NavGroup[] {
       }),
     );
   }
-  return [{ id: "bookings.main", items }];
+  // The classroom: what classes use up, who it comes from, and (for owners
+  // and admins) what the classes cost against what they bring in.
+  const studio = [
+    place("bookings.supplies", "Classroom supplies", "bookings/supplies", {
+      keywords: ["supplies", "materials", "run out", "order by", "reorder", "yarn", "stock count"],
+    }),
+    place("bookings.vendors", "Vendors", "bookings/vendors", {
+      keywords: ["where supplies come from", "supplier", "ordering notes"],
+    }),
+    ...(viewer.manager
+      ? [
+          place("bookings.budget", "Budget", "bookings/budget", {
+            keywords: ["costs", "rent", "teaching", "margin", "profit", "materials cost"],
+          }),
+        ]
+      : []),
+  ];
+  return [
+    { id: "bookings.main", items },
+    { id: "bookings.studio", name: "Classroom", items: studio },
+  ];
 }
 
 function stockMenu(viewer: NavViewer): NavGroup[] {
@@ -361,7 +381,7 @@ export function buildNav(viewer: NavViewer, attention: Attention = {}): NavTool[
       menu: [{ id: "dashboard.main", items: [place("dashboard.home", "Dashboard", "dashboard")] }],
     },
     helpdesk: { panel: "menu", menu: helpdeskMenu(viewer, attention) },
-    bookings: { panel: "menu", menu: bookingsMenu(attention) },
+    bookings: { panel: "menu", menu: bookingsMenu(attention, viewer) },
     social: {
       panel: "menu",
       menu: [

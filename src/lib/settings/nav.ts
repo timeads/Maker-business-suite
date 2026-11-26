@@ -298,6 +298,23 @@ const TOOLS: Def[] = [
         ],
       },
       {
+        id: "bookings.budget",
+        name: "Budget",
+        path: "bookings/budget",
+        show: managers,
+        keywords: [
+          "teaching rate",
+          "hourly rate",
+          "teacher",
+          "prep",
+          "clean-up",
+          "waste",
+          "project size",
+          "frame size",
+          "square foot",
+        ],
+      },
+      {
         id: "bookings.daily-email",
         name: "Daily email",
         path: "bookings/daily-email",
