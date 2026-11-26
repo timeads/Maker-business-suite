@@ -58,7 +58,18 @@ export default async function ChannelsPage({
       .maybeSingle(),
   ]);
   const settings = parseChannelSettings(config?.body);
-  const connection = row ? connectionFacts(row as Record<string, unknown>) : null;
+  // An Instagram account is "linked" when the workspace uses one, on any of its Pages.
+  const { data: igRows } = await supabase
+    .from("social_accounts")
+    .select("platform_id")
+    .eq("tenant_id", tenant.id)
+    .eq("network", "instagram")
+    .eq("active", true)
+    .limit(1);
+  const facts = row ? connectionFacts(row as Record<string, unknown>) : null;
+  const usedInstagram = (igRows as { platform_id: string }[] | null)?.[0]?.platform_id ?? null;
+  const connection =
+    facts && usedInstagram ? { ...facts, instagramId: usedInstagram } : facts;
   const live = connection !== null && connection.status !== "disconnected";
   const allowed =
     live &&

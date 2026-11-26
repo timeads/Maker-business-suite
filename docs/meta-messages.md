@@ -107,6 +107,60 @@ Notes:
   A message the customer **unsends** is marked as removed: its words and files
   are deleted here too.
 
+## Several Pages and Instagram accounts
+
+One Facebook login can hold several Pages, each with the Instagram
+professional account linked to it, and a workspace can use several of them,
+each as one of its brands.
+
+- **What the login shares is offered, not used.** After Facebook's login the
+  suite asks for every Page the person shared (`/me/accounts`, with each
+  Page's `tasks`) and keeps each Page's own token in Vault beside the first
+  one's (`token.secrets`, `page:<id>`); tokens are read only through
+  `getMetaPageToken`, which goes through `getProviderToken`. Each Page and its
+  Instagram account become rows in `social_accounts` (`note_meta_accounts`),
+  unused until an owner or admin ticks them under **Settings → Social & emails
+  → Social accounts** and picks the brand each belongs to
+  (`choose_social_accounts`). A first login starts using its first Page with
+  an Instagram account, as a login always did. Adding or removing an account
+  never touches the others; an account no longer shared can't be used, and its
+  rows (and what points at them) stay. One workspace at a time uses an account.
+- **Per-Page permission.** Meta grants permissions to the login, but says per
+  Page what the person may do there (`tasks`: `MANAGE`, `CREATE_CONTENT`,
+  `MESSAGING`, `MODERATE`, ...). An account posts only where its Page allows
+  `CREATE_CONTENT`, answers messages only with `MESSAGING` and takes comments
+  only with `MODERATE` (`MANAGE` allows all). Where Meta didn't say (accounts
+  from before this change), the login's permissions alone decide.
+  (`accountAllows` in `meta-access.ts`; `private.meta_tasks_allow` is the
+  database's twin.)
+- **Routing.** A delivery is routed by the platform id on its webhook entry
+  (a Page id, or an Instagram account id) to the workspace and the account
+  (`resolve_meta_account`); anything no workspace uses is still dropped
+  unread. The worker files through `file_account_message` /
+  `file_account_comment`, so each conversation, person and post carries its
+  account (`social_account_id`).
+- **One conversation per person per account.** Meta gives a person a
+  different id on each Page and each Instagram account, so the same human
+  writing to two accounts is two people here, each with a conversation.
+- **Answering as that account.** Replies, private replies, hiding and
+  deleting, taking or asking for thread control, and the automatic first
+  reply all go through the Page of the account the customer wrote to, with
+  that Page's token. In an automatic reply `{{business_name}}` is the brand's
+  name when the account belongs to a brand other than the main one (still
+  fixed words filled in by code).
+- **Webhook subscriptions.** Every Page with an account in use is asked to
+  send its messages and comments (`subscribed_apps`, with its own token) when
+  the Channels screen or the Social accounts screen is saved; a Page with
+  none in use is asked to stop.
+- **The inbox** names the account a conversation came to where a workspace
+  has more than one of that kind, and can be narrowed to one account
+  (`account` in the address).
+- **More Pages later.** Social accounts → "Share more Pages with us" runs the
+  login again, asking for what the connection already has. In Facebook's
+  dialog, choose "Edit settings" (or "Edit previous settings") and tick the
+  extra Pages; Facebook may otherwise reuse the earlier choice. (From memory
+  of Meta's dialog; check it against the screen.)
+
 ## Using this alongside another inbox tool
 
 Meta lets **one app at a time** answer a conversation. It calls this _thread
@@ -568,7 +622,9 @@ the app).
 
 Nothing else is new. `SUPABASE_SECRET_KEY` and the storage bucket are the ones
 the help desk already uses. The migration is
-`supabase/migrations/20270110000100_helpdesk_social.sql`.
+`supabase/migrations/20270110000100_helpdesk_social.sql`; several accounts came
+with `20270128000200_social_accounts.sql` and
+`20270128000400_helpdesk_accounts.sql`.
 
 ## Switching it on in a workspace
 
@@ -645,6 +701,13 @@ call to Meta faked in tests. Not yet seen working against Meta:
 - That `entry.id` on Instagram deliveries is the same id the connection stores
   as the Page's `instagram_business_account.id`. If it isn't, deliveries are
   dropped as "not connected" and the worker log will show nothing filed.
+- Several Pages, end to end: that `/me/accounts` returns each shared Page's
+  own `access_token` and `tasks` with the fields asked for, that the task names
+  are still `MANAGE`, `CREATE_CONTENT`, `MESSAGING` and `MODERATE`, that a
+  Page-scoped or Instagram-scoped person id really differs between two
+  accounts (the threading per account relies on it), and how Facebook's
+  dialog lets a person add Pages to an existing login. All written from
+  Meta's documentation as remembered, not read on the day.
 - The exact hosts Meta serves message files from. The list is the three Meta
   uses for media today; a file from any other host is listed as "a file we
   didn't keep".

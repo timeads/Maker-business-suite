@@ -225,9 +225,18 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   `helpdesk` / `channels` config and `channelState()` gate everything.
   `/api/webhooks/meta` checks `X-Hub-Signature-256` on the raw body and only
   queues (`private.meta_events`; `enqueue_meta_event` drops what no workspace
-  has connected); the worker files through `file_social_message` (one
-  conversation per person per channel, once per Meta message id), echoes,
-  unsends and reactions through their own functions. A person has no email:
+  has connected); the worker routes each entry by its platform id to the
+  workspace AND the account (`resolve_meta_account`, through
+  `social_accounts`) and files through `file_account_message` /
+  `file_account_comment` (they hand over to `file_social_message` /
+  `file_social_comment`: one conversation per person per account, since
+  Meta's person ids are per Page and per Instagram account; once per Meta
+  message id), echoes, unsends and reactions through their own functions.
+  Every conversation carries `tickets.social_account_id` and is answered as
+  that account through its own Page (`social_ticket_account`,
+  `getMetaPageToken`): replies, private replies, hide and delete, thread
+  control and the automatic reply alike; the inbox names it and filters by
+  it (`account`). An account's Page `tasks` gate it too (`accountAllows`). A person has no email:
   `contacts` carries `external_id` and `handle`, and the shop is matched only
   by a `known_email` the team wrote down, never by name. Files are fetched
   from Meta's hosts only (`metaFileUrl`), never a profile picture. Replies
@@ -471,9 +480,24 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   ours, pure and tested), saved through `save_config` after a preview;
   it fills words only and never becomes our defaults.
 - Social: members write posts through `save_social_post`; the worker claims
-  due posts (`claim_due_social_posts`) and records each channel's answer with
-  `finish_social_post`, which merges results so a channel that went out is
-  never sent twice. A post that is partly or fully out can't be edited.
+  due posts (`claim_due_social_posts`) and records each target's answer with
+  `finish_social_post`, which merges results so a target that went out is
+  never sent twice. A post that is partly or fully out can't be edited, but
+  a failed one can be tried again for what didn't go (`retry_social_post`).
+  Accounts: one Facebook login holds several Pages, each with its linked
+  Instagram account, as `social_accounts` rows (network, platform id, Page,
+  brand, in use or not; NO tokens: each Page's token is in Vault beside the
+  connection's, read only through `getMetaPageToken`). The login offers them
+  (`note_meta_accounts`); an owner or admin chooses which are used and their
+  brand (`choose_social_accounts`, Settings → Social accounts), within the
+  plan's `social_accounts` limit per network. A post names its `brand_id` and
+  `account_ids`; each target is "<account id>:<place>" in `results`, captions
+  are per account where they differ, and the places (`channels`) still drive
+  every scheduling rule. Posts save through `save_social_post_to` (which calls
+  `save_social_post_full`); a caller naming no accounts gets the brand's.
+  The composer picks a brand first, then its accounts; the calendar and
+  review queue filter by `brand` / `account` in the address. Another network
+  is a further `network` value.
   Photos and videos (the Assets tab) sit in the public `social` storage
   bucket under the workspace's id (Instagram fetches by URL). The browser
   sends a file straight to storage with a one-time link from `startUpload`;
@@ -890,9 +914,15 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   plain links, never as markup (`splitBody`). Other tools post heads-ups with
   `postAlert()`, which must never throw. Pages that need the whole window
   live beside the `(app)` route group, not inside it.
-- Brand kit: each workspace's colours and voice are one config (module
-  `brand`, key `kit`, schema in `lib/brand/kit.ts`), set up under Settings >
-  Brand kit, where a new workspace lands first. Claude can suggest one from
+- Brand kit: a workspace has one or more brands (`brands`: name, slug, main
+  or not, put away or not; never deleted, and posts, accounts and emails point
+  at them). Each brand's colours and voice are a config (module `brand`, key
+  `kit` for the first brand, `kit-<brand id>` for the others, schema in
+  `lib/brand/kit.ts`, written through `save_brand_kit` → `write_config`, so
+  the assistant can propose any of them), read with `loadBrandKit()` (the
+  main brand unless one is named); set up under Settings > Brand kit, where a
+  new workspace lands first and where brands are added, renamed, made main
+  and put away (owners and admins; the plan's `brands` limit). Claude can suggest one from
   five answers or read one out of an uploaded guide (`lib/brand/draft.ts`);
   the suggestion only fills the editor and is saved when a person presses
   save. `brandBrief()` puts the kit into drafting prompts as data;

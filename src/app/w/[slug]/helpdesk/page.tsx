@@ -450,7 +450,11 @@ export default async function HelpdeskPage({
   const deskSettings = parseDeskSettings(configOf(DESK_SETTINGS_KEY));
   const tagGroups = parseTagGroups(configOf(TAG_GROUPS_KEY)).groups;
   const channelSettings = parseChannelSettings(configOf(CHANNELS_KEY));
-  const metaConnection = metaRow ? connectionFacts(metaRow as Record<string, unknown>) : null;
+  const metaFacts = metaRow ? connectionFacts(metaRow as Record<string, unknown>) : null;
+  // An Instagram account is "linked" when the workspace uses one, on any of its Pages.
+  const usedInstagram = socialAccounts.find((a) => a.network === "instagram" && a.active);
+  const metaConnection =
+    metaFacts && usedInstagram ? { ...metaFacts, instagramId: usedInstagram.id } : metaFacts;
   const commentsOn = channelSettings.instagram_comments || channelSettings.facebook_comments;
   const socialOn = channelSettings.instagram || channelSettings.facebook || commentsOn;
   const savedView = choice.kind === "saved" ? savedViews.find((v) => v.id === choice.id) : null;
