@@ -4,6 +4,7 @@ import {
   chooseCarousel,
   comingReviewDay,
   freshPhotos,
+  picturedOnSlides,
   monthDue,
   monthEnd,
   monthSlots,
@@ -200,6 +201,63 @@ describe("carousels", () => {
     expect(chooseCarousel([photo("x", "p", 1)], new Set())).toEqual([]);
   });
 
+  // Ported from the Content Hub's drafting.test.ts (`chooseCarousel`).
+  it("orders process shots as they were taken, then finished photos, leaving artwork out", () => {
+    const taken = (day: number) => `2026-10-${String(day).padStart(2, "0")}T12:00:00Z`;
+    const photos = [
+      photo("f1", "p", 1, { takenAt: taken(9), role: "finished" }),
+      photo("a", "p", 9, { takenAt: taken(1) }),
+      photo("b", "p", 8, { takenAt: taken(2), role: "process" }),
+      photo("c", "p", 7, { takenAt: taken(3) }),
+      photo("art", "p", 2, { takenAt: taken(1), role: "artwork" }),
+      photo("old", "p", 3, { takenAt: taken(1) }),
+    ];
+    expect(chooseCarousel(photos, new Set(["old"])).map((p) => p.id)).toEqual([
+      "a",
+      "b",
+      "c",
+      "f1",
+    ]);
+  });
+
+  it("thins a long project to six and keeps the last two finished photos", () => {
+    const taken = (day: number) => `2026-10-${String(day).padStart(2, "0")}T12:00:00Z`;
+    const photos = [
+      ...Array.from({ length: 12 }, (_, i) => photo(`p${i}`, "p", 1, { takenAt: taken(i + 1) })),
+      photo("f1", "p", 1, { takenAt: taken(20), role: "finished" }),
+      photo("f2", "p", 1, { takenAt: taken(21), role: "finished" }),
+      photo("f3", "p", 1, { takenAt: taken(22), role: "finished" }),
+    ];
+    const chosen = chooseCarousel(photos, new Set());
+    expect(chosen).toHaveLength(6);
+    expect(chosen.slice(-2).map((p) => p.id)).toEqual(["f2", "f3"]);
+    expect(chosen[0].id).toBe("p0");
+  });
+
+  it("puts photos that don't say when they were taken after those that do, by when they were added", () => {
+    const photos = [
+      photo("added-late", "p", 9),
+      photo("added-early", "p", 1),
+      photo("shot", "p", 20, { takenAt: "2026-10-01T09:00:00Z" }),
+    ];
+    expect(freshPhotos(photos, new Set()).map((p) => p.id)).toEqual([
+      "shot",
+      "added-early",
+      "added-late",
+    ]);
+  });
+
+  it("counts photos pictured on slides as used", () => {
+    const library = [
+      { id: "x", storage_path: "t/x.jpg" },
+      { id: "y", storage_path: "t/y.jpg" },
+    ];
+    const slides = { slides: [{ image: "https://files.test/public/social/t/x.jpg", pics: [] }] };
+    expect(picturedOnSlides(slides, library)).toEqual(["x"]);
+    expect(picturedOnSlides(null, library)).toEqual([]);
+    expect([...usedPhotos([{ asset_id: null, asset_ids: ["a"] }], ["x"])]).toEqual(["x", "a"]);
+  });
+
   it("counts every photo on any post as used", () => {
     expect([
       ...usedPhotos([
@@ -256,6 +314,18 @@ describe("planning the month's project posts", () => {
   it("leaves a time empty when its topic has no project with new photos", () => {
     const used = new Set(["class8"]);
     expect(planProjects(plan, [night], photos, used, [{ topic: "classes" }])).toEqual([null]);
+  });
+
+  it("ranks projects by when their newest unposted photo was taken", () => {
+    const shotLate = [
+      photo("fox-a", "fox", 1, { takenAt: "2026-11-20T10:00:00Z" }),
+      photo("fox-b", "fox", 2, { takenAt: "2026-11-21T10:00:00Z" }),
+    ];
+    const addedLate = [photo("owl-a", "owl", 10), photo("owl-b", "owl", 11)];
+    const picks = planProjects(plan, [owl, fox], [...addedLate, ...shotLate], new Set(), [
+      { topic: "rugs" },
+    ]);
+    expect(picks[0]?.project.id).toBe("fox");
   });
 
   it("lets a project go twice only when no other can", () => {

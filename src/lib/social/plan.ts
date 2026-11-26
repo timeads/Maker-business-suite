@@ -27,6 +27,13 @@ export const socialPlanSchema = z.object({
          * photos that haven't been posted yet.
          */
         from: z.enum(["claude", "projects"]).default("claude"),
+        /**
+         * What Claude writes for it: "caption", the words for a post (with a
+         * project's photos for a "projects" topic), or "slides", a designed
+         * carousel in the brand's kit (over a project's photos for a
+         * "projects" topic) with its caption. Always a draft for a person.
+         */
+        makes: z.enum(["caption", "slides"]).default("caption"),
       }),
     )
     .max(12)

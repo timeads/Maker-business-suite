@@ -202,7 +202,13 @@ export function PlanForm({
   brands = [],
 }: {
   slug: string;
-  topics: { id: string; name: string; about: string; from: "claude" | "projects" }[];
+  topics: {
+    id: string;
+    name: string;
+    about: string;
+    from: "claude" | "projects";
+    makes: "caption" | "slides";
+  }[];
   slots: { weekday: number; time: string; topic: string | null; brand_id: string | null }[];
   styleNotes: string;
   /** With more than one brand, each time says which brand it is for. */
@@ -250,6 +256,30 @@ export function PlanForm({
                   name="topic_projects"
                   value={topic.id}
                   defaultChecked={topic.from === "projects"}
+                />
+                {topic.name}
+              </label>
+            ))}
+          </div>
+        </fieldset>
+      )}
+
+      {topics.length > 0 && (
+        <fieldset className="flex flex-col gap-2">
+          <legend className="pb-1 text-xs leading-tight font-semibold">Made as slides</legend>
+          <p className="text-muted-foreground text-xs">
+            Tick a topic and Claude designs its posts as slides in your brand kit, with the caption,
+            instead of words alone. For a topic filled from projects, the slides show that
+            project&apos;s photos. You can change every slide before anything goes out.
+          </p>
+          <div className="flex flex-wrap gap-x-5 gap-y-2">
+            {topics.map((topic) => (
+              <label key={topic.id} className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  name="topic_slides"
+                  value={topic.id}
+                  defaultChecked={topic.makes === "slides"}
                 />
                 {topic.name}
               </label>

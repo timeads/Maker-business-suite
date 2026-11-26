@@ -824,6 +824,7 @@ export async function savePlan(
     .maybeSingle();
   const stored = parsePlan(storedRow?.body);
   const fromProjects = new Set(formData.getAll("topic_projects").map(String));
+  const asSlides = new Set(formData.getAll("topic_slides").map(String));
   const topics = String(formData.get("topics") ?? "")
     .split("\n")
     .map((line) => line.trim())
@@ -837,6 +838,7 @@ export async function savePlan(
         name,
         about: cut === -1 ? "" : line.slice(cut + 1).trim(),
         from: fromProjects.has(id) ? ("projects" as const) : ("claude" as const),
+        makes: asSlides.has(id) ? ("slides" as const) : ("caption" as const),
       };
     });
   const slots: { weekday: number; time: string; topic: string | null; brand_id: string | null }[] =

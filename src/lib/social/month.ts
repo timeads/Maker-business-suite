@@ -87,6 +87,8 @@ export type MonthSlot = {
   topic: string | null;
   /** "project": a carousel from a project's photos. "topic": a post Claude writes. */
   kind: "project" | "topic";
+  /** What Claude writes for it: words alone, or designed slides with their caption. */
+  makes: "caption" | "slides";
 };
 
 /**
@@ -112,6 +114,9 @@ export function monthSlots(
   const fromProjects = new Set(
     plan.topics.filter((topic) => topic.from === "projects").map((topic) => topic.id),
   );
+  const asSlides = new Set(
+    plan.topics.filter((topic) => topic.makes === "slides").map((topic) => topic.id),
+  );
   const slots: MonthSlot[] = [];
   const last = asDate(window.end).getTime();
   for (let time = asDate(window.start).getTime(); time <= last; time += DAY_MS) {
@@ -129,6 +134,7 @@ export function monthSlots(
         time: slot.time,
         topic: slot.topic,
         kind: slot.topic && fromProjects.has(slot.topic) ? "project" : "topic",
+        makes: slot.topic && asSlides.has(slot.topic) ? "slides" : "caption",
       });
     }
   }
@@ -139,11 +145,17 @@ export function monthSlots(
 // Projects: which photos haven't been posted, and the carousel for each time
 // ---------------------------------------------------------------------------
 
+export type PhotoRole = "process" | "finished" | "artwork";
+
 export type ProjectPhoto = {
   id: string;
   projectId: string | null;
-  /** When it was added: the order a project's photos are told in. */
+  /** When it was added. */
   createdAt: string;
+  /** When it was taken, read from the photo itself; null when it doesn't say. */
+  takenAt?: string | null;
+  /** What a person marked it as. Unmarked counts as a process shot. */
+  role?: PhotoRole | null;
   mimeType: string;
   tags: string[];
   hidden: boolean;
@@ -154,13 +166,41 @@ export type MonthProject = { id: string; name: string; note: string; topic: stri
 /** At least this many unposted photos make a carousel; at most this many go in one. */
 export const MIN_NEW_PHOTOS = 2;
 export const MAX_CAROUSEL = 6;
+/** A carousel ends on at most this many finished photos. */
+export const MAX_FINISHED = 2;
 
 // Artwork and logos are never a project's story.
 const NOT_STORY = new Set(["designed", "banner", LOGO_TAG, LOGO_LIGHT_TAG]);
 
-/** Every photo already on a post, whatever became of the post. */
-export function usedPhotos(posts: { asset_id: string | null; asset_ids: string[] | null }[]) {
-  const used = new Set<string>();
+/** When a photo was taken, else when it was added: the order a project's story is told in. */
+export const photoTime = (photo: Pick<ProjectPhoto, "takenAt" | "createdAt">) => {
+  const taken = photo.takenAt ? Date.parse(photo.takenAt) : Number.NaN;
+  return Number.isNaN(taken) ? Date.parse(photo.createdAt) : taken;
+};
+
+/**
+ * In the order they were taken; a photo that doesn't say when goes after the
+ * ones that do, by when it was added (the Content Hub's `byTakenAt`).
+ */
+export function byTakenAt<T extends Pick<ProjectPhoto, "takenAt" | "createdAt" | "id">>(
+  a: T,
+  b: T,
+): number {
+  const ta = a.takenAt ? Date.parse(a.takenAt) : Number.NaN;
+  const tb = b.takenAt ? Date.parse(b.takenAt) : Number.NaN;
+  const hasA = !Number.isNaN(ta);
+  const hasB = !Number.isNaN(tb);
+  if (hasA && hasB && ta !== tb) return ta - tb;
+  if (hasA !== hasB) return hasA ? -1 : 1;
+  return a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
+}
+
+/** Every photo already on a post, whatever became of the post, or pictured on its slides. */
+export function usedPhotos(
+  posts: { asset_id: string | null; asset_ids: string[] | null }[],
+  pictured: Iterable<string> = [],
+) {
+  const used = new Set<string>(pictured);
   for (const post of posts) {
     if (post.asset_id) used.add(post.asset_id);
     for (const id of post.asset_ids ?? []) used.add(id);
@@ -168,36 +208,59 @@ export function usedPhotos(posts: { asset_id: string | null; asset_ids: string[]
   return used;
 }
 
+/**
+ * The library photos a post's slides picture, by id: a slide shows a photo
+ * by its stored address, which ends in the photo's storage path.
+ */
+export function picturedOnSlides(
+  slides: unknown,
+  photos: { id: string; storage_path: string }[],
+): string[] {
+  if (!slides) return [];
+  const text = JSON.stringify(slides);
+  return photos.filter((photo) => text.includes(photo.storage_path)).map((photo) => photo.id);
+}
+
 /** Keep `count` items spread evenly across the list, always the first and the last. */
 export function spread<T>(items: T[], count: number): T[] {
   if (items.length <= count) return items;
-  if (count <= 1) return items.slice(0, 1);
+  if (count <= 0) return [];
+  if (count === 1) return items.slice(0, 1);
   const out: T[] = [];
   for (let i = 0; i < count; i++)
     out.push(items[Math.round((i * (items.length - 1)) / (count - 1))]);
   return out;
 }
 
-/** A project's photos that can go in a post: pictures, not hidden, not artwork, not used before. */
+/**
+ * A project's photos that can go in a post, in the order they were taken:
+ * pictures, not hidden, not artwork, not used before.
+ */
 export function freshPhotos(photos: ProjectPhoto[], used: Set<string>): ProjectPhoto[] {
   return photos
     .filter(
       (photo) =>
         photo.mimeType.startsWith("image/") &&
         !photo.hidden &&
+        photo.role !== "artwork" &&
         !used.has(photo.id) &&
         !photo.tags.some((tag) => NOT_STORY.has(tag.toLowerCase())),
     )
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+    .sort(byTakenAt);
 }
 
 /**
- * The photos for one carousel, in the order they were added, thinned evenly
- * to six (always the first and the last). Empty when fewer than two are new.
+ * The photos for one carousel, in the order they tell the story (the
+ * Content Hub's `chooseCarousel`): process shots as they were taken, thinned
+ * evenly (always the first and the last), then up to two finished photos.
+ * Empty when fewer than two are new.
  */
 export function chooseCarousel(photos: ProjectPhoto[], used: Set<string>, max = MAX_CAROUSEL) {
   const fresh = freshPhotos(photos, used);
-  return fresh.length < MIN_NEW_PHOTOS ? [] : spread(fresh, max);
+  if (fresh.length < MIN_NEW_PHOTOS) return [];
+  const finished = fresh.filter((photo) => photo.role === "finished").slice(-MAX_FINISHED);
+  const process = fresh.filter((photo) => !finished.includes(photo));
+  return [...spread(process, Math.max(0, max - finished.length)), ...finished];
 }
 
 /** The topic a project's posts belong to: its own "from projects" topic, else the first one. */
@@ -231,10 +294,10 @@ export function planProjects(
   }
   const own = (project: MonthProject) => byProject.get(project.id) ?? [];
   const newest = (project: MonthProject) =>
-    freshPhotos(own(project), taken).reduce((n, p) => (p.createdAt > n ? p.createdAt : n), "");
+    Math.max(0, ...freshPhotos(own(project), taken).map(photoTime));
   const queue = projects
     .filter((project) => chooseCarousel(own(project), taken).length > 0)
-    .sort((a, b) => newest(b).localeCompare(newest(a)) || a.id.localeCompare(b.id));
+    .sort((a, b) => newest(b) - newest(a) || a.id.localeCompare(b.id));
   const topicOf = new Map(queue.map((project) => [project.id, projectTopic(project, plan)]));
 
   let lastId = "";
