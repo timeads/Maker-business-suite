@@ -10,6 +10,7 @@ import {
 } from "../bookings/config";
 import { DEFAULT_SHOP_PAGE, SHOP_PAGE_KEY, shopPageSchema } from "../bookings/shop-page";
 import { DAILY_KEY, DEFAULT_DAILY_EMAIL, dailyEmailSchema } from "../bookings/daily-config";
+import { DEFAULT_SHOP_TAGS, SHOP_TAGS_KEY, shopTagsSchema } from "../bookings/shop-tags";
 import { DEFAULT_UPCOMING, UPCOMING_KEY, upcomingSchema } from "../bookings/upcoming";
 import {
   DEFAULT_EMAIL_WORDS,
@@ -277,6 +278,16 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
       "A short email once a day to chosen people in the workspace: today's and tomorrow's classes and how full they are, bookings made in the last day, and anything over its limit or waiting for a date. on (off by default), hour (0 to 23 on the workspace's own clock, 7 by default) and recipients (the user ids of workspace members, up to 20; anyone not a member is never sent it).",
     schema: dailyEmailSchema,
     defaultBody: () => DEFAULT_DAILY_EMAIL,
+  },
+  {
+    module: BOOKINGS_MODULE,
+    key: SHOP_TAGS_KEY,
+    feature: "bookings",
+    name: "Order tags in the shop",
+    description:
+      "Whether shop orders that need a person are tagged in the business's shop (on, on by default; nothing is tagged unless the shop was connected with permission to change orders), and the tag words, each up to 40 characters with no commas, empty for the standard word: oversold (a paid order booked into a full date, standard ttw-oversold), needs_date (a workshop paid for with no date on the cart line, standard ttw-needs-date) and booking_error (the date on the line can't be found or was cancelled, standard ttw-booking-error). Tags are only ever added, once per order and reason, when the order comes in; a changed word applies to orders from then on.",
+    schema: shopTagsSchema,
+    defaultBody: () => DEFAULT_SHOP_TAGS,
   },
   {
     module: BOOKINGS_MODULE,

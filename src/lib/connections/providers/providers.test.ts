@@ -152,6 +152,31 @@ describe("Shopify adapter", () => {
     }
   });
 
+  it("asks to change orders only when order tags are asked for, and never watch-only", () => {
+    const adapter = createShopifyAdapter(fakeFetch([]).impl);
+    const asked = (input: Record<string, string>) =>
+      (
+        new URL(
+          adapter.beginConnect({
+            state: "s",
+            redirectUri: "x",
+            input: { shop: "wild-thread", ...input },
+          }),
+        ).searchParams.get("scope") ?? ""
+      ).split(",");
+    expect(asked({ access: "full" })).not.toContain("write_orders");
+    expect(asked({ access: "full", order_tags: "yes" })).toContain("write_orders");
+    expect(asked({ access: "read", order_tags: "yes" })).not.toContain("write_orders");
+    expect(asked({ access: "read", order_tags: "yes" }).every((s) => s.startsWith("read_"))).toBe(
+      true,
+    );
+    // A renewal keeps it, and only a known screen is returned to.
+    expect(adapter.reconnectInput!(["read_orders", "write_orders"])).toEqual({ order_tags: "yes" });
+    expect(adapter.reconnectInput!(["read_orders"])).toEqual({});
+    expect(adapter.returnPath!({ return_to: "bookings-tags" })).toBe("settings/bookings/shop-tags");
+    expect(adapter.returnPath!({ return_to: "../../elsewhere" })).toBeNull();
+  });
+
   it("sends the person to their own store to approve", () => {
     const adapter = createShopifyAdapter(fakeFetch([]).impl);
     const input = { shop: "Wild-Thread" };

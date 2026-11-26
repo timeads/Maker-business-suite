@@ -156,6 +156,36 @@ describe("telling the team about an order with no date", () => {
     ).rejects.toThrow(/note_shop_undated_lines/);
   });
 
+  it("tags an order with no date once, and leaves a date we couldn't find to the booking step", async () => {
+    const tagged: string[] = [];
+    const tag = async (_a: unknown, _t: string, o: { id: string; name: string }, why: string) =>
+      void tagged.push(`${o.id} ${why}`);
+    const both: ShopOrderLines[] = [
+      ...orders,
+      {
+        external_id: "5002",
+        name: "#1043",
+        cancelled: false,
+        lines: [{ line_id: "80", product_id: "9001", seats: 1, session_id: DATE }],
+      },
+    ];
+    const { admin } = fakeAdmin({
+      new: [
+        { ...fresh, order_id: "5001" },
+        { ...fresh, order_id: "5001" },
+        { ...fresh, order_id: "5002", order_name: "#1043" },
+      ],
+      cancelled: [],
+      known: 0,
+    });
+    await noteShopOrderLines(admin, "t1", "shopify", both, {
+      open: async () => false,
+      alert: async () => undefined,
+      tag,
+    });
+    expect(tagged).toEqual(["5001 needs_date"]);
+  });
+
   it("has plain words when the order names no workshop", () => {
     expect(needsDateWords({ order_name: "", service_name: null, seats: 1 })).toContain(
       "Order from your shop paid for a workshop (1 place)",

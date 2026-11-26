@@ -107,6 +107,27 @@ describe("turning shop orders into bookings", () => {
     expect(String(told[0]).length).toBeGreaterThan(20);
   });
 
+  it("tags the order in the shop at the moments the earlier app did", async () => {
+    const tagged: string[] = [];
+    const tag = async (_a: unknown, _t: string, o: { id: string; name: string }, why: string) =>
+      void tagged.push(`${o.id} ${o.name} ${why}`);
+    const run = async (answer: object) =>
+      applyShopOrders(fakeAdmin({ book_from_shop: answer }).admin, "t1", [dated], {
+        open: async () => false,
+        tag,
+      });
+    await run({ result: "booked", booking_id: "b1", oversold: true });
+    await run({ result: "booked", booking_id: "b1", oversold: true, date_cancelled: true });
+    await run({ result: "no_session" });
+    await run({ result: "booked", booking_id: "b1", oversold: false });
+    await run({ result: "unchanged", booking_id: "b1", oversold: true });
+    expect(tagged).toEqual([
+      "5001 #1042 oversold",
+      "5001 #1042 booking_error",
+      "5001 #1042 booking_error",
+    ]);
+  });
+
   it("says nothing when the shop repeats an order it has already told us about", async () => {
     const { admin } = fakeAdmin({ book_from_shop: { result: "unchanged", booking_id: "b1" } });
     let told = 0;

@@ -34,6 +34,28 @@ export const shopifyScopes = (watchOnly = false) => {
     scope.startsWith("read_"),
   );
 };
+/**
+ * Optional: changing orders, asked for only from Settings → Bookings → Order
+ * tags, so Bookings can tag orders that need a person. Never part of what a
+ * store is asked for by default, and never asked of a watch-only connection.
+ */
+export const SHOPIFY_ORDER_TAGS_SCOPE = "write_orders";
+export const WITH_ORDER_TAGS = "yes";
+/** Where a connection started from a settings screen comes back to. */
+const RETURN_PATHS: Record<string, string> = {
+  "bookings-tags": "settings/bookings/shop-tags",
+};
+
+/** Every scope to ask for, given the connect form's choices. */
+export function shopifyScopesFor(input: Record<string, string>): string[] {
+  const watchOnly = input.access === "read";
+  const scopes = shopifyScopes(watchOnly);
+  if (!watchOnly && input.order_tags === WITH_ORDER_TAGS) {
+    return [...new Set([...scopes, SHOPIFY_ORDER_TAGS_SCOPE])];
+  }
+  return scopes;
+}
+
 const WEBHOOK_TOPICS = [
   "ORDERS_CREATE",
   "ORDERS_UPDATED",
@@ -161,7 +183,14 @@ export function createShopifyAdapter(fetchImpl: Fetch = fetch): ProviderAdapter 
           { value: "read", label: "Watch only: never change anything in my store" },
         ],
       },
+      // Set by Settings → Bookings → Order tags, never drawn on the Connections page.
+      { name: "order_tags", label: "", placeholder: "", hidden: true },
+      { name: "return_to", label: "", placeholder: "", hidden: true },
     ],
+    // Renewing a store's connection keeps the order tags it was allowed.
+    reconnectInput: (scopes): Record<string, string> =>
+      scopes.includes(SHOPIFY_ORDER_TAGS_SCOPE) ? { order_tags: WITH_ORDER_TAGS } : {},
+    returnPath: (input) => RETURN_PATHS[input.return_to ?? ""] ?? null,
     // The shop tells us about each order as it happens; this hourly look is
     // the safety net for a notification that never arrived.
     pollEveryHours: 1,
@@ -178,7 +207,7 @@ export function createShopifyAdapter(fetchImpl: Fetch = fetch): ProviderAdapter 
       const url = new URL(`https://${shop}/admin/oauth/authorize`);
       url.searchParams.set("client_id", clientId());
       input.access = input.access === "read" ? "read" : "full";
-      url.searchParams.set("scope", shopifyScopes(input.access === "read").join(","));
+      url.searchParams.set("scope", shopifyScopesFor(input).join(","));
       url.searchParams.set("redirect_uri", redirectUri);
       url.searchParams.set("state", state);
       return url.toString();

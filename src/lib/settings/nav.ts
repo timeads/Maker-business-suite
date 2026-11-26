@@ -267,6 +267,20 @@ const TOOLS: Def[] = [
         ],
       },
       {
+        id: "bookings.shop-tags",
+        name: "Order tags",
+        path: "bookings/shop-tags",
+        keywords: [
+          "shopify tags",
+          "oversold",
+          "needs a date",
+          "booking error",
+          "tag orders",
+          "write orders",
+          "permission",
+        ],
+      },
+      {
         id: "bookings.daily-email",
         name: "Daily email",
         path: "bookings/daily-email",

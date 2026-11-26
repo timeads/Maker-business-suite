@@ -8,6 +8,7 @@
  *  - take help desk files out of storage once their conversation is gone
  *  - send help desk email whose "undo" wait has run out
  *  - confirm booking payments and send booking reminders
+ *  - add Bookings' "needs a person" tags to shop orders
  *  - publish scheduled social posts
  *  - ask UPS where incoming stock orders are, a few parcels at a time
  *  - look at Michaels for workspaces that sell there (reads only: nothing is sent)
@@ -871,6 +872,74 @@ async function drainPickupSteps(): Promise<number> {
 }
 
 /**
+ * Adds Bookings' "needs a person" tags to shop orders (oversold, no date, a
+ * date we couldn't book), as the business's earlier booking app did. Tried
+ * once each; what happened is kept on the row, and a tag that didn't go is
+ * told to the team so they can add it by hand.
+ */
+async function drainShopOrderTags(): Promise<number> {
+  const admin = getAdminClient();
+  const { data, error } = await admin.rpc("claim_shop_order_tags", { p_limit: 20 });
+  if (error) throw new Error(`Could not claim order tags: ${error.message}`);
+  const tags = (data ?? []) as {
+    id: string;
+    tenant_id: string;
+    provider: string;
+    shop_order_id: string;
+    shop_order_name: string;
+    tag: string;
+    can_write: boolean;
+  }[];
+  if (tags.length === 0) return 0;
+  const sender = createShopifySender();
+  const tokenDeps: TokenDeps = {
+    store: vaultTokenStore(admin),
+    adapter: getAdapter,
+    now: Date.now,
+    wait: sleep,
+    onNeedsReconnect: notifyNeedsReconnect,
+  };
+  for (const each of tags) {
+    let outcome: "done" | "not_allowed" | "failed" = "done";
+    let failure: string | null = null;
+    try {
+      if (each.provider !== "shopify") throw new Error("This order isn't one from the shop");
+      // A shop connected without permission to change orders is never written to.
+      if (!each.can_write) throw new ShopPermissionError(SHOP_NO_PERMISSION);
+      if (!(await moduleOpen(each.tenant_id, "bookings", admin))) {
+        throw new Error("Bookings isn't part of this workspace's plan right now");
+      }
+      const stored = await getProviderToken(each.tenant_id, "shopify", tokenDeps);
+      await sender.addTags(stored.externalAccountId, stored.token, each.shop_order_id, [each.tag]);
+    } catch (err) {
+      const failed = shopStepFailure(err);
+      outcome = failed.outcome;
+      failure = failed.error;
+      console.error(`tag for shop order ${each.id}: ${failure}`);
+    }
+    const { error: finishError } = await admin.rpc("finish_shop_order_tag", {
+      p_id: each.id,
+      p_outcome: outcome,
+      p_error: failure,
+    });
+    if (finishError) console.error(`could not mark order tag ${each.id}: ${finishError.message}`);
+    if (outcome !== "done") {
+      await postAlert(
+        admin,
+        each.tenant_id,
+        "bookings",
+        `We couldn't add the tag “${each.tag}” to order ${each.shop_order_name || "in your shop"}: ${
+          outcome === "not_allowed"
+            ? "your shop is connected without permission to change orders"
+            : failure
+        }. Add it in your shop if you'd like it there.`,
+      );
+    }
+  }
+  return tags.length;
+}
+
+/**
  * Looks at Michaels for workspaces that connected their seller account and
  * switched the connector on: about once an hour each, or when a manager
  * presses "Look now". The database decides who is due and hands each look to
@@ -1054,6 +1123,7 @@ async function main() {
       (await attempt(drainShipmentUndos, 0)) +
       (await attempt(drainShipments, 0)) +
       (await attempt(drainPickupSteps, 0)) +
+      (await attempt(drainShopOrderTags, 0)) +
       (await attempt(drainShipmentChecks, 0)) +
       (await attempt(drainMichaelsLooks, 0)) +
       (await attempt(drainEmailReads, 0)) +

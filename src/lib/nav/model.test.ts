@@ -463,6 +463,7 @@ describe("filterMenu", () => {
       "› Emails & questions",
       "› Email words",
       "› Shop product page",
+      "› Order tags",
       "› Daily email",
       "› Bring your bookings across",
     ]);

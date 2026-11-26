@@ -73,6 +73,7 @@ describe("settingsNav", () => {
       "bookings.emails",
       "bookings.words",
       "bookings.shop-page",
+      "bookings.shop-tags",
       "bookings.daily-email",
       "bookings.import",
     ]);
@@ -118,6 +119,7 @@ describe("settingsNav", () => {
       "bookings.emails",
       "bookings.words",
       "bookings.shop-page",
+      "bookings.shop-tags",
     ]);
   });
 

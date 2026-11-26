@@ -13,6 +13,7 @@ import type { BookingDetails } from "@/lib/bookings/emails";
 import { readEmailSettings } from "@/lib/bookings/email-settings";
 import { bookingEmail } from "@/lib/bookings/words";
 import { SHOP_PAGE_KEY, shopPageSchema } from "@/lib/bookings/shop-page";
+import { SHOP_TAGS_KEY, shopTagsSchema } from "@/lib/bookings/shop-tags";
 import { DAILY_KEY, dailyEmailSchema, hourWords } from "@/lib/bookings/daily-config";
 import { DEFAULT_UPCOMING, UPCOMING_KEY, upcomingSchema } from "@/lib/bookings/upcoming";
 import { parseClock, zonedTimeToUtc } from "@/lib/bookings/slots";
@@ -416,4 +417,39 @@ export async function setShopProduct(
   }
   revalidatePath(`/w/${slug}/bookings`, "layout");
   return { message: formData.get("intent") === "remove" ? "Removed." : "Saved." };
+}
+
+/** Saves whether shop orders that need a person are tagged, and the words. */
+export async function saveShopTags(
+  slug: string,
+  _prev: BookingsState,
+  formData: FormData,
+): Promise<BookingsState> {
+  const ctx = await context(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const parsed = shopTagsSchema.safeParse({
+    version: 1,
+    on: formData.get("on") === "on",
+    tags: {
+      oversold: text(formData, "oversold"),
+      needs_date: text(formData, "needs_date"),
+      booking_error: text(formData, "booking_error"),
+    },
+  });
+  if (!parsed.success) {
+    return { error: "A tag can be up to 40 characters, with no commas." };
+  }
+  const { error } = await ctx.supabase.rpc("save_config", {
+    p_tenant_id: ctx.tenant.id,
+    p_module: BOOKINGS_MODULE,
+    p_key: SHOP_TAGS_KEY,
+    p_body: parsed.data,
+  });
+  if (error) return { error: OOPS };
+  revalidatePath(`/w/${slug}/settings`, "layout");
+  return {
+    message: parsed.data.on
+      ? "Saved. New orders that need you are tagged in your shop from now on."
+      : "Saved. Orders won't be tagged in your shop.",
+  };
 }

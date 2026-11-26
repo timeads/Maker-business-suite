@@ -40,6 +40,12 @@ const READY_FOR_PICKUP = `mutation R($input: FulfillmentOrderLineItemsPreparedFo
   fulfillmentOrderLineItemsPreparedForPickup(input: $input) { userErrors { message } }
 }`;
 
+// Adding tags to an order (Bookings' "needs a person" tags). Only ever adds:
+// the shop keeps every tag already there.
+const TAGS_ADD = `mutation T($id: ID!, $tags: [String!]!) {
+  tagsAdd(id: $id, tags: $tags) { node { id } userErrors { message } }
+}`;
+
 export const canSendInShopify = (scopes: unknown): boolean =>
   Array.isArray(scopes) && scopes.includes("write_merchant_managed_fulfillment_orders");
 
@@ -148,6 +154,26 @@ export function createShopifySender(fetchImpl: Fetch = fetch) {
   }
 
   return {
+    /**
+     * Adds tags to an order. Nothing already on the order is touched, so a
+     * repeat would change nothing; it is still tried only once.
+     */
+    async addTags(
+      shop: string,
+      token: TokenSet,
+      orderExternalId: string,
+      tags: string[],
+    ): Promise<void> {
+      const clean = [...new Set(tags.map((tag) => tag.trim()).filter(Boolean))];
+      if (clean.length === 0) return;
+      const result = await graphql<{
+        tagsAdd: { node: { id: string } | null; userErrors: { message: string }[] };
+      }>(shop, token, TAGS_ADD, { id: orderGid(orderExternalId), tags: clean });
+      const errors = result.tagsAdd.userErrors;
+      if (errors.length > 0) throw new ShopSendError(said(errors));
+      if (!result.tagsAdd.node) throw new ShopSendError("The shop no longer has this order");
+    },
+
     async send(
       shop: string,
       token: TokenSet,

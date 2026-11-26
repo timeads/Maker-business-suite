@@ -4,6 +4,7 @@ import { sendEmail } from "../email";
 import { postAlert } from "../messages/alerts";
 import { moduleOpen } from "../module-access";
 import { queueCancelEmails } from "./shop";
+import { queueOrderTag } from "./shop-tags";
 
 /**
  * Shop orders that paid for a workshop without a usable date on the cart
@@ -15,7 +16,7 @@ import { queueCancelEmails } from "./shop";
  */
 
 type Noted = {
-  new: { order_name: string; service_name: string | null; seats: number }[];
+  new: { order_id?: string; order_name: string; service_name: string | null; seats: number }[];
   cancelled: string[];
   known: number;
 };
@@ -37,6 +38,7 @@ export async function noteShopOrderLines(
     open?: (tenantId: string) => Promise<boolean>;
     alert?: typeof postAlert;
     mail?: typeof sendEmail;
+    tag?: typeof queueOrderTag;
   } = {},
 ): Promise<void> {
   if (orders.length === 0) return;
@@ -58,6 +60,19 @@ export async function noteShopOrderLines(
   const open = await (deps.open ?? ((id) => moduleOpen(id, "bookings")))(tenantId);
   if (open) await queueCancelEmails(admin, tenantId, noted.cancelled);
   if (noted.new.length === 0) return;
+
+  // Tagged in the shop as the earlier app did: "needs a date" for a line
+  // with no date at all. A line whose date we couldn't find was tagged as a
+  // booking problem when it was tried (`applyShopOrders`).
+  const tag = deps.tag ?? queueOrderTag;
+  const tagged = new Set<string>();
+  for (const line of noted.new) {
+    const order = orders.find((each) => each.external_id === line.order_id);
+    if (!order || tagged.has(order.external_id)) continue;
+    if (!order.lines.some((each) => each.session_id === null)) continue;
+    tagged.add(order.external_id);
+    await tag(admin, tenantId, { id: order.external_id, name: order.name }, "needs_date", provider);
+  }
 
   const alert = deps.alert ?? postAlert;
   for (const line of noted.new) await alert(admin, tenantId, "bookings", needsDateWords(line));

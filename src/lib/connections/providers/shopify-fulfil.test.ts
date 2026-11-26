@@ -415,3 +415,38 @@ describe("telling the shop about a pickup", () => {
     );
   });
 });
+
+describe("adding tags to a shop order", () => {
+  it("only adds, with the order's own id and each tag once", async () => {
+    const { sender, sent } = scripted({
+      tagsAdd: { data: { tagsAdd: { node: { id: "gid://shopify/Order/1001" }, userErrors: [] } } },
+    });
+    await sender.addTags("wild-thread.myshopify.com", token, "1001", [
+      "ttw-oversold",
+      " ttw-oversold ",
+      "",
+    ]);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].query).toContain("tagsAdd(id: $id, tags: $tags)");
+    expect(sent[0].query).not.toMatch(/orderUpdate|tagsRemove/);
+    expect(sent[0].variables).toEqual({ id: "gid://shopify/Order/1001", tags: ["ttw-oversold"] });
+  });
+
+  it("asks nothing for no tags, and tells a refusal from a missing permission", async () => {
+    const none = scripted({});
+    await none.sender.addTags("wild-thread.myshopify.com", token, "1001", ["  "]);
+    expect(none.sent).toHaveLength(0);
+
+    const refused = scripted({
+      tagsAdd: { data: { tagsAdd: { node: null, userErrors: [{ message: "Order not found" }] } } },
+    });
+    await expect(
+      refused.sender.addTags("wild-thread.myshopify.com", token, "1001", ["x"]),
+    ).rejects.toThrow("Order not found");
+
+    const denied = scripted({ tagsAdd: DENIED });
+    await expect(
+      denied.sender.addTags("wild-thread.myshopify.com", token, "1001", ["x"]),
+    ).rejects.toBeInstanceOf(ShopPermissionError);
+  });
+});

@@ -4,6 +4,7 @@ import type { ShopBookingOrder } from "../connections/types";
 import { postAlert } from "../messages/alerts";
 import { moduleOpen } from "../module-access";
 import { announceBooking, getBookingDetails } from "./server";
+import { queueOrderTag } from "./shop-tags";
 
 /**
  * Bookings that come in as shop orders. The shop owns the price and the
@@ -53,11 +54,13 @@ export async function applyShopOrders(
     open?: (tenantId: string) => Promise<boolean>;
     announce?: typeof announceBooking;
     details?: typeof getBookingDetails;
+    tag?: typeof queueOrderTag;
   } = {},
 ): Promise<void> {
   if (orders.length === 0) return;
   // A paid booking is never dropped, plan or no plan; only the emails wait.
   const open = await (deps.open ?? ((id) => moduleOpen(id, "bookings")))(tenantId);
+  const tag = deps.tag ?? queueOrderTag;
   for (const order of orders) {
     if (order.cancelled) {
       const { data, error } = await admin.rpc("cancel_shop_order_bookings", {
@@ -85,14 +88,23 @@ export async function applyShopOrders(
       const outcome = data as Result;
       // A date we can't find is not dropped: the sync hands every line to
       // `noteShopOrderLines` next, which writes it down under "Needs a date"
-      // and tells the team once.
-      if (outcome.result === "no_session") continue;
+      // and tells the team once. In the shop it is tagged, as before.
+      if (outcome.result === "no_session") {
+        await tag(admin, tenantId, { id: order.external_id, name: order.name }, "booking_error");
+        continue;
+      }
       // A refund took the last place: the customer is told, where that is switched on.
       if (outcome.result === "cancelled" && outcome.booking_id && open) {
         await queueCancelEmails(admin, tenantId, [outcome.booking_id]);
       }
       if (outcome.result !== "booked" || !outcome.booking_id) continue;
+      // The shop's order carries a tag for a person to sort it out, like the
+      // earlier app did. Queued once; added only where the shop allows it.
+      if (outcome.oversold && !outcome.date_cancelled) {
+        await tag(admin, tenantId, { id: order.external_id, name: order.name }, "oversold");
+      }
       if (outcome.date_cancelled) {
+        await tag(admin, tenantId, { id: order.external_id, name: order.name }, "booking_error");
         await postAlert(
           admin,
           tenantId,
