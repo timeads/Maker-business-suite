@@ -448,7 +448,8 @@ $$;
 -- asked Eventbrite for a change, and we can't tell whether it did.
 create function public.claim_eventbrite_pushes(p_limit int default 20)
 returns table (
-  id uuid, tenant_id uuid, session_id uuid, event_id text, ticket_class_id text, seats_left int
+  id uuid, tenant_id uuid, session_id uuid, event_id text, ticket_class_id text,
+  event_name text, tries int, seats_left int
 )
 language plpgsql security definer set search_path = ''
 as $$
@@ -477,9 +478,10 @@ begin
         -- Provisional: a booking made while this push is out brings it back to now.
         check_due_at = now() + interval '5 minutes'
     from due where l.id = due.id
-    returning l.id, l.tenant_id, l.session_id, l.event_id, l.ticket_class_id
+    returning l.id, l.tenant_id, l.session_id, l.event_id, l.ticket_class_id, l.event_name,
+              l.tries
   )
-  select t.id, t.tenant_id, t.session_id, t.event_id, t.ticket_class_id,
+  select t.id, t.tenant_id, t.session_id, t.event_id, t.ticket_class_id, t.event_name, t.tries,
          -- A date called off sells nothing more.
          case when s.cancelled_at is not null then 0 else private.seats_left(s.id) end
   from taken t join public.sessions s on s.id = t.session_id;

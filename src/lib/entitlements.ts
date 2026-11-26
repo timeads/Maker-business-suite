@@ -18,8 +18,12 @@ import type { ModuleKey } from "@/lib/modules";
  * account: an optional connection, open to any workspace whose plan has
  * Bookings. Its own key, so it can become a paid extra without touching the
  * pages and the worker that ask.
+ *
+ * `eventbrite` is selling workshops on the business's own Eventbrite account
+ * as well: an optional connection, open to any workspace whose plan has
+ * Bookings, with its own key for the same reason.
  */
-export type Feature = `module.${ModuleKey}` | "mcp" | "michaels" | "texts";
+export type Feature = `module.${ModuleKey}` | "mcp" | "michaels" | "texts" | "eventbrite";
 export type Limit = "seats" | "ai_credits";
 
 /**
@@ -113,7 +117,7 @@ export function resolveEntitlements(
       const has = (moduleKey: ModuleKey) =>
         plan.includedModules.includes(moduleKey) || chosen.has(moduleKey);
       if (feature === "michaels") return has("stock");
-      if (feature === "texts") return has("bookings");
+      if (feature === "texts" || feature === "eventbrite") return has("bookings");
       return has(feature.slice("module.".length) as ModuleKey);
     },
     limit(name) {

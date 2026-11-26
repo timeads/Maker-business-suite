@@ -8,7 +8,8 @@ export type ProviderKey =
   | "redo"
   | "google_mail"
   | "michaels"
-  | "twilio";
+  | "twilio"
+  | "eventbrite";
 
 export type ConnectionStatus = "active" | "needs_reconnect" | "disconnected";
 

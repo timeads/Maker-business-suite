@@ -10,6 +10,7 @@
  *  - confirm booking payments and send booking reminders
  *  - add Bookings' "needs a person" tags to shop orders
  *  - send booking texts through each workspace's own Twilio, and take STOPs off
+ *  - keep places on Eventbrite in step, and book the orders Eventbrite tells us about
  *  - publish scheduled social posts
  *  - ask UPS where incoming stock orders are, a few parcels at a time
  *  - look at Michaels for workspaces that sell there (reads only: nothing is sent)
@@ -88,6 +89,7 @@ import { carrierResult } from "../src/lib/stock/tracking";
 import { getAdminClient, withTenant } from "../src/lib/supabase/admin";
 import { drainTextOptOuts } from "../src/lib/texts/opt-out";
 import { drainBookingTexts } from "../src/lib/texts/sends";
+import { drainEventbriteOrders, drainEventbritePushes } from "../src/lib/eventbrite/worker";
 
 const POLL_MS = 5_000;
 const SCHEDULE_EVERY_MS = 5 * 60 * 1000;
@@ -528,6 +530,29 @@ const sendBookingTexts = () => drainBookingTexts(getAdminClient());
 
 /** Replies of STOP, queued by Twilio's webhook: those numbers get no more booking texts. */
 const takeTextOptOuts = () => drainTextOptOuts(getAdminClient());
+
+const eventbriteTokenDeps = (): TokenDeps => ({
+  store: vaultTokenStore(getAdminClient()),
+  adapter: getAdapter,
+  now: Date.now,
+  wait: sleep,
+  onNeedsReconnect: notifyNeedsReconnect,
+});
+
+/**
+ * Orders Eventbrite told us about (its webhook only nudges): each is read
+ * afresh from Eventbrite and booked once, under the usual seat rules.
+ */
+const bookEventbriteOrders = () =>
+  drainEventbriteOrders(getAdminClient(), { tokenDeps: eventbriteTokenDeps() });
+
+/**
+ * Places left, pushed to each linked date's ticket type on Eventbrite: every
+ * few minutes, and at once after a booking changes. Each push is claimed
+ * once, tried once and written down; an unclear answer waits for a person.
+ */
+const pushEventbriteSeats = () =>
+  drainEventbritePushes(getAdminClient(), { tokenDeps: eventbriteTokenDeps() });
 
 /**
  * Adds deliveries that were checked in to the shop's own count, for
@@ -1144,7 +1169,10 @@ async function main() {
       (await attempt(drainMichaelsLooks, 0)) +
       (await attempt(drainEmailReads, 0)) +
       (await attempt(drainManualRuns, 0)) +
-      (await attempt(takeTextOptOuts, 0));
+      (await attempt(takeTextOptOuts, 0)) +
+      // Orders first, so the places pushed next already count them.
+      (await attempt(bookEventbriteOrders, 0)) +
+      (await attempt(pushEventbriteSeats, 0));
 
     // Opt-outs above go first, so a STOP is always taken off before a text is sent.
     if (Date.now() - lastTexts > TEXTS_EVERY_MS) {
