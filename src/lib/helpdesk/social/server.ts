@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { accountAllows } from "../../connections/meta-access";
+import { getMetaPageToken } from "../../connections/meta-token";
 import { getProviderToken, type TokenDeps } from "../../connections/tokens";
 import { withTenant } from "../../supabase/admin";
 import { HELPDESK_MODULE } from "../config";
@@ -74,7 +76,7 @@ export async function loadChannelFacts(
   return withTenant(
     tenantId,
     async (scope) => {
-      const [{ data: config }, { data: rows }] = await Promise.all([
+      const [{ data: config }, { data: rows }, { data: accounts }] = await Promise.all([
         scope
           .select("configs", "body")
           .eq("module", HELPDESK_MODULE)
@@ -84,11 +86,26 @@ export async function loadChannelFacts(
           .select("connections", "status, scopes, display_name, metadata")
           .eq("provider", "meta")
           .limit(1),
+        scope
+          .select("social_accounts", "network, platform_id, handle")
+          .eq("active", true)
+          .eq("network", "instagram")
+          .limit(1),
       ]);
       const row = (rows as Record<string, unknown>[] | null)?.[0];
+      const facts = row ? connectionFacts(row) : null;
+      // An Instagram account is "linked" when the workspace uses one, on any of its Pages.
+      const instagram = (accounts as { platform_id: string; handle: string | null }[] | null)?.[0];
       return {
         settings: parseChannelSettings((config as { body?: unknown } | null)?.body),
-        connection: row ? connectionFacts(row) : null,
+        connection:
+          facts && instagram
+            ? {
+                ...facts,
+                instagramId: instagram.platform_id,
+                instagramUsername: instagram.handle ?? facts.instagramUsername,
+              }
+            : facts,
       };
     },
     admin,
@@ -106,6 +123,60 @@ export function connectionFacts(row: Record<string, unknown>): MetaConnectionFac
     instagramId: text(metadata.instagram_id),
     instagramUsername: text(metadata.instagram_username),
   };
+}
+
+/** The account a conversation is answered as. Nothing secret. */
+export type TicketAccount = {
+  id: string;
+  network: string;
+  platformId: string;
+  pageId: string;
+  tasks: string[] | null;
+  active: boolean;
+};
+
+/**
+ * Which of the workspace's accounts a conversation came to, and so is
+ * answered as. Null when the database can't say (a database from before
+ * accounts): the conversation is then answered through the connection's own
+ * Page, as it always was.
+ */
+export async function loadTicketAccount(
+  admin: SupabaseClient,
+  where: { tenantId: string; ticketId: string },
+): Promise<TicketAccount | null> {
+  const { data, error } = await admin.rpc("social_ticket_account", {
+    p_tenant_id: where.tenantId,
+    p_ticket_id: where.ticketId,
+  });
+  const row = (data as Record<string, unknown>[] | null)?.[0];
+  if (
+    error ||
+    !row ||
+    typeof row.page_id !== "string" ||
+    typeof row.social_account_id !== "string"
+  ) {
+    return null;
+  }
+  return {
+    id: row.social_account_id,
+    network: String(row.network),
+    platformId: String(row.platform_id),
+    pageId: row.page_id,
+    tasks: Array.isArray(row.tasks) ? row.tasks.map(String) : null,
+    active: row.active === true,
+  };
+}
+
+/** The Page an account is reached through, with its own token; the connection's own Page without one. */
+async function pageFor(
+  tenantId: string,
+  account: TicketAccount | null,
+  tokenDeps: TokenDeps | undefined,
+): Promise<{ pageId: string; token: string }> {
+  if (account) return getMetaPageToken(tenantId, account.pageId, tokenDeps);
+  const stored = await getProviderToken(tenantId, "meta", tokenDeps);
+  return { pageId: stored.externalAccountId, token: stored.token.access_token };
 }
 
 export type SocialSendDeps = {
@@ -141,6 +212,10 @@ export async function sendSocialReply(
   if (channelState(channel, facts.settings, facts.connection).state !== "on") {
     throw new SocialNotSent("not_connected");
   }
+  // Answered as the account the customer wrote to, through its own Page.
+  const account = await loadTicketAccount(admin, where);
+  if (account && !account.active) throw new SocialNotSent("not_connected");
+  if (account && !accountAllows("messages", account.tasks)) throw new SocialNotSent("not_allowed");
   const window = replyWindow(context.last_inbound_at, (deps.now ?? Date.now)(), {
     humanAgent: facts.settings.human_agent,
   });
@@ -163,12 +238,12 @@ export async function sendSocialReply(
   });
   if (!text && files.length === 0) throw new SocialNotSent("too_long");
 
-  const stored = await getProviderToken(where.tenantId, "meta", deps.tokenDeps);
+  const page = await pageFor(where.tenantId, account, deps.tokenDeps);
   const bucket = admin.storage.from(FILES_BUCKET);
   const staged: string[] = [];
   const target = {
-    pageId: stored.externalAccountId,
-    token: stored.token.access_token,
+    pageId: page.pageId,
+    token: page.token,
     recipientId: context.external_id,
     humanAgent: window.needsHumanAgentTag,
   };
@@ -324,20 +399,25 @@ export async function sendCommentReply(
     throw new SocialNotSent("comments_off");
   }
   const can = commentAbilities(channel, facts.connection?.scopes ?? null);
+  // Answered as the account the comment was left on, through its own Page.
+  const account = await loadTicketAccount(admin, where);
+  if (account && !account.active) throw new SocialNotSent("comments_off");
   const text = richToText(payload.doc).trim();
   if (!text) throw new SocialNotSent("too_long");
 
   if (via === "public") {
-    if (!can.reply) throw new SocialNotSent("not_allowed");
+    if (!can.reply || (account && !accountAllows("comments", account.tasks))) {
+      throw new SocialNotSent("not_allowed");
+    }
     if ([...text].length > COMMENT_LIMITS[channel].max) throw new SocialNotSent("too_long");
     // Instagram refuses a reply to a hidden comment; say so in our own words first.
     if (channel === "instagram" && context.commentHidden) {
       throw new SocialNotSent("comment_hidden");
     }
-    const stored = await getProviderToken(where.tenantId, "meta", deps.tokenDeps);
+    const page = await pageFor(where.tenantId, account, deps.tokenDeps);
     const externalId = await replyToComment(
       channel,
-      stored.token.access_token,
+      page.token,
       context.commentId,
       text,
       deps.fetchImpl,
@@ -354,7 +434,8 @@ export async function sendCommentReply(
   if (state === "not_allowed") throw new SocialNotSent("not_allowed");
   if (state === "expired") throw new SocialNotSent("private_expired");
   if (state !== "available") throw new SocialNotSent("private_used");
-  const stored = await getProviderToken(where.tenantId, "meta", deps.tokenDeps);
+  if (account && !accountAllows("messages", account.tasks)) throw new SocialNotSent("not_allowed");
+  const page = await pageFor(where.tenantId, account, deps.tokenDeps);
   const { data: claimed, error } = await admin.rpc("claim_private_reply", {
     p_tenant_id: where.tenantId,
     p_ticket_id: where.ticketId,
@@ -364,7 +445,7 @@ export async function sendCommentReply(
   if (claimed !== true) throw new SocialNotSent("private_used");
   try {
     const went = await sendPrivateReply(
-      { pageId: stored.externalAccountId, token: stored.token.access_token },
+      { pageId: page.pageId, token: page.token },
       context.commentId,
       text,
       deps.fetchImpl,

@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { getProviderToken, type TokenDeps } from "../../connections/tokens";
+import { getMetaPageToken } from "../../connections/meta-token";
+import type { TokenDeps } from "../../connections/tokens";
 import { postAlert } from "../../messages/alerts";
 import { withTenant } from "../../supabase/admin";
 import { considerAutoReply, type AutoReplyDeps } from "../auto-reply/worker";
@@ -17,6 +18,7 @@ import {
   type CommentFiled,
   type FileResult,
   type IntakeDeps,
+  type SocialWhere,
 } from "./intake";
 import { fetchMessageMedia } from "./media";
 import { SocialNotSent, sendCommentReply, sendSocialReply, type SocialSendDeps } from "./server";
@@ -35,19 +37,31 @@ function intakeDeps(
   tokenDeps: TokenDeps,
   autoReply?: AutoReplyDeps,
 ): IntakeDeps {
-  const token = async (tenantId: string) =>
-    (await getProviderToken(tenantId, "meta", tokenDeps)).token.access_token;
+  // The Page the account is reached through answers for it, with its own token.
+  const token = async (where: SocialWhere) =>
+    (await getMetaPageToken(where.tenantId, where.pageId, tokenDeps)).token;
   return {
     now: Date.now,
     ourAppId: process.env.META_APP_ID || null,
     async whereFor(channel, accountId) {
-      const { data, error } = await admin.rpc("resolve_meta_channel", {
+      // Routed by the platform id on the webhook entry, to the workspace and the account.
+      const { data, error } = await admin.rpc("resolve_meta_account", {
         p_object: channel === "instagram" ? "instagram" : "page",
         p_account_id: accountId,
+        p_for: "messages",
       });
       check("could not look up an account", error);
-      const row = (data as { tenant_id: string; page_id: string }[] | null)?.[0];
-      return row ? { tenantId: row.tenant_id, pageId: row.page_id, channel } : null;
+      const row = (
+        data as { tenant_id: string; page_id: string; social_account_id: string }[] | null
+      )?.[0];
+      return row
+        ? {
+            tenantId: row.tenant_id,
+            pageId: row.page_id,
+            channel,
+            accountId: row.social_account_id,
+          }
+        : null;
     },
     rulesFor: (tenantId) =>
       withTenant(
@@ -63,7 +77,8 @@ function intakeDeps(
         admin,
       ),
     async file(where, event, subject, tags) {
-      const { data, error } = await admin.rpc("file_social_message", {
+      const { data, error } = await admin.rpc("file_account_message", {
+        p_social_account_id: where.accountId,
         p_tenant_id: where.tenantId,
         p_channel: where.channel,
         p_external_id: event.personId,
@@ -122,7 +137,7 @@ function intakeDeps(
       if (error) console.error(`could not note who answers a conversation: ${error.message}`);
     },
     async refreshProfile(where, personId, contactId) {
-      const profile = await readProfile(where.channel, await token(where.tenantId), personId);
+      const profile = await readProfile(where.channel, await token(where), personId);
       const { error } = await admin.rpc("set_social_profile", {
         p_tenant_id: where.tenantId,
         p_contact_id: contactId,
@@ -154,16 +169,30 @@ function intakeDeps(
       );
     },
     async commentsFor(channel, accountId) {
-      const { data, error } = await admin.rpc("resolve_meta_comments", {
+      const { data, error } = await admin.rpc("resolve_meta_account", {
         p_object: channel === "instagram" ? "instagram" : "page",
         p_account_id: accountId,
+        p_for: "comments",
       });
       check("could not look up an account", error);
       const row = (
-        data as { tenant_id: string; page_id: string; own_handle: string | null }[] | null
+        data as
+          | {
+              tenant_id: string;
+              page_id: string;
+              own_handle: string | null;
+              social_account_id: string;
+            }[]
+          | null
       )?.[0];
       return row
-        ? { tenantId: row.tenant_id, pageId: row.page_id, channel, ownHandle: row.own_handle }
+        ? {
+            tenantId: row.tenant_id,
+            pageId: row.page_id,
+            channel,
+            ownHandle: row.own_handle,
+            accountId: row.social_account_id,
+          }
         : null;
     },
     commentFilterFor: (tenantId) =>
@@ -180,7 +209,8 @@ function intakeDeps(
         admin,
       ),
     async fileComment(where, event, subject, tags, start) {
-      const { data, error } = await admin.rpc("file_social_comment", {
+      const { data, error } = await admin.rpc("file_account_comment", {
+        p_social_account_id: where.accountId,
         p_tenant_id: where.tenantId,
         p_channel: where.channel,
         p_external_id: event.personId,
@@ -239,7 +269,7 @@ function intakeDeps(
     async refreshPost(where, event, postId) {
       let post: { permalink: string | null; caption: string };
       try {
-        post = await readPost(where.channel, await token(where.tenantId), event.postId);
+        post = await readPost(where.channel, await token(where), event.postId);
       } catch (err) {
         // Meta won't say (the post has gone, or it isn't ours to read): don't ask again.
         if (!(err instanceof MetaRefused)) throw err;

@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { canPost } from "../connections/meta-access";
+import { accountAllows, canPost } from "../connections/meta-access";
+import { pageTokenOf } from "../connections/meta-token";
 import type { StoredToken } from "../connections/tokens";
 import { ReconnectRequiredError } from "../connections/types";
 import { withTenant } from "../supabase/admin";
@@ -11,11 +12,27 @@ type DuePost = {
   caption: string;
   asset_id: string | null;
   asset_ids?: string[] | null;
-  captions?: Partial<Record<Channel, string>> | null;
+  /** A caption of its own, by account id (or, from before accounts, by place). */
+  captions?: Record<string, string> | null;
   /** A place's own sized copies, one per photo in order: {"instagram": [ids]}. */
   channel_media?: Partial<Record<Channel, string[]>> | null;
   channels: Channel[];
-  results: Partial<Record<Channel, ChannelResult>>;
+  /** The accounts it goes to; empty for a post from before accounts (it goes by places alone). */
+  account_ids?: string[] | null;
+  /** Each target's answer: "<account id>:<place>" (or a bare place, before accounts). */
+  results: Record<string, ChannelResult>;
+};
+
+/** An account a post goes to, as the worker reads it. Nothing secret. */
+export type PostAccount = {
+  id: string;
+  network: string;
+  platform_id: string;
+  page_id: string | null;
+  name: string | null;
+  handle: string | null;
+  tasks: string[] | null;
+  active: boolean;
 };
 
 export type SocialWorkerDeps = {
@@ -34,40 +51,84 @@ export const publicAssetUrl = (storagePath: string) =>
 const grantedScopes = (raw: unknown): string[] | null =>
   Array.isArray(raw) ? raw.map(String) : null;
 
-const failAll = (post: DuePost, error: string): PublishOutcome => ({
+/** Which network a place is on. */
+export const placeNetwork = (place: Channel): "facebook" | "instagram" =>
+  place === "facebook" ? "facebook" : "instagram";
+
+/** One target's name in a post's answers. */
+export const targetKey = (accountId: string, place: Channel) => `${accountId}:${place}`;
+
+/**
+ * Where a post goes: each account with the places of its network, and the
+ * key each answer is kept under. A post from before accounts goes to its
+ * places by their bare names, through the connection's own Page.
+ */
+export function postTargets(
+  post: Pick<DuePost, "channels" | "account_ids">,
+  accounts: readonly PostAccount[],
+): { account: PostAccount | null; places: { place: Channel; key: string }[] }[] {
+  const ids = post.account_ids ?? [];
+  if (ids.length === 0) {
+    return [{ account: null, places: post.channels.map((place) => ({ place, key: place })) }];
+  }
+  return ids.flatMap((id) => {
+    const account = accounts.find((each) => each.id === id);
+    if (!account) return [];
+    const places = post.channels
+      .filter((place) => placeNetwork(place) === account.network)
+      .map((place) => ({ place, key: targetKey(id, place) }));
+    return places.length > 0 ? [{ account, places }] : [];
+  });
+}
+
+/** "Instagram (@handle)", "Facebook (Page name)": a target's name for people. */
+export function targetLabel(key: string, accounts: readonly PostAccount[]): string {
+  const [id, place] = key.includes(":") ? key.split(":") : [null, key];
+  const where =
+    place === "instagram_story"
+      ? "Instagram Story"
+      : place === "instagram"
+        ? "Instagram"
+        : "Facebook";
+  const account = id ? accounts.find((each) => each.id === id) : undefined;
+  const who = account ? (account.handle ? `@${account.handle}` : account.name) : null;
+  return who ? `${where} (${who})` : where;
+}
+
+const failTargets = (keys: string[], error: string): PublishOutcome => ({
   retry: false,
-  results: Object.fromEntries(
-    post.channels.filter((c) => !("id" in (post.results[c] ?? {}))).map((c) => [c, { error }]),
-  ),
+  results: Object.fromEntries(keys.map((key) => [key, { error }])),
 });
 
-async function send(post: DuePost, deps: SocialWorkerDeps): Promise<PublishOutcome> {
-  if (!(await deps.moduleOpen(post.tenant_id))) {
-    return failAll(post, "Social isn't part of this workspace's plan right now");
-  }
-  let stored: StoredToken;
-  try {
-    stored = await deps.getToken(post.tenant_id);
-  } catch (err) {
-    if (err instanceof ReconnectRequiredError) {
-      return failAll(post, "Facebook needs connecting on the Connections page");
-    }
-    throw err;
-  }
+const sent = (post: DuePost, key: string) => "id" in (post.results[key] ?? {});
+
+async function send(
+  post: DuePost,
+  deps: SocialWorkerDeps,
+): Promise<PublishOutcome & { accounts: PostAccount[] }> {
   // Posts saved before several photos were possible only have the one.
   const assetIds = post.asset_ids?.length ? post.asset_ids : post.asset_id ? [post.asset_id] : [];
   const copyIds = Object.values(post.channel_media ?? {}).flatMap((ids) =>
     Array.isArray(ids) ? ids.map(String) : [],
   );
-  const { instagramId, storagePaths, videoPath, scopes, copies } = await withTenant(
+  const accountIds = post.account_ids ?? [];
+  const { connection, storagePaths, videoPath, copies, accounts } = await withTenant(
     post.tenant_id,
     async (scope) => {
-      const [{ data: connection }, { data: assets }] = await Promise.all([
+      const [{ data: connection }, { data: assets }, { data: accountRows }] = await Promise.all([
         scope.select("connections", "metadata, scopes").eq("provider", "meta").maybeSingle(),
         assetIds.length || copyIds.length
           ? scope
               .select("social_assets", "id, storage_path, mime_type, fitted_from, fitted_for")
               .in("id", [...new Set([...assetIds, ...copyIds])])
+          : Promise.resolve({ data: [] }),
+        accountIds.length
+          ? scope
+              .select(
+                "social_accounts",
+                "id, network, platform_id, page_id, name, handle, tasks, active",
+              )
+              .in("id", accountIds)
           : Promise.resolve({ data: [] }),
       ]);
       const all = (assets ?? []) as unknown as {
@@ -81,49 +142,114 @@ async function send(post: DuePost, deps: SocialWorkerDeps): Promise<PublishOutco
       const paths = new Map(rows.map((asset) => [asset.id, asset.storage_path]));
       const video = rows.find((asset) => asset.mime_type.startsWith("video/"));
       return {
-        instagramId:
-          (connection as { metadata?: { instagram_id?: string | null } } | null)?.metadata
-            ?.instagram_id ?? null,
+        connection: connection as {
+          metadata?: { instagram_id?: string | null };
+          scopes?: unknown;
+        } | null,
         // In the order the person arranged them.
         storagePaths: video
           ? []
           : assetIds.flatMap((id) => (paths.has(id) ? [paths.get(id)!] : [])),
         videoPath: video?.storage_path ?? null,
-        scopes: grantedScopes((connection as { scopes?: unknown } | null)?.scopes),
         copies: new Map(all.filter((asset) => asset.fitted_from).map((asset) => [asset.id, asset])),
+        accounts: (accountRows ?? []) as unknown as PostAccount[],
       };
     },
     deps.admin,
   );
-  // A connection made for the help desk alone has no permission to publish.
-  const waiting = post.channels.filter((c) => !("id" in (post.results[c] ?? {})));
-  // A Story is published with the same Instagram permission as the feed.
-  if (
-    scopes !== null &&
-    waiting.some((c) => !canPost(c === "facebook" ? "facebook" : "instagram", scopes))
-  ) {
-    return failAll(
-      post,
-      "Facebook wasn't given permission to post. Open Social and press “Allow posting on Facebook”",
+  const targets = postTargets(post, accounts);
+  const waitingKeys = targets.flatMap((t) =>
+    t.places.filter((p) => !sent(post, p.key)).map((p) => p.key),
+  );
+  const outcome = (o: PublishOutcome) => ({ ...o, accounts });
+
+  if (!(await deps.moduleOpen(post.tenant_id))) {
+    return outcome(
+      failTargets(waitingKeys, "Social isn't part of this workspace's plan right now"),
     );
   }
+  let stored: StoredToken;
+  try {
+    stored = await deps.getToken(post.tenant_id);
+  } catch (err) {
+    if (err instanceof ReconnectRequiredError) {
+      return outcome(failTargets(waitingKeys, "Facebook needs connecting on the Connections page"));
+    }
+    throw err;
+  }
+  const scopes = grantedScopes(connection?.scopes);
   const imagesFor = videoPath
     ? {}
     : placeImages(assetIds, storagePaths, post.channel_media ?? {}, copies);
-  return deps.publish({
-    caption: post.caption,
-    captions: post.captions ?? {},
-    imageUrls: storagePaths.map(publicAssetUrl),
-    imagesFor: Object.fromEntries(
-      Object.entries(imagesFor).map(([place, paths]) => [place, paths.map(publicAssetUrl)]),
-    ),
-    videoUrl: videoPath ? publicAssetUrl(videoPath) : null,
-    channels: post.channels,
-    alreadySent: post.channels.filter((c) => "id" in (post.results[c] ?? {})),
-    pageId: stored.externalAccountId,
-    pageToken: stored.token.access_token,
-    instagramId,
-  });
+  const results: Record<string, ChannelResult> = {};
+  let retry = false;
+  let anyFailed = false;
+  // Each account stands alone: one failing never stops another, and each
+  // answer is kept under its own target.
+  for (const { account, places } of targets) {
+    const waiting = places.filter((p) => !sent(post, p.key));
+    if (waiting.length === 0) continue;
+    const fail = (error: string) => {
+      anyFailed = true;
+      for (const p of waiting) results[p.key] = { error };
+    };
+    // A connection made for the help desk alone has no permission to publish.
+    // A Story is published with the same Instagram permission as the feed.
+    if (scopes !== null && waiting.some((p) => !canPost(placeNetwork(p.place), scopes))) {
+      fail(
+        "Facebook wasn't given permission to post. Open Social and press “Allow posting on Facebook”",
+      );
+      continue;
+    }
+    if (account && !account.active) {
+      fail("This account isn't in use any more. Choose it again under Settings → Social accounts");
+      continue;
+    }
+    if (account && !accountAllows("posting", account.tasks)) {
+      fail("Facebook says whoever connected it can't post on this Page");
+      continue;
+    }
+    const pageId = account ? account.page_id : stored.externalAccountId;
+    const pageToken = pageId ? pageTokenOf(stored, pageId) : null;
+    if (!pageId || !pageToken) {
+      fail("This Page needs connecting again on the Connections page");
+      continue;
+    }
+    const instagramId = account
+      ? account.network === "instagram"
+        ? account.platform_id
+        : null
+      : (connection?.metadata?.instagram_id ?? null);
+    const words = (place: Channel) =>
+      (account ? post.captions?.[account.id] : undefined) ??
+      post.captions?.[place === "instagram_story" ? "instagram" : place];
+    const tried = await deps.publish({
+      caption: post.caption,
+      captions: Object.fromEntries(
+        waiting.flatMap(({ place }) => {
+          const own = words(place);
+          return own ? [[place, own]] : [];
+        }),
+      ),
+      imageUrls: storagePaths.map(publicAssetUrl),
+      imagesFor: Object.fromEntries(
+        Object.entries(imagesFor).map(([place, paths]) => [place, paths.map(publicAssetUrl)]),
+      ),
+      videoUrl: videoPath ? publicAssetUrl(videoPath) : null,
+      channels: waiting.map((p) => p.place),
+      alreadySent: [],
+      pageId,
+      pageToken,
+      instagramId,
+    });
+    for (const p of waiting) {
+      const answer = tried.results[p.place];
+      if (answer) results[p.key] = answer;
+      if (!answer || "error" in answer) anyFailed = true;
+    }
+    if (tried.retry) retry = true;
+  }
+  return outcome({ results, retry: anyFailed ? retry : true });
 }
 
 /**
@@ -163,13 +289,13 @@ export async function publishDuePosts(deps: SocialWorkerDeps): Promise<number> {
   if (error) throw new Error(`Could not claim social posts: ${error.message}`);
   const posts = (data ?? []) as DuePost[];
   for (const post of posts) {
-    let outcome: PublishOutcome;
+    let outcome: PublishOutcome & { accounts: PostAccount[] };
     try {
       outcome = await send(post, deps);
     } catch (err) {
       // Something on our side: leave the post claimed so it is retried later.
       console.error(`social post ${post.id}: ${err instanceof Error ? err.message : err}`);
-      outcome = { results: {}, retry: true };
+      outcome = { results: {}, retry: true, accounts: [] };
     }
     const { data: status, error: finishError } = await deps.admin.rpc("finish_social_post", {
       p_post_id: post.id,
@@ -184,7 +310,10 @@ export async function publishDuePosts(deps: SocialWorkerDeps): Promise<number> {
     if (status === "failed") {
       const reason = Object.entries(outcome.results)
         .filter(([, result]) => result && "error" in result)
-        .map(([channel, result]) => `${channel}: ${(result as { error: string }).error}`)
+        .map(
+          ([key, result]) =>
+            `${targetLabel(key, outcome.accounts)}: ${(result as { error: string }).error}`,
+        )
         .join("; ");
       await deps.notifyFailed(post.tenant_id, post.caption, reason || "It couldn't be sent");
     }

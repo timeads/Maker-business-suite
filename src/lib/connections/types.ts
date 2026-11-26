@@ -379,6 +379,15 @@ export interface ProviderAdapter {
   connectWithKey?(input: Record<string, string>): Promise<ConnectedAccount>;
   /** Runs once after a connection is saved (register webhooks, ...). */
   afterConnect?(account: ConnectedAccount, siteUrl: string): Promise<void>;
+  /**
+   * Runs once after a connection is saved, with the workspace named, for what
+   * the provider's login said about the workspace's accounts (Meta's Pages).
+   * Service-role calls only, each naming the workspace.
+   */
+  afterSaved?(
+    where: { tenantId: string; admin: import("@supabase/supabase-js").SupabaseClient },
+    account: ConnectedAccount,
+  ): Promise<void>;
   /** Returns new tokens. Throws ReconnectRequiredError when they can't be renewed. */
   refresh(token: TokenSet, externalAccountId: string): Promise<TokenSet>;
   /** Best-effort revoke on the provider's side. */

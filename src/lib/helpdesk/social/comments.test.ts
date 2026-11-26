@@ -971,8 +971,9 @@ describe("answering through Meta", () => {
         channel: "instagram",
       });
       expect(path(meta.calls[0])).toBe("/c-1/replies");
-      // A public reply never touches the private message's claim.
-      expect(db.rpcs).toEqual(["comment_reply_context"]);
+      // A public reply never touches the private message's claim. (It does ask which
+      // account the comment was left on, so it is answered as that account.)
+      expect(db.rpcs).toEqual(["comment_reply_context", "social_ticket_account"]);
     });
 
     it("sends the private message once: the second try is stopped before Meta is asked", async () => {

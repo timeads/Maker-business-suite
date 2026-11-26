@@ -35,8 +35,69 @@ type Page = {
   id: string;
   name: string;
   access_token: string;
+  /** What the person who logged in may do on this Page ("MANAGE", "CREATE_CONTENT", ...). */
+  tasks?: string[];
   instagram_business_account?: { id: string; username?: string };
 };
+
+/** A Page the login shared, as kept on the connection's metadata. Nothing secret. */
+export type SharedPage = {
+  id: string;
+  name: string;
+  instagram_id: string | null;
+  instagram_username: string | null;
+  tasks: string[] | null;
+};
+
+/** Where a Page's own token sits among the connection's tokens in Vault. */
+export const pageTokenKey = (pageId: string) => `page:${pageId}`;
+
+/** Every Page shared, and the Instagram account linked to each, as accounts to offer the workspace. */
+export function accountsOffered(pages: readonly SharedPage[]) {
+  return pages.flatMap((page) => [
+    {
+      network: "facebook",
+      platform_id: page.id,
+      page_id: page.id,
+      name: page.name,
+      handle: null,
+      tasks: page.tasks,
+    },
+    ...(page.instagram_id
+      ? [
+          {
+            network: "instagram",
+            platform_id: page.instagram_id,
+            page_id: page.id,
+            name: page.name,
+            handle: page.instagram_username,
+            tasks: page.tasks,
+          },
+        ]
+      : []),
+  ]);
+}
+
+/** The pages on a connection's metadata, or none. Never trusted for more than names and ids. */
+export function sharedPages(metadata: unknown): SharedPage[] {
+  const list = (metadata as { pages?: unknown } | null)?.pages;
+  if (!Array.isArray(list)) return [];
+  const text = (value: unknown) => (typeof value === "string" && value ? value : null);
+  return list.flatMap((raw) => {
+    const page = raw as Record<string, unknown>;
+    const id = text(page.id);
+    if (!id || !/^[0-9]{1,40}$/.test(id)) return [];
+    return [
+      {
+        id,
+        name: text(page.name) ?? "Facebook Page",
+        instagram_id: text(page.instagram_id),
+        instagram_username: text(page.instagram_username),
+        tasks: Array.isArray(page.tasks) ? page.tasks.map(String) : null,
+      },
+    ];
+  });
+}
 
 /** Meta says the token is no longer good (expired, revoked, password changed). */
 export function isMetaAuthError(err: unknown): boolean {
@@ -64,10 +125,18 @@ const describePage = (page: Page) =>
     ? `${page.name} · @${page.instagram_business_account.username}`
     : page.name;
 
-const pageMetadata = (page: Pick<Page, "instagram_business_account">, otherPages = 0) => ({
+const pageMetadata = (page: Pick<Page, "instagram_business_account">, all: Page[]) => ({
   instagram_id: page.instagram_business_account?.id ?? null,
   instagram_username: page.instagram_business_account?.username ?? null,
-  other_pages: otherPages,
+  other_pages: all.length - 1,
+  // Every Page shared, so the workspace can choose which to use. Names and ids only.
+  pages: all.map((each): SharedPage => ({
+    id: each.id,
+    name: each.name,
+    instagram_id: each.instagram_business_account?.id ?? null,
+    instagram_username: each.instagram_business_account?.username ?? null,
+    tasks: Array.isArray(each.tasks) ? each.tasks.map(String) : null,
+  })),
 });
 
 /**
@@ -129,7 +198,7 @@ export function createMetaAdapter(fetchImpl: Fetch = fetch): ProviderAdapter {
         fb_exchange_token: short.access_token,
       });
       const pages = await get<{ data: Page[] }>("/me/accounts", long.access_token, {
-        fields: "id,name,access_token,instagram_business_account{id,username}",
+        fields: "id,name,access_token,tasks,instagram_business_account{id,username}",
         limit: "50",
       });
       const page =
@@ -155,13 +224,32 @@ export function createMetaAdapter(fetchImpl: Fetch = fetch): ProviderAdapter {
         displayName: describePage(page),
         scopes,
         // The person's own token is kept only so access can be revoked on disconnect.
-        token: { access_token: page.access_token, refresh_token: long.access_token },
-        metadata: pageMetadata(page, pages.data.length - 1),
+        // Each Page's own token sits beside the first one's, all of it in Vault.
+        token: {
+          access_token: page.access_token,
+          refresh_token: long.access_token,
+          secrets: Object.fromEntries(
+            pages.data
+              .filter((each) => typeof each.access_token === "string" && each.access_token)
+              .map((each) => [pageTokenKey(each.id), each.access_token]),
+          ),
+        },
+        metadata: pageMetadata(page, pages.data),
       };
     },
 
     async refresh(token) {
       return token;
+    },
+
+    // Every Page the login shared (and its Instagram account) is offered to the
+    // workspace; which are used, and as which brand, is a person's choice.
+    async afterSaved({ tenantId, admin }, account) {
+      const { error } = await admin.rpc("note_meta_accounts", {
+        p_tenant_id: tenantId,
+        p_accounts: accountsOffered(sharedPages(account.metadata)),
+      });
+      if (error) throw new Error(`could not note the shared Pages: ${error.message}`);
     },
 
     // With the help desk's permissions granted, ask Meta to send this Page's
@@ -178,10 +266,14 @@ export function createMetaAdapter(fetchImpl: Fetch = fetch): ProviderAdapter {
     },
 
     async disconnect(token, externalAccountId) {
-      // Stop the Page's messages coming our way first; it may never have been asked for.
-      await unsubscribePage(externalAccountId, token.access_token, fetchImpl).catch(
-        () => undefined,
-      );
+      // Stop every Page's messages coming our way first; they may never have been asked for.
+      const pages = new Map([[externalAccountId, token.access_token]]);
+      for (const [key, value] of Object.entries(token.secrets ?? {})) {
+        if (key.startsWith("page:") && value) pages.set(key.slice("page:".length), value);
+      }
+      for (const [pageId, pageToken] of pages) {
+        await unsubscribePage(pageId, pageToken, fetchImpl).catch(() => undefined);
+      }
       if (!token.refresh_token) return;
       await requestJson(fetchImpl, "Meta", graphUrl("/me/permissions"), {
         method: "DELETE",

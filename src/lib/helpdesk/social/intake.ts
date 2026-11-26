@@ -16,8 +16,17 @@ import {
  * so it can be tested without a database or Meta.
  */
 
-/** Whose workspace an account belongs to, and the Page its messages are sent through. */
-export type SocialWhere = { tenantId: string; pageId: string; channel: SocialChannel };
+/**
+ * Whose workspace an account belongs to, which of its accounts it is (null
+ * only for a lookup from before accounts), and the Page its messages are
+ * sent through.
+ */
+export type SocialWhere = {
+  tenantId: string;
+  pageId: string;
+  channel: SocialChannel;
+  accountId?: string | null;
+};
 
 export type FileResult = {
   result: "created" | "threaded" | "duplicate" | "ignored" | "retry";

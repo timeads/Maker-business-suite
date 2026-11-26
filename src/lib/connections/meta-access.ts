@@ -111,3 +111,37 @@ export function canPost(
     ? has("pages_manage_posts")
     : has("instagram_content_publish") && has("instagram_basic");
 }
+
+/** What an account is used for, as far as Meta's per-Page tasks go. */
+export type AccountUse = "posting" | "messages" | "comments";
+
+/**
+ * Meta grants permissions to the login, but says per Page what the person
+ * may do there (`tasks` on each Page: MANAGE, CREATE_CONTENT, MESSAGING,
+ * MODERATE, ...). An account is used for something only where its Page's
+ * tasks allow it; where Meta didn't say (an account from before tasks were
+ * read), the permissions alone decide. The database's twin is
+ * `private.meta_tasks_allow`, kept in step by a test.
+ */
+export function accountAllows(
+  use: AccountUse,
+  tasks: readonly string[] | null | undefined,
+): boolean {
+  if (!tasks) return true;
+  if (tasks.includes("MANAGE")) return true;
+  const needs: Record<AccountUse, string> = {
+    posting: "CREATE_CONTENT",
+    messages: "MESSAGING",
+    comments: "MODERATE",
+  };
+  return tasks.includes(needs[use]);
+}
+
+/** Whether an account can be posted to: the login's permission for its network, and its Page's tasks. */
+export function canPostAs(
+  account: { network: string; tasks?: readonly string[] | null },
+  scopes: readonly string[] | null | undefined,
+): boolean {
+  if (account.network !== "facebook" && account.network !== "instagram") return false;
+  return canPost(account.network, scopes) && accountAllows("posting", account.tasks);
+}

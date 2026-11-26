@@ -80,6 +80,10 @@ export async function GET(request: NextRequest, ctx: { params: Promise<{ provide
     }
 
     try {
+      await adapter.afterSaved?.(
+        { tenantId: tenantCtx.tenant.id, admin: getAdminClient() },
+        account,
+      );
       await adapter.afterConnect?.(account, site);
     } catch (err) {
       console.error(
