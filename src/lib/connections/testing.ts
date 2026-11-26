@@ -1,4 +1,5 @@
 import type {
+  BookExpenseRow,
   BookPaymentRow,
   CustomerRow,
   OrderRow,
@@ -31,6 +32,10 @@ export function memoryStore() {
     bookPayments: [] as BookPaymentRow[],
     /** Set to true for a workspace that asked for payments from its books. */
     bookPaymentsWanted: false,
+    bookExpenses: [] as { run: string; row: BookExpenseRow }[],
+    /** Set to true for a workspace with Money, which reads expenses from its books. */
+    bookExpensesWanted: false,
+    expenseCloses: [] as { run: string; since: string; entities: string[] }[],
     /** How many full reads of the orders finished with Money's details. */
     detailsRead: 0,
     redacted: [] as { externalId: string; email: string | null }[],
@@ -70,6 +75,15 @@ export function memoryStore() {
     },
     async bookPaymentsWanted() {
       return state.bookPaymentsWanted;
+    },
+    async bookExpensesWanted() {
+      return state.bookExpensesWanted;
+    },
+    async fileBookExpenses(run, rows) {
+      state.bookExpenses.push(...rows.map((row) => ({ run, row })));
+    },
+    async closeBookExpenses(run, since, entities) {
+      state.expenseCloses.push({ run, since, entities });
     },
     async importBookPayments(rows) {
       state.bookPayments.push(...rows);

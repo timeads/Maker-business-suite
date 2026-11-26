@@ -1,6 +1,16 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { applyShopOrders } from "../bookings/shop";
 import { noteShopOrderLines } from "../bookings/undated";
+import {
+  EXPENSES_KEY,
+  decisionPayload,
+  factsOfRow,
+  parseExpenseSorting,
+  type ExpenseSorting,
+} from "../dashboard/expenses";
+import { REVENUE_KEY, REVENUE_MODULE, parseRevenueSettings } from "../dashboard/lines";
+import { moduleOpen } from "../module-access";
+import { withTenant } from "../supabase/admin";
 import type { SyncStore } from "./types";
 
 /**
@@ -20,6 +30,28 @@ export function rpcSyncStore(
     });
     if (error) throw new Error(`${fn} failed: ${error.message}`);
   };
+  // The workspace's lines and expense rules, read once per sync.
+  let sorting: Promise<{ settings: ExpenseSorting; lineIds: Set<string> }> | null = null;
+  const loadSorting = () =>
+    (sorting ??= withTenant(
+      scope.tenantId,
+      async (tenant) => {
+        const { data, error } = await tenant
+          .select("configs", "key, body")
+          .eq("module", REVENUE_MODULE)
+          .in("key", [REVENUE_KEY, EXPENSES_KEY]);
+        if (error) throw new Error(`Could not read the expense rules: ${error.message}`);
+        const rows = (data ?? []) as unknown as { key: string; body: unknown }[];
+        const body = (key: string) => rows.find((row) => row.key === key)?.body;
+        const revenue = parseRevenueSettings(body(REVENUE_KEY));
+        return {
+          settings: parseExpenseSorting(body(EXPENSES_KEY)),
+          lineIds: new Set(revenue.lines.map((line) => line.id)),
+        };
+      },
+      admin,
+    ));
+
   return {
     upsertCommerce: (batch) =>
       call("upsert_commerce_batch", {
@@ -46,6 +78,24 @@ export function rpcSyncStore(
       if (error) throw new Error(`book_payments_wanted failed: ${error.message}`);
       return data === true;
     },
+    bookExpensesWanted: () => moduleOpen(scope.tenantId, "dashboard", admin),
+    async fileBookExpenses(run, rows) {
+      const { settings, lineIds } = await loadSorting();
+      const withRules = rows.map((row) => ({
+        ...row,
+        ...(row.kind === "transfer" || row.kind === "card_payment"
+          ? {}
+          : decisionPayload(settings, lineIds, factsOfRow(row))),
+      }));
+      for (let start = 0; start < withRules.length; start += 500) {
+        await call("file_book_expenses", {
+          p_run: run,
+          p_rows: withRules.slice(start, start + 500),
+        });
+      }
+    },
+    closeBookExpenses: (run, since, entities) =>
+      call("close_book_expenses", { p_run: run, p_since: since, p_entities: entities }),
     redactCustomer: (externalId, email) =>
       call("redact_customer", { p_customer_external_id: externalId, p_email: email }),
     purgeProviderData: () => call("purge_provider_data", {}),

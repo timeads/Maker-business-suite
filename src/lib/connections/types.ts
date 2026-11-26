@@ -150,6 +150,30 @@ export type BookPaymentRow = {
   memo: string;
 };
 
+/**
+ * Money going out, as the books record it, for Money's expense inbox. Amounts
+ * in whole cents. Transfers and card payments are moves between the
+ * business's own accounts, kept marked and never counted as expenses.
+ */
+export type BookExpenseRow = {
+  /** The books' own kind of record and its id: together, the key. */
+  entity: string;
+  external_id: string;
+  kind: "purchase" | "bill" | "journal" | "transfer" | "card_payment";
+  /** Purchases only: Cash, Check or CreditCard, as the books say. */
+  payment_type: string | null;
+  /** YYYY-MM-DD, the books' own day. */
+  date: string;
+  amount_cents: number;
+  /** The account of the first line (for a move, the account paid into). */
+  account: string | null;
+  payee: string | null;
+  memo: string;
+  /** Moves only: the account the money left. */
+  from_account: string | null;
+  lines: { account: string | null; amount_cents: number; description: string }[];
+};
+
 /** A product's tags in the shop, noted on each of its stock items. */
 export type StockTagsRow = { product_external_id: string; tags: string[] };
 
@@ -278,6 +302,18 @@ export type SyncStore = {
   importBookPayments(rows: BookPaymentRow[]): Promise<void>;
   /** Has the workspace asked for that? If not, the books aren't read for payments at all. */
   bookPaymentsWanted(): Promise<boolean>;
+  /** Does the workspace have Money? If not, the books aren't read for expenses at all. */
+  bookExpensesWanted(): Promise<boolean>;
+  /**
+   * Expenses read from the books in one read (`run`). Upserted by the books'
+   * own ids; the workspace's rules sort new ones that nobody has sorted yet.
+   */
+  fileBookExpenses(run: string, rows: BookExpenseRow[]): Promise<void>;
+  /**
+   * After a complete read of these kinds since `since`: anything stored for
+   * them in that window that this read didn't see is gone from the books.
+   */
+  closeBookExpenses(run: string, since: string, entities: string[]): Promise<void>;
   /** Erases one shopper's personal details, keeping the sales figures. */
   redactCustomer(externalId: string, email: string | null): Promise<void>;
   /** Deletes everything synced from this provider for the workspace. */

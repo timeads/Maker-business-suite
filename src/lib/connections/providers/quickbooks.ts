@@ -7,8 +7,19 @@ import {
   type ProviderAdapter,
   type BookPaymentRow,
   type SnapshotRow,
+  type SyncStore,
   type TokenSet,
 } from "../types";
+import {
+  EXPENSE_ENTITIES,
+  EXPENSE_PAGE,
+  EXPENSE_PAGES,
+  expenseAnswerSize,
+  expensesQuery,
+  expensesSince,
+  parseExpenses,
+  type ExpensesResponse,
+} from "./quickbooks-expenses";
 import {
   PAYMENT_ENTITIES,
   PAYMENT_PAGE,
@@ -140,6 +151,56 @@ export function createQuickBooksAdapter(fetchImpl: Fetch = fetch): ProviderAdapt
     return { rows, calls };
   }
 
+  /**
+   * Expenses since the first of January last year, for Money, kind by kind
+   * and a page at a time. Only reads. Each kind is filed as it arrives; a
+   * kind read to its last page is "complete", so whatever of it the books no
+   * longer hold can be marked gone. Trouble with one kind leaves the others
+   * standing and that kind's stored rows untouched.
+   */
+  async function expenses(realmId: string, token: TokenSet, since: string, store: SyncStore) {
+    const run = crypto.randomUUID();
+    const complete: string[] = [];
+    let calls = 0;
+    for (const entity of EXPENSE_ENTITIES) {
+      try {
+        let finished = false;
+        for (let page = 0; page < EXPENSE_PAGES; page++) {
+          const query = new URLSearchParams({
+            query: expensesQuery(entity, since, page),
+            minorversion: "75",
+          });
+          calls += 1;
+          const answer = await requestJson<ExpensesResponse>(
+            fetchImpl,
+            "QuickBooks",
+            `${apiBase()}/v3/company/${encodeURIComponent(realmId)}/query?${query}`,
+            {
+              headers: {
+                Authorization: `Bearer ${token.access_token}`,
+                Accept: "application/json",
+              },
+            },
+          );
+          const rows = parseExpenses(entity, answer);
+          if (rows.length > 0) await store.fileBookExpenses(run, rows);
+          if (expenseAnswerSize(entity, answer) < EXPENSE_PAGE) {
+            finished = true;
+            break;
+          }
+        }
+        if (finished) complete.push(entity);
+      } catch (err) {
+        console.warn(
+          `QuickBooks ${entity} not read for ${realmId}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+    if (complete.length > 0) await store.closeBookExpenses(run, since, complete);
+    return { calls };
+  }
+
   return {
     key: "quickbooks",
     name: "QuickBooks",
@@ -251,6 +312,19 @@ export function createQuickBooksAdapter(fetchImpl: Fetch = fetch): ProviderAdapt
       } catch (err) {
         console.warn(
           `QuickBooks payments not read for ${externalAccountId}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+      // Expenses, for Money's inbox and profit by line. Like payments, this
+      // never stops the sync.
+      try {
+        if (await store.bookExpensesWanted()) {
+          const read = await expenses(externalAccountId, token, expensesSince(today), store);
+          calls += read.calls;
+        }
+      } catch (err) {
+        console.warn(
+          `QuickBooks expenses not read for ${externalAccountId}:`,
           err instanceof Error ? err.message : err,
         );
       }
