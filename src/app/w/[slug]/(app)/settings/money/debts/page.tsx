@@ -13,7 +13,7 @@ import { DEBT_FIELDS } from "@/lib/dashboard/figure-fields";
 import { getEntitlements } from "@/lib/entitlements";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
-import { EmergencyAccountPicker } from "../../../dashboard/debt-forms";
+import { DebtImportForm, EmergencyAccountPicker } from "../../../dashboard/debt-forms";
 import { FigureSettingsForm } from "../../../dashboard/money-figure-forms";
 
 export const metadata: Metadata = { title: "Debt payoff and emergency fund" };
@@ -127,6 +127,27 @@ export default async function DebtSettingsPage({ params }: { params: Promise<{ s
             <p className="text-ochre-text text-sm">
               Your latest balance sheet doesn&apos;t have {unread.join(", ")}. Tick the account the
               fund is in now.
+            </p>
+          )}
+        </CardContent>
+      </Card>
+      <Card id="bring-across">
+        <CardHeader>
+          <CardTitle>Bring your debt details across</CardTitle>
+          <CardDescription>
+            Moving from another app? Save its list of debts as a CSV with a column for each
+            debt&apos;s name or account, and any of: rate %, minimum, usual payment, plan, priority,
+            due day and note. Each row is matched to a debt from your books by its account name.
+            Only details you haven&apos;t set are filled in, and you see everything before it
+            happens.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {entitlements.canWrite ? (
+            <DebtImportForm slug={tenant.slug} />
+          ) : (
+            <p className="text-muted-foreground text-sm">
+              Your plan doesn&apos;t include changing Money right now.
             </p>
           )}
         </CardContent>

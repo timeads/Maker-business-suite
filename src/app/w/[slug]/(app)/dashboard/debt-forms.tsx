@@ -20,12 +20,15 @@ import {
   noteBalance,
   removeBalance,
   chooseStrategy,
+  confirmDebtImport,
   followRecommended,
+  previewDebtImport,
   removeDebt,
   removeWhatIf,
   saveDebt,
   setPlanMonths,
   type DebtActionState,
+  type DebtImportPreview,
 } from "./debt-actions";
 
 /** A debt as the form holds it: amounts as typed text in the workspace's currency. */
@@ -635,5 +638,114 @@ export function ReadBooksButton({ slug }: { slug: string }) {
         </span>
       )}
     </form>
+  );
+}
+
+/**
+ * "Bring your debt details across": a CSV read here in the browser, looked
+ * at first, then brought across in one press (a second press changes
+ * nothing). Only details nobody has set are filled.
+ */
+export function DebtImportForm({ slug }: { slug: string }) {
+  const [text, setText] = useState<string | null>(null);
+  const [fileName, setFileName] = useState("");
+  const [preview, setPreview] = useState<DebtImportPreview>({});
+  const [key, setKey] = useState("");
+  const [said, setSaid] = useState<DebtActionState>({});
+  const [pending, start] = useTransition();
+
+  const look = (body: string) =>
+    start(async () => {
+      setSaid({});
+      setPreview(await previewDebtImport(slug, body));
+      setKey(crypto.randomUUID());
+    });
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="debt-import-file">The spreadsheet, saved as CSV</Label>
+        <Input
+          id="debt-import-file"
+          type="file"
+          accept=".csv,text/csv,text/plain"
+          className="sm:w-96"
+          onChange={async (event) => {
+            const file = event.target.files?.[0];
+            if (!file) return;
+            if (file.size > 200_000) {
+              setPreview({
+                error: "That file is too big. Save only the debts' rows and try again.",
+              });
+              return;
+            }
+            const body = await file.text();
+            setFileName(file.name);
+            setText(body);
+            look(body);
+          }}
+        />
+      </div>
+      {pending && !preview.fills && <p className="text-muted-foreground text-sm">Reading…</p>}
+      {preview.error && (
+        <p role="alert" className="text-brick text-sm">
+          {preview.error}
+        </p>
+      )}
+      {preview.fills && (
+        <div className="flex flex-col gap-3 text-sm" role="status">
+          <p>
+            {preview.fills.length === 0
+              ? `Nothing in ${fileName || "that file"} needs filling in.`
+              : `From ${fileName || "that file"}, this is what would be filled in. Anything you've already set stays as it is.`}
+          </p>
+          {preview.fills.length > 0 && (
+            <ul className="flex flex-col gap-1">
+              {preview.fills.map((fill) => (
+                <li key={fill.line}>
+                  <span className="font-medium">{fill.debt}</span>: {fill.words.join(", ")}
+                  {fill.kept.length > 0 && (
+                    <span className="text-muted-foreground">
+                      {" "}
+                      (keeping your {fill.kept.join(", ")})
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+          {[...(preview.skipped ?? []), ...(preview.problems ?? [])].length > 0 && (
+            <details>
+              <summary className="text-muted-foreground cursor-pointer">
+                Rows left out ({(preview.skipped?.length ?? 0) + (preview.problems?.length ?? 0)})
+              </summary>
+              <ul className="text-muted-foreground mt-1 flex flex-col gap-0.5">
+                {[...(preview.problems ?? []), ...(preview.skipped ?? [])]
+                  .sort((a, b) => a.line - b.line)
+                  .map((row, i) => (
+                    <li key={`${row.line}-${i}`}>
+                      Line {row.line}: {row.text}
+                    </li>
+                  ))}
+              </ul>
+            </details>
+          )}
+          {preview.fills.length > 0 && text && (
+            <span className="flex flex-wrap items-center gap-2">
+              <Button
+                size="sm"
+                variant="dark"
+                className="w-fit"
+                disabled={pending}
+                onClick={() => start(async () => setSaid(await confirmDebtImport(slug, text, key)))}
+              >
+                {pending ? "Bringing across…" : "Bring these across"}
+              </Button>
+              {say(said)}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

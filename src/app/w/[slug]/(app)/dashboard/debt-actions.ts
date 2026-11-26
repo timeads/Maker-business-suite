@@ -6,6 +6,13 @@ import { requireUser } from "@/lib/auth";
 import { loadDebtSettings, loadDebtView, sheetBanks } from "@/lib/dashboard/debt/data";
 import { findBank } from "@/lib/dashboard/debt/figures";
 import {
+  IMPORT_FIELD_WORDS,
+  detailWords,
+  planDebtImport,
+  readDebtFile,
+  type ImportDebt,
+} from "@/lib/dashboard/debt/import";
+import {
   QUESTION_MAX,
   WHAT_IF_DEBTS,
   askWhatIf,
@@ -480,4 +487,108 @@ export async function followRecommended(slug: string): Promise<DebtActionState> 
   refresh(slug);
   revalidatePath(`/w/${slug}/settings`, "layout");
   return { message: "Saved: the plan follows the recommended order from now on." };
+}
+
+export type DebtImportPreview = {
+  error?: string;
+  message?: string;
+  /** What would be filled, in words, one line per debt. */
+  fills?: { line: number; debt: string; words: string[]; kept: string[] }[];
+  skipped?: { line: number; text: string }[];
+  problems?: { line: number; text: string }[];
+};
+
+const IMPORT_TEXT_MAX = 200_000;
+
+/** The file read and matched to this workspace's debts, as the member (owners and admins). */
+async function planImport(
+  ctx: Exclude<Awaited<ReturnType<typeof debtContext>>, { error: string }>,
+  text: string,
+) {
+  if (typeof text !== "string" || text.length > IMPORT_TEXT_MAX) {
+    return { error: "That file is too big. Save only the debts' rows and try again." } as const;
+  }
+  const file = readDebtFile(text);
+  if (!file.ok) return { error: file.error } as const;
+  const { data, error } = await ctx.supabase
+    .from("money_debts")
+    .select(
+      "id, name, books_account, rate_bp, minimum_cents, payment_cents, plan, priority, due_day, note, updated_by",
+    )
+    .eq("tenant_id", ctx.tenant.id)
+    .is("left_out_at", null)
+    .limit(500);
+  if (error) return { error: "We couldn't read your debts. Try again in a moment." } as const;
+  const debts: ImportDebt[] = ((data as Record<string, unknown>[] | null) ?? []).map((row) => ({
+    id: String(row.id),
+    name: String(row.name),
+    booksAccount: (row.books_account as string | null) ?? null,
+    rateBp: row.rate_bp === null || row.rate_bp === undefined ? null : Number(row.rate_bp),
+    minimum: Number(row.minimum_cents ?? 0),
+    payment:
+      row.payment_cents === null || row.payment_cents === undefined
+        ? null
+        : Number(row.payment_cents),
+    plan: String(row.plan),
+    priority: row.priority === null || row.priority === undefined ? null : Number(row.priority),
+    dueDay: row.due_day === null || row.due_day === undefined ? null : Number(row.due_day),
+    note: (row.note as string | null) ?? null,
+    savedByPerson: row.updated_by !== null && row.updated_by !== undefined,
+  }));
+  return { file, plan: planDebtImport(file.rows, debts) } as const;
+}
+
+/** "Bring your debt details across", for a look: what would be filled, and what wouldn't. */
+export async function previewDebtImport(slug: string, text: string): Promise<DebtImportPreview> {
+  const ctx = await debtContext(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const planned = await planImport(ctx, text);
+  if ("error" in planned) return { error: planned.error };
+  const money = (cents: number) => formatMoney(cents / 100, ctx.tenant.currency);
+  return {
+    fills: planned.plan.fills.map((fill) => ({
+      line: fill.line,
+      debt: fill.debtName,
+      words: detailWords(fill.details, money),
+      kept: fill.kept.map((field) => IMPORT_FIELD_WORDS[field]),
+    })),
+    skipped: planned.plan.skipped,
+    problems: planned.file.problems,
+  };
+}
+
+/**
+ * "Bring these across": the same file, matched again, through the one
+ * checked function. The request key makes a second press change nothing.
+ */
+export async function confirmDebtImport(
+  slug: string,
+  text: string,
+  requestKey: string,
+): Promise<DebtActionState> {
+  const ctx = await debtContext(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  if (!z.string().uuid().safeParse(requestKey).success) {
+    return { error: "Look at the file again first." };
+  }
+  const planned = await planImport(ctx, text);
+  if ("error" in planned) return { error: planned.error };
+  if (planned.plan.fills.length === 0) return { message: "Nothing to bring across: it's all set." };
+  const { data, error } = await ctx.supabase.rpc("import_money_debt_details", {
+    p_tenant_id: ctx.tenant.id,
+    p_request_key: requestKey,
+    p_rows: planned.plan.fills.map((fill) => ({ debt_id: fill.debtId, ...fill.details })),
+  });
+  if (error) return { error: "We couldn't bring those across. Nothing was changed." };
+  refresh(slug);
+  revalidatePath(`/w/${slug}/settings`, "layout");
+  const result = (data ?? {}) as { debts?: number; fields?: number; again?: boolean };
+  const debts = Number(result.debts ?? 0);
+  return {
+    message: result.again
+      ? "Already brought across. Nothing changed the second time."
+      : debts === 0
+        ? "Nothing needed filling: it's all set."
+        : `Filled in ${Number(result.fields ?? 0)} details on ${debts} ${debts === 1 ? "debt" : "debts"}. Anything you'd already set is just as you left it.`,
+  };
 }

@@ -775,6 +775,114 @@ describe("debts from the books", () => {
     expect((await hiddenOf()).hidden).toBe(false);
   });
 
+  it("brings debt details across, filling only what a person hasn't set, once per press", async () => {
+    // Made from the books and never saved by hand: everything is open.
+    await fileDebts(tenantA, "2026-11-28", [
+      ...ALL,
+      { ...VAN_LOAN, id: "58", name: "Kiln Loan", cents: 90000 },
+    ]);
+    const kiln = await debtNamed("Kiln Loan");
+    const card = await debtNamed("Studio Card");
+    const KEY = "33333333-3333-4333-8333-333333333333";
+    const rows = [
+      {
+        debt_id: kiln.id,
+        rate_bp: 799,
+        minimum_cents: 4000,
+        plan: "fixed",
+        priority: 3,
+        due_day: 9,
+        note: "From the old app",
+      },
+      // Set by a person already: rate, minimum, due day and place stay theirs.
+      {
+        debt_id: card.id,
+        rate_bp: 1,
+        minimum_cents: 1,
+        due_day: 1,
+        priority: 9,
+        payment_cents: 7000,
+      },
+    ];
+    const run = async (user: User, key: string) =>
+      (
+        await as<{ r: Record<string, number | boolean> }>(
+          user,
+          "select public.import_money_debt_details($1, $2, $3::jsonb) as r",
+          [tenantA, key, JSON.stringify(rows)],
+        )
+      )[0].r;
+    expect(await run(dan, KEY)).toEqual({ debts: 2, fields: 7, kept: 4, missing: 0 });
+    const details = async (id: string) =>
+      (
+        await as<Record<string, unknown>>(
+          alice,
+          "select rate_bp, minimum_cents::int, payment_cents::int, plan, priority, due_day, note from public.money_debts where id = $1",
+          [id],
+        )
+      )[0];
+    expect(await details(kiln.id)).toEqual({
+      rate_bp: 799,
+      minimum_cents: 4000,
+      payment_cents: null,
+      plan: "fixed",
+      priority: 3,
+      due_day: 9,
+      note: "From the old app",
+    });
+    expect(await details(card.id)).toMatchObject({
+      rate_bp: 2299,
+      minimum_cents: 5000,
+      payment_cents: 7000,
+      due_day: 12,
+      priority: 1,
+    });
+    // The same press again: the first answer, nothing changed.
+    expect(await run(dan, KEY)).toMatchObject({ debts: 2, fields: 7, again: true });
+    // The same file under a new key: everything is set by now.
+    expect(await run(alice, "44444444-4444-4444-8444-444444444444")).toMatchObject({
+      debts: 0,
+      fields: 0,
+    });
+    // A sync never undoes it.
+    await fileDebts(tenantA, "2026-11-29", [
+      ...ALL,
+      { ...VAN_LOAN, id: "58", name: "Kiln Loan", cents: 85000 },
+    ]);
+    expect((await details(kiln.id)).rate_bp).toBe(799);
+    // A figure no debt can have is refused whole.
+    await expect(
+      as(alice, "select public.import_money_debt_details($1, $2, $3::jsonb)", [
+        tenantA,
+        "55555555-5555-4555-8555-555555555555",
+        JSON.stringify([{ debt_id: kiln.id, due_day: 40 }]),
+      ]),
+    ).rejects.toThrow(/isn't one a debt can have/);
+  });
+
+  it("keeps the debt import to owners and admins of the workspace", async () => {
+    const kiln = await debtNamed("Kiln Loan");
+    const body = JSON.stringify([{ debt_id: kiln.id, payment_cents: 1 }]);
+    await expect(
+      as(carol, "select public.import_money_debt_details($1, $2, $3::jsonb)", [
+        tenantA,
+        "66666666-6666-4666-8666-666666666666",
+        body,
+      ]),
+    ).rejects.toThrow(/Only owners and admins/);
+    // Bob naming his own workspace reaches none of Alice's debts.
+    const [{ r }] = await as<{ r: Record<string, number> }>(
+      bob,
+      "select public.import_money_debt_details($1, $2, $3::jsonb) as r",
+      [tenantB, "77777777-7777-4777-8777-777777777777", body],
+    );
+    expect(r).toMatchObject({ debts: 0, missing: 1 });
+    expect(await as(carol, "select * from public.money_debt_imports")).toEqual([]);
+    expect(
+      await as(bob, "select * from public.money_debt_imports where tenant_id = $1", [tenantA]),
+    ).toEqual([]);
+  });
+
   it("a plain member reads none of it and changes none of it", async () => {
     expect(await as(carol, "select * from public.money_book_accounts")).toEqual([]);
     expect(await as(carol, "select * from public.money_debts")).toEqual([]);
