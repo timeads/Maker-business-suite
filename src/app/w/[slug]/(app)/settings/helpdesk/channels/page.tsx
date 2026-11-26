@@ -68,8 +68,7 @@ export default async function ChannelsPage({
     .limit(1);
   const facts = row ? connectionFacts(row as Record<string, unknown>) : null;
   const usedInstagram = (igRows as { platform_id: string }[] | null)?.[0]?.platform_id ?? null;
-  const connection =
-    facts && usedInstagram ? { ...facts, instagramId: usedInstagram } : facts;
+  const connection = facts && usedInstagram ? { ...facts, instagramId: usedInstagram } : facts;
   const live = connection !== null && connection.status !== "disconnected";
   const allowed =
     live &&

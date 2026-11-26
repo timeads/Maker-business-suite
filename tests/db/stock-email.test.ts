@@ -729,6 +729,13 @@ describe("looks at Gmail", () => {
   });
 
   it("a look that never finished is marked failed, not run again", async () => {
+    // The test before moves every look back in time; just after midnight on
+    // the workspace's clock that puts today's daily look on yesterday. Make
+    // sure today has had its one, so only the stuck look is in question here.
+    await db.query(
+      "insert into public.stock_email_reads (tenant_id, status, source, finished_at) values ($1, 'done', 'schedule', now())",
+      [tenantA],
+    );
     await db.query(
       "insert into public.stock_email_reads (tenant_id, status, source, started_at) values ($1, 'running', 'manual', now() - interval '2 hours')",
       [tenantA],
