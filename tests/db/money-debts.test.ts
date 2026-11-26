@@ -920,3 +920,383 @@ describe("debts from the books", () => {
     expect((await debtsOf(bob, tenantB)).map((d) => d.name)).toEqual(["Studio Card", "Van Loan"]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Debts paid through a plan ("consolidated" debts)
+// ---------------------------------------------------------------------------
+
+describe("debts paid through a plan", () => {
+  // Workspaces of their own, so nothing here leans on the tests above.
+  let tenantP: string;
+  let tenantQ: string;
+  let cardOne: string;
+  let cardTwo: string;
+  let cardThree: string;
+  let bobCard: string;
+
+  /** Made-up accounts: nothing here is a real lender, bank or account. */
+  const PLAN_CARDS: Liability[] = [
+    { ...STUDIO_CARD, id: "81", name: "Card One", cents: 300000 },
+    { ...STUDIO_CARD, id: "82", name: "Card Two", cents: 120050 },
+    { ...STUDIO_CARD, id: "83", name: "Card Three", cents: 45000 },
+    // The plan company's own account, passing the money through at zero.
+    { ...EQUIPMENT, id: "84", name: "Plan Company", cents: 0 },
+  ];
+
+  type Row = {
+    name: string;
+    consolidated: boolean;
+    covered_by: string | null;
+    plan: string;
+    rate_bp: number | null;
+    minimum_cents: string;
+    balance_from: string | null;
+  };
+  const rowsOf = (user: User, tenant: string) =>
+    as<Row>(
+      user,
+      `select name, consolidated, covered_by, plan, rate_bp, minimum_cents::text, balance_from
+       from public.money_debts where tenant_id = $1 order by name`,
+      [tenant],
+    );
+  const idOf = async (tenant: string, name: string) =>
+    (
+      await as<{ id: string }>(
+        alice,
+        "select id from public.money_debts where tenant_id = $1 and name = $2",
+        [tenant, name],
+      )
+    )[0].id;
+  const savePlan = async (
+    user: User,
+    tenant: string,
+    fields: Record<string, unknown>,
+    id: string | null = null,
+  ) =>
+    (
+      await as<{ id: string }>(
+        user,
+        "select public.save_money_debt_plan($1, $2, $3::jsonb) as id",
+        [tenant, id, JSON.stringify(fields)],
+      )
+    )[0].id;
+  const PLAN = {
+    name: "Card plan",
+    rate_bp: 0,
+    payment_cents: 40000,
+    due_day: 3,
+    note: "One payment for the cards",
+    balance_from: "covered",
+    plan_account_id: null,
+  };
+
+  beforeAll(async () => {
+    tenantP = await tenantFor(alice, "Alice Plans");
+    tenantQ = await tenantFor(bob, "Bob Plans");
+    await db.query(
+      `insert into public.memberships (tenant_id, user_id, role)
+       values ($1, $2, 'admin'), ($1, $3, 'member')`,
+      [tenantP, dan.id, carol.id],
+    );
+    await fileDebts(tenantP, "2026-11-20", PLAN_CARDS);
+    await fileDebts(tenantQ, "2026-11-20", [PLAN_CARDS[0]]);
+    cardOne = await idOf(tenantP, "Card One");
+    cardTwo = await idOf(tenantP, "Card Two");
+    cardThree = await idOf(tenantP, "Card Three");
+    bobCard = (
+      await as<{ id: string }>(bob, "select id from public.money_debts where tenant_id = $1", [
+        tenantQ,
+      ])
+    )[0].id;
+    // What a person filled in on a card before it went into a plan.
+    await saveDebt(
+      alice,
+      tenantP,
+      { ...CARD, name: "Card One", rate_bp: 2499, minimum_cents: 9000 },
+      cardOne,
+    );
+  });
+
+  it("an owner or admin makes one, covering the debts they tick, and nothing else changes", async () => {
+    const plan = await savePlan(dan, tenantP, { ...PLAN, covers: [cardOne, cardTwo] });
+    const rows = await rowsOf(alice, tenantP);
+    expect(rows.find((r) => r.name === "Card plan")).toMatchObject({
+      consolidated: true,
+      plan: "fixed",
+      covered_by: null,
+      balance_from: "covered",
+    });
+    expect(rows.find((r) => r.name === "Card One")).toMatchObject({
+      covered_by: plan,
+      // Kept as the person left it, unused while covered.
+      rate_bp: 2499,
+      minimum_cents: "9000",
+    });
+    expect(rows.find((r) => r.name === "Card Two")?.covered_by).toBe(plan);
+    expect(rows.find((r) => r.name === "Card Three")?.covered_by).toBeNull();
+    // Nothing is summed in the database: the plan has no balance of its own.
+    const [{ n }] = await as<{ n: number }>(
+      alice,
+      "select count(*)::int as n from public.money_debt_balances where debt_id = $1",
+      [plan],
+    );
+    expect(n).toBe(0);
+  });
+
+  it("covers a debt by one plan at most, and never a plan by a plan", async () => {
+    const plan = await idOf(tenantP, "Card plan");
+    await expect(
+      savePlan(alice, tenantP, { ...PLAN, name: "Second plan", covers: [cardTwo] }),
+    ).rejects.toThrow(/Card Two already paid through another plan/);
+    const second = await savePlan(alice, tenantP, { ...PLAN, name: "Second plan", covers: [] });
+    await expect(
+      as(alice, "select public.cover_money_debt($1, $2, $3)", [tenantP, cardOne, second]),
+    ).rejects.toThrow(/already paid through another plan/);
+    await expect(
+      as(alice, "select public.cover_money_debt($1, $2, $3)", [tenantP, plan, second]),
+    ).rejects.toThrow(/can't pay another plan/);
+    await expect(
+      savePlan(alice, tenantP, { ...PLAN, covers: [cardOne, second] }, plan),
+    ).rejects.toThrow(/can't pay another plan/);
+    // A plan stays a fixed payment, whatever form changes it.
+    await expect(
+      saveDebt(alice, tenantP, { ...CARD, name: "Card plan", books_account: null }, plan),
+    ).rejects.toThrow(/money_debts_plan_shape/);
+    // Straight in, around the functions: still one plan, of this workspace.
+    await expect(
+      db.query("update public.money_debts set covered_by = $1 where id = $2", [plan, bobCard]),
+    ).rejects.toThrow(/same workspace/);
+    await as(alice, "select public.remove_money_debt($1, $2)", [tenantP, second]);
+  });
+
+  it("un-covers a debt, one at a time or by leaving it off, and it comes back exactly", async () => {
+    const plan = await idOf(tenantP, "Card plan");
+    const before = (await rowsOf(alice, tenantP)).find((r) => r.name === "Card One");
+    await as(dan, "select public.cover_money_debt($1, $2, null)", [tenantP, cardOne]);
+    expect((await rowsOf(alice, tenantP)).find((r) => r.name === "Card One")).toEqual({
+      ...before,
+      covered_by: null,
+    });
+    await as(dan, "select public.cover_money_debt($1, $2, $3)", [tenantP, cardOne, plan]);
+    await savePlan(alice, tenantP, { ...PLAN, covers: [cardOne, cardThree] }, plan);
+    const covered = (await rowsOf(alice, tenantP))
+      .filter((r) => r.covered_by === plan)
+      .map((r) => r.name);
+    expect(covered).toEqual(["Card One", "Card Three"]);
+    await savePlan(alice, tenantP, { ...PLAN, covers: [cardOne, cardTwo] }, plan);
+  });
+
+  it("takes a typed balance only when the plan says its balance is typed in", async () => {
+    const plan = await idOf(tenantP, "Card plan");
+    await expect(
+      as(alice, "select public.note_money_debt_balance($1, $2, '2026-11-20', 400000)", [
+        tenantP,
+        plan,
+      ]),
+    ).rejects.toThrow(/worked out/);
+    await savePlan(
+      alice,
+      tenantP,
+      { ...PLAN, balance_from: "typed", covers: [cardOne, cardTwo] },
+      plan,
+    );
+    await as(alice, "select public.note_money_debt_balance($1, $2, '2026-11-20', 410000)", [
+      tenantP,
+      plan,
+    ]);
+    const [row] = await as<{ balance_cents: string; source: string }>(
+      alice,
+      "select balance_cents::text, source from public.money_debt_current($1) where debt_id = $2",
+      [tenantP, plan],
+    );
+    expect(row).toEqual({ balance_cents: "410000", source: "person" });
+    await expect(
+      savePlan(alice, tenantP, { ...PLAN, balance_from: "account", covers: [] }, plan),
+    ).rejects.toThrow(/Pick the account/);
+    await savePlan(alice, tenantP, { ...PLAN, covers: [cardOne, cardTwo] }, plan);
+  });
+
+  it("finds payments into its own account in the books, by the account's id", async () => {
+    const plan = await idOf(tenantP, "Card plan");
+    const company = (
+      await as<{ id: string }>(
+        alice,
+        "select id from public.money_book_accounts where tenant_id = $1 and books_id = '84'",
+        [tenantP],
+      )
+    )[0].id;
+    await savePlan(
+      alice,
+      tenantP,
+      { ...PLAN, plan_account_id: company, covers: [cardOne, cardTwo] },
+      plan,
+    );
+    await fileExpenses(tenantP, [
+      { ...move("pl1", "Plan Company", "2026-11-03", 40000, "transfer"), account_ref: "84" },
+      { ...move("pl2", "Card One", "2026-11-09", 25000), account_ref: "81" },
+    ]);
+    const paid = await as<{ debt_id: string; cents: string }>(
+      alice,
+      "select debt_id, cents::text from public.money_debt_payments($1, '2026-11-01', '2026-12-01') order by cents",
+      [tenantP],
+    );
+    expect(paid).toEqual([
+      { debt_id: cardOne, cents: "25000" },
+      { debt_id: plan, cents: "40000" },
+    ]);
+    // One plan per account.
+    await expect(
+      savePlan(alice, tenantP, { ...PLAN, name: "Another plan", plan_account_id: company }),
+    ).rejects.toThrow(/money_debts_plan_account_idx/);
+    // Bob can't point his plan at Alice's account.
+    await expect(savePlan(bob, tenantQ, { ...PLAN, plan_account_id: company })).rejects.toThrow(
+      /isn't here/,
+    );
+  });
+
+  it("a sync never changes any of it; a covered card gone from the books is closed and stays covered", async () => {
+    const plan = await idOf(tenantP, "Card plan");
+    const before = await rowsOf(alice, tenantP);
+    await fileDebts(
+      tenantP,
+      "2026-11-21",
+      PLAN_CARDS.map((a) => ({ ...a, cents: a.cents - 100 })),
+    );
+    expect(await rowsOf(alice, tenantP)).toEqual(before);
+    await fileDebts(
+      tenantP,
+      "2026-11-22",
+      PLAN_CARDS.filter((a) => a.name !== "Card Two"),
+    );
+    const two = (
+      await as<{ status: string; covered_by: string }>(
+        alice,
+        "select status, covered_by from public.money_debts where id = $1",
+        [cardTwo],
+      )
+    )[0];
+    expect(two).toEqual({ status: "closed", covered_by: plan });
+    await fileDebts(tenantP, "2026-11-23", PLAN_CARDS);
+  });
+
+  it("removing the plan puts every debt it covered back as it was", async () => {
+    const plan = await savePlan(alice, tenantP, {
+      ...PLAN,
+      name: "Short plan",
+      covers: [cardThree],
+    });
+    const before = (await rowsOf(alice, tenantP)).find((r) => r.name === "Card Three");
+    await as(alice, "select public.remove_money_debt($1, $2)", [tenantP, plan]);
+    expect((await rowsOf(alice, tenantP)).find((r) => r.name === "Card Three")).toEqual({
+      ...before,
+      covered_by: null,
+    });
+  });
+
+  it("brings plans across from a spreadsheet once, covering only what nobody has put under a plan", async () => {
+    const KEY = "88888888-8888-4888-8888-888888888888";
+    const run = async (user: User, key: string) =>
+      (
+        await as<{ r: Record<string, number | boolean> }>(
+          user,
+          "select public.import_money_debt_plans($1, $2, $3::jsonb, $4::jsonb) as r",
+          [
+            tenantP,
+            key,
+            JSON.stringify([
+              { name: "Card plan", payment_cents: 1 },
+              { name: "Old app plan", rate_bp: 0, payment_cents: 25000, due_day: 8 },
+            ]),
+            JSON.stringify([
+              // Already under a plan: kept as it is.
+              { debt_id: cardOne, plan_name: "Old app plan" },
+              { debt_id: cardThree, plan_name: "old app  PLAN" },
+              { debt_id: cardThree, plan_name: "No such plan" },
+            ]),
+          ],
+        )
+      )[0].r;
+    expect(await run(dan, KEY)).toEqual({ plans: 1, covered: 1, kept: 1, missing: 1 });
+    const rows = await rowsOf(alice, tenantP);
+    const made = await idOf(tenantP, "Old app plan");
+    expect(rows.find((r) => r.name === "Old app plan")).toMatchObject({
+      consolidated: true,
+      balance_from: "covered",
+    });
+    // The plan that was here keeps its own payment.
+    const [{ payment }] = await as<{ payment: string }>(
+      alice,
+      "select payment_cents::text as payment from public.money_debts where tenant_id = $1 and name = 'Card plan'",
+      [tenantP],
+    );
+    expect(payment).toBe("40000");
+    expect(rows.find((r) => r.name === "Card Three")?.covered_by).toBe(made);
+    expect(rows.find((r) => r.name === "Card One")?.covered_by).toBe(
+      await idOf(tenantP, "Card plan"),
+    );
+    expect(await run(dan, KEY)).toMatchObject({ plans: 1, again: true });
+    expect(await run(alice, "99999999-9999-4999-8999-999999999999")).toMatchObject({
+      plans: 0,
+      covered: 0,
+    });
+    await as(alice, "select public.cover_money_debt($1, $2, null)", [tenantP, cardThree]);
+  });
+
+  it("a plain member reads none of it and writes none of it", async () => {
+    const plan = await idOf(tenantP, "Card plan");
+    expect(
+      await as(carol, "select * from public.money_debts where tenant_id = $1", [tenantP]),
+    ).toEqual([]);
+    for (const [sql, params] of [
+      ["select public.save_money_debt_plan($1, null, $2::jsonb)", [tenantP, JSON.stringify(PLAN)]],
+      ["select public.cover_money_debt($1, $2, null)", [tenantP, cardOne]],
+      ["select public.cover_money_debt($1, $2, $3)", [tenantP, cardThree, plan]],
+      [
+        "select public.import_money_debt_plans($1, gen_random_uuid(), '[]'::jsonb, '[]'::jsonb)",
+        [tenantP],
+      ],
+    ] as const) {
+      await expect(as(carol, sql, [...params]), sql).rejects.toThrow(/Only owners and admins/);
+    }
+    await expect(
+      asAnon(db, (tx) =>
+        tx.query("select public.save_money_debt_plan($1, null, $2::jsonb)", [
+          tenantP,
+          JSON.stringify(PLAN),
+        ]),
+      ),
+    ).rejects.toThrow(/permission denied/);
+    expect(
+      (await rowsOf(alice, tenantP)).find((r) => r.name === "Card Three")?.covered_by,
+    ).toBeNull();
+  });
+
+  it("another workspace reads none of it, and can't cover or un-cover across", async () => {
+    const plan = await idOf(tenantP, "Card plan");
+    expect(
+      await as(bob, "select * from public.money_debts where tenant_id = $1", [tenantP]),
+    ).toEqual([]);
+    await expect(
+      as(bob, "select public.cover_money_debt($1, $2, null)", [tenantP, cardOne]),
+    ).rejects.toThrow(/Only owners and admins/);
+    // Naming his own workspace, Alice's debts and plans aren't there.
+    await expect(
+      as(bob, "select public.cover_money_debt($1, $2, null)", [tenantQ, cardOne]),
+    ).rejects.toThrow(/isn't here/);
+    await expect(
+      as(bob, "select public.cover_money_debt($1, $2, $3)", [tenantQ, bobCard, plan]),
+    ).rejects.toThrow(/isn't here/);
+    await expect(savePlan(bob, tenantQ, { ...PLAN, covers: [cardOne] })).rejects.toThrow(
+      /isn't here/,
+    );
+    expect((await rowsOf(alice, tenantP)).find((r) => r.name === "Card One")?.covered_by).toBe(
+      plan,
+    );
+    const [{ r }] = await as<{ r: Record<string, number> }>(
+      bob,
+      "select public.import_money_debt_plans($1, gen_random_uuid(), '[]'::jsonb, $2::jsonb) as r",
+      [tenantQ, JSON.stringify([{ debt_id: cardThree, plan_name: "Card plan" }])],
+    );
+    expect(r).toMatchObject({ covered: 0, missing: 1 });
+  });
+});

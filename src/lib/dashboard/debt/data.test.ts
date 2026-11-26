@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { describe, expect, it } from "vitest";
-import { loadBooksState, loadDebts } from "./data";
+import { loadBooksState, loadDebtBook, loadDebtPayments, loadDebts } from "./data";
 
 /** Made-up accounts: nothing here is a real lender, bank or account. */
 function fake(tables: Record<string, unknown[]>, rpc: Record<string, unknown[]> = {}) {
@@ -62,6 +62,80 @@ describe("loading the debts", () => {
       ["Card One", "books", false, 1999, null],
       ["Loan Two", "books", true, 0, 50000],
     ]);
+  });
+});
+
+describe("debts paid through a plan", () => {
+  const rows = () => ({
+    money_debts: [
+      debtRow({
+        id: "plan",
+        name: "Card plan",
+        plan: "fixed",
+        source: "person",
+        rate_bp: 0,
+        minimum_cents: 0,
+        payment_cents: 40000,
+        book_account_id: null,
+        books_account: null,
+        consolidated: true,
+        balance_from: "covered",
+        plan_account_id: null,
+      }),
+      debtRow({ id: "c1", name: "Card One", covered_by: "plan" }),
+      debtRow({ id: "c2", name: "Card Two", book_account_id: "a2", covered_by: "plan" }),
+      debtRow({ id: "c3", name: "Card Three", book_account_id: "a3" }),
+    ],
+    money_book_accounts: [
+      { id: "a1", name: "Card One", balance_cents: 70000, as_of: "2026-11-24", gone_at: null },
+      { id: "a2", name: "Card Two", balance_cents: 30000, as_of: "2026-11-24", gone_at: null },
+      { id: "a3", name: "Card Three", balance_cents: -1250, as_of: "2026-11-24", gone_at: null },
+    ],
+  });
+  const current = {
+    money_debt_current: [
+      { debt_id: "c1", balance_cents: 70000, as_of: "2026-11-24", source: "books" },
+      { debt_id: "c2", balance_cents: 30000, as_of: "2026-11-24", source: "books" },
+      { debt_id: "c3", balance_cents: 0, as_of: "2026-11-24", source: "books" },
+    ],
+    money_debt_payments: [
+      { debt_id: "c1", month: "2026-10-01", cents: 25000, payments: 1 },
+      { debt_id: "c3", month: "2026-10-01", cents: 5000, payments: 1 },
+    ],
+  };
+
+  it("hands everything else one debt for the plan, and keeps the covered ones beside it", async () => {
+    const { client } = fake(rows(), current);
+    const book = await loadDebtBook(client, "t1");
+    expect(book.debts.map((d) => [d.id, d.balance])).toEqual([
+      ["plan", 100000],
+      ["c3", 0],
+    ]);
+    expect(book.debts[0].group?.covers.map((d) => d.id)).toEqual(["c1", "c2"]);
+    expect(book.stored).toHaveLength(4);
+    expect((await loadDebts(client, "t1")).map((d) => d.id)).toEqual(["plan", "c3"]);
+    // A covered card's payments are the plan's.
+    expect(await loadDebtPayments(client, "t1", "2026-10-01", "2026-12-01", book)).toEqual([
+      { debtId: "plan", month: "2026-10", cents: 25000 },
+      { debtId: "c3", month: "2026-10", cents: 5000 },
+    ]);
+  });
+
+  it("says a card the books show in credit is in credit, owing nothing", async () => {
+    const { client } = fake(rows(), current);
+    const card = (await loadDebts(client, "t1")).find((d) => d.id === "c3");
+    expect(card).toMatchObject({ balance: 0, credit: 1250 });
+  });
+
+  it("reads debts saved before plans existed just as before", async () => {
+    const { client } = fake({ money_debts: [debtRow({})] });
+    const [d] = await loadDebts(client, "t1");
+    expect(d).toMatchObject({
+      consolidated: false,
+      coveredBy: null,
+      planBalanceFrom: null,
+      credit: 0,
+    });
   });
 });
 

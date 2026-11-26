@@ -10,7 +10,9 @@ import {
   debtHomeLine,
   debtTotals,
   emergencyFund,
+  isPaidOff,
   matchPayments,
+  paymentWords,
   scheduleLength,
   toPlanDebt,
   usualMonthlyExpenses,
@@ -45,6 +47,11 @@ const debt = (over: Partial<Debt> & Pick<Debt, "id">): Debt => ({
   balance: null,
   balanceAsOf: null,
   balanceFrom: null,
+  consolidated: false,
+  coveredBy: null,
+  planAccountId: null,
+  planBalanceFrom: null,
+  credit: 0,
   ...over,
 });
 
@@ -384,5 +391,38 @@ describe("the home card's debt line", () => {
   it("says nothing with nothing owed", () => {
     expect(debtHomeLine([], money)).toBeNull();
     expect(debtHomeLine([debt({ id: "a", balance: 0 })], money)).toBeNull();
+  });
+});
+
+describe("how a debt sits on Money → Debts", () => {
+  const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
+  it("folds away a debt from the books at nothing owed, paid off or in credit", () => {
+    expect(isPaidOff(debt({ id: "a", source: "books", balance: 0 }))).toBe(true);
+    expect(isPaidOff(debt({ id: "b", source: "books", balance: 0, credit: 1200 }))).toBe(true);
+    expect(isPaidOff(debt({ id: "c", source: "books", balance: 1 }))).toBe(false);
+    // No balance yet isn't paid off; nor is a typed-in debt, a plan or a closed one.
+    expect(isPaidOff(debt({ id: "d", source: "books", balance: null }))).toBe(false);
+    expect(isPaidOff(debt({ id: "e", source: "person", balance: 0 }))).toBe(false);
+    expect(isPaidOff(debt({ id: "f", source: "books", balance: 0, status: "closed" }))).toBe(false);
+    expect(isPaidOff(debt({ id: "g", source: "books", balance: 0, consolidated: true }))).toBe(
+      false,
+    );
+  });
+
+  it("says what is paid a month, a share of sales, or that nothing is paid for now", () => {
+    const opts = { revenueSharePct: 12, averageRevenue: 1_000_000, money };
+    expect(paymentWords(debt({ id: "a", minimum: 2500 }), opts)).toBe(money(2500));
+    expect(paymentWords(debt({ id: "b", minimum: 2500, status: "paused" }), opts)).toBe(
+      "No payments for now",
+    );
+    expect(paymentWords(debt({ id: "c", plan: "revenue_share" }), opts)).toBe(
+      `A share of sales (12%, about ${money(120000)})`,
+    );
+    expect(
+      paymentWords(debt({ id: "d", plan: "revenue_share" }), { ...opts, averageRevenue: 0 }),
+    ).toBe("A share of sales (12%)");
+    expect(paymentWords(debt({ id: "e", plan: "revenue_share", payment: 9000 }), opts)).toBe(
+      `A share of sales, counted as ${money(9000)}`,
+    );
   });
 });

@@ -18,7 +18,7 @@ import { loadBudgetSettings, loadProfitSettings, loadRevenueSettings } from "./d
 import { averageCents, bookMonthOf, completeMonths, type BookMonth } from "./health";
 import { profitByLine, type ExpenseGroup } from "./profit";
 import { currentMonth } from "./range";
-import { loadDebtPayments, loadDebts } from "./debt/data";
+import { loadDebtBook, loadDebtPayments } from "./debt/data";
 import { debtBudgetRows } from "./debt/figures";
 
 /** Supabase hands back 1,000 rows at most; these are paged. */
@@ -204,9 +204,11 @@ export async function loadBudgetView(
   // Allowed to fail: the budget stands without them.
   if (subject === "account") {
     try {
-      const debts = await loadDebts(supabase, tenant.id);
+      const book = await loadDebtBook(supabase, tenant.id);
+      const debts = book.debts;
       if (debts.length > 0) {
-        const paid = await loadDebtPayments(supabase, tenant.id, `${months[0]}-01`, to);
+        // A covered debt's payments are its plan's (one row for the plan).
+        const paid = await loadDebtPayments(supabase, tenant.id, `${months[0]}-01`, to, book);
         rows = [
           ...rows,
           ...debtBudgetRows({ debts, paid, months, current, warnPct: settings.warn_pct }),

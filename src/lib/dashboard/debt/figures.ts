@@ -1,6 +1,6 @@
 import { sameAccount, varianceStanding, type BudgetRow } from "../budget";
 import { averageCents, type BookMonth, type Standing } from "../health";
-import { STRATEGY_META, type PlanDebt } from "./engine";
+import { STRATEGY_META, shareOf, type PlanDebt } from "./engine";
 import type { DebtSettings, DebtStatus } from "./settings";
 
 /**
@@ -37,12 +37,68 @@ export type Debt = {
   balance: number | null;
   balanceAsOf: string | null;
   balanceFrom: "person" | "books" | null;
+  /** A plan that pays other debts (a "consolidated" debt): one fixed payment, one balance. */
+  consolidated: boolean;
+  /** On a covered debt, the plan that pays it: such a debt is never counted on its own. */
+  coveredBy: string | null;
+  /** A plan's own account in the books (`money_book_accounts`), if it has one. */
+  planAccountId: string | null;
+  /** Where a plan's balance comes from; null for any other debt. */
+  planBalanceFrom: "covered" | "account" | "typed" | null;
+  /** The books show this liability in credit by this much (owed is then nothing); else 0. */
+  credit: number;
+  /** On a plan once folded (`foldDebts`): the debts it pays. */
+  group?: DebtGroup;
+};
+
+/** A plan's covered debts, folded under it on read (`lib/dashboard/debt/plans.ts`). */
+export type DebtGroup = {
+  balanceFrom: "covered" | "account" | "typed";
+  /** Its own account in the books, as the books name it now. */
+  account: { id: string; name: string } | null;
+  /** Every debt it pays, as each is (their own rates and minimums kept, unused). */
+  covers: Debt[];
+  /** The covered debts still open, their balances added up. */
+  coveredSum: number;
+  /** Covered debts gone from the books (closed): out of the sum. */
+  gone: Debt[];
+  /** The plan's account counted as a debt by itself: folded here, never counted twice. */
+  accountDebt: Debt | null;
+  /** Its balance (typed in, or its account's) isn't what the covered debts add up to. */
+  differs: boolean;
 };
 
 /** The monthly payment the dashboard counts: the payment, else the minimum. */
 export const usualPayment = (d: Pick<Debt, "payment" | "minimum">) => d.payment ?? d.minimum;
 
 export const owing = (d: Debt) => d.status !== "closed" && (d.balance ?? 0) > 0;
+
+/**
+ * A debt from the books that the books still list with nothing owed (a
+ * paid-off card or loan, or a card in credit): folded under "Paid off" on
+ * Money → Debts, never asked for a rate.
+ */
+export const isPaidOff = (d: Debt) =>
+  d.source === "books" && !d.consolidated && d.status !== "closed" && d.balance === 0;
+
+/**
+ * What a debt's monthly payment says in words: an amount; for a debt paid
+ * as a share of sales, that share (and what the plan counts for it); for a
+ * paused one, that nothing is being paid for now.
+ */
+export function paymentWords(
+  d: Pick<Debt, "status" | "plan" | "payment" | "minimum">,
+  opts: { revenueSharePct: number; averageRevenue: number; money: (cents: number) => string },
+): string {
+  if (d.status === "paused") return "No payments for now";
+  const usual = usualPayment(d);
+  if (d.plan !== "revenue_share") return opts.money(usual);
+  if (usual > 0) return `A share of sales, counted as ${opts.money(usual)}`;
+  const counted = shareOf(Math.max(0, opts.averageRevenue), opts.revenueSharePct, 100);
+  return counted > 0
+    ? `A share of sales (${opts.revenueSharePct}%, about ${opts.money(counted)})`
+    : `A share of sales (${opts.revenueSharePct}%)`;
+}
 
 export function toPlanDebt(d: Debt): PlanDebt {
   return {
