@@ -22,7 +22,13 @@ import { periodLabel } from "@/lib/dashboard/range";
 import { getEntitlements } from "@/lib/entitlements";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
-import { EmergencyAccountPicker, ScheduleEditor, UseStrategy } from "../debt-forms";
+import {
+  EmergencyAccountPicker,
+  FollowRecommended,
+  ScheduleEditor,
+  UseStrategy,
+} from "../debt-forms";
+import { choiceNote, recommendationWords } from "@/lib/dashboard/debt/recommend";
 
 export const metadata: Metadata = { title: "Payoff plan" };
 
@@ -196,8 +202,9 @@ export default async function PayoffPlanPage({
           <CardHeader>
             <CardTitle className="text-base">This month, {monthWords(thisMonth.month)}</CardTitle>
             <CardDescription>
-              The {STRATEGY_META[settings.strategy].label.toLowerCase()} order, for the debts the
-              plan pays down.
+              The {STRATEGY_META[view.strategy].label.toLowerCase()} order
+              {view.strategyFrom === "recommended" ? " (recommended)" : ""}, for the debts the plan
+              pays down.
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-4 sm:grid-cols-3">
@@ -382,11 +389,36 @@ export default async function PayoffPlanPage({
               {converge
                 ? " Here they come out nearly the same: the same debt comes first whichever way you look at it."
                 : ""}
-              {result.interestSaved !== null && result.interestSaved > 0
-                ? ` Your plan saves about ${money(result.interestSaved)} in interest against paying only the minimums.`
-                : ""}
             </CardDescription>
           </CardHeader>
+          {view.recommendation && (
+            <CardContent className="flex flex-col gap-2 pb-0">
+              <p className="text-sm" role="status">
+                <Badge tone="good" className="mr-2">
+                  Recommended
+                </Badge>
+                {recommendationWords(view.recommendation, money)}
+              </p>
+              <p className="text-muted-foreground text-sm">
+                {view.strategyFrom === "recommended"
+                  ? "You haven't chosen an order, so the plan follows the recommended one by itself, and keeps following it as your balances change."
+                  : `You chose ${STRATEGY_META[view.strategy].label.toLowerCase()}, so the plan keeps to it.`}{" "}
+                {view.strategyFrom === "person" &&
+                  choiceNote(view.strategy, view.recommendation, result.sims, money)}
+              </p>
+              {view.strategyFrom === "person" && canEdit && (
+                <FollowRecommended slug={tenant.slug} />
+              )}
+              {view.noRate.length > 0 && (
+                <p className="text-muted-foreground text-xs">
+                  {view.noRate.map((d) => d.name).join(", ")}{" "}
+                  {view.noRate.length === 1 ? "has" : "have"} no rate yet, so{" "}
+                  {view.noRate.length === 1 ? "its" : "their"} interest is left out of this
+                  comparison.
+                </p>
+              )}
+            </CardContent>
+          )}
           <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             {STRATEGIES.map((s) => {
               const sim = result.sims[s];
@@ -394,11 +426,16 @@ export default async function PayoffPlanPage({
               return (
                 <div
                   key={s}
-                  className={`flex flex-col gap-3 rounded-lg border p-4 ${s === settings.strategy ? "border-teal ring-teal/30 ring-2" : "border-border"}`}
+                  className={`flex flex-col gap-3 rounded-lg border p-4 ${s === view.strategy ? "border-teal ring-teal/30 ring-2" : "border-border"}`}
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="font-semibold">{meta.label}</span>
-                    {s === settings.strategy && <Badge tone="open">Your plan</Badge>}
+                    <span className="flex flex-wrap gap-1">
+                      {s === view.recommendation?.strategy && (
+                        <Badge tone="good">Recommended</Badge>
+                      )}
+                      {s === view.strategy && <Badge tone="open">Your plan</Badge>}
+                    </span>
                   </div>
                   <span className="text-muted-foreground text-xs">{meta.tagline}</span>
                   <dl className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 text-sm">
@@ -430,7 +467,7 @@ export default async function PayoffPlanPage({
                       ),
                     )}
                   </ul>
-                  {canEdit && s !== settings.strategy && (
+                  {canEdit && (s !== view.strategy || view.strategyFrom === "recommended") && (
                     <UseStrategy slug={tenant.slug} strategy={s} label={meta.label} />
                   )}
                 </div>

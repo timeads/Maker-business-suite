@@ -308,7 +308,7 @@ export async function askDebtWhatIf(slug: string, question: string): Promise<Wha
   try {
     const result = await askWhatIf(debts, asked, {
       currency: ctx.tenant.currency,
-      strategy: view.settings.strategy,
+      strategy: view.strategy,
     });
     const { error: usageError } = await getAdminClient().rpc("record_usage", {
       p_tenant_id: ctx.tenant.id,
@@ -447,7 +447,11 @@ export async function chooseStrategy(slug: string, strategy: string): Promise<De
   const picked = z.enum(STRATEGIES).safeParse(strategy);
   if (!picked.success) return { error: "That isn't one of the orders." };
   const current = await loadDebtSettings(ctx.supabase, ctx.tenant.id);
-  const body = debtSettingsSchema.parse({ ...current, strategy: picked.data });
+  const body = debtSettingsSchema.parse({
+    ...current,
+    strategy: picked.data,
+    strategy_from: "person",
+  });
   const { error } = await ctx.supabase.rpc("save_config", {
     p_tenant_id: ctx.tenant.id,
     p_module: DEBT_MODULE,
@@ -457,5 +461,23 @@ export async function chooseStrategy(slug: string, strategy: string): Promise<De
   if (error) return { error: "We couldn't save that. Try again in a moment." };
   refresh(slug);
   revalidatePath(`/w/${slug}/settings`, "layout");
-  return { message: "Saved: the plan uses this order now." };
+  return { message: "Saved: the plan uses this order now, until you change it." };
+}
+
+/** "Follow the recommended order": back to the order that saves the most, worked out afresh. */
+export async function followRecommended(slug: string): Promise<DebtActionState> {
+  const ctx = await debtContext(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  const current = await loadDebtSettings(ctx.supabase, ctx.tenant.id);
+  const body = debtSettingsSchema.parse({ ...current, strategy_from: "recommended" });
+  const { error } = await ctx.supabase.rpc("save_config", {
+    p_tenant_id: ctx.tenant.id,
+    p_module: DEBT_MODULE,
+    p_key: DEBT_KEY,
+    p_body: body,
+  });
+  if (error) return { error: "We couldn't save that. Try again in a moment." };
+  refresh(slug);
+  revalidatePath(`/w/${slug}/settings`, "layout");
+  return { message: "Saved: the plan follows the recommended order from now on." };
 }

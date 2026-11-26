@@ -24,10 +24,15 @@ describe("the settings screens' boxes", () => {
     expect(keys(CUTTER_FIELDS)).toEqual(settable(DEFAULT_CUTTER_SETTINGS));
     // The emergency fund's accounts are ticked in a picker of their own
     // (the earlier typed names are only read now).
+    // One "Order" box stands for strategy_from and strategy together.
     expect(keys(DEBT_FIELDS)).toEqual(
-      settable(DEFAULT_DEBT_SETTINGS).filter(
-        (key) => key !== "emergency_picks" && key !== "emergency_accounts",
-      ),
+      [
+        ...settable(DEFAULT_DEBT_SETTINGS).filter(
+          (key) =>
+            !["emergency_picks", "emergency_accounts", "strategy", "strategy_from"].includes(key),
+        ),
+        "order",
+      ].sort(),
     );
   });
 });

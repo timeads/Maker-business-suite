@@ -16,7 +16,7 @@ import { BUDGET_KEY, budgetSettingsSchema } from "@/lib/dashboard/budget";
 import { HEALTH_KEY, healthSettingsSchema } from "@/lib/dashboard/health";
 import { PROFIT_KEY, PROFIT_MODULE, profitSettingsSchema } from "@/lib/dashboard/profit";
 import { CUTTER_KEY, cutterSettingsSchema } from "@/lib/dashboard/recurring";
-import { DEBT_KEY, debtSettingsSchema } from "@/lib/dashboard/debt/settings";
+import { DEBT_KEY, debtSettingsSchema, fromOrder } from "@/lib/dashboard/debt/settings";
 import { loadDebtSettings } from "@/lib/dashboard/debt/data";
 import { getEntitlements } from "@/lib/entitlements";
 import { createClient } from "@/lib/supabase/server";
@@ -284,7 +284,7 @@ export async function saveDebtSettings(
   const stored = await loadDebtSettings(ctx.supabase, ctx.tenant.id);
   const parsed = debtSettingsSchema.safeParse({
     ...stored,
-    ...((readBody(formData) as Record<string, unknown> | null) ?? {}),
+    ...fromOrder((readBody(formData) as Record<string, unknown> | null) ?? {}),
     version: 1,
   });
   if (!parsed.success) {

@@ -254,9 +254,11 @@ export const DEBT_FIELDS: FigureGroup[] = [
     fields: [
       {
         kind: "choice",
-        key: "strategy",
+        // Stands for `strategy_from` and `strategy` together (`fromOrder`).
+        key: "order",
         label: "Order",
         options: [
+          { value: "recommended", label: "The one that saves the most (recommended)" },
           { value: "avalanche", label: "Avalanche: highest rate first" },
           { value: "snowball", label: "Snowball: smallest balance first" },
           { value: "hybrid", label: "Hybrid: small balances, then highest rate" },

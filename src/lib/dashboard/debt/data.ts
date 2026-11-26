@@ -3,7 +3,6 @@ import { averageCents, bookMonthOf, completeMonths, type BookMonth } from "../he
 import { currentMonth } from "../range";
 import {
   debtCards,
-  debtPlan,
   emergencyReached,
   milestones,
   planPayoffs,
@@ -26,6 +25,7 @@ import {
   type SheetBank,
 } from "./figures";
 import { liabilityTypeWords } from "./books";
+import { followOrder, type Recommendation } from "./recommend";
 import { DEBT_KEY, DEBT_MODULE, parseDebtSettings, type DebtSettings } from "./settings";
 
 /**
@@ -251,6 +251,11 @@ export type DebtView = {
   noRate: Debt[];
   /** The plan's figures as the engine takes them, for a what-if to change a copy of. */
   input: PlanInput & { strategy: Strategy; hybridThreshold: number };
+  /** The order the plan follows: the recommended one, unless a person chose. */
+  strategy: Strategy;
+  strategyFrom: "recommended" | "person";
+  /** The order that pays the least interest; null with no debts for the plan to pay down. */
+  recommendation: Recommendation | null;
   result: DebtPlan;
   payoffs: Map<string, string | null>;
   milestones: Milestone[];
@@ -342,7 +347,14 @@ export async function loadDebtView(
     strategy: settings.strategy,
     hybridThreshold: settings.hybrid_threshold_cents,
   };
-  const result = debtPlan(input);
+  // Every order is worked out either way; the recommended one is followed
+  // unless a person chose their own ("Use this order" always wins).
+  const followed = followOrder(input, {
+    from: settings.strategy_from,
+    strategy: settings.strategy,
+  });
+  const { result, recommendation } = followed;
+  input.strategy = followed.strategy;
 
   return {
     current,
@@ -350,6 +362,9 @@ export async function loadDebtView(
     debts,
     totals: debtTotals(debts),
     input,
+    strategy: input.strategy,
+    strategyFrom: settings.strategy_from,
+    recommendation,
     noBalance: debts.filter((d) => d.balance === null && d.status !== "closed"),
     noRate: debts.filter((d) => d.needsRate && d.status === "active" && (d.balance ?? 0) > 0),
     result,

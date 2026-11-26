@@ -30,7 +30,13 @@ const pct = (fallback: number) => z.number().int().min(0).max(100).default(fallb
 export const debtSettingsSchema = z
   .object({
     version: z.literal(1),
-    /** Which order extra money goes in. */
+    /**
+     * Whose order the plan follows: the recommended one (the order that pays
+     * the least interest, worked out afresh each time: `recommend.ts`), or
+     * the one a person chose (`strategy`).
+     */
+    strategy_from: z.enum(["recommended", "person"]).default("recommended"),
+    /** The order a person chose ("Use this order"); followed only when `strategy_from` is person. */
     strategy: z.enum(STRATEGIES).default("avalanche"),
     /** Hybrid: balances at or under this are cleared first. */
     hybrid_threshold_cents: cents.default(100_000),
@@ -111,9 +117,37 @@ export type DebtSettings = z.infer<typeof debtSettingsSchema>;
 
 export const DEFAULT_DEBT_SETTINGS: DebtSettings = debtSettingsSchema.parse({ version: 1 });
 
+/**
+ * A setting saved before `strategy_from` existed: an order other than the
+ * old default (avalanche) was a person's choice, and stays theirs; avalanche
+ * may only have been the default, so the plan follows the recommended order.
+ */
+function withStrategyFrom(body: unknown): unknown {
+  if (!body || typeof body !== "object" || Array.isArray(body) || "strategy_from" in body) {
+    return body;
+  }
+  const strategy = (body as { strategy?: unknown }).strategy;
+  return {
+    ...body,
+    strategy_from:
+      typeof strategy === "string" && strategy !== "avalanche" ? "person" : "recommended",
+  };
+}
+
 export function parseDebtSettings(body: unknown): DebtSettings {
-  const parsed = debtSettingsSchema.safeParse(body);
+  const parsed = debtSettingsSchema.safeParse(withStrategyFrom(body));
   return parsed.success ? parsed.data : DEFAULT_DEBT_SETTINGS;
+}
+
+/** The settings form's one "Order" box: the recommended order, or one of the four. */
+export const ORDER_CHOICE = "order";
+export const orderOf = (settings: DebtSettings) =>
+  settings.strategy_from === "recommended" ? "recommended" : settings.strategy;
+export function fromOrder(body: Record<string, unknown>): Record<string, unknown> {
+  if (!(ORDER_CHOICE in body)) return body;
+  const { [ORDER_CHOICE]: order, ...rest } = body;
+  if (order === "recommended") return { ...rest, strategy_from: "recommended" };
+  return { ...rest, strategy_from: "person", strategy: order };
 }
 
 // ---------------------------------------------------------------------------

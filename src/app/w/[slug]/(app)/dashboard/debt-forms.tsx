@@ -20,6 +20,7 @@ import {
   noteBalance,
   removeBalance,
   chooseStrategy,
+  followRecommended,
   removeDebt,
   removeWhatIf,
   saveDebt,
@@ -430,6 +431,25 @@ export function UseStrategy({
         onClick={() => start(async () => setSaid(await chooseStrategy(slug, strategy)))}
       >
         {pending ? "Saving…" : "Use this order"}
+      </Button>
+      {say(said)}
+    </span>
+  );
+}
+
+/** "Follow the recommended order": back from a person's own choice. */
+export function FollowRecommended({ slug }: { slug: string }) {
+  const [said, setSaid] = useState<DebtActionState>({});
+  const [pending, start] = useTransition();
+  return (
+    <span className="flex flex-wrap items-center gap-2">
+      <Button
+        size="sm"
+        variant="ghost"
+        disabled={pending}
+        onClick={() => start(async () => setSaid(await followRecommended(slug)))}
+      >
+        {pending ? "Saving…" : "Follow the recommended order"}
       </Button>
       {say(said)}
     </span>

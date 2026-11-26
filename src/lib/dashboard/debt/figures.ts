@@ -275,7 +275,10 @@ export function debtHealth(input: {
     notes.push({
       tone: "action",
       key: "debt-plan",
-      text: `Keep going with the ${STRATEGY_META[s.strategy].label.toLowerCase()} plan: it frees ${input.money(freed)} a month as the debts it pays down are cleared.`,
+      text:
+        s.strategy_from === "person"
+          ? `Keep going with the ${STRATEGY_META[s.strategy].label.toLowerCase()} plan: it frees ${input.money(freed)} a month as the debts it pays down are cleared.`
+          : `Keep going with the payoff plan, in the order that saves the most interest: it frees ${input.money(freed)} a month as the debts it pays down are cleared.`,
     });
   }
   if (

@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { describeConfig, findConfig } from "@/lib/assistant/registry";
 import { requireUser } from "@/lib/auth";
 import { loadDebtSettings, sheetBanks } from "@/lib/dashboard/debt/data";
+import { ORDER_CHOICE, orderOf } from "@/lib/dashboard/debt/settings";
 import { bankKey, emergencyFund, pickedBanks } from "@/lib/dashboard/debt/figures";
 import { formatMoney } from "@/lib/dashboard/format";
 import { DEBT_FIELDS } from "@/lib/dashboard/figure-fields";
@@ -78,7 +79,7 @@ export default async function DebtSettingsPage({ params }: { params: Promise<{ s
               slug={tenant.slug}
               setting="debt"
               groups={DEBT_FIELDS}
-              body={settings as unknown as Record<string, unknown>}
+              body={{ ...settings, [ORDER_CHOICE]: orderOf(settings) }}
               currency={tenant.currency}
             />
           ) : (
