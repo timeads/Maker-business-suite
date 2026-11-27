@@ -113,7 +113,7 @@ its people:
 - **Costs on tables the whole team may read.** Row-level security can't hide
   a column from some people and not others, so these columns are still
   readable through the API by a member who has the table: `stock_items.
-  unit_cost` / `own_cost`, `purchase_order_lines.unit_cost`,
+unit_cost` / `own_cost`, `purchase_order_lines.unit_cost`,
   `purchase_orders.shipping_cost` / `tax_rate_pct` / `adjustments`,
   `order_lines.unit_cost`, `shipments.cost`, `shipping_label_quotes` and
   `shipping_order_plans.quote_cents`, `class_supplies.unit_cost_cents`. For
