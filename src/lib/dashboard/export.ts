@@ -86,6 +86,10 @@ export function figuresTable(
         money(card, "Average order", d.averageOrder);
         share(card, "Gross margin", d.margin);
         if (d.fromBooks) cents(card, "From your books", d.fromBooks);
+        if (d.pace) cents(card, "Revenue at this pace by the month's end", d.pace.projected);
+        if (d.pace) cents(card, "Last month's running costs", d.pace.target);
+        if (d.againstLastMonth !== null)
+          share(card, "Against the same days last month", d.againstLastMonth);
         break;
       case "sales_over_time":
         for (const p of d.points) money(card, p.longLabel, p.value);
@@ -93,6 +97,7 @@ export function figuresTable(
         break;
       case "gross_margin":
         for (const p of d.points) share(card, p.longLabel, p.value);
+        for (const p of d.net ?? []) share(card, `${p.longLabel}, net`, p.value);
         share(card, "Overall", d.overall);
         break;
       case "top_products":
@@ -161,6 +166,24 @@ export function figuresTable(
         share(card, "Operating margin", d.margin);
         if (d.otherIncome !== null) cents(card, "Other income, left out", d.otherIncome);
         if (d.otherExpenses !== null) cents(card, "Other expenses, left out", d.otherExpenses);
+        break;
+      case "books_summary":
+        cents(card, "Gross profit", d.grossProfit);
+        cents(card, "Net income", d.netIncome);
+        if (d.totalAssets !== null)
+          cents(card, `Total assets as of ${d.assetsAsOf}`, d.totalAssets);
+        for (const p of d.revenue) money(card, `${p.longLabel}, revenue`, p.value);
+        for (const p of d.costs) money(card, `${p.longLabel}, costs`, p.value);
+        break;
+      case "shipping_margin":
+        for (const m of d.months) {
+          count(card, `${m.label}, orders sent`, m.orders);
+          cents(card, `${m.label}, shoppers paid`, m.collected);
+          cents(card, `${m.label}, postage`, m.cost);
+          cents(card, `${m.label}, margin`, m.net);
+        }
+        cents(card, "Margin", d.net);
+        share(card, "Margin, % of what shoppers paid", d.share);
         break;
       case "health_check":
         if (d.runway)

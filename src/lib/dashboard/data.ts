@@ -2,6 +2,14 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { bookRevenue, bookRevenueTotal, type BookRevenue, type InvoiceGroup } from "./book-revenue";
 import { formatMoney, formatPercent } from "./format";
 import { EXPENSES_KEY, parseExpenseSorting } from "./expenses";
+import {
+  againstLastMonth,
+  breakEvenPace,
+  sameDaysLastMonth,
+  shippingMonths,
+  type Pace,
+  type ShippingMonth,
+} from "./pace";
 import { lineExpensesExplained } from "./explain";
 import { BUDGET_KEY, parseBudgetSettings } from "./budget";
 import { CUTTER_KEY, parseCutterSettings } from "./recurring";
@@ -77,6 +85,10 @@ export type WidgetData =
       margin: number | null;
       /** Whole cents the books add beside the shop (paid invoices, other income), when counted. */
       fromBooks: number | null;
+      /** This month so far only: revenue run on to the month's end against last month's costs. */
+      pace: Pace | null;
+      /** This month so far only: sales against the same days last month, as a share. */
+      againstLastMonth: number | null;
     }
   | {
       type: "sales_over_time";
@@ -91,6 +103,8 @@ export type WidgetData =
       overall: number | null;
       source: "store" | "books";
       coverage: number | null;
+      /** From the books: net income ÷ revenue each month, beside gross. */
+      net: Point[] | null;
     }
   | { type: "top_products"; rows: RankedRow[] }
   | { type: "sales_by_channel"; figure: RevenueFigure; rows: RankedRow[]; total: number }
@@ -215,6 +229,28 @@ export type WidgetData =
       otherIncome: number | null;
       otherExpenses: number | null;
       partial: string | null;
+    }
+  | {
+      type: "books_summary";
+      /** Whole cents over the range's months in the books. */
+      grossProfit: number;
+      netIncome: number;
+      totalAssets: number | null;
+      assetsAsOf: string | null;
+      /** Revenue and costs (cost of goods plus running costs) per month, dollars. */
+      revenue: Point[];
+      costs: Point[];
+      partial: string | null;
+    }
+  | {
+      type: "shipping_margin";
+      months: (ShippingMonth & { label: string })[];
+      points: Point[];
+      collected: number;
+      cost: number;
+      net: number;
+      share: number | null;
+      uncosted: number;
     }
   /** Nothing to show yet, and what would fill it: a connection, or lines set up in Settings. */
   | { type: "empty"; needs: "shopify" | "quickbooks" | "lines" };
@@ -526,6 +562,45 @@ export async function loadDashboardData(
       : [],
   );
   const today = startOfLocalDay(localDate(now, tenant.timezone), tenant.timezone);
+  // "This month so far": the range starts on the first of this month and runs to today.
+  const local = localDate(now, tenant.timezone);
+  const fromLocal = localDate(range.from, tenant.timezone);
+  const tomorrow = startOfLocalDay(
+    (() => {
+      const d = new Date(Date.UTC(local.year, local.month - 1, local.day + 1));
+      return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate() };
+    })(),
+    tenant.timezone,
+  );
+  const monthSoFar =
+    fromLocal.day === 1 &&
+    fromLocal.month === local.month &&
+    fromLocal.year === local.year &&
+    range.to.getTime() === tomorrow.getTime();
+  const lastMonthDays = sameDaysLastMonth(local);
+  const lastMonthWindow = {
+    from: startOfLocalDay(lastMonthDays.from, tenant.timezone),
+    to: startOfLocalDay(lastMonthDays.to, tenant.timezone),
+  };
+  /** Revenue under the page's figure between two instants, in whole cents. */
+  const salesBetween = async (from: Date, to: Date): Promise<number> => {
+    const args = {
+      p_tenant_id: tenant.id,
+      p_from: from.toISOString(),
+      p_to: to.toISOString(),
+      p_grouping: "month",
+      p_timezone: tenant.timezone,
+    };
+    const { data, error } =
+      figure === "net_sales"
+        ? await supabase.rpc("dashboard_sales_by_period", args)
+        : await supabase.rpc("money_sales_by_period", { ...args, p_figure: figure });
+    if (error) throw new Error(`Could not load last month's sales: ${error.message}`);
+    return ((data as Record<string, unknown>[] | null) ?? []).reduce(
+      (sum, row) => sum + Math.round(num(row.net_sales ?? row.revenue) * 100),
+      0,
+    );
+  };
   const farAhead = new Date(today);
   farAhead.setUTCFullYear(farAhead.getUTCFullYear() + DEFERRED_YEARS);
 
@@ -669,6 +744,7 @@ export async function loadDashboardData(
       "revenue_growth",
       "cash_flow",
       "operating_profit",
+      "books_summary",
     );
   const latestOf = (kind: string) =>
     supabase
@@ -708,6 +784,8 @@ export async function loadDashboardData(
     anyExpense,
     healthLines,
     invoiceEntries,
+    lastMonthSales,
+    shippingRows,
   ] = await Promise.all([
     Promise.all([...groupings].map(async (g) => [g, await salesFor(g)] as const)),
     figure === "net_sales"
@@ -748,7 +826,9 @@ export async function loadDashboardData(
           .order("period_start", { ascending: true })
           .limit(1000)
       : null,
-    needs("cash_on_hand", "runway", "health_check") ? latestOf("balance_sheet") : null,
+    needs("cash_on_hand", "runway", "health_check", "books_summary")
+      ? latestOf("balance_sheet")
+      : null,
     needs("ar_aging") ? latestOf("ar_aging") : null,
     supabase.from("orders").select("id", { count: "exact", head: true }).eq("tenant_id", tenant.id),
     wantsProfit ? expenseGroups() : Promise.resolve([] as ExpenseGroup[]),
@@ -761,6 +841,26 @@ export async function loadDashboardData(
       : Promise.resolve({ count: 0 }),
     recentLines,
     Promise.all([...invoiceGroupings].map(async (g) => [g, await invoiceGroups(g)] as const)),
+    monthSoFar && needs("key_figures")
+      ? salesBetween(lastMonthWindow.from, lastMonthWindow.to)
+      : null,
+    needs("shipping_margin")
+      ? supabase
+          .rpc("money_shipping_by_month", {
+            ...window,
+            p_timezone: tenant.timezone,
+          })
+          .then(({ data, error }) => {
+            if (error) throw new Error(`Could not load shipping: ${error.message}`);
+            return ((data as Record<string, unknown>[] | null) ?? []).map((r) => ({
+              month: String(r.month),
+              orders: num(r.orders),
+              collected_cents: Math.round(num(r.collected_cents)),
+              cost_cents: Math.round(num(r.cost_cents)),
+              costed: num(r.costed),
+            }));
+          })
+      : null,
   ]);
   for (const result of [products, channels, monthly, balance, aging]) {
     if (result?.error) throw new Error(`Could not load the dashboard: ${result.error.message}`);
@@ -792,6 +892,14 @@ export async function loadDashboardData(
   );
   const bookMonths = snaps.filter((s) => s.kind === "profit_and_loss").map(bookMonthOf);
   const cashMonths = snaps.filter((s) => s.kind === "cash_flow").map(cashMonthOf);
+  // Last month's running costs in the books, for break-even pace (the earlier dashboard's target).
+  const lastMonthKey = `${lastMonthDays.from.year}-${String(lastMonthDays.from.month).padStart(2, "0")}`;
+  const lastBooksMonth = snaps.find(
+    (s) => s.kind === "profit_and_loss" && s.period_start.slice(0, 7) === lastMonthKey,
+  );
+  const lastBooksMonthCosts = lastBooksMonth
+    ? Math.round(num(lastBooksMonth.data.expenses) * 100)
+    : null;
   const cashCents = latestSheet ? Math.round(num(latestSheet.data.cash) * 100) : null;
   const health =
     healthSettings && bookMonths.length > 0
@@ -921,6 +1029,18 @@ export async function loadDashboardData(
             const b = booksFor("month");
             return b ? bookRevenueTotal(b) : null;
           })(),
+          pace: monthSoFar
+            ? breakEvenPace({
+                revenue: Math.round(total * 100),
+                day: local.day,
+                daysInMonth: new Date(Date.UTC(local.year, local.month, 0)).getUTCDate(),
+                target: lastBooksMonthCosts,
+              })
+            : null,
+          againstLastMonth:
+            monthSoFar && lastMonthSales !== null
+              ? againstLastMonth(Math.round(total * 100), lastMonthSales)
+              : null,
         };
         break;
       }
@@ -960,6 +1080,12 @@ export async function loadDashboardData(
               longLabel: periodLabel(s.period_start, "month", true),
               value: num(s.data.income) > 0 ? num(s.data.gross_profit) / num(s.data.income) : null,
             })),
+            net: profitMonths.map((s) => ({
+              key: s.period_start,
+              label: periodLabel(s.period_start, "month"),
+              longLabel: periodLabel(s.period_start, "month", true),
+              value: num(s.data.income) > 0 ? num(s.data.net_income) / num(s.data.income) : null,
+            })),
           };
           break;
         }
@@ -971,6 +1097,7 @@ export async function loadDashboardData(
         out[widget.id] = {
           type: "gross_margin",
           source: "store",
+          net: null,
           ...storeMargin(rows),
           points: series("month", (row) =>
             row && row.costed_sales > 0 ? (row.costed_sales - row.cost) / row.costed_sales : null,
@@ -1329,6 +1456,63 @@ export async function loadDashboardData(
           otherIncome: known((m) => m.otherIncome),
           otherExpenses: known((m) => m.otherExpenses),
           partial: byMonth.has(thisMonth) ? thisMonth : null,
+        };
+        break;
+      }
+      case "books_summary": {
+        if (bookMonths.length === 0) {
+          out[widget.id] = { type: "empty", needs: "quickbooks" };
+          break;
+        }
+        const sumOf = (key: string) =>
+          profitMonths.reduce((sum, s) => sum + Math.round(num(s.data[key]) * 100), 0);
+        const byMonth = new Map(profitMonths.map((s) => [s.period_start.slice(0, 7), s]));
+        const keys = [...inRange].sort();
+        const assets =
+          latestSheet &&
+          latestSheet.data.total_assets !== null &&
+          latestSheet.data.total_assets !== undefined
+            ? Math.round(num(latestSheet.data.total_assets) * 100)
+            : null;
+        out[widget.id] = {
+          type: "books_summary",
+          grossProfit: sumOf("gross_profit"),
+          netIncome: sumOf("net_income"),
+          totalAssets: assets,
+          assetsAsOf: assets === null ? null : (latestSheet?.period_start ?? null),
+          revenue: keys.map((m) => {
+            const s = byMonth.get(m);
+            return monthPoint(m, s ? num(s.data.income) : null);
+          }),
+          costs: keys.map((m) => {
+            const s = byMonth.get(m);
+            return monthPoint(m, s ? num(s.data.cogs) + num(s.data.expenses) : null);
+          }),
+          partial: byMonth.has(thisMonth) ? thisMonth : null,
+        };
+        break;
+      }
+      case "shipping_margin": {
+        const months = shippingMonths(shippingRows ?? []);
+        if (months.length === 0 && !hasOrders) {
+          out[widget.id] = { type: "empty", needs: "shopify" };
+          break;
+        }
+        const byMonth = new Map(months.map((m) => [m.month, m]));
+        const collected = months.reduce((a, m) => a + m.collected, 0);
+        const cost = months.reduce((a, m) => a + m.cost, 0);
+        out[widget.id] = {
+          type: "shipping_margin",
+          months: months.map((m) => ({ ...m, label: periodLabel(`${m.month}-01`, "month", true) })),
+          points: [...inRange].sort().map((m) => {
+            const row = byMonth.get(m);
+            return monthPoint(m, row ? row.net / 100 : null);
+          }),
+          collected,
+          cost,
+          net: collected - cost,
+          share: collected > 0 ? (collected - cost) / collected : null,
+          uncosted: months.reduce((a, m) => a + m.uncosted, 0),
         };
         break;
       }

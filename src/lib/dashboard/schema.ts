@@ -93,6 +93,10 @@ export const widgetSchema = z.discriminatedUnion("type", [
   z.object({ ...base, type: z.literal("revenue_growth") }),
   z.object({ ...base, type: z.literal("cash_flow") }),
   z.object({ ...base, type: z.literal("operating_profit") }),
+  // Gross profit, net income and total assets from the books, with revenue against costs by month.
+  z.object({ ...base, type: z.literal("books_summary") }),
+  // What shoppers paid for shipping against what the parcels cost, by month (from Shipping).
+  z.object({ ...base, type: z.literal("shipping_margin") }),
 ]);
 export type WidgetConfig = z.infer<typeof widgetSchema>;
 export type WidgetType = WidgetConfig["type"];

@@ -715,6 +715,8 @@ const WIDGET_NAMES: Record<string, string> = {
   revenue_growth: "Revenue growth",
   cash_flow: "Cash flow",
   operating_profit: "Operating profit",
+  books_summary: "From your books (gross profit, net income, total assets)",
+  shipping_margin: "Shipping margin by month",
 };
 
 /**

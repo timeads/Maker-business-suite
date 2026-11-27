@@ -682,3 +682,102 @@ describe("cash health from the books", () => {
     }
   });
 });
+
+describe("the month so far, the books' summary and shipping", () => {
+  it("runs this month on to its end against last month's running costs", async () => {
+    const { supabase, calls } = fakeSupabase(
+      {
+        dashboard_sales_by_period: (call) =>
+          call.args.p_from === "2026-10-01T04:00:00.000Z"
+            ? [
+                {
+                  period: "2026-10-01",
+                  order_count: 5,
+                  net_sales: "800.00",
+                  cost: 0,
+                  costed_sales: 0,
+                },
+              ]
+            : [
+                {
+                  period: "2026-11-01",
+                  order_count: 7,
+                  net_sales: "1000.00",
+                  cost: 0,
+                  costed_sales: 0,
+                },
+              ],
+      },
+      {
+        snapshots: [
+          {
+            kind: "profit_and_loss",
+            period_start: "2026-10-01",
+            data: { income: 900, expenses: 1500 },
+          },
+        ],
+      },
+    );
+    const data = await loadDashboardData(
+      supabase,
+      TENANT,
+      config([{ id: "k", type: "key_figures" }]),
+      resolveRange("this_month", NOW, TENANT.timezone),
+      undefined,
+      NOW,
+    );
+    // Ten days in, 21 of 30: $1,000 so far runs on to $1,428.57.
+    expect(data.k).toMatchObject({
+      type: "key_figures",
+      pace: { projected: 142857, target: 150000, onPace: false, short: 7143 },
+      againstLastMonth: 0.25,
+    });
+    const last = calls.find((c) => c.args.p_from === "2026-10-01T04:00:00.000Z");
+    expect(last?.args.p_to).toBe("2026-10-22T04:00:00.000Z");
+  });
+
+  it("adds up the books' months in range and asks Shipping for its margin", async () => {
+    const { supabase } = fakeSupabase(
+      {
+        money_shipping_by_month: () => [
+          { month: "2026-10-01", orders: 3, collected_cents: 3000, cost_cents: 2400, costed: 3 },
+        ],
+      },
+      {
+        snapshots: [
+          {
+            kind: "profit_and_loss",
+            period_start: "2026-10-01",
+            data: { income: 900, cogs: 100, expenses: 500, gross_profit: 800, net_income: 300.25 },
+          },
+          {
+            kind: "balance_sheet",
+            period_start: "2026-11-20",
+            data: { cash: 1, total_assets: 5000 },
+          },
+        ],
+      },
+    );
+    const data = await loadDashboardData(
+      supabase,
+      TENANT,
+      config([
+        { id: "b", type: "books_summary" },
+        { id: "s", type: "shipping_margin" },
+      ]),
+      RANGE,
+      undefined,
+      NOW,
+    );
+    expect(data.b).toMatchObject({
+      type: "books_summary",
+      grossProfit: 80000,
+      netIncome: 30025,
+      totalAssets: 500000,
+      assetsAsOf: "2026-11-20",
+    });
+    const books = data.b as Extract<typeof data.b, { type: "books_summary" }>;
+    expect(books.costs.find((p) => p.key === "2026-10-01")?.value).toBe(600);
+    expect(data.s).toMatchObject({ type: "shipping_margin", net: 600, share: 0.2, uncosted: 0 });
+  });
+});

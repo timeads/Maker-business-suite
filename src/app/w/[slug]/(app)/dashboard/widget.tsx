@@ -35,6 +35,8 @@ export const TITLES: Record<WidgetType, string> = {
   revenue_growth: "Revenue growth",
   cash_flow: "Cash flow",
   operating_profit: "Operating profit",
+  books_summary: "From your books",
+  shipping_margin: "Shipping margin",
 };
 
 const PROVIDER_NAMES = { shopify: "Shopify", quickbooks: "QuickBooks" } as const;
@@ -108,6 +110,12 @@ function describe(data: WidgetData, range: string, currency: string): string | n
       return "Revenue in your books, complete months only";
     case "cash_flow":
       return `Cash in less cash out each month ${range}, from your cash flow statement (cash basis)`;
+    case "books_summary":
+      return `Your profit and loss ${range}, and what the business owns, from QuickBooks${
+        data.partial ? ". This month is still being booked" : ""
+      }`;
+    case "shipping_margin":
+      return `What shoppers paid for shipping against what the parcels cost, ${range}. Each order counts in the month its first parcel went`;
     case "operating_profit":
       return `${formatMoney(data.profit / 100, currency)} ${range}: revenue less cost of goods and running costs, from your books${
         data.margin === null ? "" : `, ${formatPercent(data.margin)} of revenue`
@@ -181,9 +189,27 @@ export function Widget({
               data.fromBooks
                 ? `. Plus ${formatMoney(data.fromBooks / 100, currency)} from your books`
                 : ""
+            }${
+              data.pace
+                ? data.pace.onPace
+                  ? `. On pace to cover last month's ${formatMoney(data.pace.target / 100, currency)} of running costs`
+                  : `. Pacing ${formatMoney(data.pace.short / 100, currency)} short of last month's running costs`
+                : ""
             }`}
           />
-          <StatTile label="Orders" value={data.orders.toLocaleString("en-US")} />
+          <StatTile
+            label="Orders"
+            value={data.orders.toLocaleString("en-US")}
+            note={
+              data.againstLastMonth === null
+                ? undefined
+                : data.againstLastMonth >= 0.01
+                  ? `Sales up ${formatPercent(data.againstLastMonth)} on the same days last month`
+                  : data.againstLastMonth <= -0.01
+                    ? `Sales down ${formatPercent(-data.againstLastMonth)} on the same days last month`
+                    : "Sales level with the same days last month"
+            }
+          />
           <StatTile
             label="Average order"
             value={data.averageOrder === null ? "—" : formatMoney(data.averageOrder, currency)}
@@ -205,14 +231,33 @@ export function Widget({
         />
       );
       break;
-    case "gross_margin":
+    case "gross_margin": {
+      const shared = data.net
+        ? prepareSharedTimeCharts([data.points, data.net], "percent", currency)
+        : null;
       body = (
         <>
-          <TimeChart
-            {...prepareTimeChart(data.points, "percent", currency)}
-            variant="line"
-            valueLabel="Gross margin"
-          />
+          {shared && data.net ? (
+            <LineMultiples
+              ticks={shared.ticks}
+              valueLabel="Margin"
+              series={[
+                {
+                  id: "gross",
+                  name: "Gross margin",
+                  total: data.overall === null ? "—" : formatPercent(data.overall),
+                  points: shared.series[0],
+                },
+                { id: "net", name: "Net margin", total: "", points: shared.series[1] },
+              ]}
+            />
+          ) : (
+            <TimeChart
+              {...prepareTimeChart(data.points, "percent", currency)}
+              variant="line"
+              valueLabel="Gross margin"
+            />
+          )}
           {data.source === "store" && data.coverage !== null && data.coverage < 0.95 && (
             <p className="text-muted-foreground mt-3 text-xs">
               Based on the {formatPercent(data.coverage)} of sales where the item has a cost set in
@@ -222,6 +267,7 @@ export function Widget({
         </>
       );
       break;
+    }
     case "top_products":
       body = (
         <BarList rows={data.rows} currency={currency} emptyText="No sales in this period yet." />
@@ -353,6 +399,79 @@ export function Widget({
       break;
     case "operating_profit":
       body = <OperatingProfit data={data} currency={currency} />;
+      break;
+    case "books_summary": {
+      const shared = prepareSharedTimeCharts([data.revenue, data.costs], "money", currency);
+      const total = (points: { value: number | null }[]) =>
+        formatMoney(
+          points.reduce((a, p) => a + (p.value ?? 0), 0),
+          currency,
+        );
+      body = (
+        <div className="flex flex-col gap-4">
+          <div className="grid grid-cols-2 gap-6 lg:grid-cols-3">
+            <StatTile label="Gross profit" value={formatMoney(data.grossProfit / 100, currency)} />
+            <StatTile
+              label="Net income"
+              value={formatMoney(data.netIncome / 100, currency)}
+              note={data.netIncome < 0 ? "A loss for this period" : undefined}
+            />
+            {data.totalAssets !== null && (
+              <StatTile
+                label="Total assets"
+                value={formatMoney(data.totalAssets / 100, currency)}
+                note={data.assetsAsOf ? `As of ${asOf(data.assetsAsOf)}` : undefined}
+              />
+            )}
+          </div>
+          <LineMultiples
+            ticks={shared.ticks}
+            valueLabel="Amount"
+            series={[
+              {
+                id: "revenue",
+                name: "Revenue",
+                total: total(data.revenue),
+                points: shared.series[0],
+              },
+              {
+                id: "costs",
+                name: "Cost of goods and running costs",
+                total: total(data.costs),
+                points: shared.series[1],
+              },
+            ]}
+          />
+        </div>
+      );
+      break;
+    }
+    case "shipping_margin":
+      body = (
+        <div className="flex flex-col gap-4">
+          <div className="grid grid-cols-2 gap-6 lg:grid-cols-4">
+            <StatTile label="Shoppers paid" value={formatMoney(data.collected / 100, currency)} />
+            <StatTile label="Postage" value={formatMoney(data.cost / 100, currency)} />
+            <StatTile label="Margin" value={formatMoney(data.net / 100, currency)} />
+            <StatTile
+              label="Margin, of what shoppers paid"
+              value={data.share === null ? "—" : formatPercent(data.share)}
+            />
+          </div>
+          <TimeChart
+            {...prepareTimeChart(data.points, "money", currency)}
+            variant="column"
+            valueLabel="Shipping margin"
+          />
+          {data.uncosted > 0 && (
+            <p className="text-muted-foreground text-xs">
+              {data.uncosted} {data.uncosted === 1 ? "order has" : "orders have"} no postage cost
+              noted (a label bought outside Shipping, say), so{" "}
+              {data.uncosted === 1 ? "it counts" : "they count"} as free postage here.
+            </p>
+          )}
+        </div>
+      );
       break;
     case "ar_aging":
       body = (

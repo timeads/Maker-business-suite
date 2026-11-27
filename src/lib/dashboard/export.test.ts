@@ -97,6 +97,8 @@ describe("Money's tables", () => {
           averageOrder: 123.45,
           margin: 0.4567,
           fromBooks: null,
+          pace: null,
+          againstLastMonth: null,
         },
         c: { type: "empty", needs: "quickbooks" },
         p: profit,
