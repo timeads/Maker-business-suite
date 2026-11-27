@@ -99,3 +99,64 @@ describe("what the setup tools answer", () => {
     expect(body.note).toBeUndefined();
   });
 });
+
+describe("Bookings', the help desk's and Social's setup tools", () => {
+  const all = ["bookings_setup_status", "helpdesk_setup_status", "social_setup_status"];
+
+  it("offers each only to people who can open that tool", () => {
+    expect(names(ctx(["bookings"]))).toContain("bookings_setup_status");
+    expect(names(ctx(["bookings"]))).not.toContain("helpdesk_setup_status");
+    expect(names(ctx(["helpdesk"]))).toContain("helpdesk_setup_status");
+    expect(names(ctx(["social"]))).toContain("social_setup_status");
+    expect(names(ctx(["stock"]))).not.toEqual(expect.arrayContaining([all[0]]));
+    expect(names(ctx(["bookings", "helpdesk", "social"], true))).toEqual(
+      expect.arrayContaining(all),
+    );
+  });
+
+  it("refuses one the person can't open, as if it didn't exist", async () => {
+    const out = await runTool("social_setup_status", {}, ctx(["bookings"]));
+    expect(out).toMatchObject({
+      isError: true,
+      content: "There is no tool called social_setup_status.",
+    });
+  });
+
+  it("Bookings: the open items, where they're done, and the guided page", async () => {
+    const out = await runTool("bookings_setup_status", {}, ctx(["bookings"]));
+    const body = JSON.parse(out.content) as {
+      open: { what: string; where: string; owners_and_admins_only: boolean }[];
+      guided_setup: string;
+      note?: string;
+    };
+    expect(body.open[0]).toMatchObject({
+      what: "Add your first workshop or appointment",
+      where: "/w/rugs/bookings/setup#what",
+      owners_and_admins_only: true,
+    });
+    expect(body.guided_setup).toBe("/w/rugs/bookings/setup");
+    expect(body.note).toMatch(/ask one/);
+  });
+
+  it("Help desk: answers from its own facts", async () => {
+    const out = await runTool("helpdesk_setup_status", {}, ctx(["helpdesk"], true));
+    const body = JSON.parse(out.content) as {
+      open: { what: string; optional: boolean; where: string }[];
+      guided_setup: string;
+    };
+    expect(body.guided_setup).toBe("/w/rugs/helpdesk/setup");
+    expect(body.open.find((item) => item.what.startsWith("Let people know"))).toMatchObject({
+      optional: true,
+      where: "/w/rugs/settings/helpdesk/auto-replies",
+    });
+  });
+
+  it("Social: asks for the brand kit and somewhere to post", async () => {
+    const out = await runTool("social_setup_status", {}, ctx(["social"], true));
+    const body = JSON.parse(out.content) as { open: { what: string }[]; guided_setup: string };
+    expect(body.open.map((item) => item.what)).toEqual(
+      expect.arrayContaining(["Save your brand kit", "Connect your Facebook Page"]),
+    );
+    expect(body.guided_setup).toBe("/w/rugs/social/setup");
+  });
+});

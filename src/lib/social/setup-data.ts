@@ -2,8 +2,6 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { loadBrands, pickBrand } from "../brand/brands";
 import { BRAND_MODULE, KIT_KEY } from "../brand/kit";
 import { canPost } from "../connections/meta-access";
-import { linkedinConfigured } from "../connections/providers/linkedin";
-import { tiktokConfigured } from "../connections/providers/tiktok";
 import { accountName } from "./accounts";
 import { hasLogo } from "./photo-match";
 import { LINKS_KEY, PLAN_KEY, SOCIAL_MODULE, parseLinkPage, parsePlan } from "./plan";
@@ -11,6 +9,16 @@ import { REVIEW_KEY } from "./review";
 import type { SocialSetupFacts } from "./setup";
 
 const STATUSES = ["active", "needs_reconnect", "disconnected"] as const;
+
+/**
+ * Whether TikTok and LinkedIn are offered here: the same test as
+ * `tiktokConfigured` / `linkedinConfigured` in their providers, which can't
+ * be imported from here without a loop through the connections registry.
+ */
+export const networksOffered = {
+  tiktok: () => Boolean(process.env.TIKTOK_CLIENT_KEY && process.env.TIKTOK_CLIENT_SECRET),
+  linkedin: () => Boolean(process.env.LINKEDIN_CLIENT_ID && process.env.LINKEDIN_CLIENT_SECRET),
+};
 
 /**
  * The facts the Social checklist is worked out from, read as the member:
@@ -99,9 +107,12 @@ export async function loadSocialSetupFacts(
       : rows.filter((a) => a.network === "facebook" || a.network === "instagram").length,
     otherAccounts: rows.filter((a) => a.network === "tiktok" || a.network === "linkedin").length,
     needsLogin: rows.filter((a) => a.needs_login).map((a) => ({ id: a.id, name: accountName(a) })),
-    tiktok: { offered: tiktokConfigured(), connected: connections.error ? true : live("tiktok") },
+    tiktok: {
+      offered: networksOffered.tiktok(),
+      connected: connections.error ? true : live("tiktok"),
+    },
     linkedin: {
-      offered: linkedinConfigured(),
+      offered: networksOffered.linkedin(),
       connected: connections.error ? true : live("linkedin"),
     },
     plan: {

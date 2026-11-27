@@ -28,6 +28,8 @@ export type ToolContext = {
   manager: boolean;
   /** The person sees what the business pays (`entitlements.seesCosts`). Left out: they don't. */
   seesCosts?: boolean;
+  /** Bookings' extras on the plan (`entitlements.can`). Left out: they aren't. */
+  canExtra?(feature: "texts" | "eventbrite"): boolean;
 };
 
 /** A tool on the plan that this person doesn't have: for them it isn't there at all. */

@@ -76,6 +76,7 @@ export async function askAssistant(
         onPlan: (module: ModuleKey) => ctx.entitlements.onPlan(`module.${module}`),
         manager: canManage(ctx.role),
         seesCosts: ctx.entitlements.seesCosts,
+        canExtra: (feature: "texts" | "eventbrite") => ctx.entitlements.can(feature),
       },
     );
     // Metered whatever came back: the tokens were spent.
