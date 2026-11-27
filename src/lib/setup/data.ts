@@ -3,7 +3,8 @@ import type { NotNow } from "./items";
 
 /**
  * A tool's "Not now"s, read as the member: owners and admins get them all;
- * the rest of the team gets Stock's and Shipping's for the tools they have,
+ * the rest of the team gets Stock's, Shipping's, Bookings', the help desk's
+ * and Social's for the tools they have,
  * and never Money's (row-level security decides). A read that fails counts
  * as none, so a checklist never stops a page drawing.
  */

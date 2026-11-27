@@ -177,3 +177,47 @@ describe("the heads-up pointing at Money → Set up", () => {
     );
   });
 });
+
+describe("Bookings', Help desk's and Social's Not now, for the tool's whole team", () => {
+  let fay: User; // plain member of A with only Bookings, once tools are chosen per person
+
+  const say = (user: User, tool: string, item: string) =>
+    as(user, "select public.say_setup_not_now($1, $2, $3, 'f1')", [tenantA, tool, item]);
+  const seen = async (user: User) =>
+    (await rows(user)).map((r) => r.item).filter((item) => item.startsWith("u."));
+
+  beforeAll(async () => {
+    fay = { id: await createUser(db, "fay@a.test"), email: "fay@a.test" };
+    await db.query(
+      "insert into public.memberships (tenant_id, user_id, role) values ($1, $2, 'member')",
+      [tenantA, fay.id],
+    );
+    // The earlier block chose tools per person; give Fay Bookings only.
+    await as(alice, "select public.set_member_tools($1, $2, $3::text[])", [
+      tenantA,
+      fay.id,
+      ["bookings"],
+    ]);
+    await say(alice, "bookings", "u.bookings");
+    await say(alice, "helpdesk", "u.helpdesk");
+    await say(alice, "social", "u.social");
+    await say(alice, "money", "u.money");
+    await as(bob, "select public.say_setup_not_now($1, 'social', 'u.other', 'f1')", [tenantB]);
+  });
+
+  it("is read by a member only for the tools they were given, never Money's", async () => {
+    expect(await seen(fay)).toEqual(["u.bookings"]);
+    expect(await seen(dan)).toEqual(["u.bookings", "u.helpdesk", "u.money", "u.social"]);
+  });
+
+  it("is read by every member while tools aren't chosen per person", async () => {
+    await as(alice, "select public.set_tools_per_person($1, false, $2::text[])", [tenantA, []]);
+    expect(await seen(carol)).toEqual(["u.bookings", "u.helpdesk", "u.social"]);
+  });
+
+  it("is still said only by owners and admins, and never crosses workspaces", async () => {
+    await expect(say(fay, "bookings", "u.mine")).rejects.toThrow(/owners and admins/i);
+    expect((await rows(fay)).every((r) => r.tenant_id === tenantA)).toBe(true);
+    expect((await rows(carol)).map((r) => r.item)).not.toContain("u.other");
+  });
+});
