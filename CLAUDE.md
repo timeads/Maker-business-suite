@@ -52,6 +52,24 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
 
 ## Things that are easy to get wrong here
 
+- Roles and tools (docs/roles.md): roles stay owner, admin, member. Owners
+  and admins have every tool the plan includes. Once a workspace switches
+  "Choose which tools each person can open" on (`tenants.tools_per_person`,
+  off by default, `set_tools_per_person`), a member has only their ticked
+  tools (`member_tools`, `set_member_tools`; invites carry ticks through
+  `create_team_invite`), never Money, and no costs or margins; Home and
+  Messages are everyone's. The rule is `private.tool_allowed` = `toolAllowed`
+  (`src/lib/team/tools.ts`, held equal by `tests/db/member-tools.test.ts`).
+  In the app, `getEntitlements().can()` already answers for the person
+  (`onPlan()` is the plan alone, `seesCosts` the costs rule): never add a
+  second gate. In the database every tool table has a RESTRICTIVE select
+  policy and a `tool_write_guard` trigger (a new table of a tool gets both,
+  with the tools that read it across listed); a checked function that READS
+  a tool's rows asks `private.tool_tenant_ids` / `private.require_tool`, not
+  just `user_tenant_ids`; a new Money reading function returns nothing
+  unless `private.tool_open(tenant, 'dashboard')`. A loader that reads a
+  cost (what the business pays, or a margin) leaves it out unless
+  `seesCosts`. Keep `tests/db/member-tools.test.ts` passing.
 - This is Next.js 16: read AGENTS.md and the docs in
   `node_modules/next/dist/docs/` before using a Next API from memory.
   Middleware is `src/proxy.ts`. Cache Components is on, so anything that reads
