@@ -14,13 +14,8 @@ import { loadMoneySetupFacts } from "@/lib/dashboard/setup-data";
 import { loadNotNow } from "@/lib/setup/data";
 import { sortItems, type SetupItem } from "@/lib/setup/items";
 import { loadDashboardConfig, loadDashboardData, loadRevenueSettings } from "@/lib/dashboard/data";
-import { resolveRange } from "@/lib/dashboard/range";
-import {
-  RANGE_LABELS,
-  RANGE_PHRASES,
-  RANGE_PRESETS,
-  type RangePreset,
-} from "@/lib/dashboard/schema";
+import { pageRange, periodChoices } from "@/lib/dashboard/range";
+import { RANGE_LABELS, RANGE_PRESETS } from "@/lib/dashboard/schema";
 import { TEMPLATE_ORDER, templateBlurb, templateConfig } from "@/lib/dashboard/templates";
 import { getEntitlements } from "@/lib/entitlements";
 import { createClient } from "@/lib/supabase/server";
@@ -30,9 +25,6 @@ import { TemplatePicker } from "./template-picker";
 import { Widget } from "./widget";
 
 export const metadata: Metadata = { title: "Money" };
-
-const isRange = (value: unknown): value is RangePreset =>
-  typeof value === "string" && (RANGE_PRESETS as readonly string[]).includes(value);
 
 export default async function DashboardPage({
   params,
@@ -81,9 +73,12 @@ export default async function DashboardPage({
   const supabase = await createClient();
   const revenue = await loadRevenueSettings(supabase, tenant.id);
   const { config, source } = await loadDashboardConfig(supabase, tenant.id, revenue);
-  const preset = isRange(query.range) ? query.range : config.range;
-  // One range for the whole page, so every number agrees with its neighbours.
-  const range = resolveRange(preset, new Date(), tenant.timezone);
+  // One range for the whole page, so every number agrees with its neighbours:
+  // a preset, or one month, quarter or year picked by hand.
+  const now = new Date();
+  const shown = pageRange(query.range, config.range, now, tenant.timezone);
+  const { range, preset } = shown;
+  const choices = periodChoices(now, tenant.timezone);
   const manager = canManage(role);
   const [data, setup] = await Promise.all([
     loadDashboardData(supabase, tenant, config, range, revenue),
@@ -132,23 +127,62 @@ export default async function DashboardPage({
         </FormMessage>
       )}
 
-      <nav aria-label="Date range" className="bg-muted flex w-fit flex-wrap gap-1 rounded-lg p-1">
-        {RANGE_PRESETS.map((option) => (
-          <Link
-            key={option}
-            href={`${base}/dashboard?range=${option}`}
-            aria-current={option === preset ? "true" : undefined}
-            className={cn(
-              "rounded-md px-3 py-1.5 text-sm transition-colors",
-              option === preset
-                ? "bg-card font-medium shadow-xs"
-                : "text-muted-foreground hover:bg-card/60",
-            )}
+      <div className="flex flex-wrap items-center gap-3">
+        <nav aria-label="Date range" className="bg-muted flex w-fit flex-wrap gap-1 rounded-lg p-1">
+          {RANGE_PRESETS.map((option) => (
+            <Link
+              key={option}
+              href={`${base}/dashboard?range=${option}`}
+              aria-current={option === preset ? "true" : undefined}
+              className={cn(
+                "rounded-md px-3 py-1.5 text-sm transition-colors",
+                option === preset
+                  ? "bg-card font-medium shadow-xs"
+                  : "text-muted-foreground hover:bg-card/60",
+              )}
+            >
+              {RANGE_LABELS[option]}
+            </Link>
+          ))}
+        </nav>
+        <form action={`${base}/dashboard`} className="flex items-center gap-2">
+          <label htmlFor="money-period" className="sr-only">
+            Pick a month, quarter or year
+          </label>
+          <select
+            id="money-period"
+            name="range"
+            defaultValue={shown.period ? shown.value : ""}
+            className="border-input bg-card h-9 rounded-sm border px-2 text-sm"
           >
-            {RANGE_LABELS[option]}
-          </Link>
-        ))}
-      </nav>
+            <option value="" disabled>
+              A month, quarter or year…
+            </option>
+            {(["month", "quarter", "year"] as const).map((kind) => (
+              <optgroup
+                key={kind}
+                label={kind === "month" ? "Months" : kind === "quarter" ? "Quarters" : "Years"}
+              >
+                {choices
+                  .filter((c) => c.kind === kind)
+                  .map((c) => (
+                    <option key={c.value} value={c.value}>
+                      {c.label}
+                    </option>
+                  ))}
+              </optgroup>
+            ))}
+          </select>
+          <Button type="submit" variant="outline" size="sm">
+            Show
+          </Button>
+        </form>
+      </div>
+      {shown.period && (
+        <p className="text-sm font-medium" role="status">
+          Showing {shown.label}
+        </p>
+      )}
       <HowWorkedOut
         label="How revenue is worked out"
         lines={[
@@ -184,7 +218,7 @@ export default async function DashboardPage({
               widget={widget}
               data={data[widget.id]}
               currency={tenant.currency}
-              rangePhrase={RANGE_PHRASES[preset]}
+              rangePhrase={shown.phrase}
               connectionsHref={`${base}/connections`}
               linesHref={`${base}/settings/money/lines`}
               inboxHref={`${base}/dashboard/expenses`}

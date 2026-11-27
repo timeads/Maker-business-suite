@@ -114,6 +114,12 @@ export function ProfitTable({ data, currency }: { data: ProfitData; currency: st
         {data.monthlyCosts > 0
           ? "Monthly costs are the ones you set in Settings, counted by the day for part of a month."
           : "No monthly costs set yet (rent split between lines, help, your own salary)."}
+        {data.changedMonths > 0
+          ? ` ${data.changedMonths === 1 ? "One month in this period has" : `${data.changedMonths} months in this period have`} a monthly cost typed in for that month alone.`
+          : ""}
+        {withTyped
+          ? " Revenue typed in is for sales that reached neither your shop nor your books."
+          : ""}
       </p>
     </details>
   );

@@ -4,6 +4,7 @@ import { LineMultiples } from "@/components/charts/line-multiples";
 import { StatTile } from "@/components/charts/stat-tile";
 import { TimeChart } from "@/components/charts/time-chart";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { HowWorkedOut } from "@/components/setup/how-worked-out";
 import type { WidgetData } from "@/lib/dashboard/data";
 import {
   formatMoney,
@@ -125,6 +126,7 @@ export function Widget({
   linesHref,
   inboxHref,
   profitHref,
+  rulesHref = `${profitHref.replace(/\/profit$/, "")}/expenses#by-account`,
 }: {
   widget: WidgetConfig;
   data: WidgetData;
@@ -138,6 +140,8 @@ export function Widget({
   inboxHref: string;
   /** Settings → Money → Profit by line. */
   profitHref: string;
+  /** Settings → Money → Sorting expenses, where each account's choice is made. */
+  rulesHref?: string;
 }) {
   const title = widget.title ?? TITLES[widget.type];
   const description = describe(data, rangePhrase, currency);
@@ -296,6 +300,7 @@ export function Widget({
           />
           <ProfitTable data={data} currency={currency} />
           {data.books && <BooksNote books={data.books} currency={currency} linesHref={linesHref} />}
+          <Feeds feeds={data.feeds} rulesHref={rulesHref} />
           <SetApart
             currency={currency}
             unsorted={data.unsorted}
@@ -330,6 +335,7 @@ export function Widget({
             inboxHref={inboxHref}
             profitHref={profitHref}
           />
+          <Feeds feeds={data.feeds} rulesHref={rulesHref} />
         </div>
       );
       break;
@@ -371,6 +377,24 @@ export function Widget({
       </CardHeader>
       <CardContent>{body}</CardContent>
     </Card>
+  );
+}
+
+/** "Which accounts feed each line": the account choices behind each line's own expenses. */
+function Feeds({
+  feeds,
+  rulesHref,
+}: {
+  feeds: { id: string; name: string; lines: string[] }[];
+  rulesHref: string;
+}) {
+  if (feeds.length === 0) return null;
+  return (
+    <HowWorkedOut
+      label="Which accounts feed each line"
+      lines={feeds.flatMap((feed) => feed.lines)}
+      change={{ href: rulesHref, label: "Choose for each account" }}
+    />
   );
 }
 

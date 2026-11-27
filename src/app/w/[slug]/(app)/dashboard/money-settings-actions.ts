@@ -298,3 +298,47 @@ export async function saveDebtSettings(
     "Saved. Your payoff plan and emergency fund are worked out this way from now on.",
   );
 }
+
+/**
+ * One month's entries for profit by line: what each monthly cost really came
+ * to that month, and revenue a line had that reached neither the shop nor
+ * the books. A blank box takes that month's entry away.
+ */
+export async function saveMonthEntries(
+  slug: string,
+  month: string,
+  _prev: MoneySettingsState,
+  formData: FormData,
+): Promise<MoneySettingsState> {
+  const ctx = await settingsContext(slug, "profit");
+  if ("error" in ctx) return { error: ctx.error };
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return { error: "Choose a month first." };
+  const rows = z
+    .array(
+      z.object({
+        kind: z.enum(["cost", "revenue"]),
+        subject: z.string().regex(/^[a-z0-9-]{1,40}$/),
+        amount_cents: z.number().int().min(0).max(100_000_000_000).nullable(),
+        note: z.string().max(200).optional(),
+      }),
+    )
+    .max(100)
+    .safeParse(readBody(formData));
+  if (!rows.success) return { error: "An amount there doesn't look right." };
+  const { error } = await ctx.supabase.rpc("set_money_line_entries", {
+    p_tenant_id: ctx.tenant.id,
+    p_month: `${month}-01`,
+    p_rows: rows.data,
+  });
+  if (error) {
+    return {
+      error:
+        error.code === "22023"
+          ? `${error.message}.`
+          : "We couldn't save that. Try again in a moment.",
+    };
+  }
+  revalidatePath(`/w/${slug}/dashboard`, "layout");
+  revalidatePath(`/w/${slug}/settings/money/profit`);
+  return { message: "Saved. Profit by line uses these for that month." };
+}

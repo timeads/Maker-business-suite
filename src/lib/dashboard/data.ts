@@ -1,6 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { bookRevenue, bookRevenueTotal, type BookRevenue, type InvoiceGroup } from "./book-revenue";
 import { formatMoney, formatPercent } from "./format";
+import { EXPENSES_KEY, parseExpenseSorting } from "./expenses";
+import { lineExpensesExplained } from "./explain";
 import { BUDGET_KEY, parseBudgetSettings } from "./budget";
 import { CUTTER_KEY, parseCutterSettings } from "./recurring";
 import {
@@ -30,9 +32,11 @@ import {
 import {
   PROFIT_KEY,
   PROFIT_MODULE,
+  monthEntries,
   monthParts,
   parseProfitSettings,
   profitByLine,
+  typedRevenue,
   type CogsSource,
   type ExpenseGroup,
   type LineProfit,
@@ -135,6 +139,10 @@ export type WidgetData =
       /** Each line's revenue by where it came from, whole cents. */
       sources: { id: string; shop: number; books: number; typed: number }[];
       books: BooksPart | null;
+      /** Some month in the range has a monthly cost typed in for that month alone. */
+      changedMonths: number;
+      /** Which of the books' accounts feed each line's own expenses, in words. */
+      feeds: { id: string; name: string; lines: string[] }[];
     }
   | {
       type: "expenses_by_line";
@@ -143,6 +151,7 @@ export type WidgetData =
       unsorted: number;
       setAside: number;
       sharedUnsplit: number;
+      feeds: { id: string; name: string; lines: string[] }[];
     }
   | {
       type: "health_check";
@@ -524,6 +533,47 @@ export async function loadDashboardData(
   const fromDay = dayKey(localDate(range.from, tenant.timezone));
   const toDay = dayKey(localDate(range.to, tenant.timezone));
   const profitSettings = wantsProfit ? await loadProfitSettings(supabase, tenant.id) : null;
+  // Month-by-month entries and the account choices, for profit by line. The
+  // explanation is allowed to fail; the entries are part of the figure.
+  const [entryRows, sortingBody] = wantsProfit
+    ? await Promise.all([
+        supabase
+          .from("money_line_entries")
+          .select("kind, month, subject, amount_cents")
+          .eq("tenant_id", tenant.id)
+          .gte("month", `${fromDay.slice(0, 7)}-01`)
+          .lt("month", toDay)
+          .limit(1000)
+          .then(({ data, error }) => {
+            if (error) throw new Error(`Could not load the month entries: ${error.message}`);
+            return ((data as Record<string, unknown>[] | null) ?? []).map((row) => ({
+              kind: String(row.kind),
+              month: String(row.month),
+              subject: String(row.subject),
+              amount_cents: num(row.amount_cents),
+            }));
+          }),
+        supabase
+          .from("configs")
+          .select("body")
+          .eq("tenant_id", tenant.id)
+          .eq("module", DASHBOARD_MODULE)
+          .eq("key", EXPENSES_KEY)
+          .maybeSingle()
+          .then(
+            ({ data }) => (data as { body?: unknown } | null)?.body,
+            () => undefined,
+          ),
+      ])
+    : [[], undefined];
+  const entries = monthEntries(entryRows);
+  const feeds = wantsProfit
+    ? revenue.lines.map((line) => ({
+        id: line.id,
+        name: line.name,
+        lines: lineExpensesExplained(parseExpenseSorting(sortingBody), line.id, line.name),
+      }))
+    : [];
 
   /** Sorted expenses added up per way of sorting, paged past Supabase's 1,000 rows. */
   const expenseGroups = async (): Promise<ExpenseGroup[]> => {
@@ -826,19 +876,24 @@ export async function loadDashboardData(
   const shopByLine = new Map(
     totalsByLine(revenue, lines.get(range.grouping) ?? []).map((line) => [line.id, line.cents]),
   );
+  const parts = monthParts(fromDay, toDay);
+  const typedByLine = typedRevenue(entries, parts);
   if (wantsProfit && profitSettings) {
     profit = profitByLine({
       lines: revenue.lines,
       revenue: new Map(
         revenue.lines.map((line) => [
           line.id,
-          (shopByLine.get(line.id) ?? 0) + (profitBooks?.byLine.get(line.id) ?? 0),
+          (shopByLine.get(line.id) ?? 0) +
+            (profitBooks?.byLine.get(line.id) ?? 0) +
+            (typedByLine.get(line.id) ?? 0),
         ]),
       ),
       cogs: costsByLine,
       expenses: expenseRows,
       settings: profitSettings,
-      parts: monthParts(fromDay, toDay),
+      parts,
+      entries,
     });
   }
   const hasExpenses = (anyExpense.count ?? 0) > 0;
@@ -1107,9 +1162,12 @@ export async function loadDashboardData(
             id: line.id,
             shop: shopByLine.get(line.id) ?? 0,
             books: profitBooks?.byLine.get(line.id) ?? 0,
-            typed: 0,
+            typed: typedByLine.get(line.id) ?? 0,
           })),
           books: profitBooks ? booksPart(profitBooks) : null,
+          changedMonths: new Set([...entries.cost.values()].flatMap((months) => [...months.keys()]))
+            .size,
+          feeds,
         };
         break;
       }
@@ -1134,6 +1192,7 @@ export async function loadDashboardData(
           setAside: profit.setAside,
           // Only the shared expenses here: monthly costs aren't in the books.
           sharedUnsplit: profit.sharedExpensesUnsplit,
+          feeds,
         };
         break;
       }

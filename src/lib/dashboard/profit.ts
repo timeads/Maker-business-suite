@@ -158,16 +158,66 @@ export function monthParts(from: string, to: string): MonthPart[] {
   return parts;
 }
 
-/** A monthly amount over the months of a range, in whole cents, each month rounded once. */
-export function proratedCents(monthly: number, parts: readonly MonthPart[]): number {
-  return parts.reduce(
-    (sum, part) =>
+/**
+ * A monthly amount over the months of a range, in whole cents, each month
+ * rounded once. `monthly` is one figure for every month, or each month's own.
+ */
+export function proratedCents(
+  monthly: number | ((month: string) => number),
+  parts: readonly MonthPart[],
+): number {
+  return parts.reduce((sum, part) => {
+    const amount = typeof monthly === "number" ? monthly : monthly(part.month);
+    return (
       sum +
       (part.days === part.daysInMonth
-        ? monthly
-        : Math.round((monthly * part.days) / part.daysInMonth)),
-    0,
-  );
+        ? amount
+        : Math.round((amount * part.days) / part.daysInMonth))
+    );
+  }, 0);
+}
+
+/**
+ * Month-by-month entries (`money_line_entries`): what a monthly cost really
+ * came to in a month, in place of its usual amount, and revenue a line had
+ * that reached neither the shop nor the books. By subject id, then month
+ * (`YYYY-MM`), in whole cents.
+ */
+export type MonthEntries = {
+  cost: ReadonlyMap<string, ReadonlyMap<string, number>>;
+  revenue: ReadonlyMap<string, ReadonlyMap<string, number>>;
+};
+
+export const NO_ENTRIES: MonthEntries = { cost: new Map(), revenue: new Map() };
+
+/** Rows as the database hands them back, sorted into `MonthEntries`. */
+export function monthEntries(
+  rows: readonly { kind: string; month: string; subject: string; amount_cents: number }[],
+): MonthEntries {
+  const cost = new Map<string, Map<string, number>>();
+  const revenue = new Map<string, Map<string, number>>();
+  for (const row of rows) {
+    const into = row.kind === "cost" ? cost : row.kind === "revenue" ? revenue : null;
+    if (!into) continue;
+    const months = into.get(row.subject) ?? new Map<string, number>();
+    months.set(row.month.slice(0, 7), Math.round(row.amount_cents));
+    into.set(row.subject, months);
+  }
+  return { cost, revenue };
+}
+
+/** A monthly cost in one month: that month's entry where there is one, else its usual amount. */
+export const costInMonth = (cost: MonthlyCost, month: string, entries: MonthEntries) =>
+  entries.cost.get(cost.id)?.get(month) ?? monthlyCostCents(cost);
+
+/** Typed-in revenue per line over a range's months, each month counted by the day for part of one. */
+export function typedRevenue(entries: MonthEntries, parts: readonly MonthPart[]) {
+  const out = new Map<string, number>();
+  for (const [line, months] of entries.revenue) {
+    const cents = proratedCents((month) => months.get(month) ?? 0, parts);
+    if (cents !== 0) out.set(line, cents);
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -221,7 +271,10 @@ export function profitByLine(input: {
   expenses: readonly ExpenseGroup[];
   settings: ProfitSettings;
   parts: readonly MonthPart[];
+  /** Months where a monthly cost came to something other than its usual amount. */
+  entries?: MonthEntries;
 }): ProfitSum {
+  const entries = input.entries ?? NO_ENTRIES;
   const ids = new Set(input.lines.map((line) => line.id));
   const direct = new Map<string, number>();
   const shared = new Map<string, number>();
@@ -268,7 +321,7 @@ export function profitByLine(input: {
   const sharedExpensesUnsplit = sharedUnsplit;
 
   for (const cost of input.settings.monthly_costs) {
-    const cents = proratedCents(monthlyCostCents(cost), input.parts);
+    const cents = proratedCents((month) => costInMonth(cost, month, entries), input.parts);
     if (fits(cost.split, ids)) {
       for (const [line, part] of splitByPercent(cents, Object.entries(cost.split))) {
         add(monthly, line, part);

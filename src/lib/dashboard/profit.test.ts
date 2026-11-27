@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_PROFIT_SETTINGS,
+  NO_ENTRIES,
   WEEKS_PER_MONTH,
+  costInMonth,
+  monthEntries,
   monthParts,
+  monthlyCostSchema,
+  typedRevenue,
   monthlyCostCents,
   parseProfitSettings,
   profitByLine,
@@ -205,5 +210,51 @@ describe("profit by line", () => {
     });
     // 3 cents: 1 by its 34%, nothing by the 33%s, and the 2 left over to the largest share.
     expect(sum.rows.map((row) => row.shared)).toEqual([3, 0, 0]);
+  });
+});
+
+describe("month-by-month entries", () => {
+  const help: MonthlyCost = monthlyCostSchema.parse({
+    id: "help",
+    name: "Studio help",
+    how: "amount",
+    amount_cents: 80000,
+    split: { shop: 100 },
+  });
+
+  it("uses a month's own figure for a monthly cost, by the day for part of a month", () => {
+    const entries = monthEntries([
+      { kind: "cost", month: "2026-10-01", subject: "help", amount_cents: 95000 },
+      { kind: "revenue", month: "2026-11-01", subject: "classes", amount_cents: 3000 },
+      { kind: "other", month: "2026-11-01", subject: "x", amount_cents: 1 },
+    ]);
+    expect(costInMonth(help, "2026-10", entries)).toBe(95000);
+    expect(costInMonth(help, "2026-09", entries)).toBe(80000);
+    const parts = monthParts("2026-10-01", "2026-11-16");
+    const sum = profitByLine({
+      lines: [{ id: "shop", name: "Shop" }],
+      revenue: new Map(),
+      cogs: null,
+      expenses: [],
+      settings: { ...DEFAULT_PROFIT_SETTINGS, monthly_costs: [help] },
+      parts,
+      entries,
+    });
+    expect(sum.rows[0].monthly).toBe(95000 + Math.round((80000 * 15) / 30));
+    expect(typedRevenue(entries, parts)).toEqual(new Map([["classes", 1500]]));
+  });
+
+  it("changes nothing without entries", () => {
+    const parts = monthParts("2026-10-01", "2026-11-01");
+    const input = {
+      lines: [{ id: "shop", name: "Shop" }],
+      revenue: new Map(),
+      cogs: null,
+      expenses: [],
+      settings: { ...DEFAULT_PROFIT_SETTINGS, monthly_costs: [help] },
+      parts,
+    };
+    expect(profitByLine(input)).toEqual(profitByLine({ ...input, entries: NO_ENTRIES }));
+    expect(profitByLine(input).rows[0].monthly).toBe(80000);
   });
 });

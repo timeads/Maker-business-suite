@@ -59,6 +59,8 @@ function fakeSupabase(
         return chain;
       },
       is: () => chain,
+      gte: () => chain,
+      lt: () => chain,
       order: () => chain,
       limit: () => chain,
       maybeSingle: () => {
@@ -345,6 +347,46 @@ describe("profit and expenses by line", () => {
       // No expenses stored in the fake: it asks for the books.
       expect(expenses).toEqual({ type: "empty", needs: "quickbooks" });
     }
+  });
+
+  it("takes a month's own cost and revenue typed in, and says which accounts feed each line", async () => {
+    const { supabase } = fakeSupabase(
+      { money_line_revenue: () => [group({ revenue_cents: "50000" })] },
+      {
+        configs: {
+          profit: PROFIT,
+          expenses: {
+            version: 1,
+            accounts: [
+              { ref: "7", name: "Studio supplies", action: { sort: "line", line: "shop" } },
+            ],
+          },
+        },
+        tables: {
+          money_line_entries: [
+            { kind: "cost", month: "2026-10-01", subject: "rent", amount_cents: 0 },
+            { kind: "revenue", month: "2026-10-01", subject: "classes", amount_cents: 2500 },
+          ],
+        },
+      },
+    );
+    const data = await loadDashboardData(
+      supabase,
+      TENANT,
+      config([{ id: "p", type: "profit_by_line" }]),
+      RANGE,
+      LINES,
+      NOW,
+    );
+    const profit = data.p as Extract<typeof data.p, { type: "profit_by_line" }>;
+    const rent = 4 * 10000 + Math.round((10000 * 21) / 30);
+    expect(profit.rows.find((r) => r.id === "shop")?.monthly).toBe(rent);
+    expect(profit.rows.find((r) => r.id === "classes")?.revenue).toBe(2500);
+    expect(profit.sources.find((r) => r.id === "classes")?.typed).toBe(2500);
+    expect(profit.changedMonths).toBe(1);
+    expect(profit.feeds.find((f) => f.id === "shop")?.lines[0]).toBe(
+      "Shop takes everything in Studio supplies.",
+    );
   });
 
   it("adds the books' paid invoices and other income where the setting says, once", async () => {
