@@ -53,7 +53,11 @@ async function context(slug: string) {
   if (!ctx) return null;
   const entitlements = await getEntitlements(ctx.tenant.id);
   if (!entitlements.can("module.shipping") || !entitlements.canWrite) return null;
-  return { tenant: ctx.tenant, supabase: await createClient() };
+  return {
+    tenant: ctx.tenant,
+    supabase: await createClient(),
+    seesCosts: entitlements.seesCosts,
+  };
 }
 
 /**
@@ -69,7 +73,7 @@ async function context(slug: string) {
 export async function planNextOrders(slug: string, view: string): Promise<PlanState> {
   const ctx = await context(slug);
   if (!ctx || !isQueueView(view)) return NOTHING;
-  const { tenant, supabase } = ctx;
+  const { tenant, supabase, seesCosts } = ctx;
   const [loaded, shipping, boxes, postage] = await Promise.all([
     loadOpenOrders(supabase, tenant.id),
     loadShippingSetup(supabase, tenant.id),
@@ -211,8 +215,11 @@ export async function planNextOrders(slug: string, view: string): Promise<PlanSt
       now: new Date(),
       // Whatever is still missing now was asked and didn't come: don't say "working on it".
       willFill: false,
+      // No margin for anyone who doesn't see costs (docs/roles.md).
       paidCents:
-        order.shipping_paid === null ? null : Math.round(Number(order.shipping_paid) * 100),
+        order.shipping_paid === null || !seesCosts
+          ? null
+          : Math.round(Number(order.shipping_paid) * 100),
       currency: tenant.currency,
       imperial: home === "US",
       money: formatMoney,

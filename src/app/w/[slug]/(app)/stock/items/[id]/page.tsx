@@ -55,12 +55,17 @@ export default async function StockItemPage({
     ...(row.soldOutDays > 0 ? [["Sold-out days left out", String(row.soldOutDays)]] : []),
     ["Runs out", relativeDay(plan.stockOutDate, today)],
     ["Order by", relativeDay(plan.reorderDate, today)],
-    [
-      "Costs you",
-      row.cost.source === "none"
-        ? "not set"
-        : `${formatMoney(row.unitCost, tenant.currency)} (${COST_SOURCE_LABELS[row.cost.source]})`,
-    ],
+    // What it costs is for owners and admins once tools are chosen per person.
+    ...(entitlements.seesCosts
+      ? [
+          [
+            "Costs you",
+            row.cost.source === "none"
+              ? "not set"
+              : `${formatMoney(row.unitCost, tenant.currency)} (${COST_SOURCE_LABELS[row.cost.source]})`,
+          ],
+        ]
+      : []),
     ["Sells for", row.price == null ? "–" : formatMoney(row.price, tenant.currency)],
     ["Comes in", row.casePack ? `cases of ${row.casePack}` : "single units"],
     ["Smallest order", row.minimum > 1 ? String(row.minimum) : "no minimum"],
@@ -178,36 +183,38 @@ export default async function StockItemPage({
         </Card>
       )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>What it costs you</CardTitle>
-          <CardDescription>
-            We use your own figure if you&apos;ve typed one, then the average of what your
-            checked-in deliveries cost, then the cost in your shop. Suggested orders and new order
-            lines start from it.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          <dl className="grid grid-cols-3 gap-x-6 gap-y-3">
-            {costs.map(([label, value, used]) => (
-              <div key={label}>
-                <dt className="text-muted-foreground text-xs font-semibold">{label}</dt>
-                <dd className="text-sm tabular-nums">
-                  {value} {used && <Badge tone="good">Used</Badge>}
-                </dd>
-              </div>
-            ))}
-          </dl>
-          {manager && (
-            <ItemCostForm
-              slug={tenant.slug}
-              itemId={item.id}
-              ownCost={row.cost.own?.toFixed(2) ?? null}
-              usual={(row.cost.average ?? row.cost.shop)?.toFixed(2) ?? null}
-            />
-          )}
-        </CardContent>
-      </Card>
+      {entitlements.seesCosts && (
+        <Card>
+          <CardHeader>
+            <CardTitle>What it costs you</CardTitle>
+            <CardDescription>
+              We use your own figure if you&apos;ve typed one, then the average of what your
+              checked-in deliveries cost, then the cost in your shop. Suggested orders and new order
+              lines start from it.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4">
+            <dl className="grid grid-cols-3 gap-x-6 gap-y-3">
+              {costs.map(([label, value, used]) => (
+                <div key={label}>
+                  <dt className="text-muted-foreground text-xs font-semibold">{label}</dt>
+                  <dd className="text-sm tabular-nums">
+                    {value} {used && <Badge tone="good">Used</Badge>}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+            {manager && (
+              <ItemCostForm
+                slug={tenant.slug}
+                itemId={item.id}
+                ownCost={row.cost.own?.toFixed(2) ?? null}
+                usual={(row.cost.average ?? row.cost.shop)?.toFixed(2) ?? null}
+              />
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {manager && (
         <Card>

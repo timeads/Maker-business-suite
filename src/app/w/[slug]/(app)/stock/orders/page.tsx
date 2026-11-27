@@ -56,7 +56,7 @@ export default async function StockOrdersPage({
   const { tenant, role, entitlements } = access;
   const supabase = await createClient();
   const [orders, { data: supplierRows }] = await Promise.all([
-    loadOrderList(supabase, tenant),
+    loadOrderList(supabase, tenant, { costs: entitlements.seesCosts }),
     supabase
       .from("suppliers")
       .select("id, name, archived_at")
@@ -286,7 +286,7 @@ export default async function StockOrdersPage({
                           )}
                         </td>
                         <td className="py-2.5 text-right tabular-nums">
-                          {formatMoney(Number(order.value), tenant.currency)}
+                          {order.value ? formatMoney(Number(order.value), tenant.currency) : "–"}
                         </td>
                       </tr>
                     );

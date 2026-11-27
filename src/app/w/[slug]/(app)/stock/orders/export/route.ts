@@ -24,7 +24,9 @@ export async function GET(request: Request, { params }: { params: Promise<{ slug
   const show = query.get("show");
   const view = isOrderView(show) ? show : "all";
   const supplier = query.get("supplier");
-  const orders = await loadOrderList(await createClient(), ctx.tenant);
+  const orders = await loadOrderList(await createClient(), ctx.tenant, {
+    costs: entitlements.seesCosts,
+  });
   const shown = searchOrders(
     orderViewRows(orders)[view],
     (query.get("q") ?? "").slice(0, 80),

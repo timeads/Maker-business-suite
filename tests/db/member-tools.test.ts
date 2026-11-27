@@ -467,6 +467,40 @@ describe("switching it on", () => {
     }
   });
 
+  it("leaves no table unheld but the workspace's own and the shop's records", async () => {
+    // A new table belongs to a tool (and gets its policy and guard) or is
+    // added here on purpose.
+    const SHARED = [
+      "audit_log",
+      "brands",
+      "chat_channels",
+      "chat_members",
+      "chat_messages",
+      "chat_reads",
+      "connections",
+      "customers",
+      "invites",
+      "member_tools",
+      "memberships",
+      "order_lines",
+      "orders",
+      "plan_grants",
+      "products",
+      "setup_not_now",
+      "subscriptions",
+      "sync_jobs",
+      "tenants",
+      "usage_events",
+    ];
+    const { rows } = await db.query<{ t: string }>(`
+      select c.relname as t from pg_class c join pg_namespace n on n.oid = c.relnamespace
+      where n.nspname = 'public' and c.relkind = 'r'
+        and not exists (select 1 from pg_trigger tg
+                        where tg.tgrelid = c.oid and tg.tgname = 'tool_write_guard')
+      order by 1`);
+    expect(rows.map((row) => row.t)).toEqual(SHARED);
+  });
+
   it("refuses a member's Money writes, whatever function they call", async () => {
     await expect(
       as(carol, "select public.propose_action($1, 'money.budget', null, $2::jsonb, 'Budget')", [
@@ -602,5 +636,59 @@ describe("switching it off and on again", () => {
     await switchTo(alice, true);
     expect(await toolsOf(carol)).toEqual(["stock", "shipping"]);
     expect(await canUse(carol, "dashboard")).toBe(false);
+  });
+});
+
+describe("costs and the tools' own checked reads", () => {
+  it("keeps what deliveries and postage cost from a member, and nothing else", async () => {
+    // carol has Stock and Shipping again (the switch is on).
+    const received = (user: User) =>
+      as(user, "select * from public.stock_received_costs($1)", [tenantA]);
+    expect(await received(carol)).toEqual([]);
+    expect((await received(alice)).length).toBeGreaterThan(0);
+    const report = async (user: User) =>
+      (
+        await as<{ r: Record<string, unknown> }>(
+          user,
+          "select public.shipping_report($1, 30) as r",
+          [tenantA],
+        )
+      )[0].r;
+    const mine = await report(carol);
+    expect(mine).toHaveProperty("parcels");
+    for (const key of ["postage", "collected", "margin", "priced"]) {
+      expect(mine).not.toHaveProperty(key);
+      expect(await report(alice)).toHaveProperty(key);
+    }
+  });
+
+  it("refuses Shipping's report, Bookings' seat figures and the help desk outbox without the tool", async () => {
+    const ola = { id: "", email: "ola@a.test" };
+    ola.id = (
+      await db.query<{ id: string }>("select id from auth.users where email = $1", [ola.email])
+    ).rows[0].id;
+    await setTools(alice, ola, ["social"]);
+    await expect(as(ola, "select public.shipping_report($1, 30)", [tenantA])).rejects.toMatchObject(
+      { code: "42501" },
+    );
+    const sessions = (
+      await db.query<{ id: string }>("select id from public.sessions where tenant_id = $1", [
+        tenantA,
+      ])
+    ).rows.map((row) => row.id);
+    const ticket = (
+      await db.query<{ id: string }>("select id from public.tickets where tenant_id = $1", [
+        tenantA,
+      ])
+    ).rows[0].id;
+    expect(await as(ola, "select * from public.session_seat_figures($1)", [sessions])).toEqual([]);
+    expect(await as(ola, "select * from public.ticket_outbox($1)", [ticket])).toEqual([]);
+    expect(await as(ola, "select * from public.eventbrite_order_updates($1)", [tenantA])).toEqual(
+      [],
+    );
+    // The owner still reads them.
+    await expect(
+      as(alice, "select public.shipping_report($1, 30)", [tenantA]),
+    ).resolves.toHaveLength(1);
   });
 });

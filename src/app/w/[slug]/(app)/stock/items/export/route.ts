@@ -38,10 +38,12 @@ export async function GET(request: Request, { params }: { params: Promise<{ slug
     ? { key: sortKey, dir: query.get("dir") === "desc" ? ("desc" as const) : ("asc" as const) }
     : DEFAULT_SORT;
   const asked = (query.get("cols") ?? "").split(",").filter(isColumnKey);
-  const columns =
+  // What an item costs is left out for anyone who doesn't see costs (docs/roles.md).
+  const columns = (
     asked.length > 0
       ? asked
-      : COLUMNS.map((column) => column.key).filter((key) => !DEFAULT_HIDDEN_COLUMNS.includes(key));
+      : COLUMNS.map((column) => column.key).filter((key) => !DEFAULT_HIDDEN_COLUMNS.includes(key))
+  ).filter((key) => entitlements.seesCosts || key !== "cost");
 
   const { rows, today } = await loadStock(await createClient(), ctx.tenant);
   // "Export the ticked rows": the page sends their ids; none means the whole view.

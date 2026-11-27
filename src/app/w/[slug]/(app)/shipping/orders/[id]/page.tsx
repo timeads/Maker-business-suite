@@ -945,8 +945,11 @@ export default async function ShippingOrderPage({
               ) : null
             }
             paid={{
+              // Without it no margin is worked out: for those who see costs only (docs/roles.md).
               cents:
-                order.shipping_paid === null ? null : Math.round(Number(order.shipping_paid) * 100),
+                order.shipping_paid === null || !entitlements.seesCosts
+                  ? null
+                  : Math.round(Number(order.shipping_paid) * 100),
               words: paidWords,
               amount: order.shipping_paid === null ? null : money(order.shipping_paid),
               method: order.shipping_method,

@@ -19,7 +19,9 @@ export async function GET(
   const missing = new NextResponse("Not found", { status: 404 });
   if (!ctx || !/^\d{1,9}$/.test(number)) return missing;
   const entitlements = await getEntitlements(ctx.tenant.id);
-  if (!entitlements.can("module.stock")) return missing;
+  // An order's sheet is what the business pays: kept from members once the
+  // workspace chooses tools per person (docs/roles.md).
+  if (!entitlements.can("module.stock") || !entitlements.seesCosts) return missing;
 
   const supabase = await createClient();
   const { data: order } = await supabase

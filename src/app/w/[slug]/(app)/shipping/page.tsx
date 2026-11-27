@@ -238,8 +238,11 @@ export default async function ShippingPage({
         ? planCell(plan, plans.get(order.id), {
             now,
             willFill,
+            // No margin for anyone who doesn't see costs (docs/roles.md).
             paidCents:
-              order.shipping_paid === null ? null : Math.round(Number(order.shipping_paid) * 100),
+              order.shipping_paid === null || !entitlements.seesCosts
+                ? null
+                : Math.round(Number(order.shipping_paid) * 100),
             currency: tenant.currency,
             imperial: home === "US",
             money: formatMoney,

@@ -73,14 +73,38 @@ export default async function StockOrderPage({
   const flags = await searchParams;
 
   const supabase = await createClient();
+  // What the business pays is for owners and admins once the workspace
+  // chooses tools per person (docs/roles.md): members' pages never read it.
+  const costs = entitlements.seesCosts;
   const { data: order } = await supabase
     .from("purchase_orders")
     .select(
-      "id, number, reference, status, notes, expected_on, ordered_at, closed_at, created_at, created_by, archived_at, source, supplier_id, shipping_cost, tax_rate_pct, adjustments, suppliers(name, email, notes), purchase_order_lines(id, stock_item_id, qty_ordered, qty_received, unit_cost, supplier_sku, note, stock_items(id, title, variant_title, sku, case_pack))",
+      costs
+        ? "id, number, reference, status, notes, expected_on, ordered_at, closed_at, created_at, created_by, archived_at, source, supplier_id, shipping_cost, tax_rate_pct, adjustments, suppliers(name, email, notes), purchase_order_lines(id, stock_item_id, qty_ordered, qty_received, unit_cost, supplier_sku, note, stock_items(id, title, variant_title, sku, case_pack))"
+        : ("id, number, reference, status, notes, expected_on, ordered_at, closed_at, created_at, created_by, archived_at, source, supplier_id, suppliers(name, email, notes), purchase_order_lines(id, stock_item_id, qty_ordered, qty_received, supplier_sku, note, stock_items(id, title, variant_title, sku, case_pack))" as string),
     )
     .eq("tenant_id", tenant.id)
     .eq("number", Number(number))
-    .maybeSingle();
+    .maybeSingle<{
+      id: string;
+      number: number;
+      reference: string;
+      status: string;
+      notes: string;
+      expected_on: string | null;
+      ordered_at: string | null;
+      closed_at: string | null;
+      created_at: string;
+      created_by: string | null;
+      archived_at: string | null;
+      source: string;
+      supplier_id: string;
+      shipping_cost?: number | string | null;
+      tax_rate_pct?: number | string | null;
+      adjustments?: unknown;
+      suppliers: unknown;
+      purchase_order_lines: unknown;
+    }>();
   if (!order) notFound();
   const supplier = order.suppliers as unknown as { name: string; email: string | null };
   const lines: OrderLine[] = (
@@ -89,7 +113,7 @@ export default async function StockOrderPage({
       stock_item_id: string;
       qty_ordered: number;
       qty_received: number;
-      unit_cost: number;
+      unit_cost?: number;
       supplier_sku: string | null;
       note: string | null;
       stock_items: Item;
@@ -103,7 +127,7 @@ export default async function StockOrderPage({
       sku: line.stock_items.sku,
       qty_ordered: line.qty_ordered,
       qty_received: line.qty_received,
-      unit_cost: Number(line.unit_cost),
+      unit_cost: costs ? Number(line.unit_cost) : 0,
       supplier_sku: line.supplier_sku,
       note: line.note ?? "",
       case_pack: casePackOf(line.stock_items.case_pack),
@@ -215,9 +239,14 @@ export default async function StockOrderPage({
       .map((row) => toAddable(row, false)),
   ];
 
-  const adjustments = parseAdjustments(order.adjustments);
-  const shipping = String(order.shipping_cost ?? "0");
-  const taxRate = String(order.tax_rate_pct ?? "0");
+  const orderMoney = order as {
+    adjustments?: unknown;
+    shipping_cost?: unknown;
+    tax_rate_pct?: unknown;
+  };
+  const adjustments = costs ? parseAdjustments(orderMoney.adjustments) : [];
+  const shipping = String(orderMoney.shipping_cost ?? "0");
+  const taxRate = String(orderMoney.tax_rate_pct ?? "0");
   const totals = computePoTotals({
     lines: lines.map((line) => ({
       qtyOrdered: line.qty_ordered,
@@ -231,7 +260,7 @@ export default async function StockOrderPage({
   const units = lines.reduce((n, line) => n + line.qty_ordered, 0);
   const status = ORDER_STATUS[order.status] ?? ORDER_STATUS.draft;
   const base = `/w/${tenant.slug}/stock`;
-  const money = (value: number) => formatMoney(value, tenant.currency);
+  const cash = (value: number) => formatMoney(value, tenant.currency);
   const when = new Intl.DateTimeFormat("en-US", {
     timeZone: tenant.timezone,
     dateStyle: "medium",
@@ -462,7 +491,8 @@ export default async function StockOrderPage({
         title={`${order.reference} · ${supplier.name}`}
         description={
           <>
-            {tenant.name} · {units} units · {money(totals.total.toNumber())}
+            {tenant.name} · {units} units
+            {costs && ` · ${cash(totals.total.toNumber())}`}
             {order.expected_on && ` · expected ${day(order.expected_on as string)}`}
           </>
         }
@@ -613,8 +643,12 @@ export default async function StockOrderPage({
                     <th className="py-2 pr-3 font-semibold">Supplier&apos;s code</th>
                     <th className="py-2 pr-3 text-right font-semibold">Ordered</th>
                     <th className="py-2 pr-3 text-right font-semibold print:hidden">Arrived</th>
-                    <th className="py-2 pr-3 text-right font-semibold">Cost each</th>
-                    <th className="py-2 text-right font-semibold">Total</th>
+                    {costs && (
+                      <>
+                        <th className="py-2 pr-3 text-right font-semibold">Cost each</th>
+                        <th className="py-2 text-right font-semibold">Total</th>
+                      </>
+                    )}
                   </tr>
                 </thead>
                 <tbody className="divide-border divide-y">
@@ -639,64 +673,84 @@ export default async function StockOrderPage({
                       <td className="py-2 pr-3 text-right tabular-nums print:hidden">
                         {line.qty_received}
                       </td>
-                      <td className="py-2 pr-3 text-right tabular-nums">{money(line.unit_cost)}</td>
-                      <td className="py-2 text-right tabular-nums">
-                        {money(
-                          computePoTotals({
-                            lines: [
-                              { qtyOrdered: line.qty_ordered, unitCost: line.unit_cost.toFixed(2) },
-                            ],
-                            shippingCost: 0,
-                            taxRatePct: 0,
-                            adjustments: [],
-                          }).subtotal.toNumber(),
-                        )}
-                      </td>
+                      {costs && (
+                        <>
+                          <td className="py-2 pr-3 text-right tabular-nums">
+                            {cash(line.unit_cost)}
+                          </td>
+                          <td className="py-2 text-right tabular-nums">
+                            {cash(
+                              computePoTotals({
+                                lines: [
+                                  {
+                                    qtyOrdered: line.qty_ordered,
+                                    unitCost: line.unit_cost.toFixed(2),
+                                  },
+                                ],
+                                shippingCost: 0,
+                                taxRatePct: 0,
+                                adjustments: [],
+                              }).subtotal.toNumber(),
+                            )}
+                          </td>
+                        </>
+                      )}
                     </tr>
                   ))}
                 </tbody>
-                <tfoot className="tabular-nums">
-                  <tr className="border-border border-t font-semibold">
-                    <td className="py-2 pr-3">{extras ? "Items" : "Total"}</td>
-                    <td />
-                    <td className="py-2 pr-3 text-right">{units}</td>
-                    <td className="print:hidden" />
-                    <td />
-                    <td className="py-2 text-right">{money(totals.subtotal.toNumber())}</td>
-                  </tr>
-                  {!totals.shipping.isZero() && (
-                    <tr>
-                      <td className="py-1 pr-3" colSpan={5}>
-                        Shipping
-                      </td>
-                      <td className="py-1 text-right">{money(totals.shipping.toNumber())}</td>
-                    </tr>
-                  )}
-                  {!totals.tax.isZero() && (
-                    <tr>
-                      <td className="py-1 pr-3" colSpan={5}>
-                        Tax ({Number(taxRate)}%)
-                      </td>
-                      <td className="py-1 text-right">{money(totals.tax.toNumber())}</td>
-                    </tr>
-                  )}
-                  {adjustments.map((adjustment, index) => (
-                    <tr key={index}>
-                      <td className="font-read py-1 pr-3" colSpan={5}>
-                        {adjustment.label}
-                      </td>
-                      <td className="py-1 text-right">{money(Number(adjustment.amount))}</td>
-                    </tr>
-                  ))}
-                  {extras && (
+                {costs ? (
+                  <tfoot className="tabular-nums">
                     <tr className="border-border border-t font-semibold">
-                      <td className="py-2 pr-3" colSpan={5}>
-                        Total
-                      </td>
-                      <td className="py-2 text-right">{money(totals.total.toNumber())}</td>
+                      <td className="py-2 pr-3">{extras ? "Items" : "Total"}</td>
+                      <td />
+                      <td className="py-2 pr-3 text-right">{units}</td>
+                      <td className="print:hidden" />
+                      <td />
+                      <td className="py-2 text-right">{cash(totals.subtotal.toNumber())}</td>
                     </tr>
-                  )}
-                </tfoot>
+                    {!totals.shipping.isZero() && (
+                      <tr>
+                        <td className="py-1 pr-3" colSpan={5}>
+                          Shipping
+                        </td>
+                        <td className="py-1 text-right">{cash(totals.shipping.toNumber())}</td>
+                      </tr>
+                    )}
+                    {!totals.tax.isZero() && (
+                      <tr>
+                        <td className="py-1 pr-3" colSpan={5}>
+                          Tax ({Number(taxRate)}%)
+                        </td>
+                        <td className="py-1 text-right">{cash(totals.tax.toNumber())}</td>
+                      </tr>
+                    )}
+                    {adjustments.map((adjustment, index) => (
+                      <tr key={index}>
+                        <td className="font-read py-1 pr-3" colSpan={5}>
+                          {adjustment.label}
+                        </td>
+                        <td className="py-1 text-right">{cash(Number(adjustment.amount))}</td>
+                      </tr>
+                    ))}
+                    {extras && (
+                      <tr className="border-border border-t font-semibold">
+                        <td className="py-2 pr-3" colSpan={5}>
+                          Total
+                        </td>
+                        <td className="py-2 text-right">{cash(totals.total.toNumber())}</td>
+                      </tr>
+                    )}
+                  </tfoot>
+                ) : (
+                  <tfoot className="tabular-nums">
+                    <tr className="border-border border-t font-semibold">
+                      <td className="py-2 pr-3">Total</td>
+                      <td />
+                      <td className="py-2 pr-3 text-right">{units}</td>
+                      <td className="print:hidden" />
+                    </tr>
+                  </tfoot>
+                )}
               </table>
               {order.notes && <p className="font-read mt-3 text-sm">{order.notes}</p>}
             </div>

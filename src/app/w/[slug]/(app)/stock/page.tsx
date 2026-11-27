@@ -98,11 +98,16 @@ export default async function StockPage({ params }: { params: Promise<{ slug: st
       bad: overdue.length > 0,
       href: `${base}/items?show=all&sort=orderBy&dir=asc`,
     },
-    {
-      label: "Worth",
-      value: money(everyOrder.reduce((sum, order) => sum + order.totalCost, 0)),
-      note: "if you place every suggested order",
-    },
+    // What the orders would cost is for those who see costs (docs/roles.md).
+    ...(entitlements.seesCosts
+      ? [
+          {
+            label: "Worth",
+            value: money(everyOrder.reduce((sum, order) => sum + order.totalCost, 0)),
+            note: "if you place every suggested order",
+          },
+        ]
+      : []),
     { label: "Sold out", value: String(out.length), note: "things people still want" },
     {
       label: "On its way",
@@ -394,8 +399,9 @@ export default async function StockPage({ params }: { params: Promise<{ slug: st
                       ? `An order placed now may not get going until they're back, arriving about ${longDay(order.expectedOn)}.`
                       : `Ordered by then, it arrives before they shut.`}{" "}
                     {order.lines.length} item{order.lines.length === 1 ? "" : "s"} ·{" "}
-                    {order.totalUnits} units · {money(order.totalCost)}, enough to last until about{" "}
-                    {longDay(order.nextArrival)}, when the first order after they reopen could
+                    {order.totalUnits} units
+                    {entitlements.seesCosts && ` · ${money(order.totalCost)}`}, enough to last until
+                    about {longDay(order.nextArrival)}, when the first order after they reopen could
                     arrive
                     {order.bumpedToMinimum &&
                       ` · raised to their smallest order of ${order.supplier.moq}`}
@@ -480,7 +486,8 @@ export default async function StockPage({ params }: { params: Promise<{ slug: st
                   <CardTitle>{order.supplier.name}</CardTitle>
                   <CardDescription>
                     {order.lines.length} item{order.lines.length === 1 ? "" : "s"} ·{" "}
-                    {order.totalUnits} units · {money(order.totalCost)} · arrives about{" "}
+                    {order.totalUnits} units
+                    {entitlements.seesCosts && ` · ${money(order.totalCost)}`} · arrives about{" "}
                     {relativeDay(new Date(`${order.expectedOn}T00:00:00`), today)}
                     {order.bumpedToMinimum &&
                       ` · raised to their smallest order of ${order.supplier.moq}`}

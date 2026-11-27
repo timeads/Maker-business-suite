@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { getEntitlements } from "@/lib/entitlements";
 import { localDay } from "@/lib/bookings/slots";
 import { canWriteShopifyStock } from "@/lib/connections/providers/shopify-stock";
 import { shopPermission, type ShopPermission } from "@/lib/connections/shop-permission";
@@ -76,8 +77,12 @@ export async function loadStock(
   tenant: { id: string; timezone: string },
 ) {
   const today = localDay(new Date(), tenant.timezone);
+  // What the business pays for an item is for owners and admins once the
+  // workspace chooses tools per person (docs/roles.md): for anyone else the
+  // costs aren't read, so every figure below is worked out without them.
+  const costs = (await getEntitlements(tenant.id)).seesCosts;
   const [
-    items,
+    rawItems,
     suppliers,
     sales,
     lines,
@@ -92,7 +97,9 @@ export async function loadStock(
       supabase
         .from("stock_items")
         .select(
-          "id, title, variant_title, sku, on_hand, unit_cost, tracked, product_status, supplier_id, lead_time_days, coverage_days, safety_stock, hidden, dont_reorder, tags, vendor, price, case_pack, moq, supplier_sku, own_cost, image_url, variant_image_url, synced_at",
+          costs
+            ? "id, title, variant_title, sku, on_hand, unit_cost, tracked, product_status, supplier_id, lead_time_days, coverage_days, safety_stock, hidden, dont_reorder, tags, vendor, price, case_pack, moq, supplier_sku, own_cost, image_url, variant_image_url, synced_at"
+            : ("id, title, variant_title, sku, on_hand, tracked, product_status, supplier_id, lead_time_days, coverage_days, safety_stock, hidden, dont_reorder, tags, vendor, price, case_pack, moq, supplier_sku, image_url, variant_image_url, synced_at" as string),
         )
         .eq("tenant_id", tenant.id)
         .order("title")
@@ -153,12 +160,14 @@ export async function loadStock(
         .range(from, to),
     ),
     // What checked-in deliveries cost, summed per item, for the average cost.
-    all<ReceivedCostRow>((from, to) =>
-      supabase
-        .rpc("stock_received_costs", { p_tenant_id: tenant.id })
-        .order("stock_item_id")
-        .range(from, to),
-    ),
+    costs
+      ? all<ReceivedCostRow>((from, to) =>
+          supabase
+            .rpc("stock_received_costs", { p_tenant_id: tenant.id })
+            .order("stock_item_id")
+            .range(from, to),
+        )
+      : Promise.resolve([] as ReceivedCostRow[]),
     // What each item brought in over 90 days, for "% Rev" and the best sellers.
     all<RevenueRow>((from, to) =>
       supabase
@@ -190,6 +199,9 @@ export async function loadStock(
       .eq("provider", "shopify")
       .maybeSingle(),
   ]);
+  const items = costs
+    ? rawItems
+    : rawItems.map((item) => ({ ...item, unit_cost: null, own_cost: null }));
   const config = (key: string) =>
     ((configs ?? []) as { key: string; body: unknown }[]).find((row) => row.key === key)?.body;
   const settings = parseStockSettings(config(STOCK_SETTINGS_KEY));
@@ -578,6 +590,8 @@ export async function loadSpendLines(
 export async function loadOrderList(
   supabase: SupabaseClient,
   tenant: { id: string; timezone: string },
+  /** False: what the orders cost isn't read at all, and each row's value is "" (docs/roles.md). */
+  { costs = true }: { costs?: boolean } = {},
 ): Promise<OrderListRow[]> {
   type Row = {
     id: string;
@@ -608,7 +622,9 @@ export async function loadOrderList(
       supabase
         .from("purchase_orders")
         .select(
-          "id, number, reference, status, supplier_id, expected_on, created_at, ordered_at, archived_at, shipping_cost, tax_rate_pct, adjustments, suppliers(name), purchase_order_lines(qty_ordered, qty_received, unit_cost), purchase_order_shipments(expected_on, arrived_on, removed_at, carrier_status, carrier_expected_on, carrier_delivered_on)",
+          costs
+            ? "id, number, reference, status, supplier_id, expected_on, created_at, ordered_at, archived_at, shipping_cost, tax_rate_pct, adjustments, suppliers(name), purchase_order_lines(qty_ordered, qty_received, unit_cost), purchase_order_shipments(expected_on, arrived_on, removed_at, carrier_status, carrier_expected_on, carrier_delivered_on)"
+            : ("id, number, reference, status, supplier_id, expected_on, created_at, ordered_at, archived_at, suppliers(name), purchase_order_lines(qty_ordered, qty_received), purchase_order_shipments(expected_on, arrived_on, removed_at, carrier_status, carrier_expected_on, carrier_delivered_on)" as string),
         )
         .eq("tenant_id", tenant.id)
         .order("number", { ascending: false })
@@ -616,8 +632,8 @@ export async function loadOrderList(
     5000,
   );
   const today = localDay(new Date(), tenant.timezone);
-  return rows.map((order) =>
-    toOrderRow(
+  return rows.map((order) => {
+    const row = toOrderRow(
       {
         id: order.id,
         number: order.number,
@@ -656,6 +672,7 @@ export async function loadOrderList(
           }),
       },
       today,
-    ),
-  );
+    );
+    return costs ? row : { ...row, value: "" };
+  });
 }

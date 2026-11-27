@@ -167,7 +167,9 @@ export default async function ScanPage({
               : Number(paid) === 0
                 ? "free shipping"
                 : `paid ${formatMoney(Number(paid), tenant.currency)}`,
-          paidAmount: paid === null || paid === undefined ? null : Number(paid),
+          // Only used for the margin, which is for those who see costs (docs/roles.md).
+          paidAmount:
+            paid === null || paid === undefined || !entitlements.seesCosts ? null : Number(paid),
           note: row.note,
           lines:
             row.cancelled || row.picked_up_at

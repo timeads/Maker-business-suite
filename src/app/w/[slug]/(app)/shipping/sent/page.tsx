@@ -69,7 +69,10 @@ export default async function SentParcelsPage({
     supabase
       .from("shipments")
       .select(
-        "id, number, order_name, recipient, destination, carrier, service, tracking_number, tracking_url, cost, shipped_at, voided_at, shop_status, shop_error, notify_customer, label_provider, label_url, label_mode, label_refund_status, merged_with",
+        // What postage cost is for those who see costs (docs/roles.md).
+        entitlements.seesCosts
+          ? "id, number, order_name, recipient, destination, carrier, service, tracking_number, tracking_url, cost, shipped_at, voided_at, shop_status, shop_error, notify_customer, label_provider, label_url, label_mode, label_refund_status, merged_with"
+          : ("id, number, order_name, recipient, destination, carrier, service, tracking_number, tracking_url, shipped_at, voided_at, shop_status, shop_error, notify_customer, label_provider, label_url, label_mode, label_refund_status, merged_with" as string),
       )
       .eq("tenant_id", tenant.id)
       .order("number", { ascending: false })
@@ -77,7 +80,7 @@ export default async function SentParcelsPage({
     loadShippingSetup(supabase, tenant.id),
     supabase.rpc("shipping_report", { p_tenant_id: tenant.id, p_days: range }),
   ]);
-  const parcels = (data ?? []) as (Parcel & { notify_customer?: boolean })[];
+  const parcels = (data ?? []) as unknown as (Parcel & { notify_customer?: boolean })[];
   // What became of undoing voided parcels in the shop. Asked apart and allowed to fail,
   // so the list still opens on a database from before this was kept.
   const { data: undoRows } = await supabase
@@ -105,12 +108,21 @@ export default async function SentParcelsPage({
     minute: "2-digit",
   });
   const manager = canManage(role) && entitlements.canWrite;
+  // Postage spent, shipping collected and the margin are for those who see costs.
+  const costs = entitlements.seesCosts;
+  const MONEY_STATS = new Set(["Postage spent", "Shipping collected", "Margin"]);
+  const costStats = <T extends { label: string }>(stats: T[]) =>
+    costs ? stats : stats.filter((stat) => !MONEY_STATS.has(stat.label));
 
   return (
     <>
       <PageHeader
         title="Sent"
-        description="What shipping cost you against what shoppers paid, and every parcel you've recorded, newest first."
+        description={
+          costs
+            ? "What shipping cost you against what shoppers paid, and every parcel you've recorded, newest first."
+            : "Every parcel you've recorded, newest first."
+        }
       />
 
       {report && (
@@ -143,7 +155,7 @@ export default async function SentParcelsPage({
             </nav>
           </div>
           <dl className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-            {[
+            {costStats([
               {
                 label: "Parcels sent",
                 value: String(report.parcels),
@@ -180,7 +192,7 @@ export default async function SentParcelsPage({
                 value: report.avg_days === null ? "–" : `${report.avg_days} days`,
                 note: "on average, to the first parcel",
               },
-            ].map((stat) => (
+            ]).map((stat) => (
               <div key={stat.label} className="bg-card border-border rounded-lg border px-4 py-3">
                 <dt className="text-muted-foreground text-xs font-semibold">{stat.label}</dt>
                 <dd
@@ -235,7 +247,7 @@ export default async function SentParcelsPage({
                     <th className="py-2 pr-3 font-semibold">To</th>
                     <th className="py-2 pr-3 font-semibold">Carrier</th>
                     <th className="py-2 pr-3 font-semibold">Tracking</th>
-                    <th className="py-2 pr-3 text-right font-semibold">Postage</th>
+                    {costs && <th className="py-2 pr-3 text-right font-semibold">Postage</th>}
                     <th className="py-2 pr-3 font-semibold">Sent</th>
                     {manager && <th className="py-2" aria-label="Undo" />}
                   </tr>
@@ -325,11 +337,13 @@ export default async function SentParcelsPage({
                           </a>
                         )}
                       </td>
-                      <td className="py-2.5 pr-3 text-right tabular-nums">
-                        {parcel.cost === null
-                          ? "–"
-                          : formatMoney(Number(parcel.cost), tenant.currency)}
-                      </td>
+                      {costs && (
+                        <td className="py-2.5 pr-3 text-right tabular-nums">
+                          {parcel.cost == null
+                            ? "–"
+                            : formatMoney(Number(parcel.cost), tenant.currency)}
+                        </td>
+                      )}
                       <td className="py-2.5 pr-3 whitespace-nowrap">
                         {when.format(new Date(parcel.shipped_at))}
                       </td>
