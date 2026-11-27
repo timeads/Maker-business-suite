@@ -1,7 +1,7 @@
 # Finish setting up: the pattern
 
-A tool that needs a few choices before its figures are true (Money, Stock
-and Shipping so far) gets three things: a checklist worked out on read, a quiet card on its
+A tool that needs a few choices before its figures are true (Money, Stock,
+Shipping, Bookings, the help desk and Social) gets three things: a checklist worked out on read, a quiet card on its
 main page, and a guided setup page. The generic part lives in `lib/setup/`
 and `components/setup/`; the tool supplies its own items and steps.
 
@@ -14,7 +14,8 @@ item's facts, through `say_setup_not_now` / `bring_back_setup_item`). When the
 facts change (a new debt needs a rate), the fingerprint no longer matches and
 the item is open again by itself. Only owners and admins say it. Money's rows
 are theirs alone to read (an item can be about debts); Stock's and Shipping's
-are read by everyone with that tool too (20270210000100), so the team isn't
+are read by everyone with that tool too (20270210000100), and so are
+Bookings', the help desk's and Social's (20270211000100), so the team isn't
 nagged about something already decided. A new tool whose items are nothing
 sensitive is added to that policy's list in a new migration.
 
@@ -63,6 +64,34 @@ planning; shown on the item page and the setup page), the page at
 `planFor`'s order, best price and margin, signature, hold; shown in "Why this
 plan" on the order page, packing on the setup page), the page at
 `shipping/setup`. Both tools' assistant tools are `lib/assistant/setup-tools.ts`.
+
+Bookings': `lib/bookings/setup.ts` (steps, items), `setup-data.ts` (facts;
+the first page hands over its services), `explain.ts` (places left in
+`private.seats_left`'s words, over the limit, when the reminder and
+thank-you go, the time-zone label; shown on a date's page, the zone also on
+the setup page), the page at `bookings/setup`. We can't see a shop's theme,
+so the date picker is "done" only once a booking has come in through the
+shop since a workshop was linked; until then it is an item a person can say
+"Not now" to. Shop orders waiting for a date are work, never an item.
+
+The help desk's: `lib/helpdesk/setup.ts`, `setup-data.ts` (`loaded`: the
+settings and Meta connection the inbox read), `explain.ts` (which views a
+conversation is in and why, Meta's reply window, why an automatic reply did
+or didn't go: the worker's own reasons aren't kept, so they're named as
+possibilities; shown in the details rail), the page at `helpdesk/setup`
+(in the `(app)` group). The inbox is three full panes, so there is no card:
+the inbox hands the number of required items to the menu's Set up row
+through `<PanelExtras>`. The automatic reply's step only links to its own
+form; nothing here writes its words.
+
+Social's: `lib/social/setup.ts`, `setup-data.ts` (`deep` looks for the logo
+the way the slip and email header do, `hasLogo` in `photo-match.ts`),
+`explain.ts` (what stands between a post and being scheduled, from
+`PLACE_RULES`, `fit.ts` and the review setting; what each target's state
+means; shown on the post page), the page at `social/setup`. The monthly run
+is explained and linked, never switched on from a checklist.
+
+All five tools' assistant tools are `lib/assistant/setup-tools.ts`.
 
 ## What the shared pieces do
 

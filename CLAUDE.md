@@ -1172,11 +1172,16 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
 - Setup: a tool's "finish setting up" checklist, card and guided page follow
   docs/setup-pattern.md (`lib/setup/`, `components/setup/`): items worked
   out on read, only "Not now" stored, steps write through existing paths.
-  Money, Stock (`lib/stock/setup.ts`, `stock/setup`) and Shipping
-  (`lib/shipping/setup.ts`, `shipping/setup`) have one; optional items never
-  show on the card, owners-and-admins items say "Ask an owner or admin" to
-  anyone else, and Stock's and Shipping's "Not now" is readable by their
-  team. Keep `tests/db/setup-not-now.test.ts` passing.
+  Money, Stock (`lib/stock/setup.ts`, `stock/setup`), Shipping
+  (`lib/shipping/setup.ts`, `shipping/setup`), Bookings, the help desk and
+  Social (`lib/<tool>/setup.ts`, `<tool>/setup`) have one; optional items
+  never show on the card, owners-and-admins items say "Ask an owner or
+  admin" to anyone else, and every tool's "Not now" but Money's is readable
+  by its team. The help desk has no card (the inbox is three panes): its
+  Set up row carries the count. A theme snippet we can't see is never
+  "done" without a real signal; the automatic reply and the monthly run are
+  only linked, never written or switched on. Keep
+  `tests/db/setup-not-now.test.ts` passing.
 - Code with no signed-in member (public pages, the worker) asks
   `moduleOpen()` in `lib/module-access.ts`, which uses the same resolver as
   `getEntitlements()`.
