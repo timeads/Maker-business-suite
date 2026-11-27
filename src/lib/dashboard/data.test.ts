@@ -347,6 +347,81 @@ describe("profit and expenses by line", () => {
     }
   });
 
+  it("adds the books' paid invoices and other income where the setting says, once", async () => {
+    const withBooks = revenueSettingsSchema.parse({
+      ...LINES,
+      books: {
+        invoices: true,
+        other_income: true,
+        accounts: [
+          { ref: "79", name: "Class income", choice: { line: "classes" } },
+          { ref: "5", name: "Sales", choice: { skip: "shop" } },
+        ],
+      },
+    });
+    const { supabase, calls } = fakeSupabase(
+      {
+        money_line_revenue: () => [group({ revenue_cents: "50000" })],
+        money_invoice_revenue: () => [
+          { period: "2026-10-01", account_ref: "79", account: "Class income", cents: "7000" },
+          { period: "2026-10-01", account_ref: "5", account: "Sales", cents: "50000" },
+          { period: "2026-11-01", account_ref: "81", account: "Rentals", cents: "1500" },
+        ],
+      },
+      {
+        configs: { profit: PROFIT },
+        snapshots: [
+          {
+            kind: "profit_and_loss",
+            period_start: "2026-10-01",
+            data: { income: 0, other_income_cents: 300 },
+          },
+          { kind: "profit_and_loss", period_start: "2026-11-01", data: { income: 0 } },
+        ],
+      },
+    );
+    const data = await loadDashboardData(
+      supabase,
+      TENANT,
+      config([
+        { id: "k", type: "key_figures" },
+        { id: "l", type: "revenue_by_line" },
+        { id: "t", type: "revenue_by_line_over_time", grouping: "month" },
+        { id: "p", type: "profit_by_line" },
+      ]),
+      RANGE,
+      withBooks,
+      NOW,
+    );
+    expect(calls.find((c) => c.fn === "money_invoice_revenue")?.args).toMatchObject({
+      p_from: "2026-06-01",
+      p_to: "2026-11-22",
+    });
+    // The shop's own sales on the books' "Sales" account are never counted again.
+    expect(data.k).toMatchObject({ type: "key_figures", fromBooks: 7300 });
+    expect(data.l).toMatchObject({
+      type: "revenue_by_line",
+      total: 573,
+      books: { invoices: 7000, otherIncome: 300, otherUnplaced: 300, waiting: 1500 },
+    });
+    const rows = (data.l as Extract<typeof data.l, { type: "revenue_by_line" }>).rows;
+    expect(rows.map((r) => [r.name, r.value])).toEqual([
+      ["Shop", 500],
+      ["Classes", 70],
+      ["Other revenue", 3],
+    ]);
+    const overTime = data.t as Extract<typeof data.t, { type: "revenue_by_line_over_time" }>;
+    expect(overTime.series[1].points.find((p) => p.key === "2026-10-01")?.value).toBe(70);
+    const profit = data.p as Extract<typeof data.p, { type: "profit_by_line" }>;
+    expect(profit.rows.find((r) => r.id === "classes")?.revenue).toBe(7000);
+    expect(profit.sources.find((r) => r.id === "classes")).toEqual({
+      id: "classes",
+      shop: 0,
+      books: 7000,
+      typed: 0,
+    });
+  });
+
   it("asks for lines first", async () => {
     const { supabase } = fakeSupabase({});
     const data = await loadDashboardData(

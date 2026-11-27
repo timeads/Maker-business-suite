@@ -8,7 +8,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { HowWorkedOut } from "@/components/setup/how-worked-out";
 import { SetupCard } from "@/components/setup/setup-card";
 import { requireUser } from "@/lib/auth";
-import { revenueExplained } from "@/lib/dashboard/explain";
+import { booksRevenueExplained, revenueExplained } from "@/lib/dashboard/explain";
 import { MONEY_TOOL, moneySetupItems } from "@/lib/dashboard/setup";
 import { loadMoneySetupFacts } from "@/lib/dashboard/setup-data";
 import { loadNotNow } from "@/lib/setup/data";
@@ -151,7 +151,12 @@ export default async function DashboardPage({
       </nav>
       <HowWorkedOut
         label="How revenue is worked out"
-        lines={revenueExplained(revenue)}
+        lines={[
+          ...revenueExplained(revenue),
+          ...(revenue.books.invoices || revenue.books.other_income
+            ? booksRevenueExplained(revenue)
+            : []),
+        ]}
         change={{ href: `${base}/settings/money/lines`, label: "Change how revenue is counted" }}
       />
 

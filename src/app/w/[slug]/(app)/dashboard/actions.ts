@@ -128,12 +128,52 @@ export async function saveBusinessLines(
   }
   return saveRevenue(
     slug,
-    (current) => ({
-      ...current,
-      lines: body.lines,
-      default_line: body.default_line ?? null,
-      rules: body.rules,
-    }),
+    (current) => {
+      // A line taken away takes the books' choices that pointed at it.
+      const kept = new Set(
+        Array.isArray(body.lines)
+          ? body.lines.map((line) => (line as { id?: unknown })?.id).filter(Boolean)
+          : [],
+      );
+      return {
+        ...current,
+        lines: body.lines,
+        default_line: body.default_line ?? null,
+        rules: body.rules,
+        books: {
+          ...current.books,
+          other_income_line:
+            current.books.other_income_line && kept.has(current.books.other_income_line)
+              ? current.books.other_income_line
+              : null,
+          accounts: current.books.accounts.filter(
+            (a) => !("line" in a.choice) || kept.has(a.choice.line),
+          ),
+        },
+      };
+    },
     "Saved. Every chart of your lines uses these from now on, for past sales too.",
+  );
+}
+
+/**
+ * Revenue from the books: whether paid invoices and other income count, and
+ * what each income account's invoices count as. Handed over as one JSON field.
+ */
+export async function saveBooksRevenue(
+  slug: string,
+  _prev: RevenueState,
+  formData: FormData,
+): Promise<RevenueState> {
+  let body: unknown;
+  try {
+    body = JSON.parse(String(formData.get("body") ?? "{}"));
+  } catch {
+    return { error: "Something in there doesn't look right." };
+  }
+  return saveRevenue(
+    slug,
+    (current) => ({ ...current, books: body }),
+    "Saved. Revenue by line and profit by line count your books this way from now on, for past months too.",
   );
 }

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  booksRevenueExplained,
+  invoicesExplained,
   expenseSortExplained,
   liabilityExplained,
   lineExpensesExplained,
@@ -149,5 +151,39 @@ describe("orderExplained", () => {
     expect(
       orderExplained({ from: "recommended", strategy: "avalanche", recommendation: null, money }),
     ).toEqual(["With nothing owing at a rate, there's no order to choose yet."]);
+  });
+});
+
+describe("booksRevenueExplained", () => {
+  it("says only the shop counts until the books are switched on", () => {
+    expect(booksRevenueExplained(LINES)).toEqual([
+      "Only sales from your shop count as revenue here. Invoices and other income in your books aren't added.",
+    ]);
+  });
+
+  it("names the accounts, the one holding the shop's sales and where other income goes", () => {
+    const words = booksRevenueExplained({
+      ...LINES,
+      books: {
+        invoices: true,
+        other_income: true,
+        other_income_line: "shop",
+        accounts: [
+          { ref: "79", name: "Class income", choice: { line: "classes" } },
+          { ref: null, name: "Sales", choice: { skip: "shop" } },
+        ],
+      },
+    });
+    expect(words.join(" ")).toContain("Class income → Classes");
+    expect(words.join(" ")).toContain(
+      "Sales holds your shop's own sales, so it's left out: those sales already count from the shop.",
+    );
+    expect(words.at(-1)).toBe(
+      "Your books' other income (interest, one-off income) is added to Shop. It never holds shop sales.",
+    );
+  });
+
+  it("explains an invoice's standing beside the list", () => {
+    expect(invoicesExplained(LINES)[1]).toMatch(/overdue once its due day has gone by/);
   });
 });

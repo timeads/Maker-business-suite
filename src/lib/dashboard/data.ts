@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { bookRevenue, bookRevenueTotal, type BookRevenue, type InvoiceGroup } from "./book-revenue";
 import { formatMoney, formatPercent } from "./format";
 import { BUDGET_KEY, parseBudgetSettings } from "./budget";
 import { CUTTER_KEY, parseCutterSettings } from "./recurring";
@@ -70,6 +71,8 @@ export type WidgetData =
       orders: number;
       averageOrder: number | null;
       margin: number | null;
+      /** Whole cents the books add beside the shop (paid invoices, other income), when counted. */
+      fromBooks: number | null;
     }
   | {
       type: "sales_over_time";
@@ -95,6 +98,8 @@ export type WidgetData =
       byClassDate: boolean;
       rows: RankedRow[];
       total: number;
+      /** What the books add, in whole cents, when the setting counts them. */
+      books: BooksPart | null;
     }
   | {
       type: "revenue_by_line_over_time";
@@ -103,6 +108,8 @@ export type WidgetData =
       grouping: Grouping;
       /** One per line, in the order the lines are set up. */
       series: { id: string; name: string; points: Point[]; total: number }[];
+      /** The books' invoices are in the series; other income only by month. */
+      withBooks: boolean;
     }
   | {
       type: "deferred_revenue";
@@ -125,6 +132,9 @@ export type WidgetData =
       setAside: number;
       sharedUnsplit: number;
       monthlyCosts: number;
+      /** Each line's revenue by where it came from, whole cents. */
+      sources: { id: string; shop: number; books: number; typed: number }[];
+      books: BooksPart | null;
     }
   | {
       type: "expenses_by_line";
@@ -199,6 +209,25 @@ export type WidgetData =
     }
   /** Nothing to show yet, and what would fill it: a connection, or lines set up in Settings. */
   | { type: "empty"; needs: "shopify" | "quickbooks" | "lines" };
+
+/** What the books add to revenue for a range, for the words beside the figures. */
+export type BooksPart = {
+  invoices: number;
+  otherIncome: number;
+  /** Other income with no line, shown beside the lines. */
+  otherUnplaced: number;
+  /** Paid invoices on accounts nobody has chosen for: counted nowhere yet. */
+  waiting: number;
+  otherUnknown: boolean;
+};
+
+const booksPart = (b: BookRevenue): BooksPart => ({
+  invoices: [...b.invoicesByLine.values()].reduce((x, y) => x + y, 0),
+  otherIncome: b.otherIncome,
+  otherUnplaced: b.otherUnplaced,
+  waiting: b.waiting,
+  otherUnknown: b.otherUnknown,
+});
 
 export type LoadedDashboard = {
   config: DashboardConfig;
@@ -425,6 +454,33 @@ export async function loadDashboardData(
     return rows;
   };
 
+  /** Paid invoices per period and income account, paged past Supabase's 1,000 rows. */
+  const invoiceGroups = async (grouping: Grouping): Promise<InvoiceGroup[]> => {
+    const rows: InvoiceGroup[] = [];
+    for (let page = 0; page < GROUP_PAGES; page++) {
+      const { data, error } = await supabase
+        .rpc("money_invoice_revenue", {
+          p_tenant_id: tenant.id,
+          p_from: fromDay,
+          p_to: toDay,
+          p_grouping: grouping,
+        })
+        .range(page * GROUP_PAGE, page * GROUP_PAGE + GROUP_PAGE - 1);
+      if (error) throw new Error(`Could not load invoices: ${error.message}`);
+      const batch = (data as Record<string, unknown>[] | null) ?? [];
+      for (const row of batch) {
+        rows.push({
+          period: String(row.period),
+          account_ref: (row.account_ref as string | null) ?? null,
+          account: (row.account as string | null) ?? null,
+          cents: Math.round(num(row.cents)),
+        });
+      }
+      if (batch.length < GROUP_PAGE) break;
+    }
+    return rows;
+  };
+
   // Revenue under the page's figure, per grouping the widgets need.
   const revenueGroupings = new Set<Grouping>();
   if (needs("key_figures")) revenueGroupings.add("month");
@@ -450,6 +506,16 @@ export async function loadDashboardData(
       }
     }
   }
+  // The books' revenue beside the shop's, when the setting counts it.
+  const books = revenue.books;
+  const wantsBooks =
+    (books.invoices || books.other_income) &&
+    needs("key_figures", "revenue_by_line", "revenue_by_line_over_time", "profit_by_line");
+  const invoiceGroupings = new Set<Grouping>(
+    wantsBooks && books.invoices
+      ? [...lineGroupings, ...(needs("key_figures") ? (["month"] as const) : [])]
+      : [],
+  );
   const today = startOfLocalDay(localDate(now, tenant.timezone), tenant.timezone);
   const farAhead = new Date(today);
   farAhead.setUTCFullYear(farAhead.getUTCFullYear() + DEFERRED_YEARS);
@@ -543,15 +609,17 @@ export async function loadDashboardData(
 
   // The books' monthly reports (a few years of months at most), and only the
   // latest of the reports kept by day, so a long history never crowds them out.
-  const wantsMonths = needs(
-    "gross_margin",
-    "key_figures",
-    "health_check",
-    "runway",
-    "revenue_growth",
-    "cash_flow",
-    "operating_profit",
-  );
+  const wantsMonths =
+    (wantsBooks && books.other_income) ||
+    needs(
+      "gross_margin",
+      "key_figures",
+      "health_check",
+      "runway",
+      "revenue_growth",
+      "cash_flow",
+      "operating_profit",
+    );
   const latestOf = (kind: string) =>
     supabase
       .from("financial_snapshots")
@@ -589,6 +657,7 @@ export async function loadDashboardData(
     costsByLine,
     anyExpense,
     healthLines,
+    invoiceEntries,
   ] = await Promise.all([
     Promise.all([...groupings].map(async (g) => [g, await salesFor(g)] as const)),
     figure === "net_sales"
@@ -641,6 +710,7 @@ export async function loadDashboardData(
           .eq("tenant_id", tenant.id)
       : Promise.resolve({ count: 0 }),
     recentLines,
+    Promise.all([...invoiceGroupings].map(async (g) => [g, await invoiceGroups(g)] as const)),
   ]);
   for (const result of [products, channels, monthly, balance, aging]) {
     if (result?.error) throw new Error(`Could not load the dashboard: ${result.error.message}`);
@@ -741,12 +811,29 @@ export async function loadDashboardData(
     return income > 0 ? gross / income : null;
   };
 
+  // Other income from the books' months the range touches; invoices per grouping.
+  const otherIncomeMonths = profitMonths.map((s) => ({
+    month: s.period_start.slice(0, 7),
+    cents:
+      typeof s.data.other_income_cents === "number" ? Math.round(s.data.other_income_cents) : null,
+  }));
+  const invoicesBy = new Map(invoiceEntries);
+  const booksFor = (grouping: Grouping): BookRevenue | null =>
+    wantsBooks ? bookRevenue(revenue, invoicesBy.get(grouping) ?? [], otherIncomeMonths) : null;
+
   let profit: ProfitSum | null = null;
+  const profitBooks = wantsProfit ? booksFor(range.grouping) : null;
+  const shopByLine = new Map(
+    totalsByLine(revenue, lines.get(range.grouping) ?? []).map((line) => [line.id, line.cents]),
+  );
   if (wantsProfit && profitSettings) {
     profit = profitByLine({
       lines: revenue.lines,
       revenue: new Map(
-        totalsByLine(revenue, lines.get(range.grouping) ?? []).map((line) => [line.id, line.cents]),
+        revenue.lines.map((line) => [
+          line.id,
+          (shopByLine.get(line.id) ?? 0) + (profitBooks?.byLine.get(line.id) ?? 0),
+        ]),
       ),
       cogs: costsByLine,
       expenses: expenseRows,
@@ -775,6 +862,10 @@ export async function loadDashboardData(
           orders,
           averageOrder: orders > 0 ? total / orders : null,
           margin: profitMonths.length > 0 ? booksMargin() : storeMargin(rows).overall,
+          fromBooks: (() => {
+            const b = booksFor("month");
+            return b ? bookRevenueTotal(b) : null;
+          })(),
         };
         break;
       }
@@ -883,23 +974,42 @@ export async function loadDashboardData(
           out[widget.id] = { type: "empty", needs: "shopify" };
           break;
         }
-        const totals = totalsByLine(revenue, lines.get(range.grouping) ?? []);
-        const sum = totals.reduce((acc, line) => acc + line.cents, 0);
+        const b = booksFor(range.grouping);
+        const totals = totalsByLine(revenue, lines.get(range.grouping) ?? []).map((line) => ({
+          ...line,
+          cents: line.cents + (b?.byLine.get(line.id) ?? 0),
+        }));
+        const other = b?.otherUnplaced ?? 0;
+        const sum = totals.reduce((acc, line) => acc + line.cents, 0) + other;
         out[widget.id] = {
           type: "revenue_by_line",
           figure,
           byClassDate: revenue.by_class_date,
           total: sum / 100,
-          rows: totals.map((line) => ({
-            name: line.name,
-            value: line.cents / 100,
-            detail: [
-              sum > 0 ? formatPercent(line.cents / sum) : null,
-              line.isDefault ? "and anything no rule matched" : null,
-            ]
-              .filter(Boolean)
-              .join(" "),
-          })),
+          books: b ? booksPart(b) : null,
+          rows: [
+            ...totals.map((line) => ({
+              name: line.name,
+              value: line.cents / 100,
+              detail: [
+                sum > 0 ? formatPercent(line.cents / sum) : null,
+                line.isDefault ? "and anything no rule matched" : null,
+              ]
+                .filter(Boolean)
+                .join(" "),
+            })),
+            ...(other !== 0
+              ? [
+                  {
+                    name: "Other revenue",
+                    value: other / 100,
+                    detail: [sum > 0 ? formatPercent(other / sum) : null, "from your books"]
+                      .filter(Boolean)
+                      .join(" "),
+                  },
+                ]
+              : []),
+          ],
         };
         break;
       }
@@ -914,12 +1024,30 @@ export async function loadDashboardData(
         }
         const grouping = widget.grouping === "auto" ? range.grouping : widget.grouping;
         const keys = periodKeys({ ...range, grouping }, tenant.timezone);
+        const b = booksFor(grouping);
+        // Other income is kept by month in the books, so it joins a chart by month only.
+        const otherLine =
+          b && grouping === "month" && books.other_income_line ? books.other_income_line : null;
         out[widget.id] = {
           type: "revenue_by_line_over_time",
           figure,
           byClassDate: revenue.by_class_date,
           grouping,
+          withBooks: b !== null,
           series: seriesByLine(revenue, lines.get(grouping) ?? [], keys).map((line) => {
+            for (const [period, cents] of b?.invoicesByPeriod.get(line.id) ?? []) {
+              if (line.cents.has(period)) {
+                line.cents.set(period, (line.cents.get(period) ?? 0) + cents);
+              }
+            }
+            if (otherLine === line.id) {
+              for (const month of otherIncomeMonths) {
+                const key = `${month.month}-01`;
+                if (month.cents !== null && line.cents.has(key)) {
+                  line.cents.set(key, (line.cents.get(key) ?? 0) + month.cents);
+                }
+              }
+            }
             const points = pointsFor(grouping, (key) => (line.cents.get(key) ?? 0) / 100);
             return {
               id: line.id,
@@ -975,6 +1103,13 @@ export async function loadDashboardData(
           setAside: profit.setAside,
           sharedUnsplit: profit.sharedUnsplit,
           monthlyCosts: profitSettings.monthly_costs.length,
+          sources: revenue.lines.map((line) => ({
+            id: line.id,
+            shop: shopByLine.get(line.id) ?? 0,
+            books: profitBooks?.byLine.get(line.id) ?? 0,
+            typed: 0,
+          })),
+          books: profitBooks ? booksPart(profitBooks) : null,
         };
         break;
       }

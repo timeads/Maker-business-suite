@@ -17,6 +17,10 @@ import { getEntitlements } from "@/lib/entitlements";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
 import { BusinessLinesForm, RevenueFigureForm } from "../../../dashboard/revenue-forms";
+import { BooksRevenueForm } from "../../../dashboard/books-revenue-form";
+import { HowWorkedOut } from "@/components/setup/how-worked-out";
+import { invoiceAccounts } from "@/lib/dashboard/book-revenue";
+import { booksRevenueExplained } from "@/lib/dashboard/explain";
 
 export const metadata: Metadata = { title: "Revenue and business lines" };
 
@@ -86,6 +90,20 @@ export default async function RevenueLinesSettings({
     if (page === MAX_PAGES - 1) complete = false;
   }
   const count = hasLines(settings) ? defaultLineCount(settings, recent) : null;
+  // The income accounts invoices use, from three Januaries back. Allowed to fail.
+  const { data: accountRows } = await supabase.rpc("money_invoice_accounts", {
+    p_tenant_id: tenant.id,
+    p_since: `${today.year - 3}-01-01`,
+  });
+  const bookAccounts = invoiceAccounts(
+    settings.books,
+    ((accountRows as Record<string, unknown>[] | null) ?? []).map((row) => ({
+      account_ref: (row.account_ref as string | null) ?? null,
+      account: (row.account as string | null) ?? null,
+      invoices: Number(row.invoices),
+      cents: Number(row.cents),
+    })),
+  );
   const defaultName =
     settings.lines.find((line) => line.id === settings.default_line)?.name ?? "the default line";
   const seenTags = new Map<string, string[]>();
@@ -190,6 +208,30 @@ export default async function RevenueLinesSettings({
               See them on Money
             </Link>
           </p>
+        </CardContent>
+      </Card>
+
+      <Card id="books" className="scroll-mt-4">
+        <CardHeader>
+          <CardTitle>Revenue from your books</CardTitle>
+          <CardDescription>
+            Money that didn&apos;t come through your shop: paid invoices and your books&apos; other
+            income. Off until you switch it on, so nothing you see changes by itself.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          {canEdit ? (
+            <BooksRevenueForm
+              slug={tenant.slug}
+              books={settings.books}
+              lines={settings.lines}
+              accounts={bookAccounts}
+              currency={tenant.currency}
+            />
+          ) : (
+            <p className="text-muted-foreground text-sm">An owner or admin can change this.</p>
+          )}
+          <HowWorkedOut lines={booksRevenueExplained(settings)} />
         </CardContent>
       </Card>
     </>

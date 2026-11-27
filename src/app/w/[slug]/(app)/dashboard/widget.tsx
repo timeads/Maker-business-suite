@@ -44,6 +44,12 @@ const figureWords = (figure: RevenueFigure) =>
     ? "net sales, after discounts and refunds, before tax and shipping"
     : "order totals, with tax and shipping, refunds taken out";
 
+/** ", with $X from your books" for a sentence, when the books add anything. */
+const booksWords = (books: { invoices: number; otherIncome: number }) =>
+  books.invoices + books.otherIncome !== 0
+    ? ", with paid invoices and other income from your books added"
+    : ", with nothing from your books in this period";
+
 const classWords = (byClassDate: boolean) =>
   byClassDate ? " Classes count in the month they run." : "";
 
@@ -68,9 +74,17 @@ function describe(data: WidgetData, range: string, currency: string): string | n
     case "top_products":
       return `By what the items sold for after discounts, ${range}`;
     case "revenue_by_line":
-      return `${formatMoney(data.total, currency)} ${range}, in ${figureWords(data.figure)}.${classWords(data.byClassDate)}`;
+      return `${formatMoney(data.total, currency)} ${range}, in ${figureWords(data.figure)}${
+        data.books ? booksWords(data.books) : ""
+      }.${classWords(data.byClassDate)}`;
     case "revenue_by_line_over_time":
-      return `${FIGURE_WORDS[data.figure].name} per line, each on the same scale.${classWords(data.byClassDate)}`;
+      return `${FIGURE_WORDS[data.figure].name} per line, each on the same scale${
+        data.withBooks
+          ? data.grouping === "month"
+            ? ", with paid invoices and other income from your books"
+            : ", with paid invoices from your books (other income joins by month)"
+          : ""
+      }.${classWords(data.byClassDate)}`;
     case "deferred_revenue":
       return `In ${figureWords(data.figure)}, for classes from today on.${
         data.byClassDate
@@ -159,6 +173,10 @@ export function Widget({
               data.figure === "net_sales"
                 ? "before tax and shipping"
                 : "with tax and shipping, refunds out"
+            }${
+              data.fromBooks
+                ? `. Plus ${formatMoney(data.fromBooks / 100, currency)} from your books`
+                : ""
             }`}
           />
           <StatTile label="Orders" value={data.orders.toLocaleString("en-US")} />
@@ -215,7 +233,10 @@ export function Widget({
       break;
     case "revenue_by_line":
       body = (
-        <BarList rows={data.rows} currency={currency} emptyText="No sales in this period yet." />
+        <div className="flex flex-col gap-3">
+          <BarList rows={data.rows} currency={currency} emptyText="No sales in this period yet." />
+          {data.books && <BooksNote books={data.books} currency={currency} linesHref={linesHref} />}
+        </div>
       );
       break;
     case "revenue_by_line_over_time": {
@@ -274,6 +295,7 @@ export function Widget({
             emptyText="No lines yet."
           />
           <ProfitTable data={data} currency={currency} />
+          {data.books && <BooksNote books={data.books} currency={currency} linesHref={linesHref} />}
           <SetApart
             currency={currency}
             unsorted={data.unsorted}
@@ -350,6 +372,57 @@ export function Widget({
       <CardContent>{body}</CardContent>
     </Card>
   );
+}
+
+/** What the books add, and what of theirs waits for a choice. */
+function BooksNote({
+  books,
+  currency,
+  linesHref,
+}: {
+  books: {
+    invoices: number;
+    otherIncome: number;
+    otherUnplaced: number;
+    waiting: number;
+    otherUnknown: boolean;
+  };
+  currency: string;
+  linesHref: string;
+}) {
+  const money = (cents: number) => formatMoney(cents / 100, currency);
+  const notes: React.ReactNode[] = [];
+  if (books.invoices !== 0) {
+    notes.push(<li key="inv">{money(books.invoices)} of it is paid invoices from your books.</li>);
+  }
+  if (books.otherIncome !== 0) {
+    notes.push(
+      <li key="other">
+        {money(books.otherIncome)} is your books&apos; other income
+        {books.otherUnplaced !== 0 ? ", shown as other revenue" : ""}.
+      </li>,
+    );
+  }
+  if (books.otherUnknown) {
+    notes.push(
+      <li key="unknown">
+        Some months were read before other income was, so it isn&apos;t known for them.
+      </li>,
+    );
+  }
+  if (books.waiting !== 0) {
+    notes.push(
+      <li key="waiting">
+        {money(books.waiting)} of paid invoices is on accounts you haven&apos;t chosen a line for,
+        so it isn&apos;t counted yet.{" "}
+        <Link href={`${linesHref}#books`} className="text-foreground underline underline-offset-4">
+          Choose
+        </Link>
+      </li>,
+    );
+  }
+  if (notes.length === 0) return null;
+  return <ul className="text-muted-foreground flex flex-col gap-1 text-xs">{notes}</ul>;
 }
 
 /** What isn't in a line's figures, in words, each with where to change it. */
