@@ -67,12 +67,12 @@ All calls go through `lib/eventbrite/client.ts` (plain `fetch`, one call at a ti
 1. Connections → Eventbrite: paste the private token.
 2. Settings → Bookings → Eventbrite: press "Switch on order updates" (this site must be on its public https address), and tick the workshops sold on Eventbrite.
 3. Bookings → Eventbrite: link each coming date to its event (the matching one is picked when it starts at the same minute). The old app's links are not brought across by the import.
-4. Before switching the old app off: delete its webhook in Eventbrite (or stop its function), and its five-minute push, so the two don't both push and both book. Orders already booked in the old app arrive through the import as "Added by you" with a tag, without their Eventbrite order number, so a later refund of one of those is told to the team rather than followed.
+4. Before switching the old app off: delete its webhook in Eventbrite (or stop its function), and its five-minute push, so the two don't both push and both book. Orders already booked in the old app arrive through the import with their Eventbrite order number (`eventbrite_order_id` in the bookings file), as Eventbrite bookings with a tag, so a later refund follows them and bringing the file in again never adds one twice, even one the suite booked from Eventbrite itself meanwhile. A file without the number brings them in as "Added by you", and a refund of one of those is told to the team rather than followed.
 
 ## 5. Not built
 
 - Making, publishing, changing or cancelling Eventbrite events from here, including moving an event when a date's time changes. The current app never did this; if it is wanted, it is a new piece of work written from Eventbrite's documentation, not from working code.
 - Signing in with Eventbrite (OAuth): it would need an Eventbrite app of ours with its keys in the environment. The pasted token is what the current app uses.
 - Removing our webhook from Eventbrite on disconnect: a disconnected workspace's address simply stops being listened to.
-- The price paid on Eventbrite (bookings carry 0, as before), and bringing the old app's links and order numbers across in the import.
+- The price paid on Eventbrite (bookings carry 0, as before), and bringing the old app's links across in the import (its order numbers do come across).
 - Cancelling from the confirmation email's link frees the place here (and so lets Eventbrite sell it again), but refunds nothing on Eventbrite, the same as for a shop order.

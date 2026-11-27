@@ -559,17 +559,29 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   nothing. A date keeps the earlier app's id when it is free (an id in use
   anywhere else is refused in words that give nothing away); imported
   bookings send nothing, carry what was already sent as `booking_emails`
-  rows (no thank-you for a class already over), keep their shop order so
-  `book_from_shop` finds them, and keep `customer_phone` / `text_opt_in`
+  and `booking_texts` rows (no thank-you for a class already over; a text
+  whose email went counts as gone), keep their shop order so
+  `book_from_shop` finds them and their `eventbrite_order_id` so
+  `book_from_eventbrite` does (matched by earlier id, then Eventbrite order,
+  then shop order and date), and keep `customer_phone` / `text_opt_in`
   (texts follow them only once texts are switched on). Keep `tests/db/booking-imports.test.ts` passing.
   A workshop can instead be sold through the business's own shop
   (`services.shop_product_id`): the date picker on the product page
   (`public/booking-widget.js`, plain JS in a shadow root, reads
   `/api/book/shop`) puts the date on the cart line as "Session ID", the
   shop takes the payment, and the order sync turns it into a booking with
-  `book_from_shop` (once per order and date; the seats follow refunds; a
-  full or closed date is still booked and flagged). Such a workshop can't
-  be booked or paid for on our own pages.
+  `book_from_shop` (once per order line, wherever the booking was moved:
+  it is known by the shop's line ids and the cart's date,
+  `shop_line_ids` / `shop_cart_session_id`, matched by
+  `private.shop_booking_for` from the stored `order_lines`; the seats follow
+  refunds; a full or closed date is still booked and flagged; a new line
+  for the date a moved booking sits on is `clash`, for a person). An order
+  from the shop's history (class started, or placed before the workshop's
+  `shop_linked_at` or before its date existed here) is written down
+  `history_only` and answered `recorded`: nothing is ever sent to it by
+  itself, until the bookings import takes it over. Keep
+  `tests/db/booking-shop-moves.test.ts` and `booking-shop-history.test.ts`
+  passing. Such a workshop can't be booked or paid for on our own pages.
   The emails that go out by themselves (reminder, day-of reminder,
   thank-you, "a refund in your shop cancelled your booking") follow the
   once-only pattern (`lib/bookings/email-sends.ts`, `booking_emails`):
@@ -581,7 +593,15 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   email went: never stamp before sending. `deliverEmail()` in `lib/email.ts`
   tells those outcomes apart; the older `claim_booking_emails` and
   `claim_booking_reminders` stay but hand nothing out. The day-of reminder
-  is off unless `day_of_on` is set. "Send the confirmation again" gives the
+  is off unless `day_of_on` is set. "Pause messages to customers" (`paused`
+  in bookings / emails, owners and admins) stops every email and text that
+  goes by itself, read by both claims in the database; `announceBooking`
+  holds confirmations. Nothing missed is sent late: a reminder only while
+  its class is ahead and inside its lead time, a thank-you not if it fell
+  due while paused (`private.booking_messages_paused_at` reads
+  `config_versions`), and what was set off while paused is written down as
+  held (`PAUSED_WORDS`; keep `tests/db/booking-pause.test.ts` passing).
+  "Send the confirmation again" gives the
   booking a new link (`renew_booking_link`: only the hash is kept), so the
   earlier one stops working. Keep `tests/db/booking-emails.test.ts` passing.
   A shop order for a workshop with no usable date on its line ("Buy again"
