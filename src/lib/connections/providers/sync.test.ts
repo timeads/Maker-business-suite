@@ -832,6 +832,7 @@ describe("QuickBooks reports", () => {
           net_income: 350,
           other_income_cents: 0,
           other_expenses_cents: 0,
+          lines: [],
           currency: "USD",
         },
       },
@@ -847,9 +848,53 @@ describe("QuickBooks reports", () => {
           net_income: 1300.5,
           other_income_cents: 0,
           other_expenses_cents: 0,
+          lines: [],
           currency: "USD",
         },
       },
+    ]);
+  });
+
+  it("keeps each account's own line per month, sub-accounts one deeper, zeros left out", () => {
+    const data = (name: string, values: string[]) => ({
+      type: "Data",
+      ColData: [{ value: name }, ...values.map((value) => ({ value }))],
+    });
+    const lined: QuickBooksReport = {
+      ...profitAndLoss,
+      Rows: {
+        Row: [
+          {
+            type: "Section",
+            group: "Income",
+            Header: { ColData: [{ value: "Income" }] },
+            Rows: { Row: [data("Class income", ["600.00", "0.00", "600.00"])] },
+            Summary: { ColData: [{ value: "Total Income" }, { value: "1,000.00" }] },
+          },
+          {
+            type: "Section",
+            group: "Expenses",
+            Header: { ColData: [{ value: "Expenses" }] },
+            Rows: {
+              Row: [
+                {
+                  type: "Section",
+                  Header: { ColData: [{ value: "Studio" }, { value: "" }] },
+                  Rows: { Row: [data("Studio:Rent", ["200.00", "200.00", "400.00"])] },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    };
+    const months = parseProfitAndLoss(lined);
+    expect(months[0].data.lines).toEqual([
+      { section: "Income", name: "Class income", depth: 0, cents: 60000 },
+      { section: "Expenses", name: "Studio:Rent", depth: 1, cents: 20000 },
+    ]);
+    expect(months[1].data.lines).toEqual([
+      { section: "Expenses", name: "Studio:Rent", depth: 1, cents: 20000 },
     ]);
   });
 
@@ -1014,6 +1059,7 @@ describe("QuickBooks reports", () => {
         bank_accounts: [],
         receivables: 650,
         total_assets: 9000,
+        lines: [],
         currency: "USD",
       },
     });

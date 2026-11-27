@@ -397,6 +397,16 @@ export function buildNav(viewer: NavViewer, attention: Attention = {}): NavTool[
               "dashboard/expenses",
               count(attention.expensesToSort),
             ),
+            place("dashboard.statements", "Statements", "dashboard/statements", {
+              keywords: [
+                "profit and loss",
+                "p&l",
+                "income statement",
+                "balance sheet",
+                "net income",
+                "assets",
+              ],
+            }),
             place("dashboard.invoices", "Invoices", "dashboard/invoices", {
               keywords: ["invoices", "customers", "overdue", "unpaid", "owed", "quickbooks"],
             }),

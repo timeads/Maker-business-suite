@@ -1,4 +1,17 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { invoiceAccounts as mergeInvoiceAccounts } from "./book-revenue";
+import type { BooksRevenue } from "./lines";
+
+const invoiceAccountRows = (books: BooksRevenue, rows: Record<string, unknown>[]) =>
+  mergeInvoiceAccounts(
+    books,
+    rows.map((row) => ({
+      account_ref: (row.account_ref as string | null) ?? null,
+      account: (row.account as string | null) ?? null,
+      invoices: Number(row.invoices),
+      cents: Number(row.cents),
+    })),
+  );
 import { loadCutterSettings, loadProfitSettings } from "./data";
 import { loadBooksState, loadDebtBook, loadDebtSettings } from "./debt/data";
 import { foldPayments } from "./debt/plans";
@@ -34,8 +47,8 @@ export async function loadMoneySetupFacts(
   const local = localDate(now, tenant.timezone);
   const today = `${local.year}-${String(local.month).padStart(2, "0")}-${String(local.day).padStart(2, "0")}`;
 
-  const [connections, profit, expenses, accounts, budget, debts, share, cutter] = await Promise.all(
-    [
+  const [connections, profit, expenses, accounts, budget, debts, share, cutter, invoiceAccounts] =
+    await Promise.all([
       supabase
         .from("connections")
         .select("provider, status, last_synced_at, last_error")
@@ -64,8 +77,25 @@ export async function loadMoneySetupFacts(
       opts.deep
         ? loadCutterWaiting(supabase, tenant.id, today).catch(() => null)
         : Promise.resolve(null),
-    ],
-  );
+      // Only when paid invoices count: which of their income accounts have no choice yet.
+      opts.revenue.books.invoices && hasLines(opts.revenue)
+        ? Promise.resolve(
+            supabase.rpc("money_invoice_accounts", {
+              p_tenant_id: tenant.id,
+              p_since: `${local.year - 3}-01-01`,
+            }),
+          ).then(
+            ({ data, error }) =>
+              error
+                ? null
+                : invoiceAccountRows(
+                    opts.revenue.books,
+                    (data as Record<string, unknown>[]) ?? [],
+                  ).filter((a) => a.name !== null && a.choice === null).length,
+            () => null,
+          )
+        : Promise.resolve(null),
+    ]);
 
   const byProvider = new Map(
     ((connections.data ?? []) as Record<string, unknown>[]).map((row) => [
@@ -97,6 +127,7 @@ export async function loadMoneySetupFacts(
     budgetRows: budget.error ? null : (budget.count ?? 0),
     defaultShare: share,
     cutterWaiting: cutter,
+    invoiceAccountsWaiting: invoiceAccounts,
     debts,
   };
 }

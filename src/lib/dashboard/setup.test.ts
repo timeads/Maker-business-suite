@@ -47,6 +47,20 @@ describe("moneySetupItems", () => {
     expect(moneySetupItems(base({ debts: NO_DEBT_WORK }))).toEqual([]);
   });
 
+  it("asks about invoice accounts only once invoices count, and only those waiting", () => {
+    const counting = { ...LINES, books: { ...LINES.books, invoices: true } };
+    expect(idsOf(base({ invoiceAccountsWaiting: 3 }))).toEqual([]);
+    expect(idsOf(base({ revenue: counting, invoiceAccountsWaiting: 0 }))).toEqual([]);
+    const [item] = moneySetupItems(base({ revenue: counting, invoiceAccountsWaiting: 2 }));
+    expect(item).toMatchObject({
+      id: "revenue.invoice-accounts",
+      title: "Say which line 2 income accounts' invoices go to",
+      to: "settings/money/lines#books",
+      step: "lines",
+      facts: "2",
+    });
+  });
+
   it("asks for the connections first, and only what's missing", () => {
     expect(idsOf(base({ books: null }))).toEqual(["books.connect"]);
     expect(

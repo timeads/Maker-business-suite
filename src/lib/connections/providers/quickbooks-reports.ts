@@ -51,6 +51,66 @@ const summary = (row: ReportRow | null): ColData[] => row?.Summary?.ColData ?? r
 const meta = (column: ReportColumn, name: string) =>
   column.MetaData?.find((m) => m.Name === name)?.Value;
 
+/** One account line of a statement, as the books lay it out. */
+export type StatementLine = {
+  /** The report section it sits in (Income, COGS, Expenses, OtherIncome, OtherExpenses; Assets…). */
+  section: string;
+  name: string;
+  /** How deep it sits: 0 for an account at the top of its section, 1 for a sub-account… */
+  depth: number;
+  cents: number;
+};
+
+const PNL_SECTIONS = new Set([
+  "Income",
+  "COGS",
+  "Expenses",
+  "OtherIncome",
+  "OtherExpenses",
+  "OtherExpense",
+]);
+const MAX_STATEMENT_LINES = 300;
+
+/**
+ * Every account line of a report under the given sections, for one column:
+ * the line's own amount (a parent's total row is left out, its children are
+ * kept). Lines at zero are left out to keep a month small.
+ */
+function statementLines(
+  rows: ReportRow[] | undefined,
+  sections: ReadonlySet<string>,
+  column: number,
+): StatementLine[] {
+  const out: StatementLine[] = [];
+  const walk = (list: ReportRow[] | undefined, section: string | null, depth: number) => {
+    for (const row of list ?? []) {
+      const here = row.group && sections.has(row.group) ? row.group : section;
+      if (row.type === "Data" && here) {
+        const cells = row.ColData ?? [];
+        const name = (cells[0]?.value ?? "").trim().replace(/\s+/g, " ").slice(0, 200);
+        const value = cents(cells[column]?.value);
+        if (name && value !== 0 && out.length < MAX_STATEMENT_LINES) {
+          out.push({ section: here, name, depth, cents: value });
+        }
+      }
+      // A section's own header row names a parent account with children below it.
+      if (row.Rows?.Row) {
+        const header = (row.Header?.ColData?.[0]?.value ?? "").trim();
+        const isSection = row.group && sections.has(row.group);
+        if (here && header && !isSection) {
+          const own = cents(row.Header?.ColData?.[column]?.value);
+          if (own !== 0 && out.length < MAX_STATEMENT_LINES) {
+            out.push({ section: here, name: header.slice(0, 200), depth, cents: own });
+          }
+        }
+        walk(row.Rows.Row, here, isSection || !header ? depth : depth + 1);
+      }
+    }
+  };
+  walk(rows, null, 0);
+  return out;
+}
+
 /** One snapshot per month from a ProfitAndLoss report summarised by month. */
 export function parseProfitAndLoss(report: QuickBooksReport): SnapshotRow[] {
   const columns = report.Columns?.Column ?? [];
@@ -95,6 +155,8 @@ export function parseProfitAndLoss(report: QuickBooksReport): SnapshotRow[] {
         // stored; readers treat a missing figure as "not known", never 0.
         other_income_cents: optional(groups.other_income, index) ?? 0,
         other_expenses_cents: optional(groups.other_expenses, index) ?? 0,
+        // Added later: each account's own line, for the statement drawn line by line.
+        lines: statementLines(rows, PNL_SECTIONS, index),
         currency: report.Header?.Currency ?? null,
       },
     });
@@ -186,6 +248,12 @@ export function parseBalanceSheet(report: QuickBooksReport, asOf: string): Snaps
       bank_accounts: accounts,
       receivables: last(findGroup(rows, "AR")),
       total_assets: last(findGroup(rows, "TotalAssets")),
+      // Added later: every account line, for the balance sheet drawn in full.
+      lines: statementLines(
+        rows,
+        new Set(["TotalAssets", "TotalLiabilitiesAndEquity", "Liabilities", "Equity"]),
+        Math.max(0, (report.Columns?.Column?.length ?? 2) - 1),
+      ),
       currency: report.Header?.Currency ?? null,
     },
   };

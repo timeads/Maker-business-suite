@@ -62,6 +62,8 @@ export type MoneySetupFacts = {
   defaultShare?: { orders: number; toDefault: number } | null;
   /** The books' expense accounts, and how many still have no choice (shared by default). */
   accounts?: { total: number; automatic: number } | null;
+  /** Income accounts paid invoices use with no choice yet; only when invoices count. */
+  invoiceAccountsWaiting?: number | null;
   /** Budget rows typed in; null when not known. */
   budgetRows?: number | null;
   /** Recurring charges nobody has decided on; only where counted. */
@@ -262,6 +264,20 @@ export function moneySetupItems(facts: MoneySetupFacts): SetupItem[] {
         step: "fund",
       });
     }
+  }
+
+  const waitingAccounts = facts.invoiceAccountsWaiting ?? 0;
+  if (lines && facts.revenue.books.invoices && waitingAccounts > 0) {
+    items.push({
+      id: "revenue.invoice-accounts",
+      title: `Say which line ${plural(waitingAccounts, "income account's", "income accounts'")} invoices go to`,
+      why: "Paid invoices on them count nowhere until you do. Mark the one that holds your shop's own sales so nothing counts twice.",
+      count: waitingAccounts,
+      to: "settings/money/lines#books",
+      action: "Choose for each account",
+      facts: String(waitingAccounts),
+      step: "lines",
+    });
   }
 
   const accounts = facts.accounts;

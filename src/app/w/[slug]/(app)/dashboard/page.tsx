@@ -14,13 +14,12 @@ import { loadMoneySetupFacts } from "@/lib/dashboard/setup-data";
 import { loadNotNow } from "@/lib/setup/data";
 import { sortItems, type SetupItem } from "@/lib/setup/items";
 import { loadDashboardConfig, loadDashboardData, loadRevenueSettings } from "@/lib/dashboard/data";
-import { pageRange, periodChoices } from "@/lib/dashboard/range";
-import { RANGE_LABELS, RANGE_PRESETS } from "@/lib/dashboard/schema";
+import { pageRange } from "@/lib/dashboard/range";
 import { TEMPLATE_ORDER, templateBlurb, templateConfig } from "@/lib/dashboard/templates";
 import { getEntitlements } from "@/lib/entitlements";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
-import { cn } from "@/lib/utils";
+import { RangePicker } from "./range-picker";
 import { TemplatePicker } from "./template-picker";
 import { Widget } from "./widget";
 
@@ -77,8 +76,7 @@ export default async function DashboardPage({
   // a preset, or one month, quarter or year picked by hand.
   const now = new Date();
   const shown = pageRange(query.range, config.range, now, tenant.timezone);
-  const { range, preset } = shown;
-  const choices = periodChoices(now, tenant.timezone);
+  const { range } = shown;
   const manager = canManage(role);
   const [data, setup] = await Promise.all([
     loadDashboardData(supabase, tenant, config, range, revenue),
@@ -127,56 +125,7 @@ export default async function DashboardPage({
         </FormMessage>
       )}
 
-      <div className="flex flex-wrap items-center gap-3">
-        <nav aria-label="Date range" className="bg-muted flex w-fit flex-wrap gap-1 rounded-lg p-1">
-          {RANGE_PRESETS.map((option) => (
-            <Link
-              key={option}
-              href={`${base}/dashboard?range=${option}`}
-              aria-current={option === preset ? "true" : undefined}
-              className={cn(
-                "rounded-md px-3 py-1.5 text-sm transition-colors",
-                option === preset
-                  ? "bg-card font-medium shadow-xs"
-                  : "text-muted-foreground hover:bg-card/60",
-              )}
-            >
-              {RANGE_LABELS[option]}
-            </Link>
-          ))}
-        </nav>
-        <form action={`${base}/dashboard`} className="flex items-center gap-2">
-          <label htmlFor="money-period" className="sr-only">
-            Pick a month, quarter or year
-          </label>
-          <select
-            id="money-period"
-            name="range"
-            defaultValue={shown.period ? shown.value : ""}
-            className="border-input bg-card h-9 rounded-sm border px-2 text-sm"
-          >
-            <option value="" disabled>
-              A month, quarter or year…
-            </option>
-            {(["month", "quarter", "year"] as const).map((kind) => (
-              <optgroup
-                key={kind}
-                label={kind === "month" ? "Months" : kind === "quarter" ? "Quarters" : "Years"}
-              >
-                {choices
-                  .filter((c) => c.kind === kind)
-                  .map((c) => (
-                    <option key={c.value} value={c.value}>
-                      {c.label}
-                    </option>
-                  ))}
-              </optgroup>
-            ))}
-          </select>
-          <Button type="submit" variant="outline" size="sm">
-            Show
-          </Button>
-        </form>
+      <RangePicker here={`${base}/dashboard`} shown={shown} timezone={tenant.timezone}>
         <Button asChild variant="ghost" size="sm">
           <a href={`${base}/dashboard/export?range=${encodeURIComponent(shown.value)}`}>
             Download these figures
@@ -191,12 +140,7 @@ export default async function DashboardPage({
             </a>
           </Button>
         )}
-      </div>
-      {shown.period && (
-        <p className="text-sm font-medium" role="status">
-          Showing {shown.label}
-        </p>
-      )}
+      </RangePicker>
       <HowWorkedOut
         label="How revenue is worked out"
         lines={[
