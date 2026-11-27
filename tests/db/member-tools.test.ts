@@ -63,6 +63,9 @@ const MONEY_FUNCTIONS: [string, unknown[]][] = [
   ["money_invoice_counts($1, '2026-11-27')", []],
   ["money_invoice_list($1, '2026-11-27', null, null, null, null, 50, 0)", []],
   ["money_invoice_revenue($1, $2::date, $3::date, 'month')", ["FROM", "TO"]],
+  ["money_invoice_sorted_list($1, '2026-11-27', null, null, null, null, false, 50, 0)", []],
+  ["money_invoice_sorted_revenue($1, $2::date, $3::date, 'month')", ["FROM", "TO"]],
+  ["money_invoice_sorting_counts($1, null)", []],
   ["money_line_item_costs($1, $2, $3)", ["FROM", "TO"]],
   [
     "money_line_revenue($1, $2, $3, 'month', 'America/New_York', 'net_sales', false, false)",

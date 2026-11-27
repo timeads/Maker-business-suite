@@ -199,6 +199,8 @@ export type BookInvoiceRow = {
   external_id: string;
   doc_number: string | null;
   customer: string | null;
+  /** The books' own id for the customer, for a default per customer. */
+  customer_ref?: string | null;
   /** YYYY-MM-DD, the books' own day. */
   date: string;
   due_date: string | null;

@@ -68,6 +68,7 @@ describe("reading invoices from the books", () => {
       external_id: "301",
       doc_number: "1042",
       customer: "Maple Studio",
+      customer_ref: "5",
       date: "2026-10-05",
       due_date: "2026-11-04",
       total_cents: 10700,

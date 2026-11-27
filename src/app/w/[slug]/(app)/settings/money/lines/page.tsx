@@ -21,7 +21,7 @@ import {
   ClosedMonthsForm,
   RevenueFigureForm,
 } from "../../../dashboard/revenue-forms";
-import { BooksRevenueForm } from "../../../dashboard/books-revenue-form";
+import { BooksRevenueForm, InvoiceCustomersList } from "../../../dashboard/books-revenue-form";
 import { HowWorkedOut } from "@/components/setup/how-worked-out";
 import { invoiceAccounts } from "@/lib/dashboard/book-revenue";
 import { booksRevenueExplained, closedMonthsExplained } from "@/lib/dashboard/explain";
@@ -258,6 +258,13 @@ export default async function RevenueLinesSettings({
           ) : (
             <p className="text-muted-foreground text-sm">An owner or admin can change this.</p>
           )}
+          <InvoiceCustomersList
+            slug={tenant.slug}
+            customers={settings.books.customers}
+            lines={settings.lines}
+            canEdit={canEdit}
+            invoicesHref={`${base}/dashboard/invoices`}
+          />
           <HowWorkedOut lines={booksRevenueExplained(settings)} />
         </CardContent>
       </Card>

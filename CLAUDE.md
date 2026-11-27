@@ -331,7 +331,22 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   choice (a line, `{skip: shop}` for the shop's own sales so nothing counts
   twice, `{skip: other}`; no choice counts nowhere and is shown apart), and
   the P&L's other income goes to a line or beside them (`bookRevenue`,
-  `booksRevenueExplained`). Invoice status is worked out on read
+  `booksRevenueExplained`). An invoice's line is ONE rule, `decideInvoice`
+  (`book-revenue.ts`), used by every figure, the list and its spreadsheet:
+  a person's own choice for that invoice (columns on `book_invoices`: a
+  line, a split by whole percents shared on its before-tax total with
+  `splitByPercent`, `shop` or `left_out`; written only by
+  `sort_book_invoices`, owners and admins, several at once; the sync never
+  touches them and a returning invoice keeps its choice), then the
+  customer's default (`books.customers`, by the books' customer id, else
+  the exact name), then each line's account; a choice naming a line no
+  longer there is passed over. Totals read `money_invoice_sorted_revenue`
+  (a split invoice on its own row); the list's filters and "Not sorted
+  yet" count are its database twins (`private.money_invoice_in_line` /
+  `money_invoice_waiting`, handed `invoiceSorting()`, held equal by
+  `tests/db/money-invoice-sorting.test.ts`). Money → Invoices sorts them
+  (`invoice-table.tsx`); the assistant proposes `money.invoice_sort` (`I1`
+  / `L1` references, several invoices in the body). Invoice status is worked out on read
   (`invoiceStatus` = `private.invoice_status`). Money → Invoices, Orders
   (`money_order_list`), Statements (each P&L month and the balance sheet
   keep every account's line, `statementLines`) and Projection (config
@@ -343,7 +358,8 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   are built from the page's own loader as the member; debts only for owners
   and admins. Shipping margin by month is `money_shipping_by_month`;
   break-even pace and the same days last month are `lib/dashboard/pace.ts`. Keep
-  `tests/db/money-invoices.test.ts`, `money-line-entries.test.ts`,
+  `tests/db/money-invoices.test.ts`, `money-invoice-sorting.test.ts`,
+  `money-line-entries.test.ts`,
   `money-order-list.test.ts`, `money-shipping-margin.test.ts` and
   `action-proposals-money.test.ts` passing.
 - Help desk: inbound email is authenticated by a secret in the webhook URL,

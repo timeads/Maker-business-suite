@@ -300,7 +300,7 @@ export type BooksPart = {
   otherIncome: number;
   /** Other income with no line, shown beside the lines. */
   otherUnplaced: number;
-  /** Paid invoices on accounts nobody has chosen for: counted nowhere yet. */
+  /** Paid invoices nobody has sorted into a line (nor their customer or account): counted nowhere yet. */
   waiting: number;
   otherUnknown: boolean;
 };
@@ -538,18 +538,30 @@ export async function loadDashboardData(
     return rows;
   };
 
-  /** Paid invoices per period and income account, paged past Supabase's 1,000 rows. */
+  /**
+   * Paid invoices per period and income account, with what decides their
+   * line (their own choice, their customer), paged past Supabase's 1,000
+   * rows. A database from before invoices were sorted one by one answers
+   * the earlier question, by account only.
+   */
   const invoiceGroups = async (grouping: Grouping): Promise<InvoiceGroup[]> => {
     const rows: InvoiceGroup[] = [];
+    let fn = "money_invoice_sorted_revenue";
     for (let page = 0; page < GROUP_PAGES; page++) {
-      const { data, error } = await supabase
-        .rpc("money_invoice_revenue", {
-          p_tenant_id: tenant.id,
-          p_from: fromDay,
-          p_to: toDay,
-          p_grouping: grouping,
-        })
-        .range(page * GROUP_PAGE, page * GROUP_PAGE + GROUP_PAGE - 1);
+      const ask = () =>
+        supabase
+          .rpc(fn, {
+            p_tenant_id: tenant.id,
+            p_from: fromDay,
+            p_to: toDay,
+            p_grouping: grouping,
+          })
+          .range(page * GROUP_PAGE, page * GROUP_PAGE + GROUP_PAGE - 1);
+      let { data, error } = await ask();
+      if (error?.code === "PGRST202" && fn !== "money_invoice_revenue") {
+        fn = "money_invoice_revenue";
+        ({ data, error } = await ask());
+      }
       if (error) throw new Error(`Could not load invoices: ${error.message}`);
       const batch = (data as Record<string, unknown>[] | null) ?? [];
       for (const row of batch) {
@@ -558,6 +570,12 @@ export async function loadDashboardData(
           account_ref: (row.account_ref as string | null) ?? null,
           account: (row.account as string | null) ?? null,
           cents: Math.round(num(row.cents)),
+          customer_ref: (row.customer_ref as string | null) ?? null,
+          customer: (row.customer as string | null) ?? null,
+          sort: (row.sort as string | null) ?? null,
+          line_id: (row.line_id as string | null) ?? null,
+          split: row.split ?? null,
+          invoice_id: (row.invoice_id as string | null) ?? null,
         });
       }
       if (batch.length < GROUP_PAGE) break;

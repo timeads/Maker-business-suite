@@ -430,6 +430,185 @@ describe("proposals about expenses, budgets and recurring charges", () => {
   });
 });
 
+describe("proposals about which line invoices count in", () => {
+  const INVOICES = [
+    {
+      id: "44444444-4444-4444-8444-444444444444",
+      doc_number: "1042",
+      customer_ref: "7",
+      customer: "Maple Library",
+      txn_date: "2026-10-05",
+      due_date: null,
+      total_cents: 11000,
+      balance_cents: 0,
+      memo: "",
+      lines: [{ account_ref: "81", account: "Rentals", cents: 10000 }],
+      sort: null,
+      line_id: null,
+      split: null,
+      status: "paid",
+      total_count: 2,
+    },
+    {
+      id: "55555555-5555-4555-8555-555555555555",
+      doc_number: "1043",
+      customer_ref: null,
+      customer: "Elm Goods",
+      txn_date: "2026-10-04",
+      due_date: null,
+      total_cents: 5000,
+      balance_cents: 0,
+      memo: "",
+      lines: [{ account_ref: "81", account: "Rentals", cents: 5000 }],
+      sort: "line",
+      line_id: "shop",
+      split: null,
+      status: "paid",
+      total_count: 2,
+    },
+  ];
+  /** The fake client, also answering the invoice list. */
+  const withInvoices = () => {
+    const made = fake({ book_invoices: INVOICES, configs: LINES_CONFIG });
+    const rpc = (made.supabase as { rpc: (n: string, a: Record<string, unknown>) => unknown }).rpc;
+    (made.supabase as { rpc: unknown }).rpc = async (
+      name: string,
+      args: Record<string, unknown>,
+    ) =>
+      name === "money_invoice_sorted_list"
+        ? (made.rpcs.push({ name, args }), { data: INVOICES, error: null })
+        : rpc(name, args);
+    return made;
+  };
+
+  it("lists invoices and lines by reference, never an id, for anyone with Money", async () => {
+    expect(toolsFor({ manager: false }).map((t) => t.name)).toEqual(
+      expect.arrayContaining(["list_invoices", "propose_invoice_sort"]),
+    );
+    expect(systemFor({ manager: false }, "Rugs")).toMatch(/propose_invoice_sort/);
+    const { supabase } = withInvoices();
+    const listed = JSON.parse((await runTool("list_invoices", {}, ctx(supabase, false))).content);
+    expect(listed.lines).toEqual([
+      { ref: "L1", name: "Shop" },
+      { ref: "L2", name: "Classes" },
+    ]);
+    expect(listed.invoices[0]).toMatchObject({
+      ref: "I1",
+      number: "1042",
+      customer: "Maple Library",
+      counts_in: "Not sorted yet",
+    });
+    expect(listed.invoices[1]).toMatchObject({
+      ref: "I2",
+      counts_in: "Shop",
+      because: "Your choice",
+    });
+    expect(JSON.stringify(listed)).not.toContain(INVOICES[0].id);
+  });
+
+  it("files a split of several invoices, mapping references back to ids and line ids", async () => {
+    const { supabase, rpcs } = withInvoices();
+    const out = await runTool(
+      "propose_invoice_sort",
+      {
+        invoices: ["I1", "i2"],
+        which: "all",
+        sort: "split",
+        split: { L1: 30, L2: 70 },
+        summary: "The library's sessions are mostly classes.",
+      },
+      ctx(supabase, false),
+    );
+    expect(out.proposal).toMatchObject({
+      source: "action",
+      key: "money.invoice_sort",
+      name: "2 invoices",
+    });
+    expect(rpcs.at(-1)).toEqual({
+      name: "propose_action",
+      args: {
+        p_tenant_id: "t1",
+        p_kind: "money.invoice_sort",
+        p_target: null,
+        p_body: {
+          invoices: [INVOICES[0].id, INVOICES[1].id],
+          choice: { sort: "split", split: { shop: 30, classes: 70 } },
+        },
+        p_summary: "The library's sessions are mostly classes.",
+      },
+    });
+  });
+
+  it("refuses an invoice or a line it can't find, and a split that doesn't add up", async () => {
+    const { supabase, rpcs } = withInvoices();
+    for (const args of [
+      { invoices: ["I9"], sort: "shop" },
+      { invoices: [], sort: "shop" },
+      { invoices: ["I1"], sort: "line", line: "L3" },
+      { invoices: ["I1"], sort: "line", line: "classes" },
+      { invoices: ["I1"], sort: "split", split: { L1: 50, L2: 40 } },
+    ]) {
+      const out = await runTool("propose_invoice_sort", { ...args, summary: "x" }, ctx(supabase));
+      expect(out.isError, JSON.stringify(args)).toBe(true);
+    }
+    expect(rpcs.filter((r) => r.name === "propose_action")).toEqual([]);
+  });
+
+  it("previews before and after by the one rule, and applies through the checked function", async () => {
+    const { supabase, rpcs } = withInvoices();
+    const row = {
+      id: "p9",
+      kind: "money.invoice_sort",
+      target: null,
+      body: {
+        invoices: [INVOICES[0].id, INVOICES[1].id],
+        choice: { sort: "line", line: "classes" },
+      },
+      summary: "Both are classes.",
+    };
+    const preview = await previewAction(supabase, { id: "t1", currency: "USD" }, row);
+    expect(preview).toMatchObject({
+      name: "2 invoices from your books",
+      before: [
+        "Invoice 1042 to Maple Library, 2026-10-05: Not sorted yet (its income account has no line yet)",
+        "Invoice 1043 to Elm Goods, 2026-10-04: Shop (your choice)",
+      ],
+      after: [
+        "Invoice 1042 to Maple Library, 2026-10-05: Classes (your choice)",
+        "Invoice 1043 to Elm Goods, 2026-10-04: Classes (your choice)",
+      ],
+    });
+    const back = await previewAction(
+      supabase,
+      { id: "t1", currency: "USD" },
+      {
+        ...row,
+        body: { ...row.body, choice: { sort: "none" } },
+      },
+    );
+    expect(back?.after[1]).toBe(
+      "Invoice 1043 to Elm Goods, 2026-10-04: Not sorted yet (its income account has no line yet)",
+    );
+    await applyAction(supabase, "t1", row);
+    expect(rpcs.at(-1)).toEqual({
+      name: "sort_book_invoices",
+      args: {
+        p_tenant_id: "t1",
+        p_ids: [INVOICES[0].id, INVOICES[1].id],
+        p_sort: "line",
+        p_line: "classes",
+        p_split: null,
+      },
+    });
+    expect(
+      await applyAction(supabase, "t1", {
+        ...row,
+        body: { invoices: [], choice: { sort: "shop" } },
+      }),
+    ).toEqual({ error: "This suggestion doesn't fit any more." });
+  });
+});
+
 describe("tools per person", () => {
   const member = (has: string[]) => ({
     manager: false,

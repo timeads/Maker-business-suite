@@ -6,6 +6,7 @@ import { loadRevenueSettings } from "@/lib/dashboard/data";
 import {
   CLOSED_MONTHS,
   REVENUE_FIGURES,
+  bookAccountChoiceSchema,
   REVENUE_KEY,
   REVENUE_MODULE,
   revenueSettingsSchema,
@@ -16,6 +17,7 @@ import { isTemplateKey, templateConfig } from "@/lib/dashboard/templates";
 import { getEntitlements } from "@/lib/entitlements";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
+import { z } from "zod";
 
 export type TemplateState = { error?: string };
 
@@ -169,6 +171,9 @@ export async function saveBusinessLines(
           accounts: current.books.accounts.filter(
             (a) => !("line" in a.choice) || kept.has(a.choice.line),
           ),
+          customers: current.books.customers.filter(
+            (c) => !("line" in c.choice) || kept.has(c.choice.line),
+          ),
         },
       };
     },
@@ -193,7 +198,74 @@ export async function saveBooksRevenue(
   }
   return saveRevenue(
     slug,
-    (current) => ({ ...current, books: body }),
+    // The customers' defaults are kept as they are: they're changed from the
+    // invoice list, one customer at a time.
+    (current) => ({
+      ...current,
+      books:
+        body && typeof body === "object" && !Array.isArray(body)
+          ? { ...body, customers: current.books.customers }
+          : body,
+    }),
     "Saved. Revenue by line and profit by line count your books this way from now on, for past months too.",
+  );
+}
+
+const customerSchema = z.object({
+  ref: z
+    .string()
+    .regex(/^[A-Za-z0-9_-]{1,60}$/)
+    .nullable(),
+  name: z.string().trim().min(1).max(200),
+});
+
+/**
+ * "Always put this customer's invoices in…": a default for every invoice to
+ * one customer of the books, by the books' id, else the exact name (null
+ * takes it away). An invoice a person sorted by hand keeps its own choice.
+ */
+export async function saveInvoiceCustomer(
+  slug: string,
+  customer: unknown,
+  choice: unknown,
+): Promise<RevenueState> {
+  const who = customerSchema.safeParse(customer);
+  const how = choice === null ? null : bookAccountChoiceSchema.safeParse(choice);
+  if (!who.success) return { error: "That invoice has no customer to choose for." };
+  if (how && !how.success) return { error: "Choose where this customer's invoices go." };
+  const key = (c: { ref: string | null; name: string }) =>
+    c.ref ? `ref:${c.ref}` : `name:${c.name}`;
+  // A choice made by name before the books gave an id is the same customer.
+  const same = (c: { ref: string | null; name: string }) =>
+    key(c) === key(who.data) || (c.ref === null && c.name === who.data.name);
+  return saveRevenue(
+    slug,
+    (current) => ({
+      ...current,
+      books: {
+        ...current.books,
+        customers: [
+          ...current.books.customers.filter((c) => !same(c)),
+          ...(how ? [{ ...who.data, choice: how.data }] : []),
+        ],
+      },
+    }),
+    how
+      ? `Saved. Invoices to ${who.data.name} go there from now on, past ones too, unless you sorted one yourself.`
+      : `Saved. Invoices to ${who.data.name} follow their own choice or income account again.`,
+  );
+}
+
+/** Takes one customer's default away, from Settings (the list there). */
+export async function removeInvoiceCustomer(
+  slug: string,
+  _prev: RevenueState,
+  formData: FormData,
+): Promise<RevenueState> {
+  const ref = String(formData.get("ref") ?? "");
+  return saveInvoiceCustomer(
+    slug,
+    { ref: ref === "" ? null : ref, name: String(formData.get("name") ?? "") },
+    null,
   );
 }

@@ -62,8 +62,8 @@ export type MoneySetupFacts = {
   defaultShare?: { orders: number; toDefault: number } | null;
   /** The books' expense accounts, and how many still have no choice (shared by default). */
   accounts?: { total: number; automatic: number } | null;
-  /** Income accounts paid invoices use with no choice yet; only when invoices count. */
-  invoiceAccountsWaiting?: number | null;
+  /** Invoices not in a line yet (by their own choice, customer or account); only when invoices count. */
+  invoicesWaiting?: number | null;
   /** Budget rows typed in; null when not known. */
   budgetRows?: number | null;
   /** Recurring charges nobody has decided on; only where counted. */
@@ -266,16 +266,19 @@ export function moneySetupItems(facts: MoneySetupFacts): SetupItem[] {
     }
   }
 
-  const waitingAccounts = facts.invoiceAccountsWaiting ?? 0;
-  if (lines && facts.revenue.books.invoices && waitingAccounts > 0) {
+  // One item for invoices, counted invoice by invoice: choosing for an income
+  // account settles every invoice on it at once, and a hand-sorted invoice
+  // settles itself, so the count is what's really still waiting.
+  const waitingInvoices = facts.invoicesWaiting ?? 0;
+  if (lines && facts.revenue.books.invoices && waitingInvoices > 0) {
     items.push({
-      id: "revenue.invoice-accounts",
-      title: `Say which line ${plural(waitingAccounts, "income account's", "income accounts'")} invoices go to`,
-      why: "Paid invoices on them count nowhere until you do. Mark the one that holds your shop's own sales so nothing counts twice.",
-      count: waitingAccounts,
-      to: "settings/money/lines#books",
-      action: "Choose for each account",
-      facts: String(waitingAccounts),
+      id: "revenue.invoices",
+      title: `Put ${plural(waitingInvoices, "invoice")} in a business line`,
+      why: "They count nowhere until they're in a line. Choosing a line for an income account sorts every invoice on it at once; mark the one that holds your shop's own sales so nothing counts twice.",
+      count: waitingInvoices,
+      to: "dashboard/invoices?waiting=1",
+      action: "Sort them",
+      facts: String(waitingInvoices),
       step: "lines",
     });
   }

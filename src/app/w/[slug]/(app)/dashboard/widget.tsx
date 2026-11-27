@@ -577,10 +577,12 @@ function BooksNote({
   if (books.waiting !== 0) {
     notes.push(
       <li key="waiting">
-        {money(books.waiting)} of paid invoices is on accounts you haven&apos;t chosen a line for,
-        so it isn&apos;t counted yet.{" "}
-        <Link href={`${linesHref}#books`} className="text-foreground underline underline-offset-4">
-          Choose
+        {money(books.waiting)} of paid invoices isn&apos;t in a line yet, so it isn&apos;t counted.{" "}
+        <Link
+          href={linesHref.replace(/\/settings\/money\/lines$/, "/dashboard/invoices?waiting=1")}
+          className="text-foreground underline underline-offset-4"
+        >
+          Sort them
         </Link>
       </li>,
     );

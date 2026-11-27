@@ -404,7 +404,7 @@ describe("profit and expenses by line", () => {
     const { supabase, calls } = fakeSupabase(
       {
         money_line_revenue: () => [group({ revenue_cents: "50000" })],
-        money_invoice_revenue: () => [
+        money_invoice_sorted_revenue: () => [
           { period: "2026-10-01", account_ref: "79", account: "Class income", cents: "7000" },
           { period: "2026-10-01", account_ref: "5", account: "Sales", cents: "50000" },
           { period: "2026-11-01", account_ref: "81", account: "Rentals", cents: "1500" },
@@ -435,7 +435,7 @@ describe("profit and expenses by line", () => {
       withBooks,
       NOW,
     );
-    expect(calls.find((c) => c.fn === "money_invoice_revenue")?.args).toMatchObject({
+    expect(calls.find((c) => c.fn === "money_invoice_sorted_revenue")?.args).toMatchObject({
       p_from: "2026-06-01",
       p_to: "2026-11-22",
     });
@@ -818,7 +818,7 @@ describe("closed months from the books", () => {
       {
         dashboard_sales_by_period: () => salesRows,
         money_line_revenue: () => lineRows,
-        money_invoice_revenue: () => [
+        money_invoice_sorted_revenue: () => [
           { period: "2026-10-01", account_ref: "79", account: "Class income", cents: "5000" },
           { period: "2026-11-01", account_ref: "79", account: "Class income", cents: "700" },
         ],
@@ -899,7 +899,7 @@ describe("closed months from the books", () => {
         money_line_revenue: () => lineRows,
         dashboard_sales_by_channel: () => [],
         dashboard_top_products: () => [],
-        money_invoice_revenue: () => [],
+        money_invoice_sorted_revenue: () => [],
       },
       {
         snapshots: [pnl("2026-07", 50, 0), pnl("2026-08", 60, 0), pnl("2026-09", 330.01, 0)],
@@ -996,6 +996,151 @@ describe("closed months from the books", () => {
     expect(s.grouping).toBe("day");
     expect(s.closedNote).toMatch(/your shop's sales/);
     expect((data.k as Extract<WidgetData, { type: "key_figures" }>).ordersFromShop).toBe(false);
+  });
+
+  it("carves invoices sorted by hand out of a books month, and adds them beside a shop month", async () => {
+    // October is a books month; November is still the shop's. Invoices are
+    // sorted by hand (whole, split, "the shop counted this"), by their
+    // customer's default and by account.
+    const sorted = revenueSettingsSchema.parse({
+      ...settings,
+      books: {
+        ...settings.books,
+        customers: [{ ref: "7", name: "Maple Library", choice: { line: "shop" } }],
+      },
+    });
+    const invoiceRows = [
+      { period: "2026-10-01", account_ref: "79", account: "Class income", cents: "5000" },
+      {
+        period: "2026-10-01",
+        account_ref: "81",
+        account: "Rentals",
+        sort: "line",
+        line_id: "shop",
+        cents: "2000",
+      },
+      {
+        period: "2026-10-01",
+        account_ref: "81",
+        account: "Rentals",
+        sort: "split",
+        split: { shop: 25, classes: 75 },
+        invoice_id: "inv-split",
+        cents: "1001",
+      },
+      { period: "2026-10-01", account_ref: "81", account: "Rentals", sort: "shop", cents: "9999" },
+      {
+        period: "2026-11-01",
+        account_ref: "81",
+        account: "Rentals",
+        sort: "line",
+        line_id: "classes",
+        cents: "300",
+      },
+      {
+        period: "2026-11-01",
+        account_ref: "81",
+        account: "Rentals",
+        customer_ref: "7",
+        customer: "Maple Library",
+        cents: "400",
+      },
+    ];
+    const run = async (rows: unknown[]) => {
+      const { supabase } = fakeSupabase(
+        {
+          dashboard_sales_by_period: () => salesRows,
+          money_line_revenue: () => lineRows,
+          money_invoice_sorted_revenue: () => rows,
+        },
+        {
+          configs: { profit: { version: 1 } },
+          snapshots: [
+            pnl("2026-06", 999, 0),
+            pnl("2026-07", 50, 0),
+            pnl("2026-08", 60, 0),
+            pnl("2026-09", 330.01, 100),
+            pnl("2026-10", 500, 0),
+          ],
+        },
+      );
+      return loadDashboardData(supabase, TENANT, config(ALL), RANGE, sorted, NOW);
+    };
+    const cents = (dollars: number) => Math.round(dollars * 100);
+    const data = await run(invoiceRows);
+    const none = await run([]);
+    const k = data.k as Extract<WidgetData, { type: "key_figures" }>;
+    const kNone = none.k as Extract<WidgetData, { type: "key_figures" }>;
+    // The books' months are the books' income whatever was sorted inside them.
+    expect(cents(k.sales)).toBe(cents(kNone.sales));
+    // November's invoices (one by hand, one by its customer) and September's
+    // other income sit beside; "the shop counted this" adds nothing anywhere.
+    expect(k.fromBooks).toBe(300 + 400 + 100);
+
+    const l = data.l as Extract<WidgetData, { type: "revenue_by_line" }>;
+    const lineCents = (name: string) => cents(l.rows.find((r) => r.name === name)?.value ?? 0);
+    const lNone = none.l as Extract<WidgetData, { type: "revenue_by_line" }>;
+    expect(cents(l.total)).toBe(cents(k.sales) + 300 + 400 + 100);
+    expect(l.rows.reduce((a, r) => a + cents(r.value), 0)).toBe(cents(l.total));
+    // October: 5,000 by account + 751 of the split to classes, 2,000 + 250
+    // to shop, then the rest of the month's 50,000 shared 3:1 (31,499 and
+    // 10,500). November adds 300 to classes and 400 to shop.
+    const octoberShop = 2000 + 250 + 31499;
+    const octoberClasses = 5000 + 751 + 10500;
+    expect(octoberShop + octoberClasses).toBe(50000);
+    const otherMonths = (name: string) =>
+      cents(lNone.rows.find((r) => r.name === name)?.value ?? 0) -
+      (name === "Shop" ? 37500 : 12500);
+    expect(lineCents("Shop")).toBe(otherMonths("Shop") + octoberShop + 400);
+    expect(lineCents("Classes")).toBe(otherMonths("Classes") + octoberClasses + 300);
+
+    const t = data.t as Extract<WidgetData, { type: "revenue_by_line_over_time" }>;
+    const october = (name: string) =>
+      cents(
+        t.series.find((x) => x.name === name)?.points.find((p) => p.key === "2026-10-01")?.value ??
+          0,
+      );
+    expect(october("Shop")).toBe(octoberShop);
+    expect(october("Classes")).toBe(octoberClasses);
+    for (const line of t.series) {
+      expect(line.points.reduce((a, p) => a + cents(p.value ?? 0), 0)).toBe(cents(line.total));
+    }
+
+    const p = data.p as Extract<WidgetData, { type: "profit_by_line" }>;
+    for (const source of p.sources) {
+      const row = p.rows.find((r) => r.id === source.id);
+      expect(source.shop + source.books + source.typed).toBe(row?.revenue);
+    }
+    expect(p.rows.find((r) => r.id === "classes")?.revenue).toBe(lineCents("Classes"));
+  });
+
+  it("asks the earlier question of a database from before invoices were sorted", async () => {
+    const asked: string[] = [];
+    const { supabase } = fakeSupabase({
+      money_line_revenue: () => lineRows,
+      money_invoice_revenue: () => [
+        { period: "2026-11-01", account_ref: "79", account: "Class income", cents: "700" },
+      ],
+    });
+    const rpc = supabase.rpc.bind(supabase);
+    (supabase as unknown as { rpc: unknown }).rpc = (fn: string, args: Record<string, unknown>) => {
+      asked.push(fn);
+      if (fn === "money_invoice_sorted_revenue") {
+        const missing = Promise.resolve({ data: null, error: { code: "PGRST202", message: "no" } });
+        return { range: () => missing, then: missing.then.bind(missing) };
+      }
+      return rpc(fn, args);
+    };
+    const data = await loadDashboardData(
+      supabase,
+      TENANT,
+      config([{ id: "l", type: "revenue_by_line" }]),
+      RANGE,
+      revenueSettingsSchema.parse({ ...settings, closed_months: "shop" }),
+      NOW,
+    );
+    expect(asked).toContain("money_invoice_revenue");
+    expect(data.l).toMatchObject({ books: { invoices: 700 } });
   });
 
   it("changes nothing while the setting is the shop's", async () => {

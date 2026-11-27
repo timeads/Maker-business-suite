@@ -20,6 +20,8 @@ let tenantA: string;
 let tenantB: string;
 let expenseA: string;
 let expenseB: string;
+let invoicesA: string[];
+let invoiceB: string;
 const RUN = "11111111-1111-4111-8111-111111111111";
 
 async function tenantFor(owner: User, name: string): Promise<string> {
@@ -69,6 +71,31 @@ async function expenseIn(tenant: string, id: string): Promise<string> {
   return rows[0].id;
 }
 
+async function invoicesIn(tenant: string, ids: string[]): Promise<string[]> {
+  await asService(db, (tx) =>
+    tx.query("select public.file_book_invoices($1, 'quickbooks', $2, $3::jsonb)", [
+      tenant,
+      RUN,
+      JSON.stringify(
+        ids.map((id) => ({
+          external_id: id,
+          doc_number: `10${id}`,
+          customer: "Maple Library",
+          date: "2026-10-05",
+          total_cents: 5000,
+          balance_cents: 0,
+          lines: [{ account_ref: "81", account: "Rentals", cents: 5000 }],
+        })),
+      ),
+    ]),
+  );
+  const { rows } = await db.query<{ id: string }>(
+    "select id from public.book_invoices where tenant_id = $1 and external_id = any($2::text[]) order by external_id",
+    [tenant, ids],
+  );
+  return rows.map((r) => r.id);
+}
+
 beforeAll(async () => {
   db = await createTestDb();
   alice = { id: await createUser(db, "alice@a.test"), email: "alice@a.test" };
@@ -82,6 +109,19 @@ beforeAll(async () => {
   );
   expenseA = await expenseIn(tenantA, "1");
   expenseB = await expenseIn(tenantB, "2");
+  invoicesA = await invoicesIn(tenantA, ["1", "2"]);
+  [invoiceB] = await invoicesIn(tenantB, ["9"]);
+  await as(alice, "select public.save_config($1, 'dashboard', 'revenue', $2::jsonb)", [
+    tenantA,
+    JSON.stringify({
+      version: 1,
+      lines: [
+        { id: "shop", name: "Shop" },
+        { id: "classes", name: "Classes" },
+      ],
+      default_line: "shop",
+    }),
+  ]);
 });
 
 describe("proposals about expenses, budgets and charges", () => {
@@ -151,6 +191,70 @@ describe("proposals about expenses, budgets and charges", () => {
       (await as(alice, "select id from public.action_proposals where id = $1", [rows[0].id]))
         .length,
     ).toBe(1);
+  });
+
+  it("sort several invoices: filed by anyone on the team about their own, applied by an owner", async () => {
+    const body = { invoices: invoicesA, choice: { sort: "line", line: "classes" } };
+    const id = await propose(carol, tenantA, "money.invoice_sort", null, body);
+    // No single target; every invoice must be this workspace's and still in the books.
+    await expect(propose(carol, tenantA, "money.invoice_sort", invoicesA[0], body)).rejects.toThrow(
+      /about no one row/,
+    );
+    await expect(
+      propose(carol, tenantA, "money.invoice_sort", null, { ...body, invoices: [invoiceB] }),
+    ).rejects.toThrow(/aren't here/);
+    await expect(
+      propose(carol, tenantA, "money.invoice_sort", null, {
+        ...body,
+        invoices: [...invoicesA, invoiceB],
+      }),
+    ).rejects.toThrow(/aren't here/);
+    for (const invoices of [[], ["not-an-id"], "x", Array(21).fill(invoicesA[0])]) {
+      await expect(
+        propose(carol, tenantA, "money.invoice_sort", null, { ...body, invoices }),
+        JSON.stringify(invoices).slice(0, 40),
+      ).rejects.toThrow(/between 1 and 20/);
+    }
+    await expect(propose(bob, tenantA, "money.invoice_sort", null, body)).rejects.toThrow(
+      /Not a member/,
+    );
+
+    // Applied as the owner through the checked function, with its history.
+    await expect(as(carol, "select * from public.claim_action_proposal($1)", [id])).rejects.toThrow(
+      /owners and admins/i,
+    );
+    await expect(
+      as(carol, "select public.sort_book_invoices($1, $2::uuid[], 'line', 'classes')", [
+        tenantA,
+        invoicesA,
+      ]),
+    ).rejects.toMatchObject({ code: "42501" });
+    const [claimed] = await as<{ body: { invoices: string[] } }>(
+      alice,
+      "select * from public.claim_action_proposal($1)",
+      [id],
+    );
+    const [{ n }] = await as<{ n: number }>(
+      alice,
+      "select public.sort_book_invoices($1, $2::uuid[], 'line', 'classes') as n",
+      [tenantA, claimed.body.invoices],
+    );
+    expect(n).toBe(2);
+    await as(alice, "select public.note_action_applied($1, $2, $3)", [
+      id,
+      ["Invoice 101 to Maple Library: Not sorted yet"],
+      ["Invoice 101 to Maple Library: Classes"],
+    ]);
+    const [seen] = await as<{ kind: string; status: string; applied_after: string[] }>(
+      carol,
+      "select kind, status, applied_after from public.action_proposals where id = $1",
+      [id],
+    );
+    expect(seen).toEqual({
+      kind: "money.invoice_sort",
+      status: "applied",
+      applied_after: ["Invoice 101 to Maple Library: Classes"],
+    });
   });
 
   it("never crosses workspaces", async () => {

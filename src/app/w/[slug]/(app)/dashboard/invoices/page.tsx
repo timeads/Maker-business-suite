@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { HowWorkedOut } from "@/components/setup/how-worked-out";
-import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
@@ -14,33 +13,27 @@ import {
   INVOICE_PAGE,
   INVOICE_VIEWS,
   INVOICE_VIEW_NAMES,
-  STATUS_WORDS,
-  daysLate,
   invoiceHref,
   parseInvoiceQuery,
-  type InvoiceStatus,
 } from "@/lib/dashboard/invoices";
+import { hasLines } from "@/lib/dashboard/lines";
+import { loadInvoicesWaiting } from "@/lib/dashboard/setup-data";
 import { dayIn } from "@/lib/dashboard/range";
 import { getEntitlements } from "@/lib/entitlements";
 import { createClient } from "@/lib/supabase/server";
-import { getTenantContext } from "@/lib/tenants";
+import { canManage, getTenantContext } from "@/lib/tenants";
 import { cn } from "@/lib/utils";
 import { loadInvoiceCounts, loadInvoiceList } from "./data";
+import { InvoiceTable } from "./invoice-table";
 
 export const metadata: Metadata = { title: "Invoices" };
 
-const TONE: Record<InvoiceStatus, BadgeTone> = { paid: "good", open: "open", overdue: "bad" };
-
-const shortDay = (iso: string) =>
-  new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: "UTC" }).format(
-    new Date(`${iso}T00:00:00Z`),
-  );
-
 /**
  * Money → Invoices: the invoices in the books, read every few hours, each
- * paid, open or overdue by the workspace's own today. The view, search,
- * line and page are in the address. The whole team can look; nothing here
- * changes the books.
+ * paid, open or overdue by the workspace's own today, and the business line
+ * each counts in, and why. The view, search, line ("not sorted yet"
+ * included) and page are in the address. The whole team can look; owners
+ * and admins sort invoices into lines here. Nothing here changes the books.
  */
 export default async function InvoicesPage({
   params,
@@ -53,7 +46,7 @@ export default async function InvoicesPage({
   const user = await requireUser(`/w/${slug}/dashboard/invoices`);
   const ctx = await getTenantContext(slug, user.id);
   if (!ctx) notFound();
-  const { tenant } = ctx;
+  const { tenant, role } = ctx;
   const entitlements = await getEntitlements(tenant.id);
   if (!entitlements.can("module.dashboard")) notFound();
   const base = `/w/${tenant.slug}`;
@@ -65,8 +58,11 @@ export default async function InvoicesPage({
   const revenue = await loadRevenueSettings(supabase, tenant.id);
   const line = revenue.lines.find((l) => l.id === query.line) ?? null;
   const shown = { ...query, line: line?.id ?? null };
-  const [counts, list] = await Promise.all([
+  const lines = hasLines(revenue) ? revenue.lines : [];
+  const canEdit = canManage(role) && entitlements.canWrite;
+  const [counts, waiting, list] = await Promise.all([
     loadInvoiceCounts(supabase, tenant.id, today),
+    loadInvoicesWaiting(supabase, tenant.id, revenue),
     loadInvoiceList(supabase, tenant.id, revenue, shown, today, {
       limit: INVOICE_PAGE,
       offset: (query.page - 1) * INVOICE_PAGE,
@@ -124,6 +120,59 @@ export default async function InvoicesPage({
             </div>
           </dl>
 
+          {!revenue.books.invoices && (
+            <p className="bg-muted rounded-md px-3 py-2 text-sm" role="note">
+              Invoices aren&apos;t counted in your revenue yet. You can still sort them into lines
+              now; they&apos;ll count once you switch on &ldquo;Add paid invoices from my
+              books&rdquo;.{" "}
+              <Link
+                href={`${base}/settings/money/lines#books`}
+                className="underline underline-offset-4"
+              >
+                Switch it on in Settings
+              </Link>
+            </p>
+          )}
+          {lines.length === 0 ? (
+            <p className="bg-muted rounded-md px-3 py-2 text-sm" role="note">
+              Set up your business lines first, then you can say which line each invoice belongs to.{" "}
+              <Link
+                href={`${base}/settings/money/lines#rules`}
+                className="underline underline-offset-4"
+              >
+                Set up lines
+              </Link>
+            </p>
+          ) : (
+            waiting !== null &&
+            waiting.invoices > 0 && (
+              <p
+                className="bg-ochre-soft text-ochre-text flex flex-wrap items-center gap-x-2 rounded-md px-3 py-2 text-sm"
+                role="status"
+              >
+                <span>
+                  {waiting.invoices.toLocaleString("en-US")}{" "}
+                  {waiting.invoices === 1 ? "invoice isn't" : "invoices aren't"} in a business line
+                  yet ({money(waiting.cents)} before tax).
+                </span>
+                {!query.waiting && (
+                  <Link
+                    href={invoiceHref(here, shown, { waiting: true })}
+                    className="font-medium underline underline-offset-4"
+                  >
+                    Show them
+                  </Link>
+                )}
+                <Link
+                  href={`${base}/settings/money/lines#books`}
+                  className="underline underline-offset-4"
+                >
+                  Choose by income account
+                </Link>
+              </p>
+            )
+          )}
+
           <nav
             aria-label="Which invoices"
             className="bg-muted flex w-fit flex-wrap gap-1 rounded-lg p-1"
@@ -159,16 +208,16 @@ export default async function InvoicesPage({
                 className="border-input bg-card h-9 w-full rounded-sm border px-3 text-sm sm:w-72"
               />
             </label>
-            {revenue.lines.length > 0 && (
+            {lines.length > 0 && (
               <label className="flex flex-col gap-1 text-xs">
                 <span className="text-muted-foreground">Business line</span>
                 <select
                   name="line"
-                  defaultValue={line?.id ?? ""}
+                  defaultValue={query.waiting ? "" : (line?.id ?? "")}
                   className="border-input bg-card h-9 rounded-sm border px-2 text-sm"
                 >
                   <option value="">Every line</option>
-                  {revenue.lines.map((l) => (
+                  {lines.map((l) => (
                     <option key={l.id} value={l.id}>
                       {l.name}
                     </option>
@@ -176,12 +225,20 @@ export default async function InvoicesPage({
                 </select>
               </label>
             )}
+            {lines.length > 0 && (
+              <label className="flex items-center gap-2 self-center pt-4 text-sm">
+                <input type="checkbox" name="waiting" value="1" defaultChecked={query.waiting} />
+                Not sorted yet
+              </label>
+            )}
             <Button type="submit" variant="outline">
               Show
             </Button>
-            {(query.q || line) && (
+            {(query.q || line || query.waiting) && (
               <Button asChild variant="ghost">
-                <Link href={invoiceHref(here, shown, { q: "", line: null })}>Clear</Link>
+                <Link href={invoiceHref(here, shown, { q: "", line: null, waiting: false })}>
+                  Clear
+                </Link>
               </Button>
             )}
           </form>
@@ -190,66 +247,20 @@ export default async function InvoicesPage({
             {list.total === 0
               ? "No invoices match."
               : `${list.total.toLocaleString("en-US")} ${list.total === 1 ? "invoice" : "invoices"}${
-                  line ? ` with lines in ${line.name}` : ""
+                  query.waiting ? " not sorted yet" : line ? ` counting in ${line.name}` : ""
                 }.`}
           </p>
 
           {list.rows.length > 0 && (
-            <div className="bg-card overflow-x-auto rounded-md border">
-              <table className="w-full min-w-[40rem] text-sm">
-                <caption className="sr-only">Invoices from your books</caption>
-                <thead className="text-muted-foreground text-xs">
-                  <tr className="border-border border-b text-left">
-                    <th scope="col" className="px-3 py-2 font-medium">
-                      Number
-                    </th>
-                    <th scope="col" className="px-3 py-2 font-medium">
-                      Customer
-                    </th>
-                    <th scope="col" className="px-3 py-2 font-medium">
-                      Date
-                    </th>
-                    <th scope="col" className="px-3 py-2 font-medium">
-                      Due
-                    </th>
-                    <th scope="col" className="px-3 py-2 text-right font-medium">
-                      Amount
-                    </th>
-                    <th scope="col" className="px-3 py-2 text-right font-medium">
-                      Still owed
-                    </th>
-                    <th scope="col" className="px-3 py-2 font-medium">
-                      Status
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {list.rows.map((row) => (
-                    <tr key={row.id} className="border-border border-b last:border-0">
-                      <td className="px-3 py-2 tabular-nums">{row.doc_number ?? "–"}</td>
-                      <td className="font-read px-3 py-2">{row.customer ?? "–"}</td>
-                      <td className="px-3 py-2 whitespace-nowrap">{shortDay(row.txn_date)}</td>
-                      <td className="px-3 py-2 whitespace-nowrap">
-                        {row.due_date ? shortDay(row.due_date) : "–"}
-                      </td>
-                      <td className="px-3 py-2 text-right tabular-nums">
-                        {money(row.total_cents)}
-                      </td>
-                      <td className="px-3 py-2 text-right tabular-nums">
-                        {row.balance_cents > 0 ? money(row.balance_cents) : "–"}
-                      </td>
-                      <td className="px-3 py-2">
-                        <Badge tone={TONE[row.status]}>
-                          {row.status === "overdue"
-                            ? `${STATUS_WORDS.overdue}, ${daysLate(row.due_date, today)} days`
-                            : STATUS_WORDS[row.status]}
-                        </Badge>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <InvoiceTable
+              slug={tenant.slug}
+              rows={list.rows}
+              lines={lines}
+              customers={revenue.books.customers}
+              currency={tenant.currency}
+              today={today}
+              canEdit={canEdit && lines.length > 0}
+            />
           )}
 
           {pages > 1 && (

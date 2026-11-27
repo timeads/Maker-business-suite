@@ -65,7 +65,16 @@ export function booksRevenueExplained(settings: RevenueSettings): string[] {
     const shop = books.accounts.filter((a) => "skip" in a.choice && a.choice.skip === "shop");
     out.push(
       "Paid invoices from your books are added, before tax, in the month of the invoice's date.",
+      "Where each one goes is decided in this order: your own choice for that invoice on the Invoices page first, then your choice for its customer, then each line's income account.",
     );
+    if (books.customers.length) {
+      out.push(
+        `Invoices to ${someNames(
+          books.customers.map((c) => c.name),
+          4,
+        )} go where you chose for ${books.customers.length === 1 ? "that customer" : "those customers"}, unless you sorted one yourself.`,
+      );
+    }
     if (toLines.length) {
       out.push(
         `Each invoice line goes to the business line its income account is pointed at: ${someNames(
@@ -81,7 +90,7 @@ export function booksRevenueExplained(settings: RevenueSettings): string[] {
             4,
           )} ${shop.length === 1 ? "holds" : "hold"} your shop's own sales, so ${shop.length === 1 ? "it's" : "they're"} left out: those sales already count from the shop.`
         : "An account that holds your shop's own sales should be marked that way, so those sales aren't counted twice.",
-      "An invoice on an account you haven't chosen for yet counts nowhere until you do; it's shown apart.",
+      "An invoice nobody has chosen for (not you, its customer or its account) counts nowhere until you do; it's shown apart.",
     );
   }
   if (books.other_income) {
@@ -112,7 +121,7 @@ export function closedMonthsExplained(settings: RevenueSettings): string[] {
   if (hasLines(settings)) {
     out.push(
       settings.books.invoices
-        ? "A books month is shared among your lines like this: paid invoices on an account pointed at a line go to that line first (they're already inside the books' income, so they're never added on top); the rest is shared in the same proportions as your shop's own sales that month."
+        ? "A books month is shared among your lines like this: paid invoices in a line (by your choice for the invoice, its customer or its account) go to that line first (they're already inside the books' income, so they're never added on top); the rest is shared in the same proportions as your shop's own sales that month."
         : "A books month is shared among your lines in the same proportions as your shop's own sales that month, so your shop still decides what's product and what's classes.",
       "A books month with no shop sales to share by shows as other revenue from your books, beside your lines.",
     );
@@ -134,11 +143,60 @@ export function invoicesExplained(settings: RevenueSettings): string[] {
     "An invoice is paid when nothing is owed on it, overdue once its due day has gone by (in your workspace's time zone), and open otherwise.",
     ...(hasLines(settings)
       ? [
-          "Filtering by a business line shows invoices with at least one line on an income account pointed at it.",
+          "Filtering by a business line shows invoices any of which count in it. “Not sorted yet” shows invoices some of which counts nowhere yet.",
         ]
       : []),
     ...booksRevenueExplained(settings),
   ];
+}
+
+/** Why one invoice counts where it does (the Invoices page's “Why?”). */
+export function invoiceLineExplained(input: {
+  by: "person" | "customer" | "account";
+  state: "sorted" | "waiting" | "left_out";
+  /** The person's or customer's choice was a split. */
+  split: boolean;
+  /** The shop already counted it. */
+  shop: boolean;
+  customer: string | null;
+  paid: boolean;
+  /** Paid invoices are added to revenue (the setting). */
+  counting: boolean;
+}): string[] {
+  const out: string[] = [];
+  if (input.by === "person") {
+    out.push(
+      "You chose this for this invoice yourself, so it stays that way whatever its customer or income account says, through every read of your books.",
+    );
+  } else if (input.by === "customer") {
+    out.push(
+      `You chose where invoices to ${input.customer ?? "this customer"} go, so this one follows that. Choose for this invoice to make an exception.`,
+    );
+  } else if (input.state === "waiting") {
+    out.push(
+      "Its income account hasn't been pointed at a line, so it counts nowhere yet. Choose a line for it here, or for its income account in Settings to sort every invoice on it at once.",
+    );
+  } else {
+    out.push(
+      "Each line of the invoice goes where its income account is pointed (Settings → Money → Revenue and business lines). Choose for this invoice to make an exception.",
+    );
+  }
+  if (input.split) {
+    out.push(
+      "A split shares the invoice before tax by whole percents, to the cent; a cent left over goes to the biggest share.",
+    );
+  }
+  if (input.shop) {
+    out.push("It's left out because your shop already counted the sale, so it never counts twice.");
+  }
+  if (!input.counting) {
+    out.push(
+      "Invoices aren't added to your revenue yet: switch on “Add paid invoices from my books” in Settings to count them.",
+    );
+  } else if (!input.paid && input.state !== "left_out") {
+    out.push("It counts once it's paid, before tax, in the month of its date.");
+  }
+  return out;
 }
 
 /** Which of the books' accounts feed one line's expenses, by the account choices. */

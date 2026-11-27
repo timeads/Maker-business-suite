@@ -138,6 +138,7 @@ export function parseInvoice(
     external_id: id,
     doc_number: text(record.DocNumber, 40) || null,
     customer: name(record.CustomerRef),
+    customer_ref: refId(record.CustomerRef),
     date,
     due_date: plainDay(record.DueDate),
     total_cents: total,

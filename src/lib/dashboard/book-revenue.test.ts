@@ -77,6 +77,7 @@ describe("which line an income account takes", () => {
       other_income: false,
       other_income_line: null,
       accounts: [],
+      customers: [],
     });
   });
 });
@@ -158,14 +159,28 @@ describe("the invoice list", () => {
       line: "classes",
       page: "3",
     });
-    expect(query).toEqual({ view: "overdue", q: "maple studio", line: "classes", page: 3 });
+    expect(query).toEqual({
+      view: "overdue",
+      q: "maple studio",
+      line: "classes",
+      waiting: false,
+      page: 3,
+    });
     expect(invoiceHref("/x", query, { view: "paid" })).toBe(
       "/x?view=paid&q=maple+studio&line=classes",
     );
+    // "Not sorted yet" and a line are one choice: the newer wins, and the address says so.
+    expect(invoiceHref("/x", query, { waiting: true })).toBe(
+      "/x?view=overdue&q=maple+studio&waiting=1",
+    );
+    const waiting = parseInvoiceQuery({ waiting: "1", line: "classes" });
+    expect(waiting).toMatchObject({ waiting: true, line: null });
+    expect(invoiceHref("/x", waiting, { line: "shop" })).toBe("/x?line=shop");
     expect(parseInvoiceQuery({ view: "nope", line: "Bad Line!", page: "-1" })).toEqual({
       view: "all",
       q: "",
       line: null,
+      waiting: false,
       page: 1,
     });
   });
@@ -181,11 +196,12 @@ describe("the invoice list", () => {
           total_cents: -1250,
           balance_cents: 0,
           status: "paid",
+          place: { line: "Classes", why: "Your choice", state: "sorted" },
         },
       ]),
     );
     expect(text).toBe(
-      "Number,Customer,Date,Due,Amount,Still owed,Status\r\n1042,'=HYPERLINK(1),2026-10-05,,-12.5,0,Paid\r\n",
+      "Number,Customer,Date,Due,Amount,Still owed,Status,Line,Decided by\r\n1042,'=HYPERLINK(1),2026-10-05,,-12.5,0,Paid,Classes,Your choice\r\n",
     );
   });
 });

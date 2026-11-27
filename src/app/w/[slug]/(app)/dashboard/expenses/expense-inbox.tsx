@@ -371,18 +371,21 @@ export function ExpenseInbox({
 }
 
 /** Whole percents per line, saved only once they add up to 100 over two lines or more. */
-function SplitEditor({
+export function SplitEditor({
   lines,
   count,
   disabled,
   onSave,
   onCancel,
+  noun = ["expense", "expenses"],
 }: {
   lines: Line[];
   count: number;
   disabled: boolean;
   onSave: (split: Record<string, number>) => void;
   onCancel: () => void;
+  /** What is being split, one and many. */
+  noun?: readonly [string, string];
 }) {
   const [shares, setShares] = useState<Record<string, number>>({});
   const used = Object.entries(shares).filter(([, pct]) => pct > 0);
@@ -391,7 +394,7 @@ function SplitEditor({
   return (
     <fieldset className="border-border bg-card flex flex-col gap-3 rounded-md border p-3">
       <legend className="px-1 text-sm font-semibold">
-        Split {count === 1 ? "this expense" : `${count} expenses`} across your lines
+        Split {count === 1 ? `this ${noun[0]}` : `${count} ${noun[1]}`} across your lines
       </legend>
       <div className="flex flex-wrap gap-3">
         {lines.map((line) => (

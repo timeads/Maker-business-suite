@@ -128,19 +128,41 @@ export const bookAccountSchema = z.object({
 export type BookAccount = z.infer<typeof bookAccountSchema>;
 
 /**
+ * A default for every invoice to one customer of the books ("invoices to
+ * this customer go to…"), keyed by the books' customer id, else the exact
+ * name. Checked after a person's own choice for an invoice and before the
+ * invoice's income accounts.
+ */
+export const bookCustomerSchema = z.object({
+  ref: z
+    .string()
+    .regex(/^[A-Za-z0-9_-]{1,60}$/)
+    .nullable()
+    .default(null),
+  name: z.string().trim().min(1).max(200),
+  choice: bookAccountChoiceSchema,
+});
+export type BookCustomer = z.infer<typeof bookCustomerSchema>;
+
+/**
  * Revenue that didn't come through the shop, from the books. Off until a
  * person switches it on, so nothing a workspace already sees changes:
- * - `invoices`: paid invoices, before tax, by the invoice's day, each line in
- *   the line its income account is pointed at (`accounts`);
+ * - `invoices`: paid invoices, before tax, by the invoice's day, in the line
+ *   a person chose for the invoice, else its customer's (`customers`), else
+ *   each invoice line in the line its income account is pointed at
+ *   (`accounts`): `decideInvoice` in `book-revenue.ts`;
  * - `other_income`: the books' "other income" (interest, one-off income),
  *   which never holds shop sales, counted in `other_income_line` or, with no
- *   line, as other revenue beside the lines.
+ *   line, as other revenue beside the lines;
+ * - `customers`: a default line (or left out) for every invoice to one
+ *   customer, between an invoice's own choice and its accounts'.
  */
 export const booksRevenueSchema = z.object({
   invoices: z.boolean().default(false),
   other_income: z.boolean().default(false),
   other_income_line: id.nullable().default(null),
   accounts: z.array(bookAccountSchema).max(200).default([]),
+  customers: z.array(bookCustomerSchema).max(200).default([]),
 });
 export type BooksRevenue = z.infer<typeof booksRevenueSchema>;
 
@@ -149,6 +171,7 @@ export const DEFAULT_BOOKS_REVENUE: BooksRevenue = {
   other_income: false,
   other_income_line: null,
   accounts: [],
+  customers: [],
 };
 
 export const revenueSettingsSchema = z
@@ -222,6 +245,25 @@ export const revenueSettingsSchema = z
           code: "custom",
           path: ["books", "accounts", index, "choice"],
           message: "An account must point at one of the lines",
+        });
+      }
+    });
+    const customerKeys = new Set<string>();
+    books.customers.forEach((customer, index) => {
+      const key = customer.ref ? `ref:${customer.ref}` : `name:${customer.name}`;
+      if (customerKeys.has(key)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["books", "customers", index],
+          message: "Each customer can only be chosen once",
+        });
+      }
+      customerKeys.add(key);
+      if ("line" in customer.choice && !ids.has(customer.choice.line)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["books", "customers", index, "choice"],
+          message: "A customer's invoices must go to one of the lines",
         });
       }
     });

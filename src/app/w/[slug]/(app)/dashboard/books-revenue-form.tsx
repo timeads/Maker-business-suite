@@ -1,12 +1,13 @@
 "use client";
 
+import Link from "next/link";
 import { useActionState, useState } from "react";
 import { FormMessage } from "@/components/ui/form-message";
 import { Label, Select } from "@/components/ui/input";
 import { SubmitButton } from "@/components/ui/submit-button";
 import type { BookAccountChoice, BooksRevenue, BusinessLine } from "@/lib/dashboard/lines";
 import { formatMoney } from "@/lib/dashboard/format";
-import { saveBooksRevenue, type RevenueState } from "./actions";
+import { removeInvoiceCustomer, saveBooksRevenue, type RevenueState } from "./actions";
 
 export type AccountOption = {
   ref: string | null;
@@ -72,6 +73,8 @@ export function BooksRevenueForm({
         return choice && a.name ? [{ ref: a.ref, name: a.name, choice }] : [];
       }),
     ],
+    // Kept on the server as they are; changed from the invoice list.
+    customers: books.customers,
   };
 
   return (
@@ -171,5 +174,76 @@ export function BooksRevenueForm({
         Save
       </SubmitButton>
     </form>
+  );
+}
+
+/**
+ * The customers whose invoices go to one line by default, each with a way
+ * to take it away. Set from Money → Invoices.
+ */
+export function InvoiceCustomersList({
+  slug,
+  customers,
+  lines,
+  canEdit,
+  invoicesHref,
+}: {
+  slug: string;
+  customers: BooksRevenue["customers"];
+  lines: readonly BusinessLine[];
+  canEdit: boolean;
+  invoicesHref: string;
+}) {
+  const [state, action] = useActionState<RevenueState, FormData>(
+    removeInvoiceCustomer.bind(null, slug),
+    {},
+  );
+  const where = (choice: BookAccountChoice) =>
+    "line" in choice
+      ? (lines.find((l) => l.id === choice.line)?.name ?? "a line since removed")
+      : choice.skip === "shop"
+        ? "left out: your shop already counted them"
+        : "left out";
+  return (
+    <div className="flex flex-col gap-2">
+      <h3 className="text-sm font-semibold">Customers whose invoices always go to one line</h3>
+      {customers.length === 0 ? (
+        <p className="text-muted-foreground text-sm">
+          None yet. On{" "}
+          <Link href={invoicesHref} className="underline underline-offset-4">
+            Invoices
+          </Link>
+          , choose &ldquo;Always put this customer&apos;s invoices in…&rdquo; beside one of theirs.
+        </p>
+      ) : (
+        <ul className="divide-border border-border divide-y rounded-md border text-sm">
+          {customers.map((c) => (
+            <li
+              key={c.ref ? `ref:${c.ref}` : `name:${c.name}`}
+              className="flex flex-wrap items-center justify-between gap-2 px-3 py-2"
+            >
+              <span>
+                <span className="font-read">{c.name}</span> → {where(c.choice)}
+              </span>
+              {canEdit && (
+                <form action={action}>
+                  <input type="hidden" name="ref" value={c.ref ?? ""} />
+                  <input type="hidden" name="name" value={c.name} />
+                  <SubmitButton variant="ghost" size="sm">
+                    Take this away
+                  </SubmitButton>
+                </form>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      <FormMessage>{state.error}</FormMessage>
+      <FormMessage kind="success">{state.message}</FormMessage>
+      <p className="text-muted-foreground text-xs">
+        An invoice you sorted yourself keeps your choice; one with neither follows its income
+        accounts.
+      </p>
+    </div>
   );
 }

@@ -6,6 +6,8 @@ import { formatMoney } from "../dashboard/format";
 import { loadRevenueSettings } from "../dashboard/data";
 import { actionSchema, actionWords, type SortAction } from "../dashboard/expenses";
 import { DECISIONS, DECISION_WORDS } from "../dashboard/recurring";
+import { placeInvoice } from "../dashboard/book-revenue";
+import { invoiceSortArgs, invoiceSortSchema, placeWords } from "../dashboard/invoices";
 
 /**
  * The assistant's proposals that aren't settings (`action_proposals`): the
@@ -60,6 +62,14 @@ export const chargeBody = z
     decision: z.enum(DECISIONS).nullable(),
     note: z.string().max(500).default(""),
     monthly_cents: z.number().int().min(0).max(100_000_000_000),
+  })
+  .strict();
+
+/** Which business line some invoices count in (up to 20, by id; the model used `I1`…). */
+export const invoiceSortBody = z
+  .object({
+    invoices: z.array(z.string().uuid()).min(1).max(20),
+    choice: invoiceSortSchema,
   })
   .strict();
 
@@ -137,6 +147,61 @@ export async function previewAction(
       name: `Expense: ${expense.payee ?? expense.account ?? "no payee"}, ${money(Number(expense.amount_cents))} on ${expense.txn_date}`,
       before: [now ? actionWords(now, lineName) : "Not sorted yet"],
       after: [actionWords(change.data, lineName)],
+    };
+  }
+  if (row.kind === "money.invoice_sort") {
+    const body = invoiceSortBody.safeParse(row.body);
+    if (!body.success) return null;
+    const [{ data }, revenue] = await Promise.all([
+      supabase
+        .from("book_invoices")
+        .select("id, doc_number, customer, customer_ref, txn_date, lines, sort, line_id, split")
+        .eq("tenant_id", tenant.id)
+        .in("id", body.data.invoices)
+        .is("removed_at", null),
+      loadRevenueSettings(supabase, tenant.id),
+    ]);
+    const found = (data ?? []) as Record<string, unknown>[];
+    if (found.length === 0) return null;
+    const lineName = (id: string) =>
+      revenue.lines.find((l) => l.id === id)?.name ?? "a line since removed";
+    const choice = body.data.choice;
+    // What each would be after: worked out by the same rule as every figure.
+    const after =
+      choice.sort === "none"
+        ? { sort: null, line_id: null, split: null }
+        : {
+            sort: choice.sort,
+            line_id: choice.sort === "line" ? choice.line : null,
+            split: choice.sort === "split" ? choice.split : null,
+          };
+    const words = (r: Record<string, unknown>, facts: Record<string, unknown>) => {
+      const place = placeWords(
+        placeInvoice(revenue, {
+          sort: (facts.sort as string | null) ?? null,
+          line_id: (facts.line_id as string | null) ?? null,
+          split: facts.split ?? null,
+          customer_ref: (r.customer_ref as string | null) ?? null,
+          customer: (r.customer as string | null) ?? null,
+          lines: (Array.isArray(r.lines) ? (r.lines as Record<string, unknown>[]) : []).map(
+            (l) => ({
+              account_ref: (l.account_ref as string | null) ?? null,
+              account: (l.account as string | null) ?? null,
+              cents: Number(l.cents ?? 0) || 0,
+            }),
+          ),
+        }),
+        lineName,
+      );
+      return `${place.line} (${place.why.toLowerCase()})`;
+    };
+    const label = (r: Record<string, unknown>) =>
+      `Invoice ${r.doc_number ?? "with no number"} to ${r.customer ?? "no customer"}, ${r.txn_date}`;
+    return {
+      ...base,
+      name: found.length === 1 ? label(found[0]) : `${found.length} invoices from your books`,
+      before: found.map((r) => `${label(r)}: ${words(r, r)}`),
+      after: found.map((r) => `${label(r)}: ${words(r, after)}`),
     };
   }
   if (row.kind === "money.budget") {
@@ -265,6 +330,20 @@ export async function applyAction(
       });
       if (error?.code === "22023") return { error: `${error.message}.` };
       if (!error && data === 0) return { error: "That expense is gone from your books." };
+      return plain(error);
+    }
+    case "money.invoice_sort": {
+      const body = invoiceSortBody.safeParse(row.body);
+      if (!body.success) return misfit;
+      const { data, error } = await supabase.rpc("sort_book_invoices", {
+        p_tenant_id: tenantId,
+        p_ids: body.data.invoices,
+        ...invoiceSortArgs(body.data.choice),
+      });
+      if (error?.code === "22023") return { error: `${error.message}.` };
+      if (!error && data === 0 && body.data.choice.sort !== "none") {
+        return { error: "Those invoices are gone from your books." };
+      }
       return plain(error);
     }
     case "money.budget": {

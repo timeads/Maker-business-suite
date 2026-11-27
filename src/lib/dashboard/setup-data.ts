@@ -1,17 +1,27 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { invoiceAccounts as mergeInvoiceAccounts } from "./book-revenue";
-import type { BooksRevenue } from "./lines";
+import { invoiceSorting } from "./book-revenue";
 
-const invoiceAccountRows = (books: BooksRevenue, rows: Record<string, unknown>[]) =>
-  mergeInvoiceAccounts(
-    books,
-    rows.map((row) => ({
-      account_ref: (row.account_ref as string | null) ?? null,
-      account: (row.account as string | null) ?? null,
-      invoices: Number(row.invoices),
-      cents: Number(row.cents),
-    })),
-  );
+/**
+ * How many invoices (since a day, or all) still wait for a line, by the one
+ * rule (`private.money_invoice_waiting`, the twin of `decideInvoice`), and
+ * what they come to before tax. Null when it can't be told (a database from
+ * before invoices were sorted one by one).
+ */
+export async function loadInvoicesWaiting(
+  supabase: SupabaseClient,
+  tenantId: string,
+  revenue: RevenueSettings,
+  since: string | null = null,
+): Promise<{ invoices: number; cents: number } | null> {
+  const { data, error } = await supabase.rpc("money_invoice_sorting_counts", {
+    p_tenant_id: tenantId,
+    p_sorting: invoiceSorting(revenue),
+    p_since: since,
+  });
+  if (error) return null;
+  const row = ((data as Record<string, unknown>[] | null) ?? [])[0];
+  return row ? { invoices: Number(row.waiting ?? 0), cents: Number(row.waiting_cents ?? 0) } : null;
+}
 import { loadCutterSettings, loadProfitSettings } from "./data";
 import { loadBooksState, loadDebtBook, loadDebtSettings } from "./debt/data";
 import { foldPayments } from "./debt/plans";
@@ -47,7 +57,7 @@ export async function loadMoneySetupFacts(
   const local = localDate(now, tenant.timezone);
   const today = `${local.year}-${String(local.month).padStart(2, "0")}-${String(local.day).padStart(2, "0")}`;
 
-  const [connections, profit, expenses, accounts, budget, debts, share, cutter, invoiceAccounts] =
+  const [connections, profit, expenses, accounts, budget, debts, share, cutter, invoicesWaiting] =
     await Promise.all([
       supabase
         .from("connections")
@@ -77,21 +87,10 @@ export async function loadMoneySetupFacts(
       opts.deep
         ? loadCutterWaiting(supabase, tenant.id, today).catch(() => null)
         : Promise.resolve(null),
-      // Only when paid invoices count: which of their income accounts have no choice yet.
+      // Only when paid invoices count: how many invoices aren't in a line yet.
       opts.revenue.books.invoices && hasLines(opts.revenue)
-        ? Promise.resolve(
-            supabase.rpc("money_invoice_accounts", {
-              p_tenant_id: tenant.id,
-              p_since: `${local.year - 3}-01-01`,
-            }),
-          ).then(
-            ({ data, error }) =>
-              error
-                ? null
-                : invoiceAccountRows(
-                    opts.revenue.books,
-                    (data as Record<string, unknown>[]) ?? [],
-                  ).filter((a) => a.name !== null && a.choice === null).length,
+        ? loadInvoicesWaiting(supabase, tenant.id, opts.revenue, `${local.year - 3}-01-01`).then(
+            (waiting) => waiting?.invoices ?? null,
             () => null,
           )
         : Promise.resolve(null),
@@ -127,7 +126,7 @@ export async function loadMoneySetupFacts(
     budgetRows: budget.error ? null : (budget.count ?? 0),
     defaultShare: share,
     cutterWaiting: cutter,
-    invoiceAccountsWaiting: invoiceAccounts,
+    invoicesWaiting,
     debts,
   };
 }

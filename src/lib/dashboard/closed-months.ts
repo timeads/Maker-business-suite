@@ -18,17 +18,18 @@ export { CLOSED_MONTHS, type ClosedMonths } from "./lines";
  *
  * How a books month is shared among the business lines, in this order
  * (the precedence, so nothing is counted twice):
- *   1. Paid invoices whose income account is pointed at a line go to that
- *      line. They are inside the books' income already, so they are carved
- *      out of it, never added on top.
+ *   1. Paid invoices in a line (by a person's choice for the invoice, its
+ *      customer's default or its income account: `decideInvoice`) go to
+ *      that line. They are inside the books' income already, so they are
+ *      carved out of it, never added on top.
  *   2. The rest of the books' income is shared among the lines in the
  *      proportions the shop's own sales fell into them that month
  *      (`splitCents`, so the shares add up to the cent). The shop knows
  *      product from workshop; the books know the total.
  *   3. With no shop sales that month to share by (or no lines set up), the
  *      rest is "Other revenue from your books", beside the lines.
- * Invoices on accounts marked as the shop's own sales, left out, or not
- * chosen yet are inside the books' income too and are never added again.
+ * Invoices the shop already counted, left out, or not sorted yet are inside
+ * the books' income too and are never added again.
  * The books' OTHER income (below the operating line) is not in the month's
  * income at all: it still follows the "other income" switch, in a line or
  * beside them, in every month alike.

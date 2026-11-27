@@ -8,6 +8,7 @@ import {
   orderExplained,
   profitExplained,
   revenueExplained,
+  invoiceLineExplained,
 } from "./explain";
 import { DEFAULT_REVENUE_SETTINGS, type RevenueSettings } from "./lines";
 import { DEFAULT_PROFIT_SETTINGS } from "./profit";
@@ -172,9 +173,12 @@ describe("booksRevenueExplained", () => {
           { ref: "79", name: "Class income", choice: { line: "classes" } },
           { ref: null, name: "Sales", choice: { skip: "shop" } },
         ],
+        customers: [{ ref: "7", name: "Maple Library", choice: { line: "classes" } }],
       },
     });
     expect(words.join(" ")).toContain("Class income → Classes");
+    expect(words.join(" ")).toContain("your own choice for that invoice");
+    expect(words.join(" ")).toContain("Invoices to Maple Library go where you chose");
     expect(words.join(" ")).toContain(
       "Sales holds your shop's own sales, so it's left out: those sales already count from the shop.",
     );
@@ -185,5 +189,46 @@ describe("booksRevenueExplained", () => {
 
   it("explains an invoice's standing beside the list", () => {
     expect(invoicesExplained(LINES)[1]).toMatch(/overdue once its due day has gone by/);
+  });
+});
+
+describe("why one invoice counts where it does", () => {
+  const base = {
+    state: "sorted" as const,
+    split: false,
+    shop: false,
+    customer: "Maple Library",
+    paid: true,
+    counting: true,
+  };
+  it("names who decided, strongest first", () => {
+    expect(invoiceLineExplained({ ...base, by: "person" })[0]).toMatch(
+      /chose this for this invoice yourself/,
+    );
+    expect(invoiceLineExplained({ ...base, by: "customer" })[0]).toMatch(
+      /invoices to Maple Library/,
+    );
+    expect(invoiceLineExplained({ ...base, by: "account" })[0]).toMatch(
+      /income account is pointed/,
+    );
+    expect(invoiceLineExplained({ ...base, by: "account", state: "waiting" })[0]).toMatch(
+      /counts nowhere yet/,
+    );
+  });
+  it("says how a split and the shop's own sales are counted, and when it will count", () => {
+    const words = invoiceLineExplained({
+      ...base,
+      by: "person",
+      split: true,
+      paid: false,
+    }).join(" ");
+    expect(words).toMatch(/to the cent/);
+    expect(words).toMatch(/counts once it's paid/);
+    expect(invoiceLineExplained({ ...base, by: "person", shop: true }).join(" ")).toMatch(
+      /never counts twice/,
+    );
+    expect(invoiceLineExplained({ ...base, by: "account", counting: false }).join(" ")).toMatch(
+      /switch on/,
+    );
   });
 });
