@@ -15,7 +15,12 @@ import {
   type MatchKind,
   type RevenueSettings,
 } from "@/lib/dashboard/lines";
-import { saveBusinessLines, saveRevenueFigure, type RevenueState } from "./actions";
+import {
+  saveBusinessLines,
+  saveClosedMonths,
+  saveRevenueFigure,
+  type RevenueState,
+} from "./actions";
 
 /** Which figure counts as revenue, and whether a class counts in the month it runs. */
 export function RevenueFigureForm({
@@ -65,6 +70,59 @@ export function RevenueFigureForm({
           </span>
         </span>
       </label>
+      <FormMessage>{state.error}</FormMessage>
+      <FormMessage kind="success">{state.message}</FormMessage>
+      <SubmitButton variant="outline" pendingText="Saving…" className="sm:w-fit">
+        Save
+      </SubmitButton>
+    </form>
+  );
+}
+
+/** Where a month that has ended takes its revenue from: the shop's sales or the books' income. */
+export function ClosedMonthsForm({
+  slug,
+  closed,
+}: {
+  slug: string;
+  closed: RevenueSettings["closed_months"];
+}) {
+  const [state, action] = useActionState<RevenueState, FormData>(
+    saveClosedMonths.bind(null, slug),
+    {},
+  );
+  const choices = [
+    {
+      value: "shop",
+      label: "Your shop's sales, every month",
+      hint: "As Money has always counted it.",
+    },
+    {
+      value: "books",
+      label: "Your books, once a month has ended",
+      hint: "Each month your books have closed takes its revenue from their income: the final number. This month stays on your shop's sales until then, and your shop's sales still decide how each month splits into your lines.",
+    },
+  ] as const;
+  return (
+    <form action={action} className="flex flex-col gap-4">
+      <fieldset className="flex flex-col gap-2">
+        <legend className="mb-1 text-sm font-semibold">For a month that has ended, count</legend>
+        {choices.map((choice) => (
+          <label key={choice.value} className="flex items-start gap-2 text-sm">
+            <input
+              type="radio"
+              name="closed_months"
+              value={choice.value}
+              defaultChecked={closed === choice.value}
+              className="mt-1"
+            />
+            <span>
+              {choice.label}
+              <span className="text-muted-foreground block text-xs">{choice.hint}</span>
+            </span>
+          </label>
+        ))}
+      </fieldset>
       <FormMessage>{state.error}</FormMessage>
       <FormMessage kind="success">{state.message}</FormMessage>
       <SubmitButton variant="outline" pendingText="Saving…" className="sm:w-fit">

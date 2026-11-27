@@ -94,6 +94,38 @@ export function booksRevenueExplained(settings: RevenueSettings): string[] {
   return out;
 }
 
+/**
+ * Where a complete month's revenue comes from (the `closed_months` setting),
+ * and how a books month is shared among the lines without counting twice.
+ */
+export function closedMonthsExplained(settings: RevenueSettings): string[] {
+  if (settings.closed_months !== "books") {
+    return [
+      "Every month's revenue is your shop's sales, with what your books add beside it where you've chosen that.",
+      "You can make your books the final number for months that have closed: they hold what really came in.",
+    ];
+  }
+  const out = [
+    "For every month that has ended and that your books have a profit and loss for, revenue is the books' income for that month. That's the final number.",
+    "This month, and any month your books don't have yet, stays on your shop's sales until the books close it. Where a date range mixes the two, Money says so.",
+  ];
+  if (hasLines(settings)) {
+    out.push(
+      settings.books.invoices
+        ? "A books month is shared among your lines like this: paid invoices on an account pointed at a line go to that line first (they're already inside the books' income, so they're never added on top); the rest is shared in the same proportions as your shop's own sales that month."
+        : "A books month is shared among your lines in the same proportions as your shop's own sales that month, so your shop still decides what's product and what's classes.",
+      "A books month with no shop sales to share by shows as other revenue from your books, beside your lines.",
+    );
+  }
+  out.push(
+    settings.books.other_income
+      ? "Your books' other income isn't part of a month's income; it's still added as you chose below."
+      : "Your books' other income (interest, one-off income) isn't part of a month's income, and stays out unless you add it below.",
+    "By day or by week, figures are always your shop's: your books close by month.",
+  );
+  return out;
+}
+
 /** What the invoice list shows and how its standing is decided. */
 export function invoicesExplained(settings: RevenueSettings): string[] {
   return [

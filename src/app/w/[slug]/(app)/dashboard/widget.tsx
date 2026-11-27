@@ -480,13 +480,22 @@ export function Widget({
       break;
   }
 
+  // Closed months from the books: which months are the books' and which the shop's.
+  const closedNote = "closedNote" in data ? data.closedNote : null;
+  const content = (
+    <CardContent>
+      {body}
+      {closedNote && (
+        <p className="text-muted-foreground mt-3 text-xs" role="note">
+          {closedNote}
+        </p>
+      )}
+    </CardContent>
+  );
+
   // The key figures row is its own heading; a card title would repeat it.
   if (data.type === "key_figures") {
-    return (
-      <Card className={widget.size === "full" ? "lg:col-span-2" : undefined}>
-        <CardContent>{body}</CardContent>
-      </Card>
-    );
+    return <Card className={widget.size === "full" ? "lg:col-span-2" : undefined}>{content}</Card>;
   }
   return (
     <Card className={widget.size === "full" ? "lg:col-span-2" : undefined}>
@@ -494,7 +503,7 @@ export function Widget({
         <CardTitle className="text-base">{title}</CardTitle>
         {description && <CardDescription>{description}</CardDescription>}
       </CardHeader>
-      <CardContent>{body}</CardContent>
+      {content}
     </Card>
   );
 }

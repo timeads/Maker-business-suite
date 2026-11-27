@@ -39,6 +39,14 @@ export const FIGURE_WORDS: Record<
   },
 };
 
+/**
+ * Where a complete month's revenue comes from: the shop's sales (the
+ * default, as before) or the books' income for the month, shared among the
+ * lines as the shop's sales were (`closed-months.ts`).
+ */
+export const CLOSED_MONTHS = ["shop", "books"] as const;
+export type ClosedMonths = (typeof CLOSED_MONTHS)[number];
+
 export const MATCH_KINDS = ["order_tag", "product_tag", "product_type", "workshop"] as const;
 export type MatchKind = (typeof MATCH_KINDS)[number];
 
@@ -147,6 +155,8 @@ export const revenueSettingsSchema = z
   .object({
     version: z.literal(1),
     figure: z.enum(REVENUE_FIGURES).default("net_sales"),
+    /** Closed months from the books (the master number) or the shop. */
+    closed_months: z.enum(CLOSED_MONTHS).default("shop"),
     /** A class sale counts in the month the class runs, not the month it was bought. */
     by_class_date: z.boolean().default(false),
     lines: z.array(businessLineSchema).max(12).default([]),
@@ -221,6 +231,7 @@ export type RevenueSettings = z.infer<typeof revenueSettingsSchema>;
 export const DEFAULT_REVENUE_SETTINGS: RevenueSettings = {
   version: 1,
   figure: "net_sales",
+  closed_months: "shop",
   by_class_date: false,
   lines: [],
   default_line: null,

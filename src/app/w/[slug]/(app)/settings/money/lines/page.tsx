@@ -16,11 +16,15 @@ import { localDate, startOfLocalDay } from "@/lib/dashboard/range";
 import { getEntitlements } from "@/lib/entitlements";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
-import { BusinessLinesForm, RevenueFigureForm } from "../../../dashboard/revenue-forms";
+import {
+  BusinessLinesForm,
+  ClosedMonthsForm,
+  RevenueFigureForm,
+} from "../../../dashboard/revenue-forms";
 import { BooksRevenueForm } from "../../../dashboard/books-revenue-form";
 import { HowWorkedOut } from "@/components/setup/how-worked-out";
 import { invoiceAccounts } from "@/lib/dashboard/book-revenue";
-import { booksRevenueExplained } from "@/lib/dashboard/explain";
+import { booksRevenueExplained, closedMonthsExplained } from "@/lib/dashboard/explain";
 
 export const metadata: Metadata = { title: "Revenue and business lines" };
 
@@ -148,6 +152,29 @@ export default async function RevenueLinesSettings({
               <li className="text-muted-foreground">An owner or admin can change these.</li>
             </ul>
           )}
+        </CardContent>
+      </Card>
+
+      <Card id="closed-months" className="scroll-mt-4">
+        <CardHeader>
+          <CardTitle>Months that have ended</CardTitle>
+          <CardDescription>
+            Your shop knows what was product and what was classes; your books hold the final number
+            once a month is closed. Choose which Money shows for past months.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          {canEdit ? (
+            <ClosedMonthsForm slug={tenant.slug} closed={settings.closed_months} />
+          ) : (
+            <p className="text-sm">
+              {settings.closed_months === "books"
+                ? "Months that have ended take their revenue from your books."
+                : "Every month's revenue is your shop's sales."}{" "}
+              <span className="text-muted-foreground">An owner or admin can change this.</span>
+            </p>
+          )}
+          <HowWorkedOut lines={closedMonthsExplained(settings)} />
         </CardContent>
       </Card>
 

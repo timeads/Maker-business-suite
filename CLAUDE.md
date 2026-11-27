@@ -136,7 +136,18 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   tags a line rule names, and `queue_commerce_detail_reads` reads each older
   shop's history once (done only when the new code's full read says so).
   Keep `tests/db/money-lines.test.ts` and `money-order-details.test.ts`
-  passing.
+  passing. `closed_months` (`shop`, the default, or `books`): with `books`
+  every complete month (workspace timezone) the range covers whole and the
+  books have a P&L for takes its revenue from the books' income
+  (`closed-months.ts`, `rangeRevenue`): paid invoices pointed at a line go
+  to it first (inside that income, never on top), the rest is shared by the
+  shop's own split that month (`splitCents`), with no shop sales it is other
+  revenue beside the lines; other income still follows its own switch; the
+  month in progress, a month the books lack and day or week charts stay the
+  shop's, and a range that mixes says so (`mixNote`). Every revenue figure
+  in `loadDashboardData` (key figures, sales over time, revenue by line and
+  over time, profit by line, and so exports and the projection's mix) goes
+  through that one table; keep the "closed months" tests in `data.test.ts`.
   Expenses (Money → Expenses to sort; docs/money-side-by-side.md): for a
   workspace with Money, the QuickBooks sync (read-only, the accounting
   scope already granted) reads purchases, bills, journal entries' debit

@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/auth";
 import { loadRevenueSettings } from "@/lib/dashboard/data";
 import {
+  CLOSED_MONTHS,
   REVENUE_FIGURES,
   REVENUE_KEY,
   REVENUE_MODULE,
@@ -111,6 +112,25 @@ export async function saveRevenueFigure(
       by_class_date: formData.get("by_class_date") === "on",
     }),
     "Saved. Money counts it this way from now on, for every date range.",
+  );
+}
+
+/** Where a complete month's revenue comes from: the shop's sales or the books' income. */
+export async function saveClosedMonths(
+  slug: string,
+  _prev: RevenueState,
+  formData: FormData,
+): Promise<RevenueState> {
+  const closed = formData.get("closed_months");
+  if (!(CLOSED_MONTHS as readonly unknown[]).includes(closed)) {
+    return { error: "Choose where a closed month's revenue comes from." };
+  }
+  return saveRevenue(
+    slug,
+    (current) => ({ ...current, closed_months: closed }),
+    closed === "books"
+      ? "Saved. Months that have ended now take their revenue from your books."
+      : "Saved. Every month is your shop's sales again.",
   );
 }
 

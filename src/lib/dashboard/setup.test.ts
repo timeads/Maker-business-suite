@@ -15,6 +15,7 @@ const NOW = new Date("2026-11-26T15:00:00Z");
 const fresh = { status: "active" as const, lastSyncedAt: "2026-11-26T09:00:00Z", lastError: null };
 const LINES: RevenueSettings = {
   ...DEFAULT_REVENUE_SETTINGS,
+  closed_months: "books",
   lines: [
     { id: "shop", name: "Shop" },
     { id: "classes", name: "Classes" },
@@ -61,6 +62,21 @@ describe("moneySetupItems", () => {
     });
   });
 
+  it("offers the books as the final number, optionally, once QuickBooks is connected", () => {
+    const shop = { ...LINES, closed_months: "shop" as const };
+    const [item] = moneySetupItems(base({ revenue: shop }));
+    expect(item).toMatchObject({
+      id: "revenue.closed-months",
+      to: "settings/money/lines#closed-months",
+      optional: true,
+      managersOnly: true,
+    });
+    expect(idsOf(base({ revenue: shop, books: null }))).not.toContain("revenue.closed-months");
+    expect(
+      idsOf(base({ revenue: shop, books: { ...fresh, status: "needs_reconnect" } })),
+    ).not.toContain("revenue.closed-months");
+  });
+
   it("asks for the connections first, and only what's missing", () => {
     expect(idsOf(base({ books: null }))).toEqual(["books.connect"]);
     expect(
@@ -75,7 +91,7 @@ describe("moneySetupItems", () => {
 
   it("asks for business lines once a shop is connected, and the split and accounts only after", () => {
     const none = base({
-      revenue: DEFAULT_REVENUE_SETTINGS,
+      revenue: { ...DEFAULT_REVENUE_SETTINGS, closed_months: "books" },
       profit: DEFAULT_PROFIT_SETTINGS,
       accounts: { total: 20, automatic: 20 },
     });

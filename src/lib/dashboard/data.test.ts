@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { describe, expect, it } from "vitest";
-import { loadDashboardConfig, loadDashboardData } from "./data";
+import { loadDashboardConfig, loadDashboardData, type WidgetData } from "./data";
 import { revenueSettingsSchema, type RevenueSettings } from "./lines";
 import { resolveRange } from "./range";
 import { dashboardSchema } from "./schema";
@@ -779,5 +779,117 @@ describe("the month so far, the books' summary and shipping", () => {
     const books = data.b as Extract<typeof data.b, { type: "books_summary" }>;
     expect(books.costs.find((p) => p.key === "2026-10-01")?.value).toBe(600);
     expect(data.s).toMatchObject({ type: "shipping_margin", net: 600, share: 0.2, uncosted: 0 });
+  });
+});
+
+describe("closed months from the books", () => {
+  // Made-up figures: the shop sells in June, September, October and
+  // November; the books have June to October.
+  const settings = revenueSettingsSchema.parse({
+    ...LINES,
+    closed_months: "books",
+    books: {
+      invoices: true,
+      other_income: true,
+      accounts: [{ ref: "79", name: "Class income", choice: { line: "classes" } }],
+    },
+  });
+  const salesRows = [
+    { period: "2026-06-01", order_count: 1, net_sales: 100, cost: 0, costed_sales: 0 },
+    { period: "2026-09-01", order_count: 3, net_sales: 300, cost: 0, costed_sales: 0 },
+    { period: "2026-10-01", order_count: 4, net_sales: 400, cost: 0, costed_sales: 0 },
+    { period: "2026-11-01", order_count: 2, net_sales: 250, cost: 0, costed_sales: 0 },
+  ];
+  const lineRows = [
+    group({ period: "2026-06-01", revenue_cents: "10000" }),
+    group({ period: "2026-09-01", revenue_cents: "20000" }),
+    group({ period: "2026-09-01", workshop: true, revenue_cents: "10000" }),
+    group({ period: "2026-10-01", revenue_cents: "30000" }),
+    group({ period: "2026-10-01", workshop: true, revenue_cents: "10000" }),
+    group({ period: "2026-11-01", revenue_cents: "25000" }),
+  ];
+  const pnl = (month: string, income: number, other?: number) => ({
+    kind: "profit_and_loss",
+    period_start: `${month}-01`,
+    data: { income, ...(other === undefined ? {} : { other_income_cents: other }) },
+  });
+  const load = async (widgets: unknown[], revenue = settings) => {
+    const { supabase } = fakeSupabase(
+      {
+        dashboard_sales_by_period: () => salesRows,
+        money_line_revenue: () => lineRows,
+        money_invoice_revenue: () => [
+          { period: "2026-10-01", account_ref: "79", account: "Class income", cents: "5000" },
+          { period: "2026-11-01", account_ref: "79", account: "Class income", cents: "700" },
+        ],
+      },
+      {
+        configs: { profit: { version: 1 } },
+        snapshots: [
+          pnl("2026-06", 999, 0),
+          pnl("2026-07", 50, 0),
+          pnl("2026-08", 60, 0),
+          pnl("2026-09", 330.01, 100),
+          pnl("2026-10", 500, 0),
+        ],
+      },
+    );
+    return loadDashboardData(supabase, TENANT, config(widgets), RANGE, revenue, NOW);
+  };
+  const ALL = [
+    { id: "k", type: "key_figures" },
+    { id: "s", type: "sales_over_time", grouping: "month" },
+    { id: "l", type: "revenue_by_line" },
+    { id: "t", type: "revenue_by_line_over_time", grouping: "month" },
+    { id: "p", type: "profit_by_line" },
+  ];
+
+  it("takes complete months from the books, and the rest from the shop", async () => {
+    const data = await load(ALL);
+    // November is still going: the shop's. June to October: the books' income
+    // (October's invoice is inside it).
+    const sales = 999 + 50 + 60 + 330.01 + 500 + 250;
+    const k = data.k as Extract<WidgetData, { type: "key_figures" }>;
+    expect(k.sales).toBeCloseTo(sales, 6);
+    // Beside: November's invoice and September's other income only.
+    expect(k.fromBooks).toBe(700 + 100);
+    expect(k.closedNote).toMatch(/Jun 2026 to Oct 2026 are from your books/);
+    expect(k.closedNote).toMatch(/Nov 2026 so far/);
+
+    const s = data.s as Extract<WidgetData, { type: "sales_over_time" }>;
+    expect(s.points.map((p) => p.value)).toEqual([999, 50, 60, 330.01, 500, 250]);
+    expect(s.total).toBeCloseTo(sales, 6);
+
+    const l = data.l as Extract<WidgetData, { type: "revenue_by_line" }>;
+    const lineSum = l.rows.reduce((a, r) => a + r.value, 0);
+    // The range total is the months' sum and the lines' sum, with what the books add beside.
+    expect(l.total).toBeCloseTo(sales + 7 + 1, 6);
+    expect(lineSum).toBeCloseTo(l.total, 6);
+    // July and August had no shop sales to share by: other revenue from the books.
+    expect(l.rows.find((r) => r.name === "Other revenue")?.value).toBeCloseTo(110 + 1, 6);
+    // October: the class invoice first, then 450 shared 3:1 by the shop's own split.
+    // September: 330.01 shared 2:1.
+    const classes = l.rows.find((r) => r.name === "Classes")?.value ?? 0;
+    expect(classes).toBeCloseTo(50 + 112.5 + 110 + 7, 6);
+
+    const t = data.t as Extract<WidgetData, { type: "revenue_by_line_over_time" }>;
+    const overTime = t.series.reduce((a, line) => a + line.total, 0);
+    expect(overTime).toBeCloseTo(lineSum - 111, 6);
+
+    const p = data.p as Extract<WidgetData, { type: "profit_by_line" }>;
+    const revenue = p.rows.reduce((a, r) => a + r.revenue, 0);
+    expect(revenue).toBe(Math.round(lineSum * 100) - 11100);
+    for (const source of p.sources) {
+      const row = p.rows.find((r) => r.id === source.id);
+      expect(source.shop + source.books + source.typed).toBe(row?.revenue);
+    }
+  });
+
+  it("changes nothing while the setting is the shop's", async () => {
+    const shopOnly = revenueSettingsSchema.parse({ ...settings, closed_months: "shop" });
+    const data = await load(ALL, shopOnly);
+    const k = data.k as Extract<WidgetData, { type: "key_figures" }>;
+    expect(k.sales).toBe(1050);
+    expect(k.closedNote).toBeNull();
   });
 });

@@ -309,6 +309,19 @@ export function moneySetupItems(facts: MoneySetupFacts): SetupItem[] {
   }
 
   const booksOn = facts.books !== null && facts.books.status !== "disconnected";
+  if (facts.books?.status === "active" && facts.revenue.closed_months === "shop") {
+    items.push({
+      id: "revenue.closed-months",
+      title: "Make your books the final number for months that have ended",
+      why: "Your books hold what really came in once a month closes. Your shop's sales still decide how each month splits into your lines.",
+      to: "settings/money/lines#closed-months",
+      action: "Have a look",
+      facts: "shop",
+      step: "lines",
+      optional: true,
+      managersOnly: true,
+    });
+  }
   if (booksOn && facts.budgetRows === 0) {
     items.push({
       id: "budget.empty",
