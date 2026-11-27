@@ -4,6 +4,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
+import { SetupCard } from "@/components/setup/setup-card";
+import { BOOKINGS_TOOL, bookingsSetupItems } from "@/lib/bookings/setup";
+import { loadBookingsSetupFacts, type ServiceRow } from "@/lib/bookings/setup-data";
+import { loadNotNow } from "@/lib/setup/data";
+import { sortItems, type SetupItem } from "@/lib/setup/items";
 import { isFull, loadSeatFigures, overShared, sharedWords } from "@/lib/bookings/seats";
 import { daysFromNow, formatDay, formatTime, localDay } from "@/lib/bookings/slots";
 import { formatMoney } from "@/lib/dashboard/format";
@@ -50,10 +55,13 @@ export default async function BookingsPage({ params }: { params: Promise<{ slug:
     site,
     { data: recent },
     { count: needDate },
+    notNow,
   ] = await Promise.all([
     supabase
       .from("services")
-      .select("id, kind, name, slug, duration_minutes, price_cents, active")
+      .select(
+        "id, kind, name, slug, duration_minutes, price_cents, active, shop_product_id, shop_linked_at",
+      )
       .eq("tenant_id", tenant.id)
       .order("name"),
     supabase
@@ -91,7 +99,16 @@ export default async function BookingsPage({ params }: { params: Promise<{ slug:
       .is("dismissed_at", null)
       .gt("seats", 0)
       .eq("order_cancelled", false),
+    loadNotNow(supabase, tenant.id, BOOKINGS_TOOL),
   ]);
+  // "Finish setting up", from the services just read and a few small counts. Never stops the page.
+  const setupItems = await loadBookingsSetupFacts(supabase, tenant, {
+    manager: canManage(role),
+    can: (feature) => entitlements.can(feature),
+    services: (services ?? []) as ServiceRow[],
+  })
+    .then((facts) => sortItems(bookingsSetupItems(facts), notNow).open)
+    .catch((): SetupItem[] => []);
   const upcoming = ((sessions ?? []) as unknown as SessionRow[]).filter(
     (s) => s.bookings.some((b) => b.status === "confirmed") || s.capacity > 1,
   );
@@ -158,6 +175,16 @@ export default async function BookingsPage({ params }: { params: Promise<{ slug:
           <a href={bookingUrl}>See your booking page</a>
         </Button>
       </PageHeader>
+
+      <SetupCard
+        slug={tenant.slug}
+        tool={BOOKINGS_TOOL}
+        items={setupItems}
+        canSnooze={canEdit}
+        canAct={canEdit}
+        setupHref="bookings/setup"
+        ending="would make booking smoother"
+      />
 
       {Boolean(needDate) && (
         <p className="bg-note rounded-md px-4 py-3 text-sm">

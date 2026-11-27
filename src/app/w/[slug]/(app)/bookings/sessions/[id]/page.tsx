@@ -6,6 +6,14 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
+import { HowWorkedOut } from "@/components/setup/how-worked-out";
+import { readEmailSettings } from "@/lib/bookings/email-settings";
+import {
+  emailTimingExplained,
+  oversoldExplained,
+  seatsExplained,
+  zoneExplained,
+} from "@/lib/bookings/explain";
 import { shopLinks } from "@/lib/helpdesk/customer";
 import { loadReturning } from "@/lib/bookings/runsheet-data";
 import { limitsToFit, loadSeatFigures, overShared, sharedWords } from "@/lib/bookings/seats";
@@ -97,6 +105,7 @@ export default async function SessionPage({
     { data: sameTime },
     { data: shop },
     { data: eventbriteRow },
+    emailSettings,
   ] = await Promise.all([
     supabase
       .from("bookings")
@@ -158,6 +167,8 @@ export default async function SessionPage({
       .maybeSingle(),
     // Where this date is sold on Eventbrite too, and how its places stand there.
     supabase.from("eventbrite_listings").select(LISTING_COLUMNS).eq("session_id", id).maybeSingle(),
+    // When the automatic emails go, for "How this is worked out".
+    readEmailSettings(supabase, tenant.id),
   ]);
   const overlapping = (
     (sameTime ?? []) as unknown as {
@@ -295,6 +306,42 @@ export default async function SessionPage({
         <p className="bg-note font-read rounded-md px-4 py-3 text-sm whitespace-pre-wrap">
           {session.notes}
         </p>
+      )}
+
+      {live && (
+        <div className="flex flex-col gap-1 print:hidden">
+          <HowWorkedOut
+            label="How the places left are worked out"
+            lines={seatsExplained(mine, {
+              capacity: session.capacity,
+              closed: session.bookings_closed,
+              private: session.private,
+            })}
+          />
+          {coming.some((b) => b.oversold) && (
+            <HowWorkedOut
+              label="Why someone is over the limit"
+              lines={oversoldExplained({
+                oversold: coming.filter((b) => b.oversold).length,
+                taken,
+                capacity: session.capacity,
+              })}
+            />
+          )}
+          <HowWorkedOut
+            label="When the reminder and thank-you go"
+            lines={emailTimingExplained(emailSettings.timing, session, tenant.timezone)}
+            change={
+              manager
+                ? { href: `/w/${tenant.slug}/settings/bookings`, label: "Change when they go" }
+                : null
+            }
+          />
+          <HowWorkedOut
+            label="Which clock these times are on"
+            lines={zoneExplained(tenant.timezone, session.starts_at)}
+          />
+        </div>
       )}
 
       <Card>
