@@ -170,6 +170,9 @@ describe("the bookings file", () => {
       reminder_sent_at: "2027-03-04T15:00:00.000Z",
       day_of_sent_at: null,
       followup_sent_at: null,
+      reminder_text_sent_at: null,
+      day_of_text_sent_at: null,
+      followup_text_sent_at: null,
       amount_cents: null,
     });
     expect(r.payload[1]).toMatchObject({
@@ -178,8 +181,24 @@ describe("the bookings file", () => {
       email_opt_in: false,
       tags: ["eventbrite"],
     });
-    expect(r.notes.join(" ")).toMatch(/Nobody is emailed/);
+    expect(r.notes.join(" ")).toMatch(/Nobody is emailed or texted/);
     expect(r.notes.join(" ")).toMatch(/Eventbrite/);
+  });
+
+  it("reads which texts the earlier app sent, under its own column names too", () => {
+    const r = read(
+      "bookings",
+      [
+        "session_id,customer_email,seats,reminder_48h_sms_sent_at,day_of_text_sent_at,followup_24h_sms_sent_at",
+        "s1,a@example.com,1,2027-03-04 15:00:00+00,,2027-03-08 15:00:00+00",
+      ].join("\n"),
+    );
+    expect(r.problems).toEqual([]);
+    expect(r.payload[0]).toMatchObject({
+      reminder_text_sent_at: "2027-03-04T15:00:00.000Z",
+      day_of_text_sent_at: null,
+      followup_text_sent_at: "2027-03-08T15:00:00.000Z",
+    });
   });
 
   it("leaves out what can't be a booking", () => {

@@ -12,6 +12,7 @@ export type BookingImportCounts = {
   shared_rooms?: number;
   oversold?: number;
   emails_marked?: number;
+  texts_marked?: number;
 };
 
 const NOUN: Record<BookingImportKind, [string, string]> = {
@@ -59,6 +60,11 @@ export function bookingCountLines(
     counts.emails_marked,
     (n) =>
       `${plural(n, "email")} noted as already sent (or not needed), so ${n === 1 ? "it isn't" : "they aren't"} sent again`,
+  );
+  add(
+    counts.texts_marked,
+    (n) =>
+      `${plural(n, "text")} noted as already sent (or not needed), so ${n === 1 ? "it isn't" : "they aren't"} sent again`,
   );
   add(
     counts.refused?.length,

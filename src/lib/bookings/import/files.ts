@@ -76,6 +76,9 @@ export const BOOKING_ALIASES: Record<BookingImportKind, Record<string, string[]>
     reminder_sent_at: ["reminder_48h_sent_at", "reminder_sent"],
     day_of_sent_at: ["reminder_2h_sent_at", "day_of_sent"],
     followup_sent_at: ["followup_24h_sent_at", "thank_you_sent_at", "followup_sent"],
+    reminder_text_sent_at: ["reminder_48h_sms_sent_at", "reminder_sms_sent_at"],
+    day_of_text_sent_at: ["reminder_2h_sms_sent_at", "day_of_sms_sent_at"],
+    followup_text_sent_at: ["followup_24h_sms_sent_at", "followup_sms_sent_at"],
     amount_paid: ["paid", "amount"],
   },
 };
@@ -528,11 +531,32 @@ function readBookings(rows: Row[], timeZone: string) {
       reminder_sent_at: moment(row, "reminder_sent_at", timeZone, "reminder sent", true),
       day_of_sent_at: moment(row, "day_of_sent_at", timeZone, "day-of reminder sent", true),
       followup_sent_at: moment(row, "followup_sent_at", timeZone, "thank-you sent", true),
+      reminder_text_sent_at: moment(
+        row,
+        "reminder_text_sent_at",
+        timeZone,
+        "reminder text sent",
+        true,
+      ),
+      day_of_text_sent_at: moment(
+        row,
+        "day_of_text_sent_at",
+        timeZone,
+        "day-of reminder text sent",
+        true,
+      ),
+      followup_text_sent_at: moment(
+        row,
+        "followup_text_sent_at",
+        timeZone,
+        "thank-you text sent",
+        true,
+      ),
       amount_cents: cents(row, "amount_paid", "amount paid"),
     };
   });
   const notes: string[] = [
-    "Nobody is emailed when these come in. Reminders and thank-yous your earlier app already sent are noted so they aren't sent again, and no thank-you goes out for a class that has already happened.",
+    "Nobody is emailed or texted when these come in. Reminders and thank-yous your earlier app already sent, by email or text, are noted so they aren't sent again, and no thank-you goes out for a class that has already happened. Where the file doesn't say whether a text went, a message whose email went counts as gone for the text too.",
   ];
   if (noEmail > 0) {
     notes.push(
@@ -612,6 +636,9 @@ export const BOOKING_COLUMNS: Record<BookingImportKind, string[]> = {
     "reminder_sent_at",
     "day_of_sent_at",
     "followup_sent_at",
+    "reminder_text_sent_at",
+    "day_of_text_sent_at",
+    "followup_text_sent_at",
     "amount_paid",
   ],
 };

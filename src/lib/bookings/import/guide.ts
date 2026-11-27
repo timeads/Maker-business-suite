@@ -97,6 +97,12 @@ export const BOOKING_IMPORT_GUIDE: Record<BookingImportKind, BookingImportGuide>
       { name: "reminder_sent_at", about: "When the reminder went, if it did" },
       { name: "day_of_sent_at", about: "When the day-of reminder went, if it did" },
       { name: "followup_sent_at", about: "When the thank-you went, if it did" },
+      {
+        name: "reminder_text_sent_at",
+        about: "When the reminder text went; empty counts as gone if the reminder email went",
+      },
+      { name: "day_of_text_sent_at", about: "When the day-of reminder text went, if it did" },
+      { name: "followup_text_sent_at", about: "When the thank-you text went, if it did" },
       { name: "amount_paid", about: "What they paid, if you know" },
     ],
   },

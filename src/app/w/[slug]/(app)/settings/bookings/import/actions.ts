@@ -82,6 +82,7 @@ const tidyCounts = (raw: unknown): BookingImportCounts & { repeated: boolean } =
     ...("shared_rooms" in value ? { shared_rooms: n("shared_rooms") } : {}),
     ...("oversold" in value ? { oversold: n("oversold") } : {}),
     ...("emails_marked" in value ? { emails_marked: n("emails_marked") } : {}),
+    ...("texts_marked" in value ? { texts_marked: n("texts_marked") } : {}),
     repeated: value.repeated === true,
   };
 };

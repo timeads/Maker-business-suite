@@ -12,7 +12,7 @@ This page says exactly what each file needs, and gives the one query that makes 
 
 Things that hold for every file:
 
-- **Nobody is emailed.** Bringing bookings in never sends a confirmation. Reminders and thank-yous your earlier app already sent are noted, so they aren't sent again, and no thank-you is ever sent for a class that had already happened when it was brought in. A reminder that hadn't gone yet for a class still to come goes out as usual, at your reminder time (Settings → Bookings).
+- **Nobody is emailed or texted.** Bringing bookings in never sends a confirmation. Reminders and thank-yous your earlier app already sent, by email or by text, are noted, so they aren't sent again, and no thank-you (email or text) is ever sent for a class that had already happened when it was brought in. Where the file doesn't say whether a text went, a message whose email went counts as gone for the text too. A reminder that hadn't gone yet for a class still to come goes out as usual, at your reminder time (Settings → Bookings).
 - **Twice is the same as once.** A second press of the button does nothing, and bringing the same file in again later changes nothing.
 - **A bad row never stops a good one.** Rows that can't be used are left out and listed. Fix them in the file and bring it in again; the rows already in aren't added twice.
 - **A paid booking is never turned away.** A booking that takes a date (or a shared room) over its limit is brought in all the same and marked "Over the limit", so you can sort it out. The date's page offers one press to raise the limit to fit.
@@ -105,34 +105,37 @@ The earlier app keeps no end time (it uses the workshop's length), and its runni
 
 ## 3. Bookings
 
-| Column                 | Needed | What goes in it                                                                                                                                             |
-| ---------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`                   |        | The booking's id in the earlier app, so bringing the file in again finds it.                                                                                |
-| `session_id`           | yes    | The date's `id`, as in the dates file.                                                                                                                      |
-| `customer_name`        |        | Their name. A booking needs a name or an email.                                                                                                             |
-| `customer_email`       |        | Their email, for reminders. A booking with none is brought in but gets no emails.                                                                           |
-| `customer_phone`       |        | Their phone number. Kept and shown on the roster; nothing sends texts yet.                                                                                  |
-| `sms_opt_in`           |        | `yes` if they agreed to text messages. Kept for when text reminders are built.                                                                              |
-| `seats`                | yes    | Places booked, 1 to 50.                                                                                                                                     |
-| `status`               |        | `confirmed`, `attended`, `no_show` or `cancelled`. Empty means confirmed. Attended and no-show are kept as check-ins.                                       |
-| `source`               |        | `shopify`, `manual` or `eventbrite`. A booking with a shop order counts as a shop booking; Eventbrite ones come in as added by you, tagged `eventbrite`.    |
-| `shopify_order_id`     |        | The shop order's id. Kept, so a refund or cancellation in your shop still follows the booking, and a later order sync finds it instead of booking it again. |
-| `shopify_order_number` |        | The order number people see, like `#1042`.                                                                                                                  |
-| `notes`                |        | Your note on the booking.                                                                                                                                   |
-| `tags`                 |        | Tags, with `;` between them. A database's `{gift,vip}` works too.                                                                                           |
-| `email_opt_in`         |        | `no` if this booking's emails were switched off.                                                                                                            |
-| `created_at`           |        | When they booked.                                                                                                                                           |
-| `cancelled_at`         |        | When it was cancelled.                                                                                                                                      |
-| `reminder_sent_at`     |        | When the reminder went. Filled in, it isn't sent again here.                                                                                                |
-| `day_of_sent_at`       |        | When the day-of reminder went.                                                                                                                              |
-| `followup_sent_at`     |        | When the thank-you went.                                                                                                                                    |
-| `amount_paid`          |        | What they paid, if you know. The earlier app doesn't keep it; leave it out.                                                                                 |
+| Column                  | Needed | What goes in it                                                                                                                                             |
+| ----------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                    |        | The booking's id in the earlier app, so bringing the file in again finds it.                                                                                |
+| `session_id`            | yes    | The date's `id`, as in the dates file.                                                                                                                      |
+| `customer_name`         |        | Their name. A booking needs a name or an email.                                                                                                             |
+| `customer_email`        |        | Their email, for reminders. A booking with none is brought in but gets no emails.                                                                           |
+| `customer_phone`        |        | Their phone number. Shown on the roster, and where text reminders go once you switch them on.                                                               |
+| `sms_opt_in`            |        | `yes` if they agreed to text messages. Only they are ever texted.                                                                                           |
+| `seats`                 | yes    | Places booked, 1 to 50.                                                                                                                                     |
+| `status`                |        | `confirmed`, `attended`, `no_show` or `cancelled`. Empty means confirmed. Attended and no-show are kept as check-ins.                                       |
+| `source`                |        | `shopify`, `manual` or `eventbrite`. A booking with a shop order counts as a shop booking; Eventbrite ones come in as added by you, tagged `eventbrite`.    |
+| `shopify_order_id`      |        | The shop order's id. Kept, so a refund or cancellation in your shop still follows the booking, and a later order sync finds it instead of booking it again. |
+| `shopify_order_number`  |        | The order number people see, like `#1042`.                                                                                                                  |
+| `notes`                 |        | Your note on the booking.                                                                                                                                   |
+| `tags`                  |        | Tags, with `;` between them. A database's `{gift,vip}` works too.                                                                                           |
+| `email_opt_in`          |        | `no` if this booking's emails were switched off.                                                                                                            |
+| `created_at`            |        | When they booked.                                                                                                                                           |
+| `cancelled_at`          |        | When it was cancelled.                                                                                                                                      |
+| `reminder_sent_at`      |        | When the reminder went. Filled in, it isn't sent again here.                                                                                                |
+| `day_of_sent_at`        |        | When the day-of reminder went.                                                                                                                              |
+| `followup_sent_at`      |        | When the thank-you went.                                                                                                                                    |
+| `reminder_text_sent_at` |        | When the reminder went as a text. Empty: counts as gone if `reminder_sent_at` is filled in.                                                                 |
+| `day_of_text_sent_at`   |        | When the day-of reminder went as a text. Empty: counts as gone if `day_of_sent_at` is filled in.                                                            |
+| `followup_text_sent_at` |        | When the thank-you went as a text. Empty: counts as gone if `followup_sent_at` is filled in, or the class is already over.                                  |
+| `amount_paid`           |        | What they paid, if you know. The earlier app doesn't keep it; leave it out.                                                                                 |
 
-Matched by `id` once brought in, else by shop order and date. If your shop's order sync has already made a booking for the same order and date, that booking is matched, not doubled: the shop's own figures (places, cancelled or not) stand, and only what the sync can't know is added (the earlier id, a phone number, which emails already went). A booking brought in before follows the file when it is brought in again. A booking can't change date through the import; move it from the date's page.
+Matched by `id` once brought in, else by shop order and date. If your shop's order sync has already made a booking for the same order and date, that booking is matched, not doubled: the shop's own figures (places, cancelled or not) stand, and only what the sync can't know is added (the earlier id, a phone number, which emails and texts already went). A booking brought in before follows the file when it is brought in again. A booking can't change date through the import; move it from the date's page.
 
 Every booking brought in gets a fresh private link of its own; nobody has it until you press "Send the confirmation again" on the roster.
 
-From the earlier app (a reminder counts as gone when the earlier app sent it by email or text, or decided not to and marked it "skipped"):
+From the earlier app. An email column counts a message as gone when the earlier app sent it by email or text, or decided not to and marked it "skipped"; the three text columns look at its texts alone (`channel = 'sms'`), so a text that never went can still go from here once you switch texts on:
 
 ```sql
 select b.id,
@@ -159,7 +162,16 @@ select b.id,
           and l.status in ('sent', 'skipped')) as day_of_sent_at,
        (select min(l.sent_at) from notification_log l
         where l.booking_id = b.id and l.template_key = 'followup_24h'
-          and l.status in ('sent', 'skipped')) as followup_sent_at
+          and l.status in ('sent', 'skipped')) as followup_sent_at,
+       (select min(l.sent_at) from notification_log l
+        where l.booking_id = b.id and l.template_key = 'reminder_48h' and l.channel = 'sms'
+          and l.status in ('sent', 'skipped')) as reminder_text_sent_at,
+       (select min(l.sent_at) from notification_log l
+        where l.booking_id = b.id and l.template_key = 'reminder_2h' and l.channel = 'sms'
+          and l.status in ('sent', 'skipped')) as day_of_text_sent_at,
+       (select min(l.sent_at) from notification_log l
+        where l.booking_id = b.id and l.template_key = 'followup_24h' and l.channel = 'sms'
+          and l.status in ('sent', 'skipped')) as followup_text_sent_at
 from bookings b
 order by b.created_at;
 ```
