@@ -4,6 +4,7 @@ import { useActionState, useState } from "react";
 import { FormMessage } from "@/components/ui/form-message";
 import { Input, Label, Select } from "@/components/ui/input";
 import { SubmitButton } from "@/components/ui/submit-button";
+import { PAUSED_WORDS } from "@/lib/bookings/config";
 import {
   addSession,
   cancelSession,
@@ -326,6 +327,8 @@ export function BookingQuestionsForm({ slug, questions }: { slug: string; questi
 }
 
 export type EmailSettings = {
+  /** "Pause messages to customers". */
+  paused?: boolean;
   reminder_hours: number;
   day_of_on: boolean;
   day_of_hours: number;
@@ -366,9 +369,36 @@ export function BookingEmailsForm({ slug, settings }: { slug: string; settings: 
   const [state, action] = useActionState(saveBookingEmails.bind(null, slug), {});
   const [followup, setFollowup] = useState(settings.followup_on);
   const [dayOf, setDayOf] = useState(settings.day_of_on);
+  const [paused, setPaused] = useState(settings.paused ?? false);
   const read = `${textarea} font-read`;
   return (
     <form action={action} className="flex flex-col gap-5">
+      <div
+        className={`flex flex-col gap-2 rounded-md border p-3 ${paused ? "border-ochre/60 bg-ochre-soft" : "border-border"}`}
+      >
+        <label className="flex items-center gap-2 text-sm font-semibold">
+          <input
+            type="checkbox"
+            name="paused"
+            checked={paused}
+            onChange={(e) => setPaused(e.target.checked)}
+          />
+          Pause messages to customers
+        </label>
+        <p className="text-muted-foreground text-xs">
+          For a pause while you sort something out, like moving from another booking app.{" "}
+          {PAUSED_WORDS.while}
+        </p>
+        <div className="text-muted-foreground flex flex-col gap-1 text-xs">
+          <p className="text-foreground font-semibold">When you untick it:</p>
+          <ul className="list-disc pl-4">
+            {PAUSED_WORDS.after.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+          <p>{PAUSED_WORDS.presses}</p>
+        </div>
+      </div>
       <div className="flex flex-col gap-2">
         <Label htmlFor="confirmation-note">Add to the “you&apos;re booked” email</Label>
         <textarea

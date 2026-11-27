@@ -422,7 +422,7 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
     feature: "bookings",
     name: "Booking emails",
     description:
-      "How many hours ahead the reminder goes out (reminder_hours), whether a second short reminder goes out on the day (day_of_on, off unless switched on) and how many hours before the start (day_of_hours, 1 to 24, only sent when shorter than reminder_hours), whether a thank-you is sent afterwards, whether the customer is emailed when a refund or cancellation in the shop cancels their booking (shop_cancel_email), and the business's own note added to the confirmation, reminder, day-of reminder and thank-you emails.",
+      "Whether every message to customers is paused for now (paused: while true, no confirmation, reminder, day-of reminder, thank-you, refund notice or text goes out by itself; afterwards a reminder goes only if its class is still ahead, and a thank-you or notice that came due while paused is never sent late), how many hours ahead the reminder goes out (reminder_hours), whether a second short reminder goes out on the day (day_of_on, off unless switched on) and how many hours before the start (day_of_hours, 1 to 24, only sent when shorter than reminder_hours), whether a thank-you is sent afterwards, whether the customer is emailed when a refund or cancellation in the shop cancels their booking (shop_cancel_email), and the business's own note added to the confirmation, reminder, day-of reminder and thank-you emails.",
     schema: bookingEmailsSchema,
     defaultBody: () => DEFAULT_EMAILS,
   },
@@ -1064,6 +1064,7 @@ export function describeConfig(entry: ConfigEntry, body: unknown): string[] {
       return t ? `"${t.slice(0, 90)}${t.length > 90 ? "…" : ""}"` : "nothing added";
     };
     return [
+      ...(value.paused ? ["Messages to customers are paused: nothing goes out by itself"] : []),
       `Reminder goes out ${value.reminder_hours} hours before`,
       value.followup_on
         ? `Thank-you goes out ${value.followup_hours} hours after`

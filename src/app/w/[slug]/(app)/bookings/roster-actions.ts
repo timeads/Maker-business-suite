@@ -438,6 +438,7 @@ export async function saveBookingEmails(
   if ("error" in ctx) return { error: ctx.error };
   const parsed = bookingEmailsSchema.safeParse({
     version: 1,
+    paused: formData.get("paused") === "on",
     reminder_hours: Number.parseInt(text(formData, "reminder_hours"), 10),
     day_of_on: formData.get("day_of_on") === "on",
     day_of_hours: Number.parseInt(text(formData, "day_of_hours") || "2", 10),
@@ -464,8 +465,9 @@ export async function saveBookingEmails(
   if (error) return { error: OOPS };
   done(slug);
   return {
-    message:
-      parsed.data.day_of_on && parsed.data.day_of_hours >= parsed.data.reminder_hours
+    message: parsed.data.paused
+      ? "Saved. Messages to customers are paused until you untick it."
+      : parsed.data.day_of_on && parsed.data.day_of_hours >= parsed.data.reminder_hours
         ? "Saved. The day-of reminder won't go out until it's set closer to the start than the first reminder."
         : "Saved.",
   };

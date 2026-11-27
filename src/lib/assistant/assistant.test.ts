@@ -60,6 +60,15 @@ describe("config registry", () => {
     if (!checked.ok) expect(checked.problems.join(" ")).toContain("questions.0");
   });
 
+  it("lets the assistant propose pausing messages to customers, and says so in words", () => {
+    const emails = findConfig("bookings", "emails")!;
+    const checked = validateConfig(emails, { version: 1, paused: true });
+    expect(checked.ok).toBe(true);
+    if (checked.ok) expect(checked.body.paused).toBe(true);
+    expect(describeConfig(emails, { version: 1, paused: true })[0]).toMatch(/paused/);
+    expect(describeConfig(emails, { version: 1 }).join(" ")).not.toMatch(/paused/);
+  });
+
   it("knows Money's cash health, budget and cost cutter settings, in words", () => {
     const health = findConfig("dashboard", "health")!;
     expect(describeConfig(health, { version: 1, runway_good_months: 9 })).toContain(

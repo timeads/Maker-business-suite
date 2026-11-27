@@ -75,6 +75,13 @@ const note = z.string().trim().max(1500);
 
 export const bookingEmailsSchema = z.object({
   version: z.literal(1),
+  /**
+   * "Pause messages to customers": while on, nothing goes to customers by
+   * itself (confirmations, reminders, thank-yous, refund notices, texts).
+   * Read by the database's claims; what came due meanwhile is never sent
+   * late (see the 20270212000500 migration and `pausedWords`).
+   */
+  paused: z.boolean().default(false),
   reminder_hours: z.number().int().min(1).max(336).default(24),
   /** A second, short reminder on the day. Off until a person switches it on. */
   day_of_on: z.boolean().default(false),
@@ -96,6 +103,23 @@ export const bookingEmailsSchema = z.object({
 export type BookingEmails = z.infer<typeof bookingEmailsSchema>;
 
 export const DEFAULT_EMAILS: BookingEmails = bookingEmailsSchema.parse({ version: 1 });
+
+/**
+ * What happens while messages are paused, and to what was missed, in the
+ * words the settings screen and the docs use. Kept here so they match the
+ * database's rule.
+ */
+export const PAUSED_WORDS = {
+  while:
+    "Nothing goes to customers by itself: no “you're booked” emails, reminders, day-of reminders, thank-yous, refund notices or texts. Your team still hears about new bookings.",
+  after: [
+    "A reminder whose class is still to come goes straight away, once. A reminder for a class that has already started is never sent.",
+    "A thank-you that came due while paused is skipped, not sent late.",
+    "“You're booked” emails and texts, and refund notices, held while paused are never sent later. Use “Send the confirmation again” on a date's list for anyone who should have one.",
+  ],
+  presses:
+    "Emails you send with a press still go: cancelling or moving a date or a person, a message to a date's people, “Send the confirmation again”.",
+} as const;
 
 export function parseBookingEmails(body: unknown): BookingEmails {
   const parsed = bookingEmailsSchema.safeParse(body);

@@ -309,8 +309,11 @@ export async function announceBooking(
   admin: SupabaseClient = getAdminClient(),
 ): Promise<void> {
   const site = siteUrl();
-  if (manageToken) {
-    const { confirmation_note } = await getBookingEmails(details.tenant_id);
+  const { confirmation_note, paused } = await getBookingEmails(details.tenant_id);
+  // While messages to customers are paused the "you're booked" email is held,
+  // and never sent later; a person can press "Send the confirmation again".
+  // Its text is queued as usual and the database holds that one.
+  if (manageToken && !paused) {
     const words = await getEmailWords(details.tenant_id);
     await sendEmail(
       bookingEmail("confirmation", details, words, {
