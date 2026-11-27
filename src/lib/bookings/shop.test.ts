@@ -218,6 +218,23 @@ describe("turning shop orders into bookings", () => {
     ]);
   });
 
+  it("sends nothing and tags nothing for an order from the shop's history", async () => {
+    const { admin, calls } = fakeAdmin({
+      book_from_shop: { result: "recorded", booking_id: "b1", oversold: true },
+    });
+    const tagged: string[] = [];
+    let told = 0;
+    await applyShopOrders(admin, "t1", [dated], {
+      open: async () => true,
+      details: async () => details,
+      announce: async () => void (told += 1),
+      tag: async (_a, _t, _o, why) => void tagged.push(why),
+    });
+    expect(told).toBe(0);
+    expect(tagged).toEqual([]);
+    expect(calls.map((c) => c.fn)).toEqual(["book_from_shop"]);
+  });
+
   it("says nothing when the shop repeats an order it has already told us about", async () => {
     const { admin } = fakeAdmin({ book_from_shop: { result: "unchanged", booking_id: "b1" } });
     let told = 0;

@@ -17,6 +17,12 @@ import { queueBookingText, saveTextConsent } from "../texts/queue";
 type Result = {
   result:
     | "booked"
+    /**
+     * From the shop's history (a class already started, or an order placed
+     * before the workshop or its date was here): written down for the
+     * roster, and nothing is ever sent to its customer by itself.
+     */
+    | "recorded"
     | "resized"
     | "cancelled"
     | "unchanged"
