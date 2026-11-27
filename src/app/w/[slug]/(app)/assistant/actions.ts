@@ -193,9 +193,17 @@ export async function applyActionProposal(
   const ctx = await context(slug);
   if ("error" in ctx) return { error: ctx.error };
   if (!canManage(ctx.role)) return { error: "Only owners and admins can apply changes." };
+  // The words of what changes, as the preview shows them now, for the history.
+  const { data: pending } = await ctx.supabase
+    .from("action_proposals")
+    .select("id, kind, target, body, summary")
+    .eq("id", proposalId)
+    .eq("tenant_id", ctx.tenant.id)
+    .maybeSingle();
+  const preview = pending ? await previewAction(ctx.supabase, ctx.tenant, pending) : null;
   const { data, error } = await ctx.supabase.rpc("claim_action_proposal", { p_id: proposalId });
   const row = (
-    (data ?? []) as { tenant_id: string; kind: string; target: string; body: unknown }[]
+    (data ?? []) as { tenant_id: string; kind: string; target: string | null; body: unknown }[]
   )[0];
   if (error || !row || row.tenant_id !== ctx.tenant.id) {
     return {
@@ -208,6 +216,15 @@ export async function applyActionProposal(
   if (done.error) {
     await ctx.supabase.rpc("reopen_action_proposal", { p_id: proposalId });
     return { error: done.error };
+  }
+  if (preview) {
+    // Allowed to fail: the change is made; only its line in the history would be missing.
+    const { error: noted } = await ctx.supabase.rpc("note_action_applied", {
+      p_id: proposalId,
+      p_before: preview.before,
+      p_after: preview.after,
+    });
+    if (noted) console.warn(`Applied suggestion not noted: ${noted.message}`);
   }
   revalidatePath(`/w/${slug}`, "layout");
   return { done: "applied" };

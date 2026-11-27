@@ -65,7 +65,10 @@ function fake(rows: Record<string, unknown[]> = {}) {
   const from = (table: string) => {
     let list = rows[table] ?? [];
     const chain: Record<string, unknown> = {};
-    for (const m of ["select", "is", "order", "limit", "in"]) chain[m] = () => chain;
+    for (const m of ["select", "is", "order", "limit", "in", "ilike", "gte", "lt", "gt"]) {
+      chain[m] = () => chain;
+    }
+    chain.range = () => Promise.resolve({ data: list, error: null });
     chain.eq = (column: string, value: unknown) => {
       if (column === "id") list = list.filter((r) => (r as { id: string }).id === value);
       return chain;
@@ -251,5 +254,178 @@ describe("previewing and applying", () => {
     );
     expect((await applyAction(supabase, "t1", { ...row, kind: "money.sell" })).error).toBeTruthy();
     expect(rpcs).toEqual([]);
+  });
+});
+
+const EXPENSES = [
+  {
+    id: "44444444-4444-4444-8444-444444444444",
+    txn_date: "2026-11-03",
+    amount_cents: 4599,
+    payee: "Yarn Barn",
+    account: "Supplies",
+    memo: "Wool",
+    sort: null,
+    line_id: null,
+    split: null,
+  },
+];
+const LINES_CONFIG = [
+  {
+    body: {
+      version: 1,
+      lines: [
+        { id: "shop", name: "Shop" },
+        { id: "classes", name: "Classes" },
+      ],
+      default_line: "shop",
+    },
+  },
+];
+
+describe("proposals about expenses, budgets and recurring charges", () => {
+  it("are offered to the whole team, with closed schemas", () => {
+    const names = toolsFor({ manager: false }).map((t) => t.name);
+    for (const name of [
+      "list_expenses",
+      "propose_expense_sort",
+      "read_budget",
+      "propose_budget",
+      "list_recurring_charges",
+      "propose_charge_decision",
+    ]) {
+      expect(names).toContain(name);
+    }
+    expect(systemFor({ manager: false }, "Rugs")).toMatch(/propose_expense_sort/);
+  });
+
+  it("lists expenses by reference and files one expense's sorting for a person to apply", async () => {
+    const { supabase, rpcs } = fake({ book_expenses: EXPENSES, configs: LINES_CONFIG });
+    const listed = await runTool("list_expenses", {}, ctx(supabase, false));
+    const body = JSON.parse(listed.content);
+    expect(body.expenses[0]).toMatchObject({ ref: "E1", payee: "Yarn Barn", amount: "45.99" });
+    expect(JSON.stringify(body)).not.toContain(EXPENSES[0].id);
+    const out = await runTool(
+      "propose_expense_sort",
+      { expense: "E1", sort: "line", line: "classes", summary: "Wool for the class kits." },
+      ctx(supabase, false),
+    );
+    expect(out.proposal).toMatchObject({ source: "action", key: "money.expense_sort" });
+    expect(rpcs.at(-1)).toEqual({
+      name: "propose_action",
+      args: {
+        p_tenant_id: "t1",
+        p_kind: "money.expense_sort",
+        p_target: EXPENSES[0].id,
+        p_body: { sort: "line", line: "classes" },
+        p_summary: "Wool for the class kits.",
+      },
+    });
+  });
+
+  it("refuses an expense it can't find or a line that isn't one", async () => {
+    const { supabase, rpcs } = fake({ book_expenses: EXPENSES, configs: LINES_CONFIG });
+    expect(
+      (
+        await runTool(
+          "propose_expense_sort",
+          { expense: "E9", sort: "shared", summary: "x" },
+          ctx(supabase),
+        )
+      ).isError,
+    ).toBe(true);
+    expect(
+      (
+        await runTool(
+          "propose_expense_sort",
+          { expense: "E1", sort: "line", line: "wholesale", summary: "x" },
+          ctx(supabase),
+        )
+      ).isError,
+    ).toBe(true);
+    expect(rpcs).toEqual([]);
+  });
+
+  it("previews and applies an expense's sorting through the checked function", async () => {
+    const { supabase, rpcs } = fake({ book_expenses: EXPENSES, configs: LINES_CONFIG });
+    const row = {
+      id: "p1",
+      kind: "money.expense_sort",
+      target: EXPENSES[0].id,
+      body: { sort: "line", line: "classes" },
+      summary: "Wool for the class kits.",
+    };
+    expect(await previewAction(supabase, { id: "t1", currency: "USD" }, row)).toMatchObject({
+      name: "Expense: Yarn Barn, $45.99 on 2026-11-03",
+      before: ["Not sorted yet"],
+      after: ["Classes"],
+    });
+    await applyAction(supabase, "t1", row);
+    expect(rpcs.at(-1)).toEqual({
+      name: "sort_book_expenses",
+      args: {
+        p_tenant_id: "t1",
+        p_ids: [EXPENSES[0].id],
+        p_sort: "line",
+        p_line: "classes",
+        p_split: null,
+      },
+    });
+  });
+
+  it("previews and applies a month's budget and a charge decision", async () => {
+    const { supabase, rpcs } = fake({
+      money_budgets: [{ subject_key: "Advertising", amount_cents: 30000 }],
+      configs: LINES_CONFIG,
+    });
+    const budget = {
+      id: "p2",
+      kind: "money.budget",
+      target: null,
+      body: {
+        month: "2027-03",
+        subject: "account",
+        rows: [{ key: "Advertising", amount_cents: 40000 }],
+      },
+      summary: "A bit more for the spring fair.",
+    };
+    expect(await previewAction(supabase, { id: "t1", currency: "USD" }, budget)).toMatchObject({
+      name: "Budget for March 2027",
+      before: ["Advertising: $300.00"],
+      after: ["Advertising: $400.00"],
+    });
+    await applyAction(supabase, "t1", budget);
+    expect(rpcs.at(-1)).toEqual({
+      name: "set_money_budgets",
+      args: {
+        p_tenant_id: "t1",
+        p_month: "2027-03-01",
+        p_rows: [{ subject: "account", key: "Advertising", amount_cents: 40000 }],
+      },
+    });
+    const charge = {
+      id: "p3",
+      kind: "money.charge",
+      target: null,
+      body: {
+        key: "design app",
+        payee: "Design App",
+        decision: "cancel",
+        note: "Unused",
+        monthly_cents: 1500,
+      },
+      summary: "Cancel the design app.",
+    };
+    expect(
+      await previewAction(fake().supabase, { id: "t1", currency: "USD" }, charge),
+    ).toMatchObject({
+      name: "Cost cutter: Design App",
+      before: ["Not decided"],
+    });
+    await applyAction(supabase, "t1", charge);
+    expect(rpcs.at(-1)?.name).toBe("decide_money_charge");
+    expect(await applyAction(supabase, "t1", { ...charge, body: { key: "x" } })).toEqual({
+      error: "This suggestion doesn't fit any more.",
+    });
   });
 });

@@ -9,6 +9,7 @@ import { requireUser } from "@/lib/auth";
 import { getEntitlements } from "@/lib/entitlements";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
+import { nameOf, type Person } from "@/lib/messages/format";
 import { previewProposal, type ProposalPreview } from "./preview";
 import { Chat, ProposalCard, RestoreButton } from "./chat";
 
@@ -30,31 +31,56 @@ export default async function AssistantPage({ params }: { params: Promise<{ slug
   const supabase = await createClient();
   const manager = canManage(role) && entitlements.canWrite;
 
-  const [usage, { data: pending }, { data: versions }, { data: pendingActions }] =
-    await Promise.all([
-      getAiUsage(supabase, tenant.id, entitlements.limit("ai_credits")),
-      supabase
-        .from("config_proposals")
-        .select("id, module, key, body, summary")
-        .eq("tenant_id", tenant.id)
-        .eq("status", "pending")
-        .order("created_at", { ascending: false })
-        .limit(5),
-      supabase
-        .from("config_versions")
-        .select("id, module, key, version, source, note, created_at")
-        .eq("tenant_id", tenant.id)
-        .order("created_at", { ascending: false })
-        .limit(8),
-      // Read as the member: debt proposals reach owners and admins only.
-      supabase
-        .from("action_proposals")
-        .select("id, kind, target, body, summary")
-        .eq("tenant_id", tenant.id)
-        .eq("status", "pending")
-        .order("created_at", { ascending: false })
-        .limit(5),
-    ]);
+  const [
+    usage,
+    { data: pending },
+    { data: versions },
+    { data: pendingActions },
+    { data: appliedActions },
+    { data: people },
+  ] = await Promise.all([
+    getAiUsage(supabase, tenant.id, entitlements.limit("ai_credits")),
+    supabase
+      .from("config_proposals")
+      .select("id, module, key, body, summary")
+      .eq("tenant_id", tenant.id)
+      .eq("status", "pending")
+      .order("created_at", { ascending: false })
+      .limit(5),
+    supabase
+      .from("config_versions")
+      .select("id, module, key, version, source, note, created_at")
+      .eq("tenant_id", tenant.id)
+      .order("created_at", { ascending: false })
+      .limit(8),
+    // Read as the member: debt proposals reach owners and admins only.
+    supabase
+      .from("action_proposals")
+      .select("id, kind, target, body, summary")
+      .eq("tenant_id", tenant.id)
+      .eq("status", "pending")
+      .order("created_at", { ascending: false })
+      .limit(5),
+    // What was applied that isn't a setting, with the words of what changed.
+    // Read as the member: a debt's history reaches owners and admins only.
+    supabase
+      .from("action_proposals")
+      .select("id, summary, decided_by, decided_at, applied_before, applied_after")
+      .eq("tenant_id", tenant.id)
+      .eq("status", "applied")
+      .order("decided_at", { ascending: false })
+      .limit(10),
+    supabase.rpc("chat_people", { p_tenant_id: tenant.id }),
+  ]);
+  const who = new Map(((people ?? []) as Person[]).map((p) => [p.user_id, nameOf(p)]));
+  const applied = (appliedActions ?? []) as {
+    id: string;
+    summary: string;
+    decided_by: string | null;
+    decided_at: string;
+    applied_before: string[] | null;
+    applied_after: string[] | null;
+  }[];
   const waiting = (
     await Promise.all([
       ...(pending ?? []).map((p) => previewProposal(supabase, tenant.id, p)),
@@ -149,6 +175,37 @@ export default async function AssistantPage({ params }: { params: Promise<{ slug
           )}
         </CardContent>
       </Card>
+
+      {applied.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Suggestions applied</CardTitle>
+            <CardDescription>
+              Changes the assistant suggested that aren&apos;t settings (an expense sorted, a
+              budget, a decision about a charge, a debt&apos;s details): who applied each, when, and
+              what it changed. Change any of them back where it lives in Money.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ul className="divide-border flex flex-col divide-y">
+              {applied.map((a) => (
+                <li key={a.id} className="flex flex-col gap-1 py-2 text-sm">
+                  <span className="font-medium">{a.summary}</span>
+                  <span className="text-muted-foreground">
+                    {a.decided_by ? (who.get(a.decided_by) ?? "Someone on the team") : "Someone"} ·{" "}
+                    {when.format(new Date(a.decided_at))}
+                  </span>
+                  {a.applied_after && a.applied_after.length > 0 && (
+                    <span className="text-muted-foreground text-xs">
+                      {(a.applied_before ?? []).join("; ") || "–"} → {a.applied_after.join("; ")}
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
 
       <p className="text-muted-foreground text-xs">
         AI allowance used this month: {percent}%
