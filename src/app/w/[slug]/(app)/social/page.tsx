@@ -4,6 +4,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { FormMessage } from "@/components/ui/form-message";
 import { PageHeader } from "@/components/ui/page-header";
+import { SetupCard } from "@/components/setup/setup-card";
+import { loadNotNow } from "@/lib/setup/data";
+import { sortItems, type SetupItem } from "@/lib/setup/items";
+import { SOCIAL_TOOL, socialSetupItems } from "@/lib/social/setup";
+import { loadSocialSetupFacts } from "@/lib/social/setup-data";
 import { formatDay, formatTime, localDay, zonedTimeToUtc } from "@/lib/bookings/slots";
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
@@ -87,22 +92,30 @@ export default async function SocialPage({
 
   const supabase = await createClient();
   const columns = "id, caption, channels, status, scheduled_for, planned_for, updated_at, review";
-  const [{ data: inMonth }, { data: drafts }, { data: failed }, channels] = await Promise.all([
-    narrow(supabase.from("social_posts").select(columns).eq("tenant_id", tenant.id), filter)
-      .neq("status", "draft")
-      .gte("scheduled_for", from.toISOString())
-      .lt("scheduled_for", to.toISOString())
-      .order("scheduled_for"),
-    narrow(supabase.from("social_posts").select(columns).eq("tenant_id", tenant.id), filter)
-      .eq("status", "draft")
-      .order("updated_at", { ascending: false })
-      .limit(60),
-    narrow(supabase.from("social_posts").select(columns).eq("tenant_id", tenant.id), filter)
-      .eq("status", "failed")
-      .order("scheduled_for", { ascending: false })
-      .limit(10),
-    socialChannels(supabase, tenant.id),
-  ]);
+  const [{ data: inMonth }, { data: drafts }, { data: failed }, channels, setupItems] =
+    await Promise.all([
+      narrow(supabase.from("social_posts").select(columns).eq("tenant_id", tenant.id), filter)
+        .neq("status", "draft")
+        .gte("scheduled_for", from.toISOString())
+        .lt("scheduled_for", to.toISOString())
+        .order("scheduled_for"),
+      narrow(supabase.from("social_posts").select(columns).eq("tenant_id", tenant.id), filter)
+        .eq("status", "draft")
+        .order("updated_at", { ascending: false })
+        .limit(60),
+      narrow(supabase.from("social_posts").select(columns).eq("tenant_id", tenant.id), filter)
+        .eq("status", "failed")
+        .order("scheduled_for", { ascending: false })
+        .limit(10),
+      socialChannels(supabase, tenant.id),
+      // "Finish setting up": a few small reads, no asset rows. Never stops the page.
+      Promise.all([
+        loadSocialSetupFacts(supabase, tenant),
+        loadNotNow(supabase, tenant.id, SOCIAL_TOOL),
+      ])
+        .then(([facts, notNow]) => sortItems(socialSetupItems(facts), notNow).open)
+        .catch((): SetupItem[] => []),
+    ]);
   const byDay = new Map<string, PostRow[]>();
   // Drafts pencilled in for a day sit on the calendar too, marked as drafts.
   const pencilled = ((drafts ?? []) as PostRow[]).filter(
@@ -160,6 +173,16 @@ export default async function SocialPage({
           </Button>
         )}
       </PageHeader>
+
+      <SetupCard
+        slug={tenant.slug}
+        tool={SOCIAL_TOOL}
+        items={setupItems}
+        canSnooze={canManage(role) && entitlements.canWrite}
+        canAct={canManage(role) && entitlements.canWrite}
+        setupHref="social/setup"
+        ending="would get your posts out in your own look"
+      />
 
       <FormMessage kind="success">{SAVED[query.saved ?? ""]}</FormMessage>
 

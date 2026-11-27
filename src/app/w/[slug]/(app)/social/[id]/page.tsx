@@ -8,6 +8,8 @@ import { ownDesign } from "@/lib/brand/slides";
 import { publicAssetUrl } from "@/lib/social/worker";
 import { createClient } from "@/lib/supabase/server";
 import { Badge } from "@/components/ui/badge";
+import { HowWorkedOut } from "@/components/setup/how-worked-out";
+import { scheduleExplained, targetExplained } from "@/lib/social/explain";
 import { Composer, DeletePostForm, RetryPostForm, SettleTargetForm } from "../composer";
 import { socialAccess } from "../gate";
 import { SendBackForm } from "../review-forms";
@@ -123,9 +125,17 @@ export default async function PostPage({
         ? [post.asset_id as string]
         : []
   ) as string[];
-  const [choices, kit] = await Promise.all([
+  const [choices, kit, { data: sizeRows }] = await Promise.all([
     composerChoices(supabase, tenant.id, photoIds),
     loadDesignKit(supabase, tenant.id, targets.brand?.id),
+    // Each photo's size as the server read it, for "what stands in the way".
+    photoIds.length
+      ? supabase
+          .from("social_assets")
+          .select("id, width, height, mime_type")
+          .eq("tenant_id", tenant.id)
+          .in("id", photoIds)
+      : Promise.resolve({ data: [] }),
   ]);
   // On a draft Claude wrote, say why each photo that fits the topic is there.
   const topic = choices.plan.topics.find((t) => t.id === post.topic);
@@ -157,6 +167,27 @@ export default async function PostPage({
     { channels: ((post.channels as string[]) ?? []).filter(isPlace), account_ids: accountIds },
     named,
   ).flatMap((t) => t.places);
+  const sizes = new Map(
+    (
+      (sizeRows ?? []) as {
+        id: string;
+        width: number | null;
+        height: number | null;
+        mime_type: string;
+      }[]
+    ).map((row) => [row.id, row]),
+  );
+  const postPhotos = photoIds.map((photoId) => sizes.get(photoId));
+  const postPlaces = ((post.channels as string[]) ?? []).filter(isPlace);
+  const scheduleLines = scheduleExplained({
+    places: postPlaces,
+    wordsFor: (place) => captions[place] ?? (post.caption as string) ?? "",
+    photos: postPhotos
+      .filter((photo) => !photo?.mime_type?.startsWith("video/"))
+      .map((photo) => ({ width: photo?.width ?? null, height: photo?.height ?? null })),
+    video: postPhotos.some((photo) => photo?.mime_type?.startsWith("video/")),
+    needsApproval: review.required && !review.canSchedule,
+  });
   const captionLabel = (key: string) => {
     const account = named.find((a) => a.id === key);
     return account ? targetLabel(`${key}:${account.network}`, named) : (CHANNEL_NAMES[key] ?? key);
@@ -285,6 +316,14 @@ export default async function PostPage({
         <>
           <Card>
             <CardContent className="pt-6">
+              {post.status !== "scheduled" && (
+                <div className="mb-4">
+                  <HowWorkedOut
+                    label="What has to be true before this can be scheduled"
+                    lines={scheduleLines}
+                  />
+                </div>
+              )}
               <Composer
                 key={post.updated_at as string}
                 slug={tenant.slug}
@@ -381,6 +420,18 @@ export default async function PostPage({
             </ul>
             {post.status === "failed" && (partlyOut || inFlight) && entitlements.canWrite && (
               <RetryPostForm slug={tenant.slug} postId={post.id as string} />
+            )}
+            {targetsOut.length > 0 && (
+              <HowWorkedOut
+                label="What each of these means"
+                lines={targetsOut.map(
+                  (t) =>
+                    `${targetLabel(t.key, named)}: ${targetExplained(
+                      results[t.key],
+                      NETWORK_LABELS[placeNetwork(t.place)] ?? "the network",
+                    )}`,
+                )}
+              />
             )}
           </CardContent>
         </Card>
