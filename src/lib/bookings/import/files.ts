@@ -76,6 +76,7 @@ export const BOOKING_ALIASES: Record<BookingImportKind, Record<string, string[]>
     reminder_sent_at: ["reminder_48h_sent_at", "reminder_sent"],
     day_of_sent_at: ["reminder_2h_sent_at", "day_of_sent"],
     followup_sent_at: ["followup_24h_sent_at", "thank_you_sent_at", "followup_sent"],
+    eventbrite_order_id: ["eventbrite_order", "eventbrite_order_number"],
     reminder_text_sent_at: ["reminder_48h_sms_sent_at", "reminder_sms_sent_at"],
     day_of_text_sent_at: ["reminder_2h_sms_sent_at", "day_of_sms_sent_at"],
     followup_text_sent_at: ["followup_24h_sms_sent_at", "followup_sms_sent_at"],
@@ -503,8 +504,12 @@ function readBookings(rows: Row[], timeZone: string) {
       return bad(`“${row.get("customer_phone")}” doesn't look like a phone number`);
     }
     const orderId = shopId(row, "shopify_order_id", "order");
+    const eventbriteTyped = row.get("eventbrite_order_id").trim();
+    if (eventbriteTyped && !/^\d{1,30}$/.test(eventbriteTyped)) {
+      return bad(`“${eventbriteTyped}” isn't an Eventbrite order number`);
+    }
     const tags = readTags(row.get("tags"));
-    if (source === "eventbrite") {
+    if (source === "eventbrite" || eventbriteTyped) {
       fromEventbrite += 1;
       if (!tags.includes("eventbrite")) tags.push("eventbrite");
     }
@@ -524,6 +529,7 @@ function readBookings(rows: Row[], timeZone: string) {
       tags,
       shop_order_id: orderId,
       shop_order_name: text(row, "shopify_order_number", 40, "The order number").trim() || null,
+      eventbrite_order_id: eventbriteTyped || null,
       notes: text(row, "notes", 2000, "The note"),
       email_opt_in: yesNo(row, "email_opt_in") ?? true,
       created_at: moment(row, "created_at", timeZone, "booked on", true),
@@ -565,7 +571,7 @@ function readBookings(rows: Row[], timeZone: string) {
   }
   if (fromEventbrite > 0) {
     notes.push(
-      `${fromEventbrite === 1 ? "1 booking came" : `${fromEventbrite} bookings came`} through Eventbrite; ${fromEventbrite === 1 ? "it comes" : "they come"} in as added by you, tagged “eventbrite”.`,
+      `${fromEventbrite === 1 ? "1 booking came" : `${fromEventbrite} bookings came`} through Eventbrite, tagged “eventbrite”. With its Eventbrite order number a booking keeps it, so Eventbrite's later changes follow it and bringing the file in again never adds it twice; without one it comes in as added by you.`,
     );
   }
   return { payload, problems, notes };
@@ -628,6 +634,7 @@ export const BOOKING_COLUMNS: Record<BookingImportKind, string[]> = {
     "source",
     "shopify_order_id",
     "shopify_order_number",
+    "eventbrite_order_id",
     "notes",
     "tags",
     "email_opt_in",

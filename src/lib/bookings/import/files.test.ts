@@ -163,6 +163,7 @@ describe("the bookings file", () => {
       tags: ["gift"],
       shop_order_id: "5001",
       shop_order_name: "#1001",
+      eventbrite_order_id: null,
       notes: "",
       email_opt_in: true,
       created_at: "2027-01-02T15:00:00.000Z",
@@ -199,6 +200,19 @@ describe("the bookings file", () => {
       day_of_text_sent_at: null,
       followup_text_sent_at: "2027-03-08T15:00:00.000Z",
     });
+  });
+
+  it("keeps an Eventbrite order's number, and refuses one that isn't a number", () => {
+    const r = read(
+      "bookings",
+      [
+        "session_id,customer_email,seats,source,eventbrite_order_id",
+        "s1,a@example.com,1,eventbrite,1234567890",
+        "s1,b@example.com,1,eventbrite,EB-12",
+      ].join("\n"),
+    );
+    expect(r.payload[0]).toMatchObject({ eventbrite_order_id: "1234567890", tags: ["eventbrite"] });
+    expect(r.problems).toEqual([{ line: 3, reason: "“EB-12” isn't an Eventbrite order number" }]);
   });
 
   it("leaves out what can't be a booking", () => {

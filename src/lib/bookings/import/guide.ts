@@ -76,7 +76,7 @@ export const BOOKING_IMPORT_GUIDE: Record<BookingImportKind, BookingImportGuide>
     about:
       "Who booked which date. Nobody is emailed; what your earlier app already sent is noted so it isn't sent again.",
     matchedBy:
-      "Matched by the id from your earlier app, else by shop order and date. A booking the shop sync has already made is matched, not doubled.",
+      "Matched by the id from your earlier app, else by Eventbrite order, else by shop order and date. A booking the shop sync or Eventbrite has already made here is matched, not doubled.",
     columns: [
       { name: "id", about: "The booking's id in your earlier app" },
       { name: "session_id", needed: true, about: "The date's id, as in the dates file" },
@@ -89,6 +89,11 @@ export const BOOKING_IMPORT_GUIDE: Record<BookingImportKind, BookingImportGuide>
       { name: "source", about: "shopify, manual or eventbrite" },
       { name: "shopify_order_id", about: "The shop order's id, so refunds still follow it" },
       { name: "shopify_order_number", about: "The order number people see, like #1042" },
+      {
+        name: "eventbrite_order_id",
+        about:
+          "The Eventbrite order's number, so Eventbrite's changes follow it and it's never added twice",
+      },
       { name: "notes", about: "Your note on the booking" },
       { name: "tags", about: "Tags, with ; between them" },
       { name: "email_opt_in", about: "no if this booking's emails were switched off" },
