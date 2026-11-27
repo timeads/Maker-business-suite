@@ -18,6 +18,8 @@ export async function helpdeskAccess(slug: string, path: string) {
   if (entitlements.can("module.helpdesk")) {
     return { ok: true as const, user, ...ctx, entitlements };
   }
+  // On the plan, but not one of this person's tools (docs/roles.md).
+  const notTheirs = entitlements.onPlan("module.helpdesk");
   const hasChoice = entitlements.plan !== null && entitlements.plan.moduleChoices > 0;
   return {
     ok: false as const,
@@ -28,11 +30,13 @@ export async function helpdeskAccess(slug: string, path: string) {
           <CardHeader>
             <CardTitle>One inbox, with each customer&apos;s orders beside their message</CardTitle>
             <CardDescription>
-              {hasChoice
-                ? "Your plan includes one extra tool of your choice. Pick the help desk to switch it on."
-                : entitlements.plan
-                  ? "The help desk isn't part of your current plan."
-                  : "Pick a plan to switch the help desk on — the first 14 days are free."}
+              {notTheirs
+                ? "The help desk isn't one of the tools you can open here."
+                : hasChoice
+                  ? "Your plan includes one extra tool of your choice. Pick the help desk to switch it on."
+                  : entitlements.plan
+                    ? "The help desk isn't part of your current plan."
+                    : "Pick a plan to switch the help desk on — the first 14 days are free."}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -44,7 +48,9 @@ export async function helpdeskAccess(slug: string, path: string) {
               </Button>
             ) : (
               <p className="text-muted-foreground text-sm">
-                Ask a workspace owner or admin to switch it on.
+                {notTheirs
+                  ? "Ask a workspace owner or admin to add it to your tools."
+                  : "Ask a workspace owner or admin to switch it on."}
               </p>
             )}
           </CardContent>

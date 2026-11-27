@@ -18,6 +18,8 @@ export async function shippingAccess(slug: string, path: string) {
   if (entitlements.can("module.shipping")) {
     return { ok: true as const, user, ...ctx, entitlements };
   }
+  // On the plan, but not one of this person's tools (docs/roles.md).
+  const notTheirs = entitlements.onPlan("module.shipping");
   const hasChoice = entitlements.plan !== null && entitlements.plan.moduleChoices > 0;
   return {
     ok: false as const,
@@ -31,11 +33,13 @@ export async function shippingAccess(slug: string, path: string) {
               place
             </CardTitle>
             <CardDescription>
-              {hasChoice
-                ? "Your plan includes one extra tool of your choice. Shipping comes with the Growth plan and up."
-                : entitlements.plan
-                  ? "Shipping isn&apos;t part of your current plan."
-                  : "Pick a plan to switch Shipping on — the first 14 days are free."}
+              {notTheirs
+                ? "Shipping isn't one of the tools you can open here."
+                : hasChoice
+                  ? "Your plan includes one extra tool of your choice. Shipping comes with the Growth plan and up."
+                  : entitlements.plan
+                    ? "Shipping isn't part of your current plan."
+                    : "Pick a plan to switch Shipping on — the first 14 days are free."}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -47,7 +51,9 @@ export async function shippingAccess(slug: string, path: string) {
               </Button>
             ) : (
               <p className="text-muted-foreground text-sm">
-                Ask a workspace owner or admin to switch it on.
+                {notTheirs
+                  ? "Ask a workspace owner or admin to add it to your tools."
+                  : "Ask a workspace owner or admin to switch it on."}
               </p>
             )}
           </CardContent>
