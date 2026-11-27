@@ -321,7 +321,7 @@ describe("the QuickBooks sync and expenses", () => {
     expect(
       all.filter((url) => url.includes("from Account where Classification = 'Liability'")),
     ).toHaveLength(1);
-    const queries = all.filter((url) => !url.includes("from Account "));
+    const queries = all.filter((url) => !/from (Account|Item|Invoice) /.test(url));
     expect(queries).toHaveLength(5);
     expect(
       queries.every((url) =>
@@ -340,7 +340,8 @@ describe("the QuickBooks sync and expenses", () => {
       "CreditCardPayment",
     ]);
     expect(state.expenseCloses[0].run).toBe(state.bookExpenses[0].run);
-    expect(state.usage).toBe(5 + 5 + 1);
+    // Five reports, five kinds of expense, the chart, then items and invoices.
+    expect(state.usage).toBe(5 + 5 + 1 + 2);
   });
 
   it("reads the monthly reports from three Januaries back, cash flow on the cash basis", async () => {

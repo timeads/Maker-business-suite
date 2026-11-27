@@ -238,6 +238,7 @@ describe("buildNav: each tool's menu", () => {
     expect(labels(tool(tools, "dashboard"))).toEqual([
       "Dashboard",
       "Expenses to sort",
+      "Invoices",
       "Budget",
       "Cost cutter",
       "Set up",

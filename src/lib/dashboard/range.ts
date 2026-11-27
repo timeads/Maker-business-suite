@@ -170,3 +170,8 @@ export function periodLabel(periodKey: string, grouping: Grouping, withYear = fa
     ...(withYear ? { year: "numeric" } : {}),
   }).format(date);
 }
+
+/** The plain day it is at `instant` in `timeZone`, `YYYY-MM-DD`. */
+export function dayIn(instant: Date, timeZone: string): string {
+  return key(localDate(instant, timeZone));
+}

@@ -36,6 +36,19 @@ import {
   type PaymentsResponse,
 } from "./quickbooks-payments";
 import {
+  INVOICE_PAGE,
+  INVOICE_PAGES,
+  ITEM_PAGE,
+  ITEM_PAGES,
+  answerCount,
+  invoicesQuery,
+  itemsQuery,
+  parseInvoices,
+  parseItems,
+  type ItemAccount,
+  type QueryAnswer,
+} from "./quickbooks-invoices";
+import {
   parseAgedReceivables,
   parseBalanceSheet,
   parseLiabilityAccounts,
@@ -258,6 +271,57 @@ export function createQuickBooksAdapter(fetchImpl: Fetch = fetch): ProviderAdapt
     return { calls };
   }
 
+  /** One read-only question in QuickBooks' query language. */
+  const ask = (realmId: string, token: TokenSet, query: string) =>
+    requestJson<QueryAnswer>(
+      fetchImpl,
+      "QuickBooks",
+      `${apiBase()}/v3/company/${encodeURIComponent(realmId)}/query?${new URLSearchParams({
+        query,
+        minorversion: "75",
+      })}`,
+      { headers: { Authorization: `Bearer ${token.access_token}`, Accept: "application/json" } },
+    );
+
+  /**
+   * Invoices since a day, for Money, a page at a time, with the item list
+   * for each sales line's income account. Only reads. Filed as they arrive;
+   * read to the last page, whatever the books no longer hold is marked gone.
+   * Trouble with the item list only leaves accounts unnamed.
+   */
+  async function invoices(realmId: string, token: TokenSet, since: string, store: SyncStore) {
+    let calls = 0;
+    const items = new Map<string, ItemAccount>();
+    try {
+      for (let page = 0; page < ITEM_PAGES; page++) {
+        calls += 1;
+        const answer = await ask(realmId, token, itemsQuery(page));
+        for (const [id, account] of parseItems(answer)) items.set(id, account);
+        if (answerCount("Item", answer) < ITEM_PAGE) break;
+      }
+    } catch (err) {
+      if (err instanceof ProviderHttpError && err.status === 401) throw err;
+      console.warn(
+        `QuickBooks items not read for ${realmId}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+    const run = crypto.randomUUID();
+    let finished = false;
+    for (let page = 0; page < INVOICE_PAGES; page++) {
+      calls += 1;
+      const answer = await ask(realmId, token, invoicesQuery(since, page));
+      const rows = parseInvoices(answer, items);
+      if (rows.length > 0) await store.fileBookInvoices(run, rows);
+      if (answerCount("Invoice", answer) < INVOICE_PAGE) {
+        finished = true;
+        break;
+      }
+    }
+    if (finished) await store.closeBookInvoices(run, since);
+    return { calls };
+  }
+
   return {
     key: "quickbooks",
     name: "QuickBooks",
@@ -436,6 +500,22 @@ export function createQuickBooksAdapter(fetchImpl: Fetch = fetch): ProviderAdapt
       } catch (err) {
         console.warn(
           `QuickBooks expenses not read for ${externalAccountId}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+      // Invoices, for Money's invoice list and revenue by line. Never stops
+      // the sync; a database not yet on the newer functions just says so.
+      try {
+        if (await store.bookExpensesWanted()) {
+          const read = await invoices(externalAccountId, token, since, store);
+          calls += read.calls;
+        }
+      } catch (err) {
+        if (err instanceof ProviderHttpError && err.status === 401) {
+          throw new ReconnectRequiredError("QuickBooks no longer accepts this company's access");
+        }
+        console.warn(
+          `QuickBooks invoices not read for ${externalAccountId}:`,
           err instanceof Error ? err.message : err,
         );
       }

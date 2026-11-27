@@ -46,6 +46,67 @@ export function revenueExplained(settings: RevenueSettings): string[] {
   return out;
 }
 
+/**
+ * How the books' revenue joins the shop's, and why nothing counts twice.
+ * Shown beside revenue, profit by line and the invoice list.
+ */
+export function booksRevenueExplained(settings: RevenueSettings): string[] {
+  const books = settings.books;
+  const name = (id: string) => settings.lines.find((l) => l.id === id)?.name ?? "a removed line";
+  if (!books.invoices && !books.other_income) {
+    return [
+      "Only sales from your shop count as revenue here. Invoices and other income in your books aren't added.",
+    ];
+  }
+  const out: string[] = [];
+  if (books.invoices) {
+    const toLines = books.accounts.filter((a) => "line" in a.choice);
+    const shop = books.accounts.filter((a) => "skip" in a.choice && a.choice.skip === "shop");
+    out.push(
+      "Paid invoices from your books are added, before tax, in the month of the invoice's date.",
+    );
+    if (toLines.length) {
+      out.push(
+        `Each invoice line goes to the business line its income account is pointed at: ${someNames(
+          toLines.map((a) => ("line" in a.choice ? `${a.name} → ${name(a.choice.line)}` : a.name)),
+          5,
+        )}.`,
+      );
+    }
+    out.push(
+      shop.length
+        ? `${someNames(
+            shop.map((a) => a.name),
+            4,
+          )} ${shop.length === 1 ? "holds" : "hold"} your shop's own sales, so ${shop.length === 1 ? "it's" : "they're"} left out: those sales already count from the shop.`
+        : "An account that holds your shop's own sales should be marked that way, so those sales aren't counted twice.",
+      "An invoice on an account you haven't chosen for yet counts nowhere until you do; it's shown apart.",
+    );
+  }
+  if (books.other_income) {
+    out.push(
+      books.other_income_line
+        ? `Your books' other income (interest, one-off income) is added to ${name(books.other_income_line)}. It never holds shop sales.`
+        : "Your books' other income (interest, one-off income) is shown as other revenue beside your lines. It never holds shop sales.",
+    );
+  }
+  return out;
+}
+
+/** What the invoice list shows and how its standing is decided. */
+export function invoicesExplained(settings: RevenueSettings): string[] {
+  return [
+    "Invoices are read from your books every few hours, from three Januaries back. Nothing is ever changed there.",
+    "An invoice is paid when nothing is owed on it, overdue once its due day has gone by (in your workspace's time zone), and open otherwise.",
+    ...(hasLines(settings)
+      ? [
+          "Filtering by a business line shows invoices with at least one line on an income account pointed at it.",
+        ]
+      : []),
+    ...booksRevenueExplained(settings),
+  ];
+}
+
 /** Which of the books' accounts feed one line's expenses, by the account choices. */
 export function lineExpensesExplained(
   sorting: Pick<ExpenseSorting, "accounts">,

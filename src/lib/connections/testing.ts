@@ -1,6 +1,7 @@
 import type { BookLiability } from "../dashboard/debt/books";
 import type {
   BookExpenseRow,
+  BookInvoiceRow,
   BookPaymentRow,
   CustomerRow,
   OrderRow,
@@ -37,6 +38,10 @@ export function memoryStore() {
     /** Set to true for a workspace with Money, which reads expenses from its books. */
     bookExpensesWanted: false,
     expenseCloses: [] as { run: string; since: string; entities: string[] }[],
+    bookInvoices: [] as { run: string; row: BookInvoiceRow }[],
+    invoiceCloses: [] as { run: string; since: string }[],
+    /** Set to make filing invoices fail, as a database without the newer function would. */
+    bookInvoicesFail: false,
     debtBalances: [] as { asOf: string; accounts: { name: string; cents: number }[] }[],
     bookDebts: [] as { asOf: string; accounts: BookLiability[]; complete: boolean }[],
     /** Set to make filing debts fail, as a database without the newer function would. */
@@ -89,6 +94,13 @@ export function memoryStore() {
     },
     async closeBookExpenses(run, since, entities) {
       state.expenseCloses.push({ run, since, entities });
+    },
+    async fileBookInvoices(run, rows) {
+      if (state.bookInvoicesFail) throw new Error("file_book_invoices failed: no such function");
+      state.bookInvoices.push(...rows.map((row) => ({ run, row })));
+    },
+    async closeBookInvoices(run, since) {
+      state.invoiceCloses.push({ run, since });
     },
     async importBookPayments(rows) {
       state.bookPayments.push(...rows);

@@ -98,6 +98,12 @@ export function rpcSyncStore(
     },
     closeBookExpenses: (run, since, entities) =>
       call("close_book_expenses", { p_run: run, p_since: since, p_entities: entities }),
+    async fileBookInvoices(run, rows) {
+      for (let start = 0; start < rows.length; start += 500) {
+        await call("file_book_invoices", { p_run: run, p_rows: rows.slice(start, start + 500) });
+      }
+    },
+    closeBookInvoices: (run, since) => call("close_book_invoices", { p_run: run, p_since: since }),
     noteDebtBalances: (asOf, accounts) =>
       call("note_debt_balances_from_books", { p_as_of: asOf, p_rows: accounts }),
     async fileBookDebts(asOf, accounts, complete) {

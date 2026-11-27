@@ -189,6 +189,32 @@ export type BookExpenseRow = {
   }[];
 };
 
+/**
+ * An invoice as the books hold it, for Money's invoice list and revenue by
+ * line. Amounts in whole cents. `net_cents` is the invoice before tax, shared
+ * among its sales lines to the cent (`lines[].cents`); each line names the
+ * income account it is booked to.
+ */
+export type BookInvoiceRow = {
+  external_id: string;
+  doc_number: string | null;
+  customer: string | null;
+  /** YYYY-MM-DD, the books' own day. */
+  date: string;
+  due_date: string | null;
+  total_cents: number;
+  balance_cents: number;
+  net_cents: number;
+  memo: string;
+  lines: {
+    account_ref: string | null;
+    account: string | null;
+    item: string | null;
+    cents: number;
+    description: string;
+  }[];
+};
+
 /** A product's tags in the shop, noted on each of its stock items. */
 export type StockTagsRow = { product_external_id: string; tags: string[] };
 
@@ -329,6 +355,10 @@ export type SyncStore = {
    * them in that window that this read didn't see is gone from the books.
    */
   closeBookExpenses(run: string, since: string, entities: string[]): Promise<void>;
+  /** Invoices read from the books in one read (`run`), upserted by the books' own ids. */
+  fileBookInvoices(run: string, rows: BookInvoiceRow[]): Promise<void>;
+  /** After a complete read since `since`: any invoice this read didn't see is gone from the books. */
+  closeBookInvoices(run: string, since: string): Promise<void>;
   /**
    * The books' liability accounts as of a day, for Money's debts. The
    * database keeps a balance only for a debt linked to one of them.

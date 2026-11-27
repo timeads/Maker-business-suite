@@ -94,6 +94,55 @@ export const lineRuleSchema = z
   });
 export type LineRule = z.infer<typeof lineRuleSchema>;
 
+/**
+ * What one of the books' income accounts counts as, for paid invoices booked
+ * to it: a business line's revenue, or left out, either because it holds the
+ * shop's own sales (already counted from the shop, so counting it again would
+ * count it twice) or for another reason. An account with no choice counts
+ * nowhere and is shown apart until a person decides.
+ */
+export const bookAccountChoiceSchema = z.union([
+  z.object({ line: id }).strict(),
+  z.object({ skip: z.enum(["shop", "other"]) }).strict(),
+]);
+export type BookAccountChoice = z.infer<typeof bookAccountChoiceSchema>;
+
+export const bookAccountSchema = z.object({
+  /** The books' own id for the account, when known; else the exact name decides. */
+  ref: z
+    .string()
+    .regex(/^[A-Za-z0-9_-]{1,60}$/)
+    .nullable()
+    .default(null),
+  name: z.string().trim().min(1).max(200),
+  choice: bookAccountChoiceSchema,
+});
+export type BookAccount = z.infer<typeof bookAccountSchema>;
+
+/**
+ * Revenue that didn't come through the shop, from the books. Off until a
+ * person switches it on, so nothing a workspace already sees changes:
+ * - `invoices`: paid invoices, before tax, by the invoice's day, each line in
+ *   the line its income account is pointed at (`accounts`);
+ * - `other_income`: the books' "other income" (interest, one-off income),
+ *   which never holds shop sales, counted in `other_income_line` or, with no
+ *   line, as other revenue beside the lines.
+ */
+export const booksRevenueSchema = z.object({
+  invoices: z.boolean().default(false),
+  other_income: z.boolean().default(false),
+  other_income_line: id.nullable().default(null),
+  accounts: z.array(bookAccountSchema).max(200).default([]),
+});
+export type BooksRevenue = z.infer<typeof booksRevenueSchema>;
+
+export const DEFAULT_BOOKS_REVENUE: BooksRevenue = {
+  invoices: false,
+  other_income: false,
+  other_income_line: null,
+  accounts: [],
+};
+
 export const revenueSettingsSchema = z
   .object({
     version: z.literal(1),
@@ -105,6 +154,8 @@ export const revenueSettingsSchema = z
     default_line: id.nullable().default(null),
     /** Checked from the top; the first that matches decides. */
     rules: z.array(lineRuleSchema).max(60).default([]),
+    /** Revenue from the books beside the shop's. */
+    books: booksRevenueSchema.default(DEFAULT_BOOKS_REVENUE),
   })
   .superRefine((value, ctx) => {
     const ids = new Set(value.lines.map((line) => line.id));
@@ -137,6 +188,33 @@ export const revenueSettingsSchema = z
         });
       }
     });
+    const books = value.books;
+    if (books.other_income_line !== null && !ids.has(books.other_income_line)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["books", "other_income_line"],
+        message: "Other income must go to one of the lines",
+      });
+    }
+    const keys = new Set<string>();
+    books.accounts.forEach((account, index) => {
+      const key = account.ref ? `ref:${account.ref}` : `name:${account.name}`;
+      if (keys.has(key)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["books", "accounts", index],
+          message: "Each account can only be chosen once",
+        });
+      }
+      keys.add(key);
+      if ("line" in account.choice && !ids.has(account.choice.line)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["books", "accounts", index, "choice"],
+          message: "An account must point at one of the lines",
+        });
+      }
+    });
   });
 export type RevenueSettings = z.infer<typeof revenueSettingsSchema>;
 
@@ -147,6 +225,7 @@ export const DEFAULT_REVENUE_SETTINGS: RevenueSettings = {
   lines: [],
   default_line: null,
   rules: [],
+  books: DEFAULT_BOOKS_REVENUE,
 };
 
 /** The stored settings, or the defaults when there are none or they don't parse. */
