@@ -125,6 +125,9 @@ unit_cost` / `own_cost`, `purchase_order_lines.unit_cost`,
   shopper paid. Label prices at buying time stay (see below), and the
   classroom's supply cost is read but only shown on the owners-and-admins
   form.
+  The owner decided (2026-11-27) that these cost columns staying readable
+  through the API for members who have that tool is accepted and will not
+  be closed.
 - **Heads-ups in Messages** come from every tool and Messages is everyone's,
   so a member still sees, say, a Shipping heads-up without Shipping. None of
   them carries a Money figure.

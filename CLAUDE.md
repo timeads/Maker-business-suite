@@ -1172,6 +1172,11 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
 - Setup: a tool's "finish setting up" checklist, card and guided page follow
   docs/setup-pattern.md (`lib/setup/`, `components/setup/`): items worked
   out on read, only "Not now" stored, steps write through existing paths.
+  Money, Stock (`lib/stock/setup.ts`, `stock/setup`) and Shipping
+  (`lib/shipping/setup.ts`, `shipping/setup`) have one; optional items never
+  show on the card, owners-and-admins items say "Ask an owner or admin" to
+  anyone else, and Stock's and Shipping's "Not now" is readable by their
+  team. Keep `tests/db/setup-not-now.test.ts` passing.
 - Code with no signed-in member (public pages, the worker) asks
   `moduleOpen()` in `lib/module-access.ts`, which uses the same resolver as
   `getEntitlements()`.
