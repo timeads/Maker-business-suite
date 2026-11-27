@@ -102,7 +102,7 @@ export function shippingSetupItems(facts: ShippingSetupFacts): SetupItem[] {
   const items: SetupItem[] = shopItems(facts.shop, facts.now, {
     what: "Shipping reads the orders waiting to go, and where they're going, from your shop.",
     step: "shop",
-    readAgain: "connections",
+    readAgain: "shipping/setup#shop",
   });
   const shopOn = facts.shop?.status === "active";
 

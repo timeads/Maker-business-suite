@@ -3,9 +3,17 @@ import { notFound } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
+import { HowWorkedOut } from "@/components/setup/how-worked-out";
 import { formatMoney } from "@/lib/dashboard/format";
 import { COST_SOURCE_LABELS } from "@/lib/stock/cost";
 import { caseLabel } from "@/lib/stock/engine";
+import {
+  costExplained,
+  leadTimeFrom,
+  orderByExplained,
+  salesRateExplained,
+  suggestionExplained,
+} from "@/lib/stock/explain";
 import { closureNote } from "@/lib/stock/views";
 import {
   HEALTH_LABELS,
@@ -42,6 +50,19 @@ export default async function StockItemPage({
   const left = notPlannedReason(row);
   const cases = caseLabel(row.suggestedQty, row.casePack);
   const manager = canManage(role) && entitlements.canWrite;
+  const base = `/w/${tenant.slug}`;
+  // Where the days that matter most are changed: this item's own figure is
+  // below, a supplier's on its page, the usual ones in Settings.
+  const leadChange = !manager
+    ? null
+    : leadTimeFrom(row) === "supplier" && row.supplier
+      ? {
+          href: `${base}/stock/suppliers/${row.supplier.id}`,
+          label: `Change ${row.supplier.name}'s days`,
+        }
+      : leadTimeFrom(row) === "usual"
+        ? { href: `${base}/settings/stock`, label: "Change the usual figures" }
+        : null;
   const facts = [
     ["On the shelf", String(item.on_hand)],
     ["On its way", String(row.onOrder)],
@@ -140,6 +161,25 @@ export default async function StockItemPage({
             </p>
             <p className="text-muted-foreground mt-1 text-xs">The sum: {plan.explain}</p>
           </div>
+          <div className="flex flex-col gap-2">
+            <HowWorkedOut
+              label="How the order-by date is worked out"
+              lines={orderByExplained(row, settings, today)}
+              change={leadChange}
+            />
+            <HowWorkedOut
+              label="How the amount to order is worked out"
+              lines={suggestionExplained(row)}
+              change={leadChange}
+            />
+            <HowWorkedOut
+              label="How the sales rate is measured"
+              lines={salesRateExplained(row, settings)}
+              change={
+                manager ? { href: `${base}/settings/stock`, label: "Busy seasons on or off" } : null
+              }
+            />
+          </div>
         </CardContent>
       </Card>
 
@@ -194,6 +234,10 @@ export default async function StockItemPage({
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
+            <HowWorkedOut
+              label="Which cost is used"
+              lines={costExplained(row, (amount) => formatMoney(amount, tenant.currency))}
+            />
             <dl className="grid grid-cols-3 gap-x-6 gap-y-3">
               {costs.map(([label, value, used]) => (
                 <div key={label}>

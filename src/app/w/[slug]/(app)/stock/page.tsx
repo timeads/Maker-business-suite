@@ -4,7 +4,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
+import { SetupCard } from "@/components/setup/setup-card";
 import { formatMoney } from "@/lib/dashboard/format";
+import { loadNotNow } from "@/lib/setup/data";
+import { sortItems, type SetupItem } from "@/lib/setup/items";
+import { STOCK_TOOL, stockSetupItems } from "@/lib/stock/setup";
+import { loadStockSetupFacts } from "@/lib/stock/setup-data";
 import { bySupplier, computeBuildAhead } from "@/lib/stock/engine/seasons";
 import {
   closureOrders,
@@ -40,11 +45,21 @@ export default async function StockPage({ params }: { params: Promise<{ slug: st
     { rows, today, link, suppliers, seasons, settings },
     { incoming },
     { parcels, canAskUps },
+    notNow,
   ] = await Promise.all([
     loadStock(supabase, tenant),
     loadIncoming(supabase, tenant),
     loadIncomingParcels(supabase, tenant),
+    loadNotNow(supabase, tenant.id, STOCK_TOOL),
   ]);
+  // "Finish setting up", from what was just read. Never stops the page.
+  const setup = await loadStockSetupFacts(supabase, tenant, {
+    manager: canManage(role),
+    seesCosts: entitlements.seesCosts,
+    loaded: { rows, suppliers, settings, seasons },
+  })
+    .then((facts) => sortItems(stockSetupItems(facts), notNow).open)
+    .catch((): SetupItem[] => []);
   const day = (value: string) =>
     new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short", day: "numeric" }).format(
       new Date(`${value}T12:00:00Z`),
@@ -161,6 +176,17 @@ export default async function StockPage({ params }: { params: Promise<{ slug: st
           </>
         )}
       </PageHeader>
+
+      <SetupCard
+        slug={tenant.slug}
+        tool={STOCK_TOOL}
+        // With nothing read yet, the card below already says what to do.
+        items={rows.length > 0 ? setup : []}
+        canSnooze={canEdit}
+        canAct={canEdit}
+        setupHref="stock/setup"
+        ending="would make these suggestions truer"
+      />
 
       {rows.length === 0 ? (
         <Card>

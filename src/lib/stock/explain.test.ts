@@ -5,6 +5,7 @@ import {
   coverFrom,
   leadTimeFrom,
   orderByExplained,
+  planningExplained,
   salesRateExplained,
   suggestionExplained,
 } from "./explain";
@@ -189,5 +190,16 @@ describe("costExplained", () => {
     expect(costExplained(rowOf({ unit_cost: null }), money)[1]).toBe(
       "None of those is known for this one yet, so orders count it as costing nothing.",
     );
+  });
+});
+
+describe("planningExplained", () => {
+  it("says the workspace's own figures and rules", () => {
+    const lines = planningExplained({ ...DEFAULT_STOCK_SETTINGS, skip_tags: ["sample"] });
+    expect(lines[0]).toContain("else your usual 30 days), less your 7 days between");
+    expect(lines[1]).toContain("30 days after");
+    expect(lines[2]).toMatch(/^Busy seasons are on/);
+    expect(lines).toContain("Anything with “gift card” in its name is never reordered.");
+    expect(lines).toContain("Anything tagged “sample” in your shop is never reordered.");
   });
 });

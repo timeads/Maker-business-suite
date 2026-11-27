@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { SetupCard } from "@/components/setup/setup-card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
@@ -28,7 +29,12 @@ import {
   todayIn,
   type QueueView,
 } from "@/lib/shipping/queue";
+import { loadNotNow } from "@/lib/setup/data";
+import { sortItems, type SetupItem } from "@/lib/setup/items";
+import { SHIPPING_TOOL, shippingOrderFacts, shippingSetupItems } from "@/lib/shipping/setup";
+import { loadShippingSetupFacts } from "@/lib/shipping/setup-data";
 import { createClient } from "@/lib/supabase/server";
+import { canManage } from "@/lib/tenants";
 import { cn } from "@/lib/utils";
 import {
   ORDER_FIELDS,
@@ -77,7 +83,8 @@ export default async function ShippingPage({
   const { slug } = await params;
   const access = await shippingAccess(slug, `/w/${slug}/shipping`);
   if (!access.ok) return access.upsell;
-  const { tenant, entitlements } = access;
+  const { tenant, role, entitlements } = access;
+  const canEdit = canManage(role) && entitlements.canWrite;
   const base = `/w/${tenant.slug}/shipping`;
   const query = await searchParams;
   const justSent = /^\d{1,9}$/.test(query.sent ?? "") ? query.sent : null;
@@ -85,7 +92,7 @@ export default async function ShippingPage({
   const q = cleanSearch(query.q);
 
   const supabase = await createClient();
-  const [loaded, setup, groups, boxes, postage, labelOpen, found] = await Promise.all([
+  const [loaded, setup, groups, boxes, postage, labelOpen, found, notNow] = await Promise.all([
     loadOpenOrders(supabase, tenant.id),
     loadShippingSetup(supabase, tenant.id),
     loadGroups(supabase, tenant.id),
@@ -101,7 +108,18 @@ export default async function ShippingPage({
           .order("placed_at", { ascending: false })
           .limit(100)
       : null,
+    loadNotNow(supabase, tenant.id, SHIPPING_TOOL),
   ]);
+  // "Finish setting up", from what was just read (counts only). Never stops the page.
+  const setupItems = await loadShippingSetupFacts(supabase, tenant, {
+    loaded: {
+      open: shippingOrderFacts(loaded, setup.settings.ship_from_country),
+      boxes,
+      postage,
+    },
+  })
+    .then((facts) => sortItems(shippingSetupItems(facts), notNow).open)
+    .catch((): SetupItem[] => []);
   const now = new Date(daysFromNow(0));
   const today = todayIn(tenant.timezone, now);
   const home = setup.settings.ship_from_country;
@@ -269,6 +287,16 @@ export default async function ShippingPage({
           </Button>
         )}
       </PageHeader>
+
+      <SetupCard
+        slug={tenant.slug}
+        tool={SHIPPING_TOOL}
+        items={q ? [] : setupItems}
+        canSnooze={canEdit}
+        canAct={canEdit}
+        setupHref="shipping/setup"
+        ending="would make sending smoother"
+      />
 
       {justSent && (
         <p role="status" className="bg-mint-soft text-mint-ink rounded-md px-4 py-2.5 text-sm">

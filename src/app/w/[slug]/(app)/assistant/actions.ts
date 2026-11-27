@@ -75,6 +75,7 @@ export async function askAssistant(
         can: (module: ModuleKey) => ctx.entitlements.can(`module.${module}`),
         onPlan: (module: ModuleKey) => ctx.entitlements.onPlan(`module.${module}`),
         manager: canManage(ctx.role),
+        seesCosts: ctx.entitlements.seesCosts,
       },
     );
     // Metered whatever came back: the tokens were spent.

@@ -4,6 +4,7 @@ import { notFound, redirect } from "next/navigation";
 import { Mail, Truck } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { HowWorkedOut } from "@/components/setup/how-worked-out";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { daysFromNow } from "@/lib/bookings/slots";
@@ -19,6 +20,12 @@ import {
   shownBoxes,
 } from "@/lib/shipping/labels";
 import { leftBehind, parsePart, partOrder } from "@/lib/shipping/part";
+import {
+  boxExplained,
+  holdExplained,
+  quoteExplained,
+  signatureExplained,
+} from "@/lib/shipping/explain";
 import { choiceOf, planFor, type OrderPlan } from "@/lib/shipping/plan";
 import { pickupTells, undoWords } from "@/lib/shipping/shop-steps";
 import { boughtBoxes, slipBoxes } from "@/lib/shipping/slip-boxes";
@@ -1276,6 +1283,49 @@ export default async function ShippingOrderPage({
               </div>
             </CardContent>
           </Card>
+
+          {todo && !order.pickup && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Why this plan</CardTitle>
+                <CardDescription>
+                  How the box, price, signature and hold for this order were decided.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-2">
+                <HowWorkedOut
+                  label="Which box, and its weight"
+                  lines={boxExplained(plan, { boxes, settings: setup.settings })}
+                  change={
+                    canManage(role)
+                      ? { href: `/w/${tenant.slug}/settings/shipping#boxes`, label: "Your boxes" }
+                      : null
+                  }
+                />
+                <HowWorkedOut
+                  label="The best price"
+                  lines={quoteExplained(plan, {
+                    sources: postage.active,
+                    costs: entitlements.seesCosts,
+                  })}
+                />
+                <HowWorkedOut
+                  label="Signature"
+                  lines={signatureExplained(plan, {
+                    signatureOver: setup.settings.signature_over,
+                    total,
+                    money: (amount) => money(amount),
+                  })}
+                  change={
+                    canManage(role)
+                      ? { href: `/w/${tenant.slug}/settings/shipping/rules`, label: "Your rules" }
+                      : null
+                  }
+                />
+                {!group && <HowWorkedOut label="Hold" lines={holdExplained(order, plan, today)} />}
+              </CardContent>
+            </Card>
+          )}
 
           {sale && (
             <Card>

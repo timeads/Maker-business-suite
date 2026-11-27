@@ -179,3 +179,32 @@ export function costExplained(row: StockRow, money: (amount: number) => string):
   );
   return out;
 }
+
+/** The workspace's planning rules as a whole, for the guided setup and Settings. */
+export function planningExplained(
+  settings: Pick<
+    StockSettings,
+    | "default_lead_time_days"
+    | "default_coverage_days"
+    | "review_buffer_days"
+    | "seasonality"
+    | "skip_words"
+    | "skip_tags"
+  >,
+): string[] {
+  const out = [
+    `An item's order-by date is the day it runs out, less the days it takes to arrive (its own figure, else its supplier's, else your usual ${days(settings.default_lead_time_days)}), less your ${days(settings.review_buffer_days)} between sitting down to order.`,
+    `Each order is sized to last until it arrives and ${days(settings.default_coverage_days)} after, unless the item or its supplier says otherwise, then raised to any smallest order and to whole cases.`,
+    settings.seasonality
+      ? "Busy seasons are on: months that sell more every year are ordered for ahead of time."
+      : "Busy seasons are off, so every month counts the same.",
+  ];
+  const quoted = (words: readonly string[]) => words.map((w) => `“${w}”`).join(", ");
+  if (settings.skip_words.length > 0) {
+    out.push(`Anything with ${quoted(settings.skip_words)} in its name is never reordered.`);
+  }
+  if (settings.skip_tags.length > 0) {
+    out.push(`Anything tagged ${quoted(settings.skip_tags)} in your shop is never reordered.`);
+  }
+  return out;
+}

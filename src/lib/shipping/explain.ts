@@ -22,6 +22,35 @@ const list = (words: readonly string[]) =>
 export const BOX_ORDER_WORDS =
   "The first of these that applies decides the boxes: what you saved for this order, a rule's box, how you packed exactly these items before, the box used for the same products in other amounts, then your usual box.";
 
+/** What "remember how I pack" is set to, when it isn't the usual (both on). */
+function rememberWords(settings: Pick<ShippingSettings, "remember_packing">): string[] {
+  const remember = settings.remember_packing;
+  if (remember.exact && remember.similar) return [];
+  if (!remember.exact && !remember.similar) {
+    return ["Remembering how you pack is switched off, so earlier orders aren't looked at."];
+  }
+  return [
+    remember.exact
+      ? "Only orders with exactly the same items are remembered; similar ones aren't."
+      : "Orders with exactly the same items aren't remembered; similar ones are.",
+  ];
+}
+
+/** How any order's boxes are chosen, for the guided setup. */
+export function packingExplained(
+  settings: Pick<ShippingSettings, "remember_packing">,
+  boxes: readonly SavedBox[],
+): string[] {
+  const usual = boxes.find((box) => box.is_default) ?? boxes[0];
+  return [
+    BOX_ORDER_WORDS,
+    ...rememberWords(settings),
+    usual
+      ? `Your usual box is ${usual.name}${usual.is_default ? "" : " (the first you added, since none is marked)"}.`
+      : "There's no box saved yet.",
+  ];
+}
+
 const boxName = (box: OrderPlan["boxes"][number]) =>
   box.box?.name ?? boxSize({ length_in: box.length, width_in: box.width, height_in: box.height });
 
@@ -63,16 +92,7 @@ export function boxExplained(
       }
       break;
   }
-  const remember = setup.settings.remember_packing;
-  if (!remember.exact && !remember.similar) {
-    out.push("Remembering how you pack is switched off, so earlier orders aren't looked at.");
-  } else if (!remember.exact || !remember.similar) {
-    out.push(
-      remember.exact
-        ? "Only orders with exactly the same items are remembered; similar ones aren't."
-        : "Orders with exactly the same items aren't remembered; similar ones are.",
-    );
-  }
+  out.push(...rememberWords(setup.settings));
   if (plan.boxes.length > 0) {
     out.push(
       plan.weightTenthOz === null

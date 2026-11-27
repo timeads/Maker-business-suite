@@ -4,6 +4,7 @@ import {
   BOX_ORDER_WORDS,
   boxExplained,
   holdExplained,
+  packingExplained,
   quoteExplained,
   signatureExplained,
 } from "./explain";
@@ -227,5 +228,24 @@ describe("holdExplained", () => {
         "2026-11-27",
       ),
     ).toEqual(["It isn't on hold."]);
+  });
+});
+
+describe("packingExplained", () => {
+  it("says the order, the remembering and the usual box", () => {
+    expect(packingExplained(settings, [box(), big])).toEqual([
+      BOX_ORDER_WORDS,
+      "Your usual box is Medium box.",
+    ]);
+    expect(
+      packingExplained({ remember_packing: { exact: false, similar: false } }, [
+        box({ is_default: false }),
+      ]),
+    ).toEqual([
+      BOX_ORDER_WORDS,
+      "Remembering how you pack is switched off, so earlier orders aren't looked at.",
+      "Your usual box is Medium box (the first you added, since none is marked).",
+    ]);
+    expect(packingExplained(settings, []).at(-1)).toBe("There's no box saved yet.");
   });
 });
