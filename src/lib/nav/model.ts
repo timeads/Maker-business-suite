@@ -397,6 +397,9 @@ export function buildNav(viewer: NavViewer, attention: Attention = {}): NavTool[
               "dashboard/expenses",
               count(attention.expensesToSort),
             ),
+            place("dashboard.orders", "Orders", "dashboard/orders", {
+              keywords: ["orders", "transactions", "shop orders", "refunded", "tags"],
+            }),
             place("dashboard.statements", "Statements", "dashboard/statements", {
               keywords: [
                 "profit and loss",
