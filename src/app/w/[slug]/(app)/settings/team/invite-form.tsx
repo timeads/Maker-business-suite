@@ -6,8 +6,14 @@ import { FormMessage } from "@/components/ui/form-message";
 import { Input, Label, Select } from "@/components/ui/input";
 import { SubmitButton } from "@/components/ui/submit-button";
 import { inviteTeammate, type InviteState } from "../actions";
+import { ToolTicks, type ToolChoice } from "./tool-forms";
 
-export function InviteForm({ slug }: { slug: string }) {
+/**
+ * `tools` is set once the workspace chooses tools per person: a member's
+ * invite then carries the ticked tools, and none ticked means none.
+ */
+export function InviteForm({ slug, tools }: { slug: string; tools?: ToolChoice[] }) {
+  const [role, setRole] = useState("member");
   const [state, action] = useActionState<InviteState, FormData>(
     inviteTeammate.bind(null, slug),
     {},
@@ -30,26 +36,46 @@ export function InviteForm({ slug }: { slug: string }) {
           setCopied(false);
           action(formData);
         }}
-        className="flex flex-col gap-3 sm:flex-row sm:items-end"
+        className="flex flex-col gap-3"
       >
-        <div className="flex flex-1 flex-col gap-2">
-          <Label htmlFor="invite-email">Email</Label>
-          <Input
-            id="invite-email"
-            name="email"
-            type="email"
-            placeholder="teammate@yourstudio.com"
-            required
-          />
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+          <div className="flex flex-1 flex-col gap-2">
+            <Label htmlFor="invite-email">Email</Label>
+            <Input
+              id="invite-email"
+              name="email"
+              type="email"
+              placeholder="teammate@yourstudio.com"
+              required
+            />
+          </div>
+          <div className="flex flex-col gap-2 sm:w-36">
+            <Label htmlFor="invite-role">Role</Label>
+            <Select
+              id="invite-role"
+              name="role"
+              value={role}
+              onChange={(event) => setRole(event.target.value)}
+            >
+              <option value="member">Member</option>
+              <option value="admin">Admin</option>
+            </Select>
+          </div>
+          <SubmitButton pendingText="Inviting…">Send invite</SubmitButton>
         </div>
-        <div className="flex flex-col gap-2 sm:w-36">
-          <Label htmlFor="invite-role">Role</Label>
-          <Select id="invite-role" name="role" defaultValue="member">
-            <option value="member">Member</option>
-            <option value="admin">Admin</option>
-          </Select>
-        </div>
-        <SubmitButton pendingText="Inviting…">Send invite</SubmitButton>
+        {tools &&
+          (role === "member" ? (
+            <div className="flex flex-col gap-2">
+              <p className="text-sm font-medium">Tools they can open</p>
+              <ToolTicks tools={tools} ticked={[]} idPrefix="invite-tools" />
+              <p className="text-muted-foreground text-xs">
+                Tick none and they start with Home and Messages only. You can change this on this
+                page any time.
+              </p>
+            </div>
+          ) : (
+            <p className="text-muted-foreground text-xs">Admins open every tool, Money included.</p>
+          ))}
       </form>
 
       <FormMessage>{state.error}</FormMessage>

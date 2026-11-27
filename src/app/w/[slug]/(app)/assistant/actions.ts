@@ -73,6 +73,7 @@ export async function askAssistant(
         supabase: ctx.supabase,
         tenant: ctx.tenant,
         can: (module: ModuleKey) => ctx.entitlements.can(`module.${module}`),
+        onPlan: (module: ModuleKey) => ctx.entitlements.onPlan(`module.${module}`),
         manager: canManage(ctx.role),
       },
     );

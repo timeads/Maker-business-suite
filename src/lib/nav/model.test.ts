@@ -560,3 +560,46 @@ describe("buildNav: Instagram & Facebook in the help desk", () => {
     expect(row).toMatchObject({ label: "Instagram & Facebook", to: "helpdesk?view=social" });
   });
 });
+
+describe("buildNav: tools per person", () => {
+  const member = (tools: Feature[]) =>
+    viewer({
+      manager: false,
+      features: ["module.messages", ...tools],
+      onPlan: (feature) => EVERYTHING.includes(feature),
+    });
+
+  it("leaves a tool that isn't theirs off the rail instead of showing it locked", () => {
+    const keys = buildNav(member(["module.shipping"])).map((one) => one.key);
+    expect(keys).toEqual(["home", "assistant", "messages", "shipping", "connections", "settings"]);
+  });
+
+  it("keeps Home and Messages for a member with no tools", () => {
+    const tools = buildNav(member([]));
+    expect(tools.map((one) => one.key)).toEqual([
+      "home",
+      "assistant",
+      "messages",
+      "connections",
+      "settings",
+    ]);
+    expect(tools.every((one) => one.state === "open")).toBe(true);
+  });
+
+  it("still shows a tool the plan lacks as locked", () => {
+    const tools = buildNav(
+      viewer({
+        manager: false,
+        features: ["module.messages", "module.stock"],
+        onPlan: (feature) => ["module.messages", "module.stock"].includes(feature),
+      }),
+    );
+    expect(tool(tools, "shipping").state).toBe("locked");
+    expect(tool(tools, "stock").state).toBe("open");
+  });
+
+  it("never lists Money's settings for someone without Money", () => {
+    const settings = tool(buildNav(member(["module.stock"])), "settings");
+    expect(labels(settings)).not.toContain("Money");
+  });
+});

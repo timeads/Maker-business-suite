@@ -22,6 +22,7 @@ import { daysFromNow, formatTime, localDay } from "@/lib/bookings/slots";
 import { getEntitlements } from "@/lib/entitlements";
 import type { ModuleKey } from "@/lib/modules";
 import { loadStockHomeFacts, stockHomeLines } from "@/lib/stock/home-summary";
+import { homeCards } from "@/lib/team/home";
 import { createClient } from "@/lib/supabase/server";
 import { canManage, getTenantContext } from "@/lib/tenants";
 import { HomeCards } from "./home-cards";
@@ -56,7 +57,9 @@ export default async function WorkspaceHomePage({ params }: { params: Promise<{ 
   if (!ctx) notFound();
   const { tenant, role } = ctx;
   const entitlements = await getEntitlements(tenant.id);
-  const has = (key: ModuleKey) => entitlements.can(`module.${key}`);
+  // A card for each tool this person can open, and nothing of the others.
+  const shown = homeCards(entitlements, role);
+  const has = (key: ModuleKey) => shown.tools.includes(key);
   const base = `/w/${tenant.slug}`;
   const supabase = await createClient();
   const now = daysFromNow(0);
@@ -343,6 +346,19 @@ export default async function WorkspaceHomePage({ params }: { params: Promise<{ 
               <Link href={`${base}/settings/brand?welcome=1`}>Set up brand kit</Link>
             </Button>
           </CardContent>
+        </Card>
+      )}
+
+      {shown.noTools && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Your tools are on their way</CardTitle>
+            <CardDescription>
+              An owner or admin of {tenant.name} chooses which tools each person opens, and
+              hasn&apos;t given you any yet. Ask them to tick the ones you need on the People page.
+              Messages is open to you in the meantime.
+            </CardDescription>
+          </CardHeader>
         </Card>
       )}
 

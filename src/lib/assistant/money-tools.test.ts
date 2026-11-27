@@ -429,3 +429,43 @@ describe("proposals about expenses, budgets and recurring charges", () => {
     });
   });
 });
+
+describe("tools per person", () => {
+  const member = (has: string[]) => ({
+    manager: false,
+    can: (module: string) => has.includes(module),
+    onPlan: () => true,
+  });
+
+  it("offers a member without Money no Money tools and no sales figures", () => {
+    const names = toolsFor(member(["helpdesk"])).map((t) => t.name);
+    for (const tool of [...MONEY_TOOLS, ...DEBT_TOOLS]) expect(names).not.toContain(tool.name);
+    expect(names).not.toContain("query_metrics");
+    expect(names).toContain("search_tickets");
+    expect(systemFor(member(["helpdesk"]), "Rugs")).toMatch(/owners and admins/);
+  });
+
+  it("offers no help desk search without the help desk", () => {
+    expect(toolsFor(member([])).map((t) => t.name)).not.toContain("search_tickets");
+  });
+
+  it("refuses a hidden tool as if it didn't exist, and hides its settings", async () => {
+    const { supabase } = fake();
+    const c: ToolContext = { ...ctx(supabase, false), can: () => false, onPlan: () => true };
+    const out = await runTool("list_expenses", {}, c);
+    expect(out).toMatchObject({ isError: true, content: "There is no tool called list_expenses." });
+    const listed = JSON.parse((await runTool("list_configs", {}, c)).content) as {
+      module: string;
+    }[];
+    expect(listed.some((entry) => entry.module === "dashboard")).toBe(false);
+    const got = await runTool("get_config", { module: "dashboard", key: "health" }, c);
+    expect(got.isError).toBe(true);
+  });
+
+  it("changes nothing for an owner", () => {
+    const names = toolsFor({ manager: true, can: () => true, onPlan: () => true }).map(
+      (t) => t.name,
+    );
+    for (const tool of [...MONEY_TOOLS, ...DEBT_TOOLS]) expect(names).toContain(tool.name);
+  });
+});

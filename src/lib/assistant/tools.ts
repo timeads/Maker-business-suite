@@ -17,9 +17,19 @@ export type ToolContext = {
   supabase: SupabaseClient;
   tenant: { id: string; timezone: string; currency: string; slug?: string };
   can(module: ModuleKey): boolean;
+  /**
+   * The plan's answer alone. A tool the plan has that `can` refuses is not
+   * one of this person's tools (docs/roles.md): its assistant tools and
+   * settings don't exist for them. Without it, nothing is hidden that way.
+   */
+  onPlan?(module: ModuleKey): boolean;
   /** Owner or admin: only they may see a setting marked `ownersOnly`. */
   manager: boolean;
 };
+
+/** A tool on the plan that this person doesn't have: for them it isn't there at all. */
+export const notTheirs = (ctx: Pick<ToolContext, "can" | "onPlan">, module: ModuleKey) =>
+  Boolean(ctx.onPlan?.(module)) && !ctx.can(module);
 
 /** A filed proposal: a setting (`config_proposals`) or a Money action (`action_proposals`). */
 export type Proposal = {
@@ -109,12 +119,29 @@ export const TOOLS: Anthropic.Tool[] = [
   },
 ];
 
+/** Which of this person's tools each assistant tool reads. */
+const TOOL_MODULE: Record<string, ModuleKey> = {
+  query_metrics: "dashboard",
+  search_tickets: "helpdesk",
+};
+
 /**
  * The tools this person's assistant is offered: the debt tools only for
- * owners and admins (for anyone else they don't exist).
+ * owners and admins (for anyone else they don't exist), and nothing of a
+ * tool that isn't theirs: no Money tools for a member once the workspace
+ * chooses tools per person, no help desk search without the help desk.
  */
-export function toolsFor(ctx: Pick<ToolContext, "manager">): Anthropic.Tool[] {
-  return [...TOOLS, ...MONEY_TOOLS, ...(ctx.manager ? DEBT_TOOLS : [])];
+export function toolsFor(
+  ctx: Pick<ToolContext, "manager"> & Partial<Pick<ToolContext, "can" | "onPlan">>,
+): Anthropic.Tool[] {
+  const hidden = (module: ModuleKey) =>
+    ctx.can ? notTheirs({ can: ctx.can, onPlan: ctx.onPlan }, module) : false;
+  const money = !hidden("dashboard");
+  return [
+    ...TOOLS.filter((tool) => !TOOL_MODULE[tool.name] || !hidden(TOOL_MODULE[tool.name])),
+    ...(money ? MONEY_TOOLS : []),
+    ...(ctx.manager && money ? DEBT_TOOLS : []),
+  ];
 }
 
 const json = (value: unknown) => JSON.stringify(value);
@@ -126,9 +153,12 @@ function nextDay(day: string): string {
   return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
 }
 
-/** A setting only owners and admins may see doesn't exist for anyone else. */
+/**
+ * A setting only owners and admins may see doesn't exist for anyone else,
+ * nor does a setting of a tool that isn't this person's.
+ */
 const visible = (entry: ReturnType<typeof findConfig>, ctx: ToolContext) =>
-  entry && (!entry.ownersOnly || ctx.manager) ? entry : undefined;
+  entry && (!entry.ownersOnly || ctx.manager) && !notTheirs(ctx, entry.feature) ? entry : undefined;
 
 export async function runTool(
   name: string,
@@ -136,6 +166,10 @@ export async function runTool(
   ctx: ToolContext,
 ): Promise<ToolOutcome> {
   const args = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+  // A tool this person isn't offered doesn't exist for them.
+  if (!toolsFor(ctx).some((tool) => tool.name === name)) {
+    return fail(`There is no tool called ${name}.`);
+  }
   const money = await runMoneyTool(name, args, ctx);
   if (money) return money;
 
@@ -149,7 +183,7 @@ export async function runTool(
       const saved = new Map((data ?? []).map((row) => [`${row.module}/${row.key}`, row]));
       return {
         content: json(
-          CONFIG_REGISTRY.filter((entry) => !entry.ownersOnly || ctx.manager).map((entry) => ({
+          CONFIG_REGISTRY.filter((entry) => visible(entry, ctx)).map((entry) => ({
             module: entry.module,
             key: entry.key,
             name: entry.name,

@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { runTool, toolsFor, type Proposal, type ToolContext } from "./tools";
+import { notTheirs, runTool, toolsFor, type Proposal, type ToolContext } from "./tools";
 
 export type ChatTurn = { role: "user" | "assistant"; text: string };
 
@@ -36,9 +36,19 @@ const DEBTS = `
 
 This person is an owner or admin, so you can also read the business's debts (list_debts) and propose a debt's rate, minimum, usual payment or due day, which plan pays a debt, or whether a liability in the books counts as a debt. A debt's own figures are not a setting: "my line of credit is 10%" is propose_debt_change, not the debt plan setting.`;
 
+/** For a member whose workspace keeps Money to owners and admins (docs/roles.md). */
+const NO_MONEY = `
+
+This person's workspace keeps Money to its owners and admins, so you have no sales figures, expenses, budget or Money settings for them, and the Money items above don't apply. If they ask about any of it, say kindly that Money is for the workspace's owners and admins, and that an owner can make them an admin if they need it.`;
+
 /** The instructions for this person's turn. */
-export function systemFor(ctx: Pick<ToolContext, "manager">, workspaceName: string): string {
-  return `${SYSTEM}${ctx.manager ? DEBTS : ""}\n\nThe business is called ${workspaceName}.`;
+export function systemFor(
+  ctx: Pick<ToolContext, "manager"> & Partial<Pick<ToolContext, "can" | "onPlan">>,
+  workspaceName: string,
+): string {
+  const noMoney = ctx.can ? notTheirs({ can: ctx.can, onPlan: ctx.onPlan }, "dashboard") : false;
+  const extra = noMoney ? NO_MONEY : ctx.manager ? DEBTS : "";
+  return `${SYSTEM}${extra}\n\nThe business is called ${workspaceName}.`;
 }
 
 type Client = Pick<Anthropic, "beta">;

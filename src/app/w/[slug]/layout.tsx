@@ -84,6 +84,7 @@ export default async function WorkspaceLayout({
   const tools = buildNav(
     {
       can: (feature) => entitlements.can(feature),
+      onPlan: (feature) => entitlements.onPlan(feature),
       manager: canManage(ctx.role),
       canWrite: entitlements.canWrite,
       gmailOrders: googleMailConfigured(),

@@ -1,6 +1,7 @@
 import type { Attention } from "@/lib/attention";
 import { VIEWS } from "@/lib/helpdesk/views";
 import { MODULES, type ModuleKey } from "@/lib/modules";
+import type { Feature } from "@/lib/entitlements";
 import { settingsNav, type SettingsSection, type SettingsViewer } from "@/lib/settings/nav";
 
 /**
@@ -24,6 +25,13 @@ export type NavViewer = SettingsViewer & {
   manualName?: string;
   /** Instagram or Facebook messages are switched on for the help desk. */
   socialInbox?: boolean;
+  /**
+   * The plan's answer alone (`entitlements.onPlan`). A tool the plan has but
+   * `can` refuses is not one of this person's tools (docs/roles.md): it is
+   * left off the rail rather than shown as locked. Without it, every tool
+   * `can` refuses is shown as locked, as before.
+   */
+  onPlan?: (feature: Feature) => boolean;
 };
 
 export type NavMatch = {
@@ -477,7 +485,12 @@ export function buildNav(viewer: NavViewer, attention: Attention = {}): NavTool[
   };
 
   const open = MODULES.filter((m) => m.available && viewer.can(`module.${m.key}`));
-  const shut = MODULES.filter((m) => !(m.available && viewer.can(`module.${m.key}`)));
+  // On the plan but not one of this person's tools: not there at all.
+  const notTheirs = (key: ModuleKey) =>
+    Boolean(viewer.onPlan?.(`module.${key}`)) && !viewer.can(`module.${key}`);
+  const shut = MODULES.filter(
+    (m) => !(m.available && viewer.can(`module.${m.key}`)) && !notTheirs(m.key),
+  );
 
   return [
     { key: "home", name: "Home", to: "", place: "top", state: "open", panel: "none", menu: [] },
