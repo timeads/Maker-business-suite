@@ -143,11 +143,17 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   to it first (inside that income, never on top), the rest is shared by the
   shop's own split that month (`splitCents`), with no shop sales it is other
   revenue beside the lines; other income still follows its own switch; the
-  month in progress, a month the books lack and day or week charts stay the
-  shop's, and a range that mixes says so (`mixNote`). Every revenue figure
-  in `loadDashboardData` (key figures, sales over time, revenue by line and
+  month in progress and a month the books lack stay the shop's, and a range
+  that mixes says so (`mixNote`). Every revenue figure in
+  `loadDashboardData` (key figures, sales over time, revenue by line and
   over time, profit by line, and so exports and the projection's mix) goes
-  through that one table; keep the "closed months" tests in `data.test.ts`.
+  through that one table: a range with any books month draws Sales and lines
+  over time BY MONTH from it whatever grouping is asked (totals equal the key
+  figure to the cent; a shop month is marked "so far, from your shop" on the
+  chart and in its table row; books income no line could take is a `beside`
+  series), and only a range with no books month keeps the shop's day or week
+  chart, with its note. Channels and best sellers are the shop's own orders
+  and say so (`fromShop`). Keep the "closed months" tests in `data.test.ts`.
   Expenses (Money → Expenses to sort; docs/money-side-by-side.md): for a
   workspace with Money, the QuickBooks sync (read-only, the accounting
   scope already granted) reads purchases, bills, journal entries' debit

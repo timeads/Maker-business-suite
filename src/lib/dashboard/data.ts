@@ -1,6 +1,12 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { bookRevenue, bookRevenueTotal, type BookRevenue, type InvoiceGroup } from "./book-revenue";
-import { booksMonths, mixNote, rangeRevenue, type RangeRevenue } from "./closed-months";
+import {
+  booksMonths,
+  mixNote,
+  rangeRevenue,
+  type MonthFigure,
+  type RangeRevenue,
+} from "./closed-months";
 import { formatMoney, formatPercent } from "./format";
 import { EXPENSES_KEY, parseExpenseSorting } from "./expenses";
 import {
@@ -92,6 +98,8 @@ export type WidgetData =
       againstLastMonth: number | null;
       /** Closed months from the books: which months are the books' and which the shop's. */
       closedNote?: string | null;
+      /** Orders and the average order are the shop's own, beside a revenue figure from the books. */
+      ordersFromShop?: boolean;
     }
   | {
       type: "sales_over_time";
@@ -100,6 +108,8 @@ export type WidgetData =
       total: number;
       grouping: Grouping;
       closedNote?: string | null;
+      /** A month on the shop's figure in a range of books months, marked on the chart. */
+      marker?: { key: string; label: string } | null;
     }
   | {
       type: "gross_margin";
@@ -110,8 +120,20 @@ export type WidgetData =
       /** From the books: net income ÷ revenue each month, beside gross. */
       net: Point[] | null;
     }
-  | { type: "top_products"; rows: RankedRow[] }
-  | { type: "sales_by_channel"; figure: RevenueFigure; rows: RankedRow[]; total: number }
+  | {
+      type: "top_products";
+      rows: RankedRow[];
+      /** The range has books months: these are the shop's orders, said so beside the books' total. */
+      fromShop?: boolean;
+    }
+  | {
+      type: "sales_by_channel";
+      figure: RevenueFigure;
+      rows: RankedRow[];
+      total: number;
+      /** The range has books months: this is the shop's own total, said so. */
+      fromShop?: boolean;
+    }
   | { type: "cash_on_hand"; cash: number; asOf: string }
   | { type: "ar_aging"; rows: RankedRow[]; total: number; asOf: string }
   | {
@@ -129,8 +151,18 @@ export type WidgetData =
       figure: RevenueFigure;
       byClassDate: boolean;
       grouping: Grouping;
-      /** One per line, in the order the lines are set up. */
-      series: { id: string; name: string; points: Point[]; total: number }[];
+      /**
+       * One per line, in the order the lines are set up; then, by month over
+       * books months, the books' revenue no line could take (`beside`).
+       */
+      series: {
+        id: string;
+        name: string;
+        points: Point[];
+        total: number;
+        beside?: boolean;
+        marker?: { key: string; label: string } | null;
+      }[];
       /** The books' invoices are in the series; other income only by month. */
       withBooks: boolean;
       closedNote?: string | null;
@@ -1068,6 +1100,8 @@ export async function loadDashboardData(
           );
         })()
       : null;
+  /** A month's revenue as the key figures count it (invoices beside a shop month are said apart). */
+  const shownCents = (m: MonthFigure) => (m.source === "books" ? m.total : m.shop);
   const closedNote = closed
     ? (mixNote(
         closed.fromBooks,
@@ -1079,6 +1113,39 @@ export async function loadDashboardData(
         ? "Every month here is from your books, shared among your lines as your shop's sales were."
         : null))
     : null;
+  /**
+   * The range's revenue in whole cents as the key figures state it: a books
+   * month's income, the shop's sales for the rest. The Sales chart's months
+   * and its total come from the same table, so the two always agree.
+   */
+  const closedCents = closed ? closed.months.reduce((sum, m) => sum + shownCents(m), 0) : 0;
+  /** In a range with books months, the months still on the shop's figure, in words. */
+  const shopMonthWords = new Map(
+    (closed?.fromShop ?? []).map((m) => [
+      `${m}-01`,
+      m === thisMonth ? "so far, from your shop" : "from your shop",
+    ]),
+  );
+  /** Charts by month over a books range: a shop month says so in its tooltip and table row. */
+  const markShopMonths = (points: Point[]): Point[] =>
+    points.map((p) => {
+      const words = shopMonthWords.get(p.key);
+      return words ? { ...p, longLabel: `${p.longLabel} (${words})` } : p;
+    });
+  /** And on the chart itself: the month in progress, else the last month on the shop's figure. */
+  const shopMarker = (() => {
+    const month = closed?.fromShop.includes(thisMonth) ? thisMonth : closed?.fromShop.at(-1);
+    if (!month) return null;
+    return {
+      key: `${month}-01`,
+      label: month === thisMonth ? "So far, from your shop" : "From your shop",
+    };
+  })();
+  /** A range too short to hold a month the books have closed: the shop's own chart, said so. */
+  const shortRangeNote =
+    closedBooks && !closed
+      ? "These are your shop's sales. Once a month has ended and your books have it, the books' figure takes over, by month."
+      : null;
   /** The shop's own part of each line: its sales in the months on the shop's figure. */
   const closedShopLines = new Map<string, number>(lineIds.map((id) => [id, 0]));
   if (closed) {
@@ -1157,10 +1224,7 @@ export async function loadDashboardData(
         const orders = counted.reduce((sum, r) => sum + r.order_count, 0);
         // With closed months from the books: their income, and the shop's
         // sales for the rest (what the books add beside is said apart).
-        const shown = closed
-          ? closed.months.reduce((sum, m) => sum + (m.source === "books" ? m.total : m.shop), 0) /
-            100
-          : total;
+        const shown = closed ? closedCents / 100 : total;
         out[widget.id] = {
           type: "key_figures",
           figure,
@@ -1173,6 +1237,7 @@ export async function loadDashboardData(
             return b ? bookRevenueTotal(b) : null;
           })(),
           closedNote,
+          ordersFromShop: closed !== null,
           pace: monthSoFar
             ? breakEvenPace({
                 revenue: Math.round(total * 100),
@@ -1193,30 +1258,32 @@ export async function loadDashboardData(
           out[widget.id] = { type: "empty", needs: "shopify" };
           break;
         }
+        // A range with books months is drawn by month from the key figures'
+        // own month table (the books close by month, so a day or a week of
+        // theirs doesn't exist); its total is that table's, to the cent.
+        if (closed) {
+          const byMonth = new Map(closed.months.map((m) => [`${m.month}-01`, shownCents(m)]));
+          out[widget.id] = {
+            type: "sales_over_time",
+            figure,
+            points: markShopMonths(pointsFor("month", (key) => (byMonth.get(key) ?? 0) / 100)),
+            grouping: "month",
+            total: closedCents / 100,
+            closedNote,
+            marker: shopMarker,
+          };
+          break;
+        }
         const grouping = widget.grouping === "auto" ? range.grouping : widget.grouping;
         const byPeriod = new Map(revenueRows(grouping).map((row) => [row.period, row.revenue]));
-        // By month, a closed month from the books is the books' income.
-        const fromClosed =
-          closed && grouping === "month"
-            ? new Map(
-                closed.months.map((m) => [
-                  `${m.month}-01`,
-                  (m.source === "books" ? m.total : m.shop) / 100,
-                ]),
-              )
-            : null;
-        const points = pointsFor(grouping, (key) => fromClosed?.get(key) ?? byPeriod.get(key) ?? 0);
+        const points = pointsFor(grouping, (key) => byPeriod.get(key) ?? 0);
         out[widget.id] = {
           type: "sales_over_time",
           figure,
           points,
           grouping,
           total: points.reduce((sum, p) => sum + (p.value ?? 0), 0),
-          closedNote: closed
-            ? grouping === "month"
-              ? closedNote
-              : "By day or week these are your shop's sales: your books close by month, so see this by month for their figures."
-            : null,
+          closedNote: shortRangeNote,
         };
         break;
       }
@@ -1274,6 +1341,7 @@ export async function loadDashboardData(
             ? { type: "empty", needs: "shopify" }
             : {
                 type: "top_products",
+                fromShop: closed !== null,
                 rows: rows.map((row) => ({
                   name: String(row.title),
                   value: num(row.revenue),
@@ -1290,6 +1358,7 @@ export async function loadDashboardData(
             : {
                 type: "sales_by_channel",
                 figure,
+                fromShop: closed !== null,
                 total: rows.reduce((sum, row) => sum + num(row.net_sales ?? row.revenue), 0),
                 rows: rows.map((row) => ({
                   name: String(row.channel),
@@ -1372,9 +1441,14 @@ export async function loadDashboardData(
           out[widget.id] = { type: "empty", needs: "shopify" };
           break;
         }
-        const grouping = widget.grouping === "auto" ? range.grouping : widget.grouping;
+        // Books months in the range: by month, from the key figures' month table.
+        const grouping = closed
+          ? "month"
+          : widget.grouping === "auto"
+            ? range.grouping
+            : widget.grouping;
         const keys = periodKeys({ ...range, grouping }, tenant.timezone);
-        const byMonth = closed !== null && grouping === "month";
+        const byMonth = closed !== null;
         const b = booksFor(grouping, byMonth);
         // Other income is kept by month in the books, so it joins a chart by month only.
         const otherLine =
@@ -1397,38 +1471,56 @@ export async function loadDashboardData(
           byClassDate: revenue.by_class_date,
           grouping,
           withBooks: b !== null,
-          closedNote: closed
-            ? byMonth
-              ? closedNote
-              : "By day or week these are your shop's sales: your books close by month, so see this by month for their figures."
-            : null,
-          series: (closedLines ?? seriesByLine(revenue, lines.get(grouping) ?? [], keys)).map(
-            (line) => {
-              // Invoices are already in the closed table's lines.
-              for (const [period, cents] of closedLines
-                ? []
-                : (b?.invoicesByPeriod.get(line.id) ?? [])) {
-                if (line.cents.has(period)) {
-                  line.cents.set(period, (line.cents.get(period) ?? 0) + cents);
-                }
-              }
-              if (otherLine === line.id) {
-                for (const month of otherIncomeMonths) {
-                  const key = `${month.month}-01`;
-                  if (month.cents !== null && line.cents.has(key)) {
-                    line.cents.set(key, (line.cents.get(key) ?? 0) + month.cents);
+          closedNote: closed ? closedNote : shortRangeNote,
+          series: [
+            ...(closedLines ?? seriesByLine(revenue, lines.get(grouping) ?? [], keys)).map(
+              (line) => {
+                // Invoices are already in the closed table's lines.
+                for (const [period, cents] of closedLines
+                  ? []
+                  : (b?.invoicesByPeriod.get(line.id) ?? [])) {
+                  if (line.cents.has(period)) {
+                    line.cents.set(period, (line.cents.get(period) ?? 0) + cents);
                   }
                 }
-              }
-              const points = pointsFor(grouping, (key) => (line.cents.get(key) ?? 0) / 100);
-              return {
-                id: line.id,
-                name: line.name,
-                points,
-                total: [...line.cents.values()].reduce((a, b) => a + b, 0) / 100,
-              };
-            },
-          ),
+                if (otherLine === line.id) {
+                  for (const month of otherIncomeMonths) {
+                    const key = `${month.month}-01`;
+                    if (month.cents !== null && line.cents.has(key)) {
+                      line.cents.set(key, (line.cents.get(key) ?? 0) + month.cents);
+                    }
+                  }
+                }
+                const points = pointsFor(grouping, (key) => (line.cents.get(key) ?? 0) / 100);
+                return {
+                  id: line.id,
+                  name: line.name,
+                  points: byMonth ? markShopMonths(points) : points,
+                  total: [...line.cents.values()].reduce((a, b) => a + b, 0) / 100,
+                  marker: byMonth ? shopMarker : null,
+                };
+              },
+            ),
+            // A books month with no shop sales to share it by: beside the lines,
+            // so the charts still add up to the key figure.
+            ...(closed && closed.unplaced !== 0
+              ? (() => {
+                  const unplaced = new Map(closed.months.map((m) => [`${m.month}-01`, m.unplaced]));
+                  return [
+                    {
+                      id: "other-from-books",
+                      name: "Other revenue, from your books",
+                      beside: true,
+                      points: markShopMonths(
+                        pointsFor("month", (key) => (unplaced.get(key) ?? 0) / 100),
+                      ),
+                      total: closed.unplaced / 100,
+                      marker: shopMarker,
+                    },
+                  ];
+                })()
+              : []),
+          ],
         };
         break;
       }

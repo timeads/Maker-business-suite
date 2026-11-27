@@ -73,9 +73,13 @@ function describe(data: WidgetData, range: string, currency: string): string | n
         ? `${formatPercent(data.overall)} overall, from your QuickBooks profit and loss`
         : `${formatPercent(data.overall)} on items with a cost recorded in Shopify`;
     case "sales_by_channel":
-      return `${formatMoney(data.total, currency)} ${range}, in ${figureWords(data.figure)}`;
+      return data.fromShop
+        ? `${formatMoney(data.total, currency)} ${range} from your shop's own orders, in ${figureWords(data.figure)}. Your books don't record where a sale came from`
+        : `${formatMoney(data.total, currency)} ${range}, in ${figureWords(data.figure)}`;
     case "top_products":
-      return `By what the items sold for after discounts, ${range}`;
+      return data.fromShop
+        ? `From your shop's own orders, by what the items sold for after discounts, ${range}`
+        : `By what the items sold for after discounts, ${range}`;
     case "revenue_by_line":
       return `${formatMoney(data.total, currency)} ${range}, in ${figureWords(data.figure)}${
         data.books ? booksWords(data.books) : ""
@@ -202,7 +206,9 @@ export function Widget({
             value={data.orders.toLocaleString("en-US")}
             note={
               data.againstLastMonth === null
-                ? undefined
+                ? data.ordersFromShop
+                  ? "In your shop. The average order is the shop's too"
+                  : undefined
                 : data.againstLastMonth >= 0.01
                   ? `Sales up ${formatPercent(data.againstLastMonth)} on the same days last month`
                   : data.againstLastMonth <= -0.01
@@ -228,6 +234,7 @@ export function Widget({
           {...prepareTimeChart(data.points, "money", currency)}
           variant="column"
           valueLabel={FIGURE_WORDS[data.figure].name}
+          marker={data.marker ?? null}
         />
       );
       break;
@@ -269,13 +276,17 @@ export function Widget({
       break;
     }
     case "top_products":
-      body = (
-        <BarList rows={data.rows} currency={currency} emptyText="No sales in this period yet." />
-      );
-      break;
     case "sales_by_channel":
       body = (
-        <BarList rows={data.rows} currency={currency} emptyText="No sales in this period yet." />
+        <BarList
+          rows={data.rows}
+          currency={currency}
+          emptyText={
+            data.fromShop
+              ? "No orders in your shop in this period."
+              : "No sales in this period yet."
+          }
+        />
       );
       break;
     case "cash_on_hand":
@@ -304,6 +315,7 @@ export function Widget({
             name: line.name,
             total: formatMoney(line.total, currency),
             points: shared.series[index],
+            marker: line.marker ?? null,
           }))}
         />
       );

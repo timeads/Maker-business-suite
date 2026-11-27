@@ -874,7 +874,10 @@ describe("closed months from the books", () => {
 
     const t = data.t as Extract<WidgetData, { type: "revenue_by_line_over_time" }>;
     const overTime = t.series.reduce((a, line) => a + line.total, 0);
-    expect(overTime).toBeCloseTo(lineSum - 111, 6);
+    // July and August's books income no line could take is its own series
+    // beside the lines; only September's other income (with no line) is left out.
+    expect(t.series.at(-1)).toMatchObject({ beside: true, total: 110 });
+    expect(overTime).toBeCloseTo(lineSum - 1, 6);
 
     const p = data.p as Extract<WidgetData, { type: "profit_by_line" }>;
     const revenue = p.rows.reduce((a, r) => a + r.revenue, 0);
@@ -883,6 +886,116 @@ describe("closed months from the books", () => {
       const row = p.rows.find((r) => r.id === source.id);
       expect(source.shop + source.books + source.typed).toBe(row?.revenue);
     }
+  });
+
+  it("draws a range of books months by month, from the key figures' own table", async () => {
+    // Last quarter (July to September), every month closed and in the books;
+    // the charts are asked for by week and by the range's own grouping.
+    const quarter = resolveRange("last_quarter", NOW, TENANT.timezone);
+    expect(quarter.grouping).toBe("week");
+    const { supabase } = fakeSupabase(
+      {
+        dashboard_sales_by_period: () => salesRows,
+        money_line_revenue: () => lineRows,
+        dashboard_sales_by_channel: () => [],
+        dashboard_top_products: () => [],
+        money_invoice_revenue: () => [],
+      },
+      {
+        snapshots: [pnl("2026-07", 50, 0), pnl("2026-08", 60, 0), pnl("2026-09", 330.01, 0)],
+      },
+    );
+    const data = await loadDashboardData(
+      supabase,
+      TENANT,
+      config([
+        { id: "k", type: "key_figures" },
+        { id: "s", type: "sales_over_time", grouping: "week" },
+        { id: "t", type: "revenue_by_line_over_time" },
+        { id: "c", type: "sales_by_channel" },
+        { id: "b", type: "top_products" },
+      ]),
+      quarter,
+      revenueSettingsSchema.parse({ ...settings, books: { invoices: false, other_income: false } }),
+      NOW,
+    );
+    const cents = (dollars: number) => Math.round(dollars * 100);
+    const k = data.k as Extract<WidgetData, { type: "key_figures" }>;
+    expect(cents(k.sales)).toBe(44001);
+    expect(k.ordersFromShop).toBe(true);
+
+    const s = data.s as Extract<WidgetData, { type: "sales_over_time" }>;
+    expect(s.grouping).toBe("month");
+    expect(s.points.map((p) => p.key)).toEqual(["2026-07-01", "2026-08-01", "2026-09-01"]);
+    expect(cents(s.total)).toBe(cents(k.sales));
+    expect(s.points.reduce((a, p) => a + cents(p.value ?? 0), 0)).toBe(cents(k.sales));
+    expect(s.closedNote).toMatch(/Every month here is from your books/);
+    expect(s.marker ?? null).toBeNull();
+    expect(s.points.some((p) => /from your shop/.test(p.longLabel))).toBe(false);
+
+    const t = data.t as Extract<WidgetData, { type: "revenue_by_line_over_time" }>;
+    expect(t.grouping).toBe("month");
+    // July and August had no shop sales to share by: beside the lines, so it all adds up.
+    expect(t.series.map((line) => line.name)).toEqual([
+      "Shop",
+      "Classes",
+      "Other revenue, from your books",
+    ]);
+    expect(t.series.reduce((a, line) => a + cents(line.total), 0)).toBe(cents(k.sales));
+    for (const line of t.series) {
+      expect(line.points.reduce((a, p) => a + cents(p.value ?? 0), 0)).toBe(cents(line.total));
+    }
+
+    // Shop-only tiles say so, with the shop's own total.
+    expect(data.c).toMatchObject({ type: "sales_by_channel", fromShop: true, total: 0 });
+    expect(data.b).toMatchObject({ type: "top_products", fromShop: true });
+  });
+
+  it("marks the month still on the shop's figure in a mixed range", async () => {
+    const data = await load([
+      { id: "k", type: "key_figures" },
+      { id: "s", type: "sales_over_time", grouping: "week" },
+      { id: "t", type: "revenue_by_line_over_time", grouping: "week" },
+    ]);
+    const k = data.k as Extract<WidgetData, { type: "key_figures" }>;
+    const s = data.s as Extract<WidgetData, { type: "sales_over_time" }>;
+    expect(s.grouping).toBe("month");
+    expect(Math.round(s.total * 100)).toBe(Math.round(k.sales * 100));
+    expect(s.marker).toEqual({ key: "2026-11-01", label: "So far, from your shop" });
+    const november = s.points.find((p) => p.key === "2026-11-01");
+    expect(november?.longLabel).toMatch(/\(so far, from your shop\)$/);
+    expect(november?.value).toBe(250);
+    expect(s.points.find((p) => p.key === "2026-10-01")?.longLabel).not.toMatch(/shop/);
+
+    const t = data.t as Extract<WidgetData, { type: "revenue_by_line_over_time" }>;
+    expect(t.grouping).toBe("month");
+    for (const line of t.series) {
+      expect(line.marker).toEqual(s.marker);
+      expect(line.points.find((p) => p.key === "2026-11-01")?.longLabel).toMatch(/so far/);
+    }
+  });
+
+  it("keeps the shop's own chart, and says so, for a range too short for a closed month", async () => {
+    const thisMonth = resolveRange("this_month", NOW, TENANT.timezone);
+    const { supabase } = fakeSupabase(
+      { dashboard_sales_by_period: () => [], money_line_revenue: () => [] },
+      { snapshots: [pnl("2026-10", 500, 0)] },
+    );
+    const data = await loadDashboardData(
+      supabase,
+      TENANT,
+      config([
+        { id: "k", type: "key_figures" },
+        { id: "s", type: "sales_over_time" },
+      ]),
+      thisMonth,
+      settings,
+      NOW,
+    );
+    const s = data.s as Extract<WidgetData, { type: "sales_over_time" }>;
+    expect(s.grouping).toBe("day");
+    expect(s.closedNote).toMatch(/your shop's sales/);
+    expect((data.k as Extract<WidgetData, { type: "key_figures" }>).ordersFromShop).toBe(false);
   });
 
   it("changes nothing while the setting is the shop's", async () => {

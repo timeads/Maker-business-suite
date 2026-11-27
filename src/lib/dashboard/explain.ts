@@ -121,7 +121,8 @@ export function closedMonthsExplained(settings: RevenueSettings): string[] {
     settings.books.other_income
       ? "Your books' other income isn't part of a month's income; it's still added as you chose below."
       : "Your books' other income (interest, one-off income) isn't part of a month's income, and stays out unless you add it below.",
-    "By day or by week, figures are always your shop's: your books close by month.",
+    "Your books close by month, so wherever a date range takes in a month from your books, the sales charts are drawn by month, and a month still on your shop's sales is marked. A range too short for a month that has ended (this month, say) charts your shop's sales by day or week.",
+    "Where sales come from and best sellers are always your shop's own orders: your books don't say where a sale came from or which item it was.",
   );
   return out;
 }

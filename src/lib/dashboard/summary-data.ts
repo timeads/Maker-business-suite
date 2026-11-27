@@ -108,11 +108,13 @@ export async function loadSummaryInput(
           },
     lines:
       lines?.type === "revenue_by_line_over_time"
-        ? lines.series.map((line) => ({
-            name: line.name,
-            cents: at(line.points, key) ?? 0,
-            previous: at(line.points, `${addMonths(month, -1)}-01`),
-          }))
+        ? lines.series
+            .filter((line) => !line.beside)
+            .map((line) => ({
+              name: line.name,
+              cents: at(line.points, key) ?? 0,
+              previous: at(line.points, `${addMonths(month, -1)}-01`),
+            }))
         : [],
     books: thisBooks
       ? {
