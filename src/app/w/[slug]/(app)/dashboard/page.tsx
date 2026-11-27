@@ -22,6 +22,11 @@ import { canManage, getTenantContext } from "@/lib/tenants";
 import { RangePicker } from "./range-picker";
 import { TemplatePicker } from "./template-picker";
 import { Widget } from "./widget";
+import { SummaryCard } from "./summary-card";
+import { addMonths } from "@/lib/dashboard/budget";
+import { currentMonth, periodLabel } from "@/lib/dashboard/range";
+import { readSections } from "@/lib/dashboard/summary";
+import { nameOf, type Person } from "@/lib/messages/format";
 
 export const metadata: Metadata = { title: "Money" };
 
@@ -78,7 +83,10 @@ export default async function DashboardPage({
   const shown = pageRange(query.range, config.range, now, tenant.timezone);
   const { range } = shown;
   const manager = canManage(role);
-  const [data, setup] = await Promise.all([
+  // The monthly summary of the last complete month: owners and admins only
+  // (the database hands nobody else one). Allowed to fail.
+  const summaryMonth = addMonths(currentMonth(now, tenant.timezone), -1);
+  const [data, setup, summaryRow, people] = await Promise.all([
     loadDashboardData(supabase, tenant, config, range, revenue),
     // "Finish setting up", for the people who can do it. Never stops the page.
     manager
@@ -89,7 +97,38 @@ export default async function DashboardPage({
           .then(([facts, notNow]) => sortItems(moneySetupItems(facts), notNow).open)
           .catch((): SetupItem[] => [])
       : Promise.resolve([] as SetupItem[]),
+    manager
+      ? supabase
+          .from("money_summaries")
+          .select("sections, written_by, written_at")
+          .eq("tenant_id", tenant.id)
+          .eq("month", `${summaryMonth}-01`)
+          .maybeSingle()
+          .then(
+            ({ data: row }) =>
+              row as { sections: unknown; written_by: string | null; written_at: string } | null,
+            () => null,
+          )
+      : Promise.resolve(null),
+    manager
+      ? supabase.rpc("list_members", { p_tenant_id: tenant.id }).then(
+          ({ data: rows }) => (rows ?? []) as Person[],
+          () => [] as Person[],
+        )
+      : Promise.resolve([] as Person[]),
   ]);
+  const summary = summaryRow
+    ? {
+        sections: readSections(summaryRow.sections),
+        writtenOn: new Intl.DateTimeFormat("en-US", {
+          timeZone: tenant.timezone,
+          dateStyle: "medium",
+        }).format(new Date(summaryRow.written_at)),
+        writtenBy: summaryRow.written_by
+          ? nameOf(people.find((p) => p.user_id === summaryRow.written_by))
+          : "someone who has left",
+      }
+    : null;
 
   return (
     <>
@@ -117,6 +156,15 @@ export default async function DashboardPage({
         canSnooze={manager && entitlements.canWrite}
         setupHref="dashboard/setup"
       />
+
+      {manager && (
+        <SummaryCard
+          slug={tenant.slug}
+          monthWords={periodLabel(`${summaryMonth}-01`, "month", true)}
+          summary={summary}
+          canWrite={entitlements.canWrite}
+        />
+      )}
 
       {source === "invalid" && (
         <FormMessage>

@@ -173,11 +173,23 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   `tests/db/money-expense-accounts.test.ts`), applied in code as expenses
   arrive and on "Apply my rules to what's waiting"
   (`note_expense_decisions`), never over a person's choice; never a payee,
-  bank or account name in code. Money calls a model in two places only,
+  bank or account name in code. Money calls a model in three places only,
   each a person's press with structured output and no tools: "Suggest
   lines for these" (`expense-suggest.ts`, `E1`/`L1` references,
   `tidySuggestions`; it only writes a suggestion, applied by a person's
-  "Use this") and the debt what-if (below). Profit by line
+  "Use this"), the debt what-if (below), and the monthly summary
+  (`summary.ts`, "Write this month's summary" on Money, owners and admins
+  only, the last complete month): code works out every figure
+  (`summaryFigures`, through the pages' own loaders, `summary-data.ts`) and
+  hands them over as data under `F1`/`L1`/`A1`/`C1` with named fields;
+  Claude returns only sentences with `{REF.field}` placeholders in three
+  sections; `tidySummary` drops any unknown reference, any digit, amount,
+  percent or capitalised word of the model's own, and code fills the
+  figures in. Kept per workspace per month in `money_summaries` (owners and
+  admins read it; written only by `save_money_summary`, service role, naming
+  the owner or admin who pressed), counted against the AI allowance, never
+  sent anywhere (`summary-guard.test.ts`). Keep
+  `tests/db/money-summaries.test.ts` passing. Profit by line
   (`lib/dashboard/profit.ts`, config `dashboard` / `profit`, Settings →
   Money → Profit by line) is revenue − cost of goods (only when counted from
   the shop's item costs) − its expenses − its share of shared ones − its

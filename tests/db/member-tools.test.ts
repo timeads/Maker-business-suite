@@ -40,6 +40,7 @@ const MONEY_TABLES = [
   "money_debt_balances",
   "money_debt_plan_months",
   "money_debt_scenarios",
+  "money_summaries",
   "action_proposals",
 ];
 
