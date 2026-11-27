@@ -4,6 +4,7 @@ import { zonedTimeToUtc } from "../bookings/slots";
 import type { ModuleKey } from "../modules";
 import { DEBT_TOOLS, MONEY_TOOLS, runMoneyTool } from "./money-tools";
 import { CONFIG_REGISTRY, configJsonSchema, findConfig, validateConfig } from "./registry";
+import { SETUP_TOOLS, SETUP_TOOL_MODULE, runSetupTool } from "./setup-tools";
 
 /**
  * The assistant's whole reach (CLAUDE.md rule 5). Every tool runs with the
@@ -25,6 +26,8 @@ export type ToolContext = {
   onPlan?(module: ModuleKey): boolean;
   /** Owner or admin: only they may see a setting marked `ownersOnly`. */
   manager: boolean;
+  /** The person sees what the business pays (`entitlements.seesCosts`). Left out: they don't. */
+  seesCosts?: boolean;
 };
 
 /** A tool on the plan that this person doesn't have: for them it isn't there at all. */
@@ -137,10 +140,13 @@ export function toolsFor(
   const hidden = (module: ModuleKey) =>
     ctx.can ? notTheirs({ can: ctx.can, onPlan: ctx.onPlan }, module) : false;
   const money = !hidden("dashboard");
+  // A tool's setup status only for people who can open that tool.
+  const opens = (module: ModuleKey) => (ctx.can ? ctx.can(module) : true);
   return [
     ...TOOLS.filter((tool) => !TOOL_MODULE[tool.name] || !hidden(TOOL_MODULE[tool.name])),
     ...(money ? MONEY_TOOLS : []),
     ...(ctx.manager && money ? DEBT_TOOLS : []),
+    ...SETUP_TOOLS.filter((tool) => opens(SETUP_TOOL_MODULE[tool.name])),
   ];
 }
 
@@ -172,6 +178,8 @@ export async function runTool(
   }
   const money = await runMoneyTool(name, args, ctx);
   if (money) return money;
+  const setup = await runSetupTool(name, ctx);
+  if (setup) return setup;
 
   switch (name) {
     case "list_configs": {
