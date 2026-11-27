@@ -132,6 +132,9 @@ const place = (id: string, label: string, to: string, more: Partial<NavItem> = {
 const first = (id: string, label: string, to: string, more: Partial<NavItem> = {}): NavItem =>
   place(id, label, to, { match: { path: to, exact: true }, ...more });
 
+/** What people type when they want a tool's guided setup. */
+const SETUP_WORDS = ["set up", "setup", "get started", "checklist", "fine tune", "finish"];
+
 const count = (n: number | undefined) => (n && n > 0 ? { count: n } : {});
 
 function shippingMenu(attention: Attention): NavGroup[] {
@@ -145,6 +148,8 @@ function shippingMenu(attention: Attention): NavGroup[] {
         place("shipping.batches", "Label batches", "shipping/batches"),
         place("shipping.rates", "Rate calculator", "shipping/rates"),
         place("shipping.sent", "Sent", "shipping/sent"),
+        // The guided setup. No count: working it out takes reads the layout doesn't do.
+        place("shipping.setup", "Set up", "shipping/setup", { keywords: SETUP_WORDS }),
       ],
     },
   ];
@@ -221,6 +226,9 @@ function stockMenu(viewer: NavViewer): NavGroup[] {
       place("stock.spend", "Spend", "stock/spend"),
     );
   }
+  // The guided setup, for everyone with Stock. No count: working it out
+  // takes reads the layout doesn't do.
+  items.push(place("stock.setup", "Set up", "stock/setup", { keywords: SETUP_WORDS }));
   if (viewer.michaels) {
     items.push(
       place("stock.michaels", "Michaels", "stock/michaels", {

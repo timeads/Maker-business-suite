@@ -1,11 +1,12 @@
 import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
-import { cardTitle, type SetupItem } from "@/lib/setup/items";
+import { cardTitle, requiredItems, type SetupItem } from "@/lib/setup/items";
 import { SetupList } from "./setup-list";
 
 /**
  * The quiet card at the top of a tool's page: "3 things would make these
  * figures truer", folded until opened, and gone when nothing is left.
+ * Optional items never show here: they wait on the guided page.
  */
 export function SetupCard({
   slug,
@@ -14,6 +15,7 @@ export function SetupCard({
   canSnooze,
   setupHref,
   ending,
+  canAct = true,
 }: {
   slug: string;
   tool: string;
@@ -22,17 +24,20 @@ export function SetupCard({
   /** The tool's guided setup, inside the workspace. */
   setupHref: string;
   ending?: string;
+  /** The person is an owner or admin who can change things. */
+  canAct?: boolean;
 }) {
-  if (items.length === 0) return null;
+  const shown = requiredItems(items);
+  if (shown.length === 0) return null;
   return (
     <Card className="py-0">
       <details>
         <summary className="flex cursor-pointer flex-wrap items-center justify-between gap-2 px-6 py-4">
-          <span className="text-sm font-semibold">{cardTitle(items.length, ending)}</span>
+          <span className="text-sm font-semibold">{cardTitle(shown.length, ending)}</span>
           <span className="text-muted-foreground text-xs">Show me</span>
         </summary>
         <CardContent className="flex flex-col gap-3 pb-5">
-          <SetupList slug={slug} tool={tool} items={items} canSnooze={canSnooze} />
+          <SetupList slug={slug} tool={tool} items={shown} canSnooze={canSnooze} canAct={canAct} />
           <Link
             href={`/w/${slug}/${setupHref}`}
             className="text-muted-foreground w-fit text-sm hover:underline"

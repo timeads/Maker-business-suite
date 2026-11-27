@@ -4,6 +4,7 @@ import {
   fingerprint,
   firstOpenStep,
   openByStep,
+  requiredItems,
   someNames,
   sortItems,
   type SetupItem,
@@ -68,5 +69,12 @@ describe("words and steps", () => {
     expect(someNames(["A", "B"])).toBe("A and B");
     expect(someNames(["A", "B", "C"])).toBe("A, B and C");
     expect(someNames(["A", "B", "C", "D", "E"])).toBe("A, B, C and 2 more");
+  });
+});
+
+describe("requiredItems", () => {
+  it("leaves out the optional ones, which never nag on a card", () => {
+    const items = [item("a", ""), { ...item("b", ""), optional: true }, item("c", "")];
+    expect(requiredItems(items).map((i) => i.id)).toEqual(["a", "c"]);
   });
 });

@@ -85,15 +85,24 @@ describe("buildNav: the rail", () => {
 });
 
 describe("buildNav: each tool's menu", () => {
-  it("Shipping has its six places", () => {
-    expect(labels(tool(buildNav(viewer()), "shipping"))).toEqual([
+  it("Shipping has its six places and its guided setup", () => {
+    const shipping = tool(buildNav(viewer()), "shipping");
+    expect(labels(shipping)).toEqual([
       "To ship",
       "All orders",
       "Scan & pack",
       "Label batches",
       "Rate calculator",
       "Sent",
+      "Set up",
     ]);
+    // Everyone with Shipping walks it; items only owners and admins can do say so.
+    expect(labels(tool(buildNav(viewer({ manager: false })), "shipping"))).toContain("Set up");
+    expect(shipping.menu[0].items.at(-1)).toMatchObject({
+      id: "shipping.setup",
+      to: "shipping/setup",
+    });
+    expect(placeName(shipping, at("shipping/setup"))).toBe("Set up");
   });
 
   it("Stock shows Balances and Spend to managers only", () => {
@@ -104,13 +113,16 @@ describe("buildNav: each tool's menu", () => {
       "Suppliers",
       "Balances",
       "Spend",
+      "Set up",
     ]);
     expect(labels(tool(buildNav(viewer({ manager: false })), "stock"))).toEqual([
       "To order",
       "Everything",
       "Orders",
       "Suppliers",
+      "Set up",
     ]);
+    expect(placeName(tool(buildNav(viewer()), "stock"), at("stock/setup"))).toBe("Set up");
   });
 
   it("Stock shows Michaels, with its four pages, only once it is connected", () => {

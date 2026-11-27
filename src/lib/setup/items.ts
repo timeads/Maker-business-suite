@@ -29,7 +29,21 @@ export type SetupItem = {
   facts: string;
   /** Which step of the guided setup takes care of it. */
   step: string;
+  /**
+   * Nice to have, never needed for true figures. Shown on the guided page
+   * with "Optional" beside it; the tool's card leaves it out, so it never nags.
+   */
+  optional?: boolean;
+  /**
+   * Only owners and admins can do it. Anyone else is shown the item with
+   * "Ask an owner or admin" instead of the link.
+   */
+  managersOnly?: boolean;
 };
+
+/** The items that make the figures truer: what a tool's card shows. */
+export const requiredItems = (items: readonly SetupItem[]): SetupItem[] =>
+  items.filter((item) => !item.optional);
 
 export type NotNow = { item: string; fingerprint: string };
 
