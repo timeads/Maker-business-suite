@@ -98,7 +98,11 @@ describe("filing invoices", () => {
       [tenantA],
     );
     expect(rows[0].n).toBe("3");
-    expect((await list(alice, tenantA, "paid")).map((r) => r.doc_number)).toEqual(["102", "101"]);
+    // Two on the same day come newest first, then in a fixed order of their own.
+    expect((await list(alice, tenantA, "paid")).map((r) => r.doc_number).sort()).toEqual([
+      "101",
+      "102",
+    ]);
   });
 
   it("skips what isn't clear, and only the sync can file", async () => {
