@@ -103,6 +103,9 @@ export default async function BudgetPage({
         title="Budget"
         description="What you planned to spend against what your books say you spent, and the revenue you need to cover your costs."
       >
+        <Button asChild variant="ghost" size="sm">
+          <a href={href({}).replace(here, `${here}/export`)}>Download as a spreadsheet</a>
+        </Button>
         <Button asChild variant="outline" size="sm">
           <Link href={`${base}/settings/money/budget`}>Budget settings</Link>
         </Button>

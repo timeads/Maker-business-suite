@@ -77,6 +77,11 @@ export default async function PayoffPlanPage({
       title="Payoff plan"
       description="Your debts paid down a month at a time, with a safety cushion built up alongside. Only owners and admins can see this."
     >
+      {view.debts.length > 0 && (
+        <Button asChild variant="ghost" size="sm">
+          <a href={`${base}/dashboard/debts/export`}>Download the debts</a>
+        </Button>
+      )}
       <Button asChild variant="outline" size="sm">
         <Link href={`${base}/settings/money/debts`}>Plan settings</Link>
       </Button>

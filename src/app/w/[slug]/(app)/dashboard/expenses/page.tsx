@@ -126,7 +126,13 @@ export default async function ExpensesPage({
       <PageHeader
         title="Expenses to sort"
         description="Put each expense from your books on the line it belongs to, so Money can show what each part of your business really makes."
-      />
+      >
+        {monthRows.length > 0 && (
+          <Button asChild variant="ghost" size="sm">
+            <a href={inboxHref(`${here}/export`, query, { page: 1 })}>Download as a spreadsheet</a>
+          </Button>
+        )}
+      </PageHeader>
 
       {monthRows.length === 0 ? (
         <Card>

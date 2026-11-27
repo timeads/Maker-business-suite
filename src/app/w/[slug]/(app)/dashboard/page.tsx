@@ -177,6 +177,20 @@ export default async function DashboardPage({
             Show
           </Button>
         </form>
+        <Button asChild variant="ghost" size="sm">
+          <a href={`${base}/dashboard/export?range=${encodeURIComponent(shown.value)}`}>
+            Download these figures
+          </a>
+        </Button>
+        {config.widgets.some((w) => w.type === "profit_by_line") && (
+          <Button asChild variant="ghost" size="sm">
+            <a
+              href={`${base}/dashboard/export?range=${encodeURIComponent(shown.value)}&what=profit`}
+            >
+              Download profit by line
+            </a>
+          </Button>
+        )}
       </div>
       {shown.period && (
         <p className="text-sm font-medium" role="status">

@@ -17,7 +17,7 @@ import { CashFlow, HealthCheck, OperatingProfit, RevenueGrowth, Runway } from ".
 import { ProfitTable } from "./profit-table";
 import type { WidgetConfig, WidgetType } from "@/lib/dashboard/schema";
 
-const TITLES: Record<WidgetType, string> = {
+export const TITLES: Record<WidgetType, string> = {
   key_figures: "At a glance",
   sales_over_time: "Sales",
   gross_margin: "Gross margin",
