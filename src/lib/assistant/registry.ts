@@ -1,3 +1,9 @@
+import {
+  DEFAULT_PROJECTION_SETTINGS,
+  PROJECTION_KEY,
+  PROJECTION_MODULE,
+  projectionSettingsSchema,
+} from "../dashboard/projection";
 import { z } from "zod";
 import {
   BOOKINGS_MODULE,
@@ -284,6 +290,16 @@ export const CONFIG_REGISTRY: readonly ConfigEntry[] = [
       "How Money's cost cutter finds recurring charges in the books' expenses. months_back: how many months to look over, this one included (3–24). min_months: a payee charging in at least this many different months is recurring (2–12). leave_out_accounts: account names never counted (whole names). leave_out_payees: payees never counted when their name contains these words. growing_fast_pct / creeping_pct: the last six months' average against the six before, at or above which a charge is flagged as growing fast or creeping up (whole percents). new_months: first charged within this many months is new. stopped_days: no charge for this many days is stopped. small_cents and adds_up_cents: a charge under small_cents a month that comes to at least adds_up_cents a year is flagged as small but adding up; null for either switches that flag off. Deciding to keep or cancel a charge is done by a person on Money → Cost cutter, not here.",
     schema: cutterSettingsSchema,
     defaultBody: () => DEFAULT_CUTTER_SETTINGS,
+  },
+  {
+    module: PROJECTION_MODULE,
+    key: PROJECTION_KEY,
+    feature: "dashboard",
+    name: "Money: projection",
+    description:
+      "The yearly growth rates Money's 3-year projection uses, in whole percents (−100 to 1000; a minus number shrinks it). line_growth: per business line id (the 'Money: revenue and business lines' setting's ids); a line not listed grows by other_growth. other_growth: revenue with no line. cogs_growth: cost of goods. fixed_growth: running costs. The projection starts from the books' last twelve complete months. Examples: 'assume classes grow 20% a year' is line_growth for the classes line set to 20; 'keep running costs flat' is fixed_growth 0.",
+    schema: projectionSettingsSchema,
+    defaultBody: () => DEFAULT_PROJECTION_SETTINGS,
   },
   {
     module: DEBT_MODULE,

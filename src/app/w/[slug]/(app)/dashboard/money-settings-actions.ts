@@ -16,6 +16,11 @@ import { BUDGET_KEY, budgetSettingsSchema } from "@/lib/dashboard/budget";
 import { HEALTH_KEY, healthSettingsSchema } from "@/lib/dashboard/health";
 import { PROFIT_KEY, PROFIT_MODULE, profitSettingsSchema } from "@/lib/dashboard/profit";
 import { CUTTER_KEY, cutterSettingsSchema } from "@/lib/dashboard/recurring";
+import {
+  PROJECTION_KEY,
+  PROJECTION_MODULE,
+  projectionSettingsSchema,
+} from "@/lib/dashboard/projection";
 import { DEBT_KEY, debtSettingsSchema, fromOrder } from "@/lib/dashboard/debt/settings";
 import { loadDebtSettings } from "@/lib/dashboard/debt/data";
 import { getEntitlements } from "@/lib/entitlements";
@@ -341,4 +346,35 @@ export async function saveMonthEntries(
   revalidatePath(`/w/${slug}/dashboard`, "layout");
   revalidatePath(`/w/${slug}/settings/money/profit`);
   return { message: "Saved. Profit by line uses these for that month." };
+}
+
+/** Money → Projection: each line's yearly growth, and cost of goods' and running costs'. */
+export async function saveProjectionSettings(
+  slug: string,
+  _prev: MoneySettingsState,
+  formData: FormData,
+): Promise<MoneySettingsState> {
+  const ctx = await settingsContext(slug, "profit");
+  if ("error" in ctx) return { error: ctx.error };
+  const parsed = projectionSettingsSchema.safeParse({ version: 1, ...(readBody(formData) ?? {}) });
+  if (!parsed.success) {
+    return { error: "Each rate is a whole percent a year, between −100 and 1000." };
+  }
+  const revenue = await loadRevenueSettings(ctx.supabase, ctx.tenant.id);
+  const ids = new Set(revenue.lines.map((l) => l.id));
+  const body = {
+    ...parsed.data,
+    line_growth: Object.fromEntries(
+      Object.entries(parsed.data.line_growth).filter(([id]) => ids.has(id)),
+    ),
+  };
+  const { error } = await ctx.supabase.rpc("save_config", {
+    p_tenant_id: ctx.tenant.id,
+    p_module: PROJECTION_MODULE,
+    p_key: PROJECTION_KEY,
+    p_body: body,
+  });
+  if (error) return { error: "We couldn't save that. Try again in a moment." };
+  revalidatePath(`/w/${slug}/dashboard`, "layout");
+  return { message: "Saved. The projection uses these rates." };
 }

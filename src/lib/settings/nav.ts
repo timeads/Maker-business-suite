@@ -585,6 +585,12 @@ const TOOLS: Def[] = [
         ],
       },
       {
+        id: "money.projection",
+        name: "Projection",
+        path: "money/projection",
+        keywords: ["projection", "forecast", "growth rates", "three years", "outlook"],
+      },
+      {
         id: "money.cost-cutter",
         name: "Cost cutter",
         path: "money/cost-cutter",

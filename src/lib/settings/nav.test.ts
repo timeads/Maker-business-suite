@@ -100,6 +100,7 @@ describe("settingsNav", () => {
       "money.profit",
       "money.health",
       "money.budget",
+      "money.projection",
       "money.cost-cutter",
       "money.debts",
     ]);

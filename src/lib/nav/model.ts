@@ -413,6 +413,9 @@ export function buildNav(viewer: NavViewer, attention: Attention = {}): NavTool[
             place("dashboard.invoices", "Invoices", "dashboard/invoices", {
               keywords: ["invoices", "customers", "overdue", "unpaid", "owed", "quickbooks"],
             }),
+            place("dashboard.projection", "Projection", "dashboard/projection", {
+              keywords: ["projection", "forecast", "three years", "growth", "outlook"],
+            }),
             place("dashboard.budget", "Budget", "dashboard/budget", {
               keywords: ["budget", "break-even", "variance", "cost of goods", "plan spending"],
             }),

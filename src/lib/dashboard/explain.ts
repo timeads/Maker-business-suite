@@ -3,6 +3,7 @@ import { recommendationWords, type Recommendation } from "./debt/recommend";
 import { actionWords, type ExpenseSorting, type SortAction } from "./expenses";
 import { FIGURE_WORDS, MATCH_WORDS, hasLines, type RevenueSettings } from "./lines";
 import type { ProfitSettings } from "./profit";
+import type { ProjectionSettings } from "./projection";
 import { someNames } from "../setup/items";
 
 /**
@@ -224,5 +225,22 @@ export function orderExplained(input: {
     `The plan follows the order that pays the least interest, worked out again each time: now ${label.toLowerCase()} (${tagline}).`,
     recommendationWords(input.recommendation, input.money),
     "Choose another order and the plan keeps to yours.",
+  ];
+}
+
+/** How the 3-year projection is put together, in the workspace's own rates. */
+export function projectionExplained(
+  settings: ProjectionSettings,
+  lines: readonly { id: string; name: string }[],
+): string[] {
+  const rate = (pct: number) => `${pct >= 0 ? "grows" : "shrinks"} ${Math.abs(pct)}% a year`;
+  return [
+    "It starts from your books' last twelve complete months: their revenue, cost of goods and running costs.",
+    lines.length
+      ? "Revenue is shared among your lines as your shop (and your books, where you count them) split it over the same months."
+      : "With no business lines yet, revenue is one figure.",
+    ...lines.map((l) => `${l.name} ${rate(settings.line_growth[l.id] ?? settings.other_growth)}.`),
+    `Cost of goods ${rate(settings.cogs_growth)}; running costs ${rate(settings.fixed_growth)}.`,
+    "Each year grows from the one before, in whole cents. It's a sketch, not a forecast: nothing about the year ahead is known to it.",
   ];
 }

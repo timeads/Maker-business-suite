@@ -241,6 +241,7 @@ describe("buildNav: each tool's menu", () => {
       "Orders",
       "Statements",
       "Invoices",
+      "Projection",
       "Budget",
       "Cost cutter",
       "Set up",
