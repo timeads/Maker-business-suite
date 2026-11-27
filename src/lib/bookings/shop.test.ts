@@ -209,8 +209,10 @@ describe("turning shop orders into bookings", () => {
     await run({ result: "no_session" });
     await run({ result: "booked", booking_id: "b1", oversold: false });
     await run({ result: "unchanged", booking_id: "b1", oversold: true });
+    await run({ result: "clash", booking_id: "b1" });
     expect(tagged).toEqual([
       "5001 #1042 oversold",
+      "5001 #1042 booking_error",
       "5001 #1042 booking_error",
       "5001 #1042 booking_error",
     ]);

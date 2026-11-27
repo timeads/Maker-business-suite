@@ -88,7 +88,9 @@ const BANK_SOURCES = new Set<LedgerSource>(["BANK_NOTICE_EMAIL", "QUICKBOOKS"]);
  * counts such a pair once, exactly as the estimate does.
  */
 export function absorbedPayments(entries: LedgerEntryInput[], matchDays = 7): Set<string> {
-  const vendorPayments = entries.filter((e) => e.type === "PAYMENT" && e.source === "SUPPLIER_STATEMENT_EMAIL");
+  const vendorPayments = entries.filter(
+    (e) => e.type === "PAYMENT" && e.source === "SUPPLIER_STATEMENT_EMAIL",
+  );
   const consumed = new Set<string>();
   const absorbed = new Set<string>();
   for (const e of entries) {

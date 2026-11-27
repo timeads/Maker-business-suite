@@ -15,7 +15,15 @@ import { queueBookingText, saveTextConsent } from "../texts/queue";
  */
 
 type Result = {
-  result: "booked" | "resized" | "cancelled" | "unchanged" | "nothing" | "no_session";
+  result:
+    | "booked"
+    | "resized"
+    | "cancelled"
+    | "unchanged"
+    | "nothing"
+    | "no_session"
+    /** A new line names a date where this order's moved booking already sits. */
+    | "clash";
   booking_id?: string;
   oversold?: boolean;
   date_cancelled?: boolean;
@@ -93,6 +101,20 @@ export async function applyShopOrders(
       // and tells the team once. In the shop it is tagged, as before.
       if (outcome.result === "no_session") {
         await tag(admin, tenantId, { id: order.external_id, name: order.name }, "booking_error");
+        continue;
+      }
+      // A booking is known by the order's lines, wherever it was moved to. A
+      // new line for a date the order's moved booking already sits on can't
+      // be a second booking there, and a paid place is never dropped: a
+      // person is told, and the order tagged as a booking problem.
+      if (outcome.result === "clash") {
+        await tag(admin, tenantId, { id: order.external_id, name: order.name }, "booking_error");
+        await postAlert(
+          admin,
+          tenantId,
+          "bookings",
+          `Order ${order.name} in your shop has a new line for a date where its booking (moved there earlier) already sits, so the new places aren't booked yet. Open that date's roster and add them, or refund the line.`,
+        );
         continue;
       }
       // A refund took the last place: the customer is told, where that is switched on.
