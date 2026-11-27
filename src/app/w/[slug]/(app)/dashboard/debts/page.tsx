@@ -461,6 +461,14 @@ export default async function PayoffPlanPage({
                   {canEdit && (s !== view.strategy || view.strategyFrom === "recommended") && (
                     <UseStrategy slug={tenant.slug} strategy={s} label={meta.label} />
                   )}
+                  {s === "custom" && (
+                    <Link
+                      href={`${base}/dashboard/debts/accounts#own-order`}
+                      className="text-sm underline underline-offset-4"
+                    >
+                      Set your own order
+                    </Link>
+                  )}
                 </div>
               );
             })}

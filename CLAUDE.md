@@ -240,7 +240,13 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   (`debt/recommend.ts`, pure: clears the debts, then least interest, then
   sooner, then avalanche, snowball, hybrid, custom) and follows it while
   the setting's `strategy_from` is `recommended`; "Use this order" sets
-  `person` and sticks. The fund's accounts are `emergency_picks` (books'
+  `person` and sticks. A debt's place in "your own order" (`priority`) is always
+  1..N among the debts that take one (pool, active, not a plan, not folded
+  into an open plan: `debt/order.ts`, twin of `private.money_debt_renumber`);
+  a trigger renumbers after any change to which debts take a place (new ones
+  go last), and a move (`move_money_debt`, or a place given on save or
+  import) is an insert. A move by hand also switches the plan to `person` /
+  `custom`. Keep `tests/db/money-debt-order.test.ts` passing. The fund's accounts are `emergency_picks` (books'
   id, else name; earlier `emergency_accounts` names still read), ticked
   from the latest balance sheet. "Also in your books" can be hidden
   (`hide_book_liability`, `money_book_accounts.hidden_at`: the list only).

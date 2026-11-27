@@ -579,6 +579,66 @@ export async function chooseStrategy(slug: string, strategy: string): Promise<De
   return { message: "Saved: the plan uses this order now, until you change it." };
 }
 
+/**
+ * Moves a debt to a place in "your own order" (1 is first; the others shift
+ * around it) through the one checked function, and then follows that order
+ * as "Use this order" on "Your own order" would, if the plan wasn't already.
+ */
+export async function moveDebt(
+  slug: string,
+  debtId: string,
+  position: number,
+): Promise<DebtActionState & { place?: number }> {
+  const ctx = await debtContext(slug);
+  if ("error" in ctx) return { error: ctx.error };
+  if (!z.string().uuid().safeParse(debtId).success) return { error: "Which debt is this?" };
+  if (!Number.isInteger(position) || position < 1 || position > 999) {
+    return { error: "Pick a place from the list." };
+  }
+  const { data, error } = await ctx.supabase.rpc("move_money_debt", {
+    p_tenant_id: ctx.tenant.id,
+    p_debt_id: debtId,
+    p_position: position,
+  });
+  if (error || typeof data !== "number") {
+    if (error?.code === "22023") {
+      return { error: "Only debts paid down from the pool take a place in your own order." };
+    }
+    return { error: "We couldn't move that. Try again in a moment." };
+  }
+  const current = await loadDebtSettings(ctx.supabase, ctx.tenant.id);
+  let switched = false;
+  if (current.strategy_from !== "person" || current.strategy !== "custom") {
+    const body = debtSettingsSchema.parse({
+      ...current,
+      strategy: "custom",
+      strategy_from: "person",
+    });
+    const saved = await ctx.supabase.rpc("save_config", {
+      p_tenant_id: ctx.tenant.id,
+      p_module: DEBT_MODULE,
+      p_key: DEBT_KEY,
+      p_body: body,
+    });
+    if (saved.error) {
+      refresh(slug);
+      return {
+        place: data,
+        error: "Moved, but we couldn't switch the plan to your own order. Try “Use this order”.",
+      };
+    }
+    switched = true;
+    revalidatePath(`/w/${slug}/settings`, "layout");
+  }
+  refresh(slug);
+  return {
+    place: data,
+    message: switched
+      ? `Moved to number ${data}. The plan follows your own order now.`
+      : `Moved to number ${data}.`,
+  };
+}
+
 /** "Follow the recommended order": back to the order that saves the most, worked out afresh. */
 export async function followRecommended(slug: string): Promise<DebtActionState> {
   const ctx = await debtContext(slug);

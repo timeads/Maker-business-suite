@@ -11,6 +11,8 @@ import { requireUser } from "@/lib/auth";
 import { loadBooksState, loadDebtView } from "@/lib/dashboard/debt/data";
 import { isPaidOff, paymentWords, type Debt } from "@/lib/dashboard/debt/figures";
 import { coverWords } from "@/lib/dashboard/debt/plans";
+import { noPlaceWords, withPlaces } from "@/lib/dashboard/debt/order";
+import { STRATEGY_META } from "@/lib/dashboard/debt/engine";
 import {
   DEBT_KIND_WORDS,
   DEBT_STATUS_WORDS,
@@ -36,6 +38,7 @@ import {
   type DebtPlanFormValues,
   type PlanCandidate,
 } from "../../debt-forms";
+import { DebtOrder } from "../../debt-order";
 
 export const metadata: Metadata = { title: "Debts" };
 
@@ -152,7 +155,12 @@ export default async function DebtsPage({ params }: { params: Promise<{ slug: st
 
   // On the page: what's owed (plans whole), then the debts at nothing owed
   // the books still list, folded away. Covered debts sit under their plan.
-  const active = view.debts.filter((d) => !isPaidOff(d));
+  // Debts with a place in "your own order" first, in it; then the rest.
+  const placed = withPlaces(view.debts.filter((d) => !isPaidOff(d)));
+  const active = placed.map((p) => p.debt);
+  const placeOf = new Map(placed.map((p) => [p.debt.id, p.place]));
+  const ordered = placed.filter((p) => p.place !== null).map((p) => p.debt);
+  const ownOrderOn = view.strategyFrom === "person" && view.strategy === "custom";
   const paidOff = view.debts.filter(isPaidOff);
   const plans = view.debts.filter((d) => d.consolidated);
   const covered = plans.flatMap((p) => p.group?.covers ?? []);
@@ -280,7 +288,12 @@ export default async function DebtsPage({ params }: { params: Promise<{ slug: st
                           key={d.id}
                           className={`border-border ${group ? "" : "border-b last:border-0"}`}
                         >
-                          <td className="px-2 py-2 tabular-nums">{d.priority ?? "–"}</td>
+                          <td
+                            className="px-2 py-2 tabular-nums"
+                            title={noPlaceWords(d) ?? undefined}
+                          >
+                            {placeOf.get(d.id) ?? "–"}
+                          </td>
                           <th scope="row" className="px-2 py-2 font-normal">
                             <a href={`#debt-${d.id}`} className="font-medium hover:underline">
                               {d.name}
@@ -428,6 +441,41 @@ export default async function DebtsPage({ params }: { params: Promise<{ slug: st
                 </p>
               </details>
             )}
+          </CardContent>
+        </Card>
+      )}
+
+      {ordered.length > 1 && (
+        <Card id="own-order" className="scroll-mt-4">
+          <CardHeader>
+            <CardTitle className="text-base">Your own order</CardTitle>
+            <CardDescription>
+              Which debt the extra goes to first when the plan follows your own order. Drag a debt,
+              use its arrows or pick its number; the others shift to make room. Only debts paid down
+              from the pool take a place: fixed payments, shares of sales, paused debts and plans
+              that pay other debts keep their own pace.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <DebtOrder
+              slug={tenant.slug}
+              canEdit={canEdit}
+              following={
+                ownOrderOn
+                  ? null
+                  : view.strategyFrom === "recommended"
+                    ? `the recommended order (${STRATEGY_META[view.strategy].label.toLowerCase()})`
+                    : `the ${STRATEGY_META[view.strategy].label.toLowerCase()} order you chose`
+              }
+              items={ordered.map((d) => ({
+                id: d.id,
+                name: d.name,
+                detail: [
+                  d.balance === null ? "No balance yet" : `${money(d.balance)} owed`,
+                  d.needsRate ? "needs a rate" : `${bpWords(d.rateBp)} a year`,
+                ].join(" · "),
+              }))}
+            />
           </CardContent>
         </Card>
       )}
