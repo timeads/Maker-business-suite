@@ -265,8 +265,8 @@ select s.name as supplier,
        e.reference,
        e.description,
        to_char(e."paymentSentAt", 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as paid_on,
-       case when e.type = 'PAYMENT' and e.source = 'KARIDA_EMAIL' then 'supplier'
-            when e.type = 'PAYMENT' and e.source in ('WELLS_FARGO_EMAIL', 'QUICKBOOKS') then 'bank'
+       case when e.type = 'PAYMENT' and e.source = '<the source your earlier app gives the supplier''s statement email>' then 'supplier'
+            when e.type = 'PAYMENT' and e.source in ('<the source it gives the bank''s notice>', 'QUICKBOOKS') then 'bank'
        end as reported_by,
        case when e."needsReview" then 'yes' else 'no' end as needs_review,
        case when e."needsReview" then left(e."reviewNote", 500) end as review_note
@@ -277,7 +277,7 @@ where e."supersededById" is null
 order by s.name, e."entryDate", e."createdAt";
 ```
 
-TuftStock's balance treats a payment as the supplier's own word only when it was read from the supplier's statement email (`KARIDA_EMAIL`), and as the bank's when it came from the bank's notice or the books; a payment typed in says nothing. If the query (unlike the download) leaves two invoices or two payments with the same reference on one account, the second corrects the first here, so give the later one an empty reference.
+TuftStock's balance treats a payment as the supplier's own word only when it was read from the supplier's statement email (its own source value for that email), and as the bank's when it came from the bank's notice or the books; a payment typed in says nothing. If the query (unlike the download) leaves two invoices or two payments with the same reference on one account, the second corrects the first here, so give the later one an empty reference.
 
 Entries TuftStock had flagged for a second look come across marked "to check", with its note. Pressing "Looks right" here clears the mark; bringing the file in again while TuftStock still has the flag puts it back.
 

@@ -214,11 +214,11 @@ describe("entrySource", () => {
   const src = (over: Partial<StoredSource>) =>
     entrySource({ source: "import", type: "payment", reported_by: null, ...over });
   it("reads whose word a payment is off the entry, however it was written down", () => {
-    expect(src({ reported_by: "supplier" })).toBe("KARIDA_EMAIL");
-    expect(src({ reported_by: "bank" })).toBe("WELLS_FARGO_EMAIL");
+    expect(src({ reported_by: "supplier" })).toBe("SUPPLIER_STATEMENT_EMAIL");
+    expect(src({ reported_by: "bank" })).toBe("BANK_NOTICE_EMAIL");
     expect(src({})).toBe("MANUAL");
-    expect(src({ source: "email", reported_by: "supplier" })).toBe("KARIDA_EMAIL");
-    expect(src({ source: "email", reported_by: "bank" })).toBe("WELLS_FARGO_EMAIL");
+    expect(src({ source: "email", reported_by: "supplier" })).toBe("SUPPLIER_STATEMENT_EMAIL");
+    expect(src({ source: "email", reported_by: "bank" })).toBe("BANK_NOTICE_EMAIL");
     expect(src({ source: "email" })).toBe("MANUAL");
     expect(src({ source: "manual" })).toBe("MANUAL");
   });

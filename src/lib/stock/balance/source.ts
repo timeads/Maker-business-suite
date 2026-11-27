@@ -19,8 +19,8 @@ export type StoredSource = {
 export function entrySource(row: StoredSource): LedgerSource {
   if (row.source === "books") return "QUICKBOOKS";
   if (row.type === "payment") {
-    if (row.reported_by === "supplier") return "KARIDA_EMAIL";
-    if (row.reported_by === "bank") return "WELLS_FARGO_EMAIL";
+    if (row.reported_by === "supplier") return "SUPPLIER_STATEMENT_EMAIL";
+    if (row.reported_by === "bank") return "BANK_NOTICE_EMAIL";
     return "MANUAL";
   }
   return row.source === "email" || row.source === "upload" ? "VENDOR_EMAIL" : "MANUAL";

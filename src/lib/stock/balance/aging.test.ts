@@ -18,7 +18,7 @@ function inv(
     statedBalance: null,
     reference,
     description: null,
-    source: "KARIDA_EMAIL",
+    source: "SUPPLIER_STATEMENT_EMAIL",
     needsReview: false,
     supersededById: null,
     ...extra,

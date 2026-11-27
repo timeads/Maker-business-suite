@@ -24,7 +24,7 @@ function entry(
     statedBalance: null,
     reference: null,
     description: null,
-    source: "KARIDA_EMAIL" as LedgerSource,
+    source: "SUPPLIER_STATEMENT_EMAIL" as LedgerSource,
     needsReview: false,
     supersededById: null,
     ...extra,
@@ -117,7 +117,7 @@ describe("computeVendorBalance", () => {
   it("flags a wire sent just before the statement that the vendor hasn't recorded", () => {
     // Wired 7/31; statement written 8/01 before Kestrel logged receipt on 8/03.
     const entries = [
-      entry("PAYMENT", "2026-07-31", 8000, { source: "WELLS_FARGO_EMAIL" }),
+      entry("PAYMENT", "2026-07-31", 8000, { source: "BANK_NOTICE_EMAIL" }),
       statement("2026-08-01", 20000),
     ];
     const r = computeVendorBalance(entries, new Date("2026-08-05T00:00:00Z"));
@@ -145,8 +145,8 @@ describe("computeVendorBalance", () => {
 
   it("does not flag a wire the vendor already reported receiving", () => {
     const entries = [
-      entry("PAYMENT", "2026-07-31", 8000, { source: "WELLS_FARGO_EMAIL" }),
-      entry("PAYMENT", "2026-08-03", 8000, { source: "KARIDA_EMAIL" }),
+      entry("PAYMENT", "2026-07-31", 8000, { source: "BANK_NOTICE_EMAIL" }),
+      entry("PAYMENT", "2026-08-03", 8000, { source: "SUPPLIER_STATEMENT_EMAIL" }),
       statement("2026-08-06", 20000),
     ];
     const r = computeVendorBalance(entries, new Date("2026-08-10T00:00:00Z"));
@@ -157,8 +157,8 @@ describe("computeVendorBalance", () => {
     // Wired 08/07 ($15,000); Kestrel's statement records it received on 08/10.
     const entries = [
       statement("2026-08-06", 18803.5),
-      entry("PAYMENT", "2026-08-07", 15000, { source: "WELLS_FARGO_EMAIL" }),
-      entry("PAYMENT", "2026-08-10", 15000, { source: "KARIDA_EMAIL" }),
+      entry("PAYMENT", "2026-08-07", 15000, { source: "BANK_NOTICE_EMAIL" }),
+      entry("PAYMENT", "2026-08-10", 15000, { source: "SUPPLIER_STATEMENT_EMAIL" }),
     ];
     const r = computeVendorBalance(entries, new Date("2026-08-20T00:00:00Z"));
     expect(r.paymentsSince).toBe("15000.00");
@@ -168,9 +168,9 @@ describe("computeVendorBalance", () => {
   it("keeps two genuinely separate wires of the same amount", () => {
     const entries = [
       statement("2026-08-06", 30000),
-      entry("PAYMENT", "2026-08-07", 5000, { source: "WELLS_FARGO_EMAIL" }),
-      entry("PAYMENT", "2026-08-08", 5000, { source: "WELLS_FARGO_EMAIL" }),
-      entry("PAYMENT", "2026-08-10", 5000, { source: "KARIDA_EMAIL" }),
+      entry("PAYMENT", "2026-08-07", 5000, { source: "BANK_NOTICE_EMAIL" }),
+      entry("PAYMENT", "2026-08-08", 5000, { source: "BANK_NOTICE_EMAIL" }),
+      entry("PAYMENT", "2026-08-10", 5000, { source: "SUPPLIER_STATEMENT_EMAIL" }),
     ];
     // One bank row is absorbed by the vendor's record; the other still counts.
     const r = computeVendorBalance(entries, new Date("2026-08-20T00:00:00Z"));

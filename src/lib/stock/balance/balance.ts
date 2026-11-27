@@ -23,7 +23,7 @@ import { Money } from "./money";
 
 export type LedgerType = "STATEMENT" | "INVOICE" | "PAYMENT" | "ADJUSTMENT";
 export type LedgerSource =
-  "KARIDA_EMAIL" | "VENDOR_EMAIL" | "WELLS_FARGO_EMAIL" | "QUICKBOOKS" | "MANUAL";
+  "SUPPLIER_STATEMENT_EMAIL" | "VENDOR_EMAIL" | "BANK_NOTICE_EMAIL" | "QUICKBOOKS" | "MANUAL";
 
 export interface LedgerEntryInput {
   id: string;
@@ -80,7 +80,7 @@ const ZERO = new Money(0);
  * Each vendor payment can absorb only one wire, so two identical wires stay distinct.
  */
 /** Payments seen from our bank's side rather than reported by the vendor. */
-const BANK_SOURCES = new Set<LedgerSource>(["WELLS_FARGO_EMAIL", "QUICKBOOKS"]);
+const BANK_SOURCES = new Set<LedgerSource>(["BANK_NOTICE_EMAIL", "QUICKBOOKS"]);
 
 /**
  * The bank-side payments that are the same money as a payment the vendor
@@ -88,7 +88,7 @@ const BANK_SOURCES = new Set<LedgerSource>(["WELLS_FARGO_EMAIL", "QUICKBOOKS"]);
  * counts such a pair once, exactly as the estimate does.
  */
 export function absorbedPayments(entries: LedgerEntryInput[], matchDays = 7): Set<string> {
-  const vendorPayments = entries.filter((e) => e.type === "PAYMENT" && e.source === "KARIDA_EMAIL");
+  const vendorPayments = entries.filter((e) => e.type === "PAYMENT" && e.source === "SUPPLIER_STATEMENT_EMAIL");
   const consumed = new Set<string>();
   const absorbed = new Set<string>();
   for (const e of entries) {
@@ -181,7 +181,7 @@ export function computeVendorBalance(
   if (anchorDate) {
     const windowStart = new Date(anchorDate.getTime() - lagDays * DAY);
     const vendorPayments = activity.filter(
-      (e) => e.type === "PAYMENT" && e.source === "KARIDA_EMAIL",
+      (e) => e.type === "PAYMENT" && e.source === "SUPPLIER_STATEMENT_EMAIL",
     );
     const ours = (e: LedgerEntryInput) =>
       BANK_SOURCES.has(e.source) || (opts.ownPaymentsAreOurs === true && e.source === "MANUAL");
