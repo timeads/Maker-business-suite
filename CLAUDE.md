@@ -110,7 +110,16 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   RLS. Chart text is formatted on the server (`prepareTimeChart`) so server
   and browser output match. Charts follow one validated series colour
   (`--chart-1`) and always offer a table view; several business lines are
-  small multiples on one scale (`LineMultiples`), never a second colour.
+  small multiples on one scale (`LineMultiples`), never a second colour. ONE
+  owner-approved exception: the payoff projection (Money → Payoff plan) is
+  one line chart with a colour per debt (`payoff-chart.ts`,
+  `MultiLineChart`), from the categorical palette `--chart-cat-1`…`8` /
+  `--chart-neutral` (`lib/charts/palette.ts`, light and dark, held to
+  globals.css and checked for contrast and colour-blind separation by
+  `palette.test.ts`), each slot with its own dash and marker, a legend that
+  toggles lines, end labels where they fit, the table view, and past eight
+  debts the rest as one "Other debts" line. Use that palette nowhere else
+  without the owner's say.
   Revenue settings are a config (`dashboard` / `revenue`,
   `lib/dashboard/lines.ts`, Settings → Money → Revenue and business lines):
   the figure (`net_sales`, the default, served by the earlier queries so

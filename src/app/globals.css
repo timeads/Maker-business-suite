@@ -139,6 +139,21 @@
   /* Charts: one validated series colour per mode, and a recessive grid. */
   --chart-1: #365555;
   --chart-grid: var(--tuft-stone-3);
+  /*
+   * The one exception: a categorical palette for charts where each line is a
+   * thing of its own (the payoff projection's debts). Fixed order, never
+   * cycled; checked in src/lib/charts/palette.test.ts. Past eight, the rest
+   * are one line in --chart-neutral.
+   */
+  --chart-cat-1: #14938d;
+  --chart-cat-2: #a87520;
+  --chart-cat-3: #a0340b;
+  --chart-cat-4: #979031;
+  --chart-cat-5: #945c9c;
+  --chart-cat-6: #aa5d34;
+  --chart-cat-7: #5a81bc;
+  --chart-cat-8: #2c6e31;
+  --chart-neutral: #6c655d;
 }
 
 /*
@@ -205,6 +220,15 @@
   color-scheme: dark;
   --chart-1: #9fd0c8;
   --chart-grid: #2b2825;
+  --chart-cat-1: #00a291;
+  --chart-cat-2: #ce8f49;
+  --chart-cat-3: #bc4a3c;
+  --chart-cat-4: #a38b09;
+  --chart-cat-5: #aa4c93;
+  --chart-cat-6: #bd7b3a;
+  --chart-cat-7: #549de5;
+  --chart-cat-8: #4ea06a;
+  --chart-neutral: #978f84;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -245,6 +269,15 @@
     color-scheme: dark;
     --chart-1: #9fd0c8;
     --chart-grid: #2b2825;
+    --chart-cat-1: #00a291;
+    --chart-cat-2: #ce8f49;
+    --chart-cat-3: #bc4a3c;
+    --chart-cat-4: #a38b09;
+    --chart-cat-5: #aa4c93;
+    --chart-cat-6: #bd7b3a;
+    --chart-cat-7: #549de5;
+    --chart-cat-8: #4ea06a;
+    --chart-neutral: #978f84;
   }
 }
 

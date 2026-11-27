@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { StatTile } from "@/components/charts/stat-tile";
-import { LineMultiples } from "@/components/charts/line-multiples";
+import { MultiLineChart } from "@/components/charts/multi-line-chart";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,7 +12,8 @@ import { loadDebtView } from "@/lib/dashboard/debt/data";
 import { STRATEGIES, STRATEGY_META, strategiesConverge } from "@/lib/dashboard/debt/engine";
 import { bankKey, scheduleLength } from "@/lib/dashboard/debt/figures";
 import { bpWords } from "@/lib/dashboard/debt/settings";
-import { formatMoney, formatPercent, prepareSharedTimeCharts } from "@/lib/dashboard/format";
+import { formatMoney, formatPercent } from "@/lib/dashboard/format";
+import { payoffChart } from "@/lib/dashboard/debt/payoff-chart";
 import { payoffProjection } from "@/lib/dashboard/debt/projection";
 import { periodLabel } from "@/lib/dashboard/range";
 import { getEntitlements } from "@/lib/entitlements";
@@ -114,28 +115,24 @@ export default async function PayoffPlanPage({
   const thisMonth = result.schedule[0];
   const atYear = result.plan[11]?.emergencyBalance ?? null;
   const shown = result.plan.slice(0, scheduleLength(result.plan, all));
-  // The projection, a small chart per debt on one scale and one time axis
-  // (the house's one series colour), its words worked out here on the server.
-  const projection = payoffProjection({
-    plan: result.plan,
-    debts: view.input.debts,
-    fundTarget: emergency.target,
-    monthWords: (month) => monthWords(month, false),
-    money,
-  });
-  const shared = prepareSharedTimeCharts(
-    projection.series.map((line) =>
-      line.values.map((cents, i) => ({
-        key: `${projection.months[i]}-01`,
-        label: periodLabel(`${projection.months[i]}-01`, "month"),
-        longLabel: periodLabel(`${projection.months[i]}-01`, "month", true),
-        value: cents / 100,
-      })),
-    ),
-    "money",
-    tenant.currency,
+  // The projection: one chart, a line per debt in its own colour (the owner's
+  // choice; the one exception to the house's single series colour), its words
+  // worked out here on the server.
+  const chart = payoffChart(
+    payoffProjection({
+      plan: result.plan,
+      debts: view.input.debts,
+      fundTarget: emergency.target,
+      monthWords: (month) => monthWords(month, false),
+      money,
+    }),
+    {
+      money,
+      axisMoney: (cents) => formatMoney(cents / 100, tenant.currency, true),
+      monthLabel: (month) => periodLabel(`${month}-01`, "month"),
+      monthLong: (month) => periodLabel(`${month}-01`, "month", true),
+    },
   );
-  const markWords = { total: "Debt-free", debt: "Paid off", fund: "Reached" } as const;
   const converge = result.poolDebts.length > 0 && strategiesConverge(result.sims);
   const fastest = Math.min(...STRATEGIES.map((s) => result.sims[s].monthsToFreedom));
   const cheapest = Math.min(...STRATEGIES.map((s) => result.sims[s].totalInterest));
@@ -269,27 +266,12 @@ export default async function PayoffPlanPage({
         <CardHeader>
           <CardTitle className="text-base">Payoff projection</CardTitle>
           <CardDescription>
-            What&apos;s owed at the end of each month, a small chart for each debt, with all of them
-            together and the emergency fund. Every chart shares one scale, so a taller bar always
-            means more. A plan that pays other debts is one debt here.
+            What&apos;s owed on each debt at the end of each month as the plan pays it down. Point
+            at a month (or tab to it) for every figure there; tap a name to hide or show its line.
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <LineMultiples
-            ticks={shared.ticks}
-            valueLabel="At the end of the month"
-            periodHeading="Month"
-            totalRow={false}
-            series={projection.series.map((line, index) => ({
-              id: line.id,
-              name: line.name,
-              total: line.words,
-              points: shared.series[index],
-              marker: line.payoff
-                ? { key: `${line.payoff}-01`, label: markWords[line.kind] }
-                : null,
-            }))}
-          />
+          <MultiLineChart chart={chart} valueLabel="Owed at the end of the month" />
         </CardContent>
       </Card>
 

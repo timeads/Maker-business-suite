@@ -1,12 +1,12 @@
 import type { PlanDebt, PlanMonth } from "./engine";
 
 /**
- * The payoff projection, a line per debt (the earlier dashboard's "Payoff
- * projection + emergency fund" chart), told apart the house way: one small
- * chart per debt, plus total owed and the emergency fund, all on one time
- * axis and one money scale, in the one series colour. Pure: the plan's
- * months in, each series' figures (whole cents) and words out. A plan that
- * pays other debts is one debt here, as everywhere.
+ * The payoff projection's figures (the earlier dashboard's "Payoff
+ * projection + emergency fund" chart): a series per debt, all of them
+ * together and the emergency fund, on one time axis. Pure: the plan's months
+ * in, each series' figures (whole cents) and words out. A plan that pays
+ * other debts is one debt here, as everywhere. Drawn as one line chart, a
+ * colour per debt, by `payoff-chart.ts`.
  */
 
 export type ProjectionSeries = {
