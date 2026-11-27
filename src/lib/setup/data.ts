@@ -2,9 +2,10 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { NotNow } from "./items";
 
 /**
- * A tool's "Not now"s, read as the member: owners and admins get them, and
- * row-level security hands anyone else none. A read that fails counts as
- * none, so a checklist never stops a page drawing.
+ * A tool's "Not now"s, read as the member: owners and admins get them all;
+ * the rest of the team gets Stock's and Shipping's for the tools they have,
+ * and never Money's (row-level security decides). A read that fails counts
+ * as none, so a checklist never stops a page drawing.
  */
 export async function loadNotNow(
   supabase: SupabaseClient,

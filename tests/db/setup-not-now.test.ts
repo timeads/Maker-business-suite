@@ -112,6 +112,51 @@ describe("Not now", () => {
   });
 });
 
+describe("Stock's and Shipping's Not now, for the tool's whole team", () => {
+  let erin: User; // plain member of A with only Shipping, once tools are chosen per person
+
+  const say = (user: User, tool: string, item: string) =>
+    as(user, "select public.say_setup_not_now($1, $2, $3, 'f1')", [tenantA, tool, item]);
+  const seen = async (user: User) =>
+    (await rows(user)).map((r) => r.item).filter((item) => item.startsWith("t."));
+
+  beforeAll(async () => {
+    erin = { id: await createUser(db, "erin@a.test"), email: "erin@a.test" };
+    await db.query(
+      "insert into public.memberships (tenant_id, user_id, role) values ($1, $2, 'member')",
+      [tenantA, erin.id],
+    );
+    await say(alice, "stock", "t.stock");
+    await say(alice, "shipping", "t.shipping");
+    await say(alice, "money", "t.money");
+    await as(bob, "select public.say_setup_not_now($1, 'stock', 't.other', 'f1')", [tenantB]);
+  });
+
+  it("is read by every member who has the tool, never Money's", async () => {
+    expect(await seen(carol)).toEqual(["t.shipping", "t.stock"]);
+    expect(await seen(alice)).toEqual(["t.money", "t.shipping", "t.stock"]);
+  });
+
+  it("follows the tools a member was given once the workspace chooses per person", async () => {
+    await as(alice, "select public.set_tools_per_person($1, true, $2::text[])", [tenantA, []]);
+    await as(alice, "select public.set_member_tools($1, $2, $3::text[])", [
+      tenantA,
+      erin.id,
+      ["shipping"],
+    ]);
+    expect(await seen(erin)).toEqual(["t.shipping"]);
+    expect(await seen(carol)).toEqual([]);
+    // Owners and admins still read every tool's.
+    expect(await seen(dan)).toEqual(["t.money", "t.shipping", "t.stock"]);
+  });
+
+  it("is still said only by owners and admins, and never crosses workspaces", async () => {
+    await expect(say(erin, "shipping", "t.mine")).rejects.toThrow(/owners and admins/i);
+    expect((await rows(erin)).every((r) => r.tenant_id === tenantA)).toBe(true);
+    expect((await rows(bob)).map((r) => r.item)).toEqual(["budget", "t.other"]);
+  });
+});
+
 describe("the heads-up pointing at Money → Set up", () => {
   it("is claimed once per workspace, by the worker only", async () => {
     const claim = (tenant: string) =>
