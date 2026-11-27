@@ -177,6 +177,9 @@ function bookingsMenu(attention: Attention, viewer: NavViewer): NavGroup[] {
           }),
         ]
       : []),
+    // The guided setup, for everyone with Bookings. No count: working it out
+    // takes reads the layout doesn't do.
+    place("bookings.setup", "Set up", "bookings/setup", { keywords: SETUP_WORDS }),
   ];
   // Shop orders that paid for a workshop with no date: a place only while
   // some are waiting (the page itself is always reachable from a roster).
@@ -302,6 +305,13 @@ function helpdeskMenu(viewer: NavViewer, attention: Attention): NavGroup[] {
         place("helpdesk.manual", viewer.manualName?.trim() || "Manual", "helpdesk/manual", {
           icon: "book",
           keywords: ["manual", "topics", "knowledge base", "articles", "how to"],
+        }),
+        // The guided setup. The inbox is three full panes, so its card lives
+        // here: the inbox hands over how many required things are left
+        // (`<PanelExtras>`); the layout itself never works it out.
+        place("helpdesk.setup", "Set up", "helpdesk/setup", {
+          icon: "check",
+          keywords: SETUP_WORDS,
         }),
       ],
     },
@@ -482,6 +492,8 @@ export function buildNav(viewer: NavViewer, attention: Attention = {}): NavTool[
             place("social.projects", "Projects", "social/projects"),
             place("social.plan", "Plan", "social/plan"),
             place("social.links", "Link page", "social/links"),
+            // The guided setup. No count: working it out takes reads the layout doesn't do.
+            place("social.setup", "Set up", "social/setup", { keywords: SETUP_WORDS }),
           ],
         },
       ],

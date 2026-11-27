@@ -125,3 +125,25 @@ export function pickLogoAsset<T extends TaggedAsset>(assets: T[], onDark = false
     ) ?? null;
   return (onDark ? tagged(LOGO_LIGHT_TAG) : null) ?? tagged(LOGO_TAG);
 }
+
+/**
+ * Whether these asset rows hold a logo, found exactly as `pickLogoAsset`
+ * finds one for an email header or a packing slip (any capitalisation of
+ * `logo`, pictures only), so a setup checklist never asks for a logo the
+ * slip would already print. Hand it the same rows the consumer reads (the
+ * slip reads PNG and JPEG only, newest 500).
+ */
+export function hasLogo(
+  rows: readonly { id?: unknown; tags?: unknown; mime_type?: unknown }[],
+): boolean {
+  return (
+    pickLogoAsset(
+      rows.map((row, i) => ({
+        id: String(row.id ?? i),
+        title: "",
+        tags: Array.isArray(row.tags) ? row.tags.map(String) : [],
+        mimeType: String(row.mime_type ?? ""),
+      })),
+    ) !== null
+  );
+}

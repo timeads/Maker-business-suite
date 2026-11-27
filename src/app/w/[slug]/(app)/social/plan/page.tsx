@@ -168,7 +168,7 @@ export default async function SocialPlanPage({ params }: { params: Promise<{ slu
         </div>
       )}
 
-      <Card>
+      <Card id="month" className="scroll-mt-6">
         <CardHeader>
           <CardTitle>The monthly run</CardTitle>
           <CardDescription>
@@ -263,7 +263,7 @@ export default async function SocialPlanPage({ params }: { params: Promise<{ slu
         </CardContent>
       </Card>
 
-      <Card>
+      <Card id="plan" className="scroll-mt-6">
         <CardHeader>
           <CardTitle>Your plan</CardTitle>
           <CardDescription>

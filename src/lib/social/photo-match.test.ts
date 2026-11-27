@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { matchPhotos, matchWords, pickLogoAsset, pickPhoto, type TaggedAsset } from "./photo-match";
+import {
+  hasLogo,
+  matchPhotos,
+  matchWords,
+  pickLogoAsset,
+  pickPhoto,
+  type TaggedAsset,
+} from "./photo-match";
 
 const asset = (
   id: string,
@@ -77,5 +84,19 @@ describe("matching photos to words by their tags", () => {
     expect(pickLogoAsset(library.filter((a) => !a.id.startsWith("logo")))).toBeNull();
     // A video tagged as the logo is not a logo.
     expect(pickLogoAsset([asset("v", "", ["logo"], "video/mp4")])).toBeNull();
+  });
+});
+
+describe("hasLogo", () => {
+  const row = (tags: string[], mime_type = "image/png") => ({ id: "a", tags, mime_type });
+  it("finds a logo in any capitalisation, as the slip and email header do", () => {
+    expect(hasLogo([row(["logo"])])).toBe(true);
+    expect(hasLogo([row(["Logo"])])).toBe(true);
+    expect(hasLogo([row(["shop", "LOGO"])])).toBe(true);
+  });
+  it("leaves out videos, other tags and the dark-background logo alone", () => {
+    expect(hasLogo([row(["logo"], "video/mp4")])).toBe(false);
+    expect(hasLogo([row(["logos"]), row(["logo-light"])])).toBe(false);
+    expect(hasLogo([])).toBe(false);
   });
 });

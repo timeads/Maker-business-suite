@@ -137,6 +137,20 @@ describe("buildNav: each tool's menu", () => {
     ]);
   });
 
+  it("Help desk keeps its guided setup beside the numbers, with the count the inbox hands over", () => {
+    const desk = tool(buildNav(viewer()), "helpdesk");
+    expect(desk.menu[0].items.map((item) => item.id)).toEqual([
+      "helpdesk.reports",
+      "helpdesk.manual",
+      "helpdesk.setup",
+    ]);
+    expect(desk.menu[0].items[2].count).toBeUndefined();
+    const menu = withExtras(desk.menu, { counts: { "helpdesk.setup": 2 } });
+    expect(menu[0].items[2]).toMatchObject({ label: "Set up", to: "helpdesk/setup", count: 2 });
+    expect(activeIn(desk, { path: "helpdesk/setup", query: {} }).item).toBe("helpdesk.setup");
+    expect(labels(tool(buildNav(viewer({ manager: false })), "helpdesk"))).toContain("Set up");
+  });
+
   it("Help desk has its numbers first, the views the team knows, and groups the inbox fills", () => {
     const desk = tool(buildNav(viewer()), "helpdesk");
     expect(desk.menu.map((group) => group.name)).toEqual([
@@ -216,6 +230,7 @@ describe("buildNav: each tool's menu", () => {
       "Runsheet",
       "Customers",
       "Messages sent",
+      "Set up",
       "Classroom supplies",
       "Vendors",
       "Budget",
@@ -232,6 +247,7 @@ describe("buildNav: each tool's menu", () => {
       "Runsheet",
       "Customers",
       "Messages sent",
+      "Set up",
       "Classroom supplies",
       "Vendors",
       "Budget",
@@ -246,7 +262,14 @@ describe("buildNav: each tool's menu", () => {
       "Projects",
       "Plan",
       "Link page",
+      "Set up",
     ]);
+    expect(placeName(tool(tools, "bookings"), at("bookings/setup"))).toBe("Set up");
+    expect(placeName(tool(tools, "social"), at("social/setup"))).toBe("Set up");
+    // Everyone with the tool walks it; what only owners and admins can do says so.
+    const member = buildNav(viewer({ manager: false }));
+    expect(labels(tool(member, "bookings"))).toContain("Set up");
+    expect(labels(tool(member, "social"))).toContain("Set up");
     expect(labels(tool(tools, "dashboard"))).toEqual([
       "Dashboard",
       "Expenses to sort",

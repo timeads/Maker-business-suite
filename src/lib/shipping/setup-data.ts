@@ -2,7 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { canSendInShopify } from "../connections/providers/shopify-fulfil";
 import { shopPermission } from "../connections/shop-permission";
 import { connectionFact } from "../setup/connection";
-import { LOGO_TAG } from "../social/photo-match";
+import { hasLogo } from "../social/photo-match";
 import {
   SHIPPING_MODULE,
   SHIPPING_SETTINGS_KEY,
@@ -87,13 +87,15 @@ export async function loadShippingSetupFacts(
           .is("picked_up_at", null)
           .order("placed_at")
           .limit(OPEN_LOOKED_AT),
+    // The same rows the slip looks through (`loadSlipLogoUrl`), matched the same way.
     supabase
       .from("social_assets")
-      .select("id", { count: "exact", head: true })
+      .select("id, tags, mime_type")
       .eq("tenant_id", tenant.id)
       .eq("hidden", false)
       .in("mime_type", ["image/png", "image/jpeg"])
-      .contains("tags", [LOGO_TAG]),
+      .order("created_at", { ascending: false })
+      .limit(500),
   ]);
 
   const rows = (connections.data ?? []) as Record<string, unknown>[];
@@ -143,7 +145,7 @@ export async function loadShippingSetupFacts(
       saved: configs.error ? true : Boolean(body(SLIP_LAYOUT_KEY)),
       logoWanted: slip.show_logo,
       // Not known counts as there: never ask for a logo we couldn't look for.
-      logo: logo.error ? true : (logo.count ?? 0) > 0,
+      logo: logo.error ? true : hasLogo((logo.data ?? []) as Parameters<typeof hasLogo>[0]),
     },
     rules: {
       count: parseShippingRules(body(SHIPPING_RULES_KEY)?.body).length,
