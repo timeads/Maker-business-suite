@@ -111,6 +111,13 @@ import { loadStockForBought, type BoughtItemStock, type BoughtLine } from "@/lib
 import { createClient } from "@/lib/supabase/server";
 import { canManage } from "@/lib/tenants";
 import { cn } from "@/lib/utils";
+import { HowWorkedOut } from "@/components/setup/how-worked-out";
+import { AUTO_REPLIES_KEY, parseAutoReplies } from "@/lib/helpdesk/auto-reply/config";
+import { autoReplyExplained, replyWindowExplained, viewExplained } from "@/lib/helpdesk/explain";
+import { HELPDESK_TOOL, helpdeskSetupItems } from "@/lib/helpdesk/setup";
+import { SETUP_CONFIG_KEYS, loadHelpdeskSetupFacts } from "@/lib/helpdesk/setup-data";
+import { loadNotNow } from "@/lib/setup/data";
+import { requiredItems, sortItems } from "@/lib/setup/items";
 import { addTicketToManual } from "../(app)/helpdesk/manual/actions";
 import { AskButton } from "../(app)/helpdesk/manual/editor";
 import { MessageFiles, type ShownFile } from "./attachments";
@@ -377,7 +384,10 @@ export default async function HelpdeskPage({
       .select("key, body")
       .eq("tenant_id", tenant.id)
       .eq("module", HELPDESK_MODULE)
-      .in("key", [SAVED_VIEWS_KEY, DESK_SETTINGS_KEY, TAG_GROUPS_KEY, CHANNELS_KEY]),
+      // The inbox's own settings, and the ones the Set up row's count looks at.
+      .in("key", [
+        ...new Set([SAVED_VIEWS_KEY, DESK_SETTINGS_KEY, TAG_GROUPS_KEY, ...SETUP_CONFIG_KEYS]),
+      ]),
     // This person's own read marks, newest first.
     supabase
       .from("ticket_reads")
@@ -455,6 +465,7 @@ export default async function HelpdeskPage({
   const usedInstagram = socialAccounts.find((a) => a.network === "instagram" && a.active);
   const metaConnection =
     metaFacts && usedInstagram ? { ...metaFacts, instagramId: usedInstagram.id } : metaFacts;
+  const autoReplies = parseAutoReplies(configOf(AUTO_REPLIES_KEY));
   const commentsOn = channelSettings.instagram_comments || channelSettings.facebook_comments;
   const socialOn = channelSettings.instagram || channelSettings.facebook || commentsOn;
   const savedView = choice.kind === "saved" ? savedViews.find((v) => v.id === choice.id) : null;
@@ -580,6 +591,29 @@ export default async function HelpdeskPage({
       ),
     ).length;
   }
+
+  // The Set up row's count: what's still required, from the settings and
+  // connection just read, plus "has an email come in?" and the shop's state.
+  // Never stops the inbox drawing.
+  counts["helpdesk.setup"] = await Promise.all([
+    loadHelpdeskSetupFacts(supabase, tenant, {
+      loaded: {
+        configs: new Map(
+          ((deskConfigs ?? []) as { key: string; body: unknown }[]).map((row) => [
+            row.key,
+            row.body,
+          ]),
+        ),
+        meta: metaConnection,
+      },
+    }),
+    loadNotNow(supabase, tenant.id, HELPDESK_TOOL),
+  ])
+    .then(
+      ([setupFacts, notNow]) =>
+        requiredItems(sortItems(helpdeskSetupItems(setupFacts), notNow).open).length,
+    )
+    .catch(() => 0);
 
   const kept = {
     view,
@@ -1907,6 +1941,48 @@ export default async function HelpdeskPage({
               </dd>
             </div>
           </dl>
+          {/* Why it sits where it does, and what its channel allows: worked out from what is on screen. */}
+          <div className="mt-2 flex flex-col gap-1">
+            <HowWorkedOut
+              label="Why it's where it is"
+              lines={viewExplained(
+                { ...ticket, mentioned: mentioned.has(ticket.id) },
+                user.id,
+                nowMs,
+                (at) => when.format(new Date(at)),
+                { folder: folders.find((f) => f.id === ticket.folder_id)?.name ?? null },
+              )}
+            />
+            {channel && socialWindow && !isComment && (
+              <HowWorkedOut
+                label="How long you can reply"
+                lines={replyWindowExplained(
+                  channel,
+                  socialWindow,
+                  (at) => windowTime.format(new Date(at)),
+                  channelSettings.human_agent,
+                )}
+              />
+            )}
+            <HowWorkedOut
+              label="About the automatic reply"
+              lines={autoReplyExplained(autoReplies, {
+                channel: channel ?? "email",
+                ticketKind: ticket.kind ?? "message",
+                sent: thread.some((m) => m.automatic),
+                firstInboundAt: thread.find((m) => m.direction === "inbound")?.created_at ?? null,
+                timeZone: tenant.timezone,
+              })}
+              change={
+                canManage(role)
+                  ? {
+                      href: `/w/${tenant.slug}/settings/helpdesk/auto-replies`,
+                      label: "Automatic replies",
+                    }
+                  : null
+              }
+            />
+          </div>
         </section>
 
         {(canDraft || ticket.ai_summary) && (
