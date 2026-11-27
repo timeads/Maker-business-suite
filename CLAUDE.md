@@ -255,6 +255,35 @@ provider, more social networks, video, SMS). See docs/build-plan.md.
   `list_debts` (references `D1`/`L1`, never ids) and the three debt
   proposal tools: `action_proposals` rows applied by a person through
   `claim_action_proposal` then the checked function (`applyAction`).
+  More action kinds, for the whole team to file and owners and admins to
+  apply: `money.expense_sort` (`sort_book_expenses`), `money.budget`
+  (`set_money_budgets`), `money.charge` (`decide_money_charge`), with
+  expenses and charges as `E1`/`C1` references; applying one writes its
+  before/after words onto the row (`note_action_applied`, only by who
+  applied it) and the assistant page lists them. Debt kinds stay
+  owners-only, history included.
+  Revenue from the books (revenue config `books`, off by default): paid
+  invoices (`book_invoices`, read-only with every sync, `file_book_invoices`
+  / `close_book_invoices`, each line's income account from the item list
+  and its share before tax, `splitCents`) count by the income account's
+  choice (a line, `{skip: shop}` for the shop's own sales so nothing counts
+  twice, `{skip: other}`; no choice counts nowhere and is shown apart), and
+  the P&L's other income goes to a line or beside them (`bookRevenue`,
+  `booksRevenueExplained`). Invoice status is worked out on read
+  (`invoiceStatus` = `private.invoice_status`). Money → Invoices, Orders
+  (`money_order_list`), Statements (each P&L month and the balance sheet
+  keep every account's line, `statementLines`) and Projection (config
+  `dashboard` / `projection`, `lib/dashboard/projection.ts`). A page's range
+  is a preset or any month, quarter or year (`pageRange`, `RangePicker`).
+  Month-by-month entries (`money_line_entries`, `set_money_line_entries`):
+  a monthly cost's own figure for one month, and revenue typed in for a
+  line. Spreadsheets (`lib/dashboard/export.ts`, routes beside each page)
+  are built from the page's own loader as the member; debts only for owners
+  and admins. Shipping margin by month is `money_shipping_by_month`;
+  break-even pace and the same days last month are `lib/dashboard/pace.ts`. Keep
+  `tests/db/money-invoices.test.ts`, `money-line-entries.test.ts`,
+  `money-order-list.test.ts`, `money-shipping-margin.test.ts` and
+  `action-proposals-money.test.ts` passing.
 - Help desk: inbound email is authenticated by a secret in the webhook URL,
   queued (`private.inbound_emails`) and filed by the worker through
   `file_inbound_email` (the older `ingest_inbound_email` hands over to it),
